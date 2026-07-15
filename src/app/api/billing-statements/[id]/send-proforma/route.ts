@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { resolveAttachmentUrl } from "@/lib/communications-log";
 
 export const maxDuration = 30;
 
@@ -76,6 +77,8 @@ export async function POST(
     return NextResponse.json({ error: result.error || "Dispatch failed" }, { status: 500 });
   }
 
+  const commLogEntry = result.commLogEntry ? await resolveAttachmentUrl(result.commLogEntry) : null;
+
   return NextResponse.json({
     success: true,
     proformaRef: result.proformaRef,
@@ -84,5 +87,6 @@ export async function POST(
     emailedTo: result.emailedTo,
     emailSkipped: result.emailSkipped,
     noContact: result.noContact,
+    commLogEntry,
   });
 }

@@ -15,6 +15,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { logCommunication } from "@/lib/communications-log";
+import type { CommunicationLogEntry } from "@/types";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
@@ -54,6 +56,9 @@ export interface DispatchResult {
   /** Storage path of the generated PDF in the crm-documents bucket, e.g. for callers
    *  that need a signed URL to attach the PDF to a WhatsApp message. */
   pdfStoragePath?: string | null;
+  /** communications_log row for the email send, if one was attempted — lets the
+   *  caller show a post-send confirmation with the exact content that was sent. */
+  commLogEntry?: CommunicationLogEntry | null;
   error?: string;
 }
 
@@ -368,6 +373,8 @@ export async function dispatchProforma(
 
   const now = new Date().toISOString();
   let emailedSuccessfully = false;
+  let emailError: string | null = null;
+  const emailSubject = `Proforma Invoice ${proformaRef} — ${partyRef} — The WorkVilla`;
 
   if (toList.length > 0) {
     try {
@@ -379,7 +386,7 @@ export async function dispatchProforma(
           to: toList,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
-          subject: `Proforma Invoice ${proformaRef} — ${partyRef} — The WorkVilla`,
+          subject: emailSubject,
           html: emailHtml,
           attachments: [{ filename: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
         }),
@@ -388,8 +395,26 @@ export async function dispatchProforma(
       );
       emailedSuccessfully = true;
     } catch (err) {
+      emailError = err instanceof Error ? err.message : "Email send failed";
       console.error("[send-proforma] Email failed:", err);
     }
+  }
+
+  let commLogEntry: CommunicationLogEntry | null = null;
+  if (toList.length > 0) {
+    commLogEntry = await logCommunication(adminSupabase, {
+      entityType: "billing_statement",
+      entityId: statementId,
+      channel: "email",
+      recipient: toList.join(", "),
+      subject: emailSubject,
+      body: emailHtml,
+      attachmentUrl: storagePath,
+      attachmentName: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`,
+      status: emailedSuccessfully ? "sent" : "failed",
+      errorMessage: emailError,
+      sentBy: dispatchedBy,
+    });
   }
 
   // The proforma is only "sent" when a channel actually delivered something the
@@ -455,6 +480,7 @@ export async function dispatchProforma(
     emailSkipped: toList.length === 0,
     noContact,
     pdfStoragePath: storagePath,
+    commLogEntry,
   };
 }
 
@@ -737,6 +763,8 @@ export async function dispatchGstDirect(
 
   const nowIso = new Date().toISOString();
   let emailedSuccessfully = false;
+  let emailError: string | null = null;
+  const emailSubject = `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`;
   if (toList.length > 0) {
     try {
       const ccList = additionalCc.filter(Boolean);
@@ -747,7 +775,7 @@ export async function dispatchGstDirect(
           to: toList,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
-          subject: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
+          subject: emailSubject,
           html: emailHtml,
           attachments: [{ filename: `Invoice-${invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
         }),
@@ -755,8 +783,26 @@ export async function dispatchGstDirect(
       );
       emailedSuccessfully = true;
     } catch (err) {
+      emailError = err instanceof Error ? err.message : "Email send failed";
       console.error("[gst-direct] Email failed:", err);
     }
+  }
+
+  let commLogEntry: CommunicationLogEntry | null = null;
+  if (toList.length > 0) {
+    commLogEntry = await logCommunication(adminSupabase, {
+      entityType: "billing_statement",
+      entityId: statementId,
+      channel: "email",
+      recipient: toList.join(", "),
+      subject: emailSubject,
+      body: emailHtml,
+      attachmentUrl: storagePath,
+      attachmentName: `Invoice-${invoiceNumber.replace(/\//g, "-")}.pdf`,
+      status: emailedSuccessfully ? "sent" : "failed",
+      errorMessage: emailError,
+      sentBy: dispatchedBy,
+    });
   }
 
   const delivered = emailedSuccessfully || Boolean(razorpayLinkUrl);
@@ -818,5 +864,6 @@ export async function dispatchGstDirect(
     emailedTo: emailedSuccessfully ? (toList.join(", ") || null) : null,
     emailSkipped: toList.length === 0,
     noContact,
+    commLogEntry,
   };
 }

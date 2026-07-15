@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { logCommunication, resolveAttachmentUrl } from "@/lib/communications-log";
 import { messaging } from "@/lib/whatsapp";
 
 // POST — Re-send GST invoice email for a billing-statement-sourced PDF
@@ -69,13 +70,8 @@ export async function POST(
   const appBaseUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
   const gstTrackingUrl = `${appBaseUrl}/api/billing-statements/${id}/track?type=gst`;
 
-  const { error: emailError } = await resend.emails.send({
-    from: EMAIL_FROM,
-    replyTo: EMAIL_REPLY_TO,
-    to: recipients,
-    bcc: "billing@theworkvilla.com",
-    subject: `GST Invoice ${invoiceNum} — ${contract?.contract_number || "Contract"}`,
-    html: `
+  const emailSubject = `GST Invoice ${invoiceNum} — ${contract?.contract_number || "Contract"}`;
+  const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
         <div style="background-color: #015E65; padding: 24px 32px;">
           <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold;">The WorkVilla</h1>
@@ -102,12 +98,36 @@ export async function POST(
           <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">GST: 33AAACU4245J1ZF</p>
         </div>
       </div>
-    `,
+    `;
+
+  const { error: emailError } = await resend.emails.send({
+    from: EMAIL_FROM,
+    replyTo: EMAIL_REPLY_TO,
+    to: recipients,
+    bcc: "billing@theworkvilla.com",
+    subject: emailSubject,
+    html: emailHtml,
     attachments: [{ filename, content: pdfBuffer, contentType: "application/pdf" }],
   });
 
+  const logged = await logCommunication(adminSupabase, {
+    entityType: "billing_statement",
+    entityId: id,
+    channel: "email",
+    recipient: recipients.join(", "),
+    subject: emailSubject,
+    body: emailHtml,
+    attachmentUrl: statement.gst_invoice_path as string,
+    attachmentName: filename,
+    status: emailError ? "failed" : "sent",
+    errorMessage: emailError?.message ?? null,
+    sentBy: dbUser.id,
+  });
+
+  const commLogEntry = logged ? await resolveAttachmentUrl(logged) : null;
+
   if (emailError) {
-    return NextResponse.json({ error: emailError.message || "Failed to send email" }, { status: 502 });
+    return NextResponse.json({ error: emailError.message || "Failed to send email", commLogEntry }, { status: 502 });
   }
 
   await adminSupabase
@@ -137,5 +157,5 @@ export async function POST(
       .catch((e: unknown) => console.error("[messaging] GST invoice WA signed URL failed:", e));
   }
 
-  return NextResponse.json({ message: "GST invoice emailed successfully" });
+  return NextResponse.json({ message: "GST invoice emailed successfully", commLogEntry });
 }

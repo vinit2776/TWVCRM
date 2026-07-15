@@ -25,6 +25,9 @@ import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
 import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
 import { StatementTimeline } from "@/components/accounting/statement-timeline";
+import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
+import { RecentCommunicationsCard } from "@/components/communications/recent-communications-card";
+import type { CommunicationLogEntry } from "@/types";
 
 interface UsageCharge {
   id: string;
@@ -183,6 +186,11 @@ export function ViewStatementDialog({
   // Resend GST email state
   const [resendingGstEmail, setResendingGstEmail] = useState(false);
 
+  // Post-send confirmation modal + inline card refresh trigger
+  const [sentEntry, setSentEntry] = useState<CommunicationLogEntry | null>(null);
+  const [showSentDialog, setShowSentDialog] = useState(false);
+  const [commsRefreshKey, setCommsRefreshKey] = useState(0);
+
   // Re-issue payment link state
   const [reissuingLink, setReissuingLink] = useState(false);
   const [showResendChoice, setShowResendChoice] = useState(false);
@@ -334,6 +342,11 @@ export function ViewStatementDialog({
         onStatusChange();
         const refreshed = await fetch(`/api/billing-statements/${statementId}`);
         if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
+        if (json.commLogEntry) {
+          setSentEntry(json.commLogEntry);
+          setShowSentDialog(true);
+          setCommsRefreshKey((k) => k + 1);
+        }
       } else {
         toast.error(json.error || "Failed to send proforma");
       }
@@ -567,6 +580,11 @@ export function ViewStatementDialog({
       if (!res.ok) throw new Error(json.error || "Failed");
       toast.success("GST invoice email resent");
       onStatusChange();
+      if (json.commLogEntry) {
+        setSentEntry(json.commLogEntry);
+        setShowSentDialog(true);
+        setCommsRefreshKey((k) => k + 1);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to resend GST email");
     } finally {
@@ -633,6 +651,19 @@ export function ViewStatementDialog({
                 <StatementTimeline statementId={statement.id} maxHeight="280px" />
               </div>
             </details>
+
+            {/* Recent communications — persistent, always-visible record of
+                every email/WhatsApp/SMS sent for this statement, with content
+                and attachment. The always-visible counterpart to the
+                post-send confirmation modal. */}
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1.5">Recent Communications</p>
+              <RecentCommunicationsCard
+                entityType="billing_statement"
+                entityId={statement.id}
+                refreshKey={commsRefreshKey}
+              />
+            </div>
 
             {/* Tally state (only for Tally-issued statements; renders null otherwise) */}
             <TallyStatusBadge
@@ -1528,6 +1559,12 @@ export function ViewStatementDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <CommunicationSentDialog
+      entry={sentEntry}
+      open={showSentDialog}
+      onOpenChange={setShowSentDialog}
+    />
     </>
   );
 }
