@@ -219,22 +219,36 @@ export async function uploadForEStampAndSigning(params: {
   // Actual payload is inside raw.data
   const data = raw.data ?? raw;
 
-  // Leegality v3 response structure:
-  // data.requests[] — one entry per VIRTUAL signer with signUrl field.
-  // NOTE: AADHAAR-type invitees are NOT included in data.requests (they get
-  // the link via email directly from Leegality — no API-accessible URL).
+  // Leegality v3 response structure: the array of per-signer entries (each
+  // with a signUrl field) has been observed under both data.requests[] and
+  // data.invitees[] in production — same ambiguity getSigningStatus() already
+  // guards against. NOTE: AADHAAR-type invitees are NOT included in either
+  // array (they get the link via email directly from Leegality — no
+  // API-accessible URL), so this may legitimately return fewer entries than
+  // invitees sent.
   const requests: Record<string, unknown>[] = Array.isArray(data.requests)
     ? data.requests
-    : [];
+    : Array.isArray(data.invitees)
+      ? data.invitees
+      : [];
 
-  const signUrls: string[] = requests
-    .map((r) => String(r.signUrl ?? r.sign_url ?? r.signingUrl ?? ""))
-    .filter(Boolean);
+  console.log("[Leegality] requests count:", requests.length, "raw:", JSON.stringify(requests));
 
-  console.log("[Leegality] requests count:", requests.length, "signUrls:", signUrls);
+  // Match sign URLs back to lessor/lessee by email rather than assuming
+  // array position — AADHAAR invitees are omitted from the array, which
+  // shifts positional indexes whenever the lessee isn't VIRTUAL.
+  const findSignUrl = (email: string): string => {
+    const match = requests.find(
+      (r) => String(r.email ?? "").toLowerCase() === email.toLowerCase()
+    );
+    return String(match?.signUrl ?? match?.sign_url ?? match?.signingUrl ?? "");
+  };
 
-  // First sign URL belongs to the lessor (VIRTUAL signer)
-  const signUrl = signUrls[0] ?? "";
+  const lessorSignUrl = findSignUrl(params.lessorSigner.email);
+  const lesseeSignUrl = findSignUrl(params.lesseeSigner.email);
+
+  const signUrls: string[] = [lessorSignUrl, lesseeSignUrl].filter(Boolean);
+  const signUrl = lessorSignUrl || signUrls[0] || "";
 
   return {
     documentId: data.documentId ?? data.document_id ?? data.id ?? "",
