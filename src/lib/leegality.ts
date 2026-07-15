@@ -13,9 +13,11 @@
  * Key concepts:
  *   - profileId: Workflow ID from Leegality Dashboard (REQUIRED, set via LEEGALITY_PROFILE_ID)
  *   - inviteetype: signing method per invitee ("AADHAAR", "VIRTUAL", "DSC", "OFFLINE_SIGN")
- *   - stampSeries: stamp series code from dashboard (set via LEEGALITY_STAMP_SERIES)
- *   - stampValue: stamp duty amount as string e.g. "300"
  *   - documentId + signUrl returned on successful upload
+ *
+ * Note: e-stamping (LEEGALITY_STAMP_SERIES) was removed from this flow — plain
+ * e-sign only, no stamp paper. eStamp fields are still parsed defensively in
+ * getSigningStatus() in case the API returns them, but nothing sets them.
  *
  * Webhook HMAC: LEEGALITY_PRIVATE_SALT — used to verify inbound webhook signatures
  */
@@ -83,8 +85,15 @@ const BASE_URL =
   (process.env.LEEGALITY_API_URL || "https://api.leegality.com/v3.0").trim();
 const API_KEY = process.env.LEEGALITY_API_KEY?.trim();
 const PROFILE_ID = process.env.LEEGALITY_PROFILE_ID?.trim();
-const _STAMP_SERIES = process.env.LEEGALITY_STAMP_SERIES?.trim();
 const IS_SANDBOX = process.env.LEEGALITY_ENVIRONMENT?.trim() !== "production";
+
+const APP_URL = (
+  process.env.NEXT_PUBLIC_APP_URL ||
+  process.env.APP_URL ||
+  "https://twv-crm.vercel.app"
+)
+  .trim()
+  .replace(/\/$/, "");
 
 function getAuthHeaders() {
   return {
@@ -176,6 +185,10 @@ export async function uploadForEStampAndSigning(params: {
     ],
     // Both parties receive signing invitations simultaneously (not sequential)
     sequential: false,
+    // Tell Leegality where to POST status callbacks for this document. A
+    // dashboard-level global webhook URL is not guaranteed to be configured
+    // correctly (or at all) — this makes delivery explicit per request.
+    webhook_url: `${APP_URL}/api/webhooks/leegality`,
   };
 
   // Optional: add internal reference number for traceability
@@ -406,6 +419,40 @@ export async function downloadStampedDocument(
 }
 
 // ================================================================
+// Webhook payload parsing
+// ================================================================
+
+export interface LeegalityWebhookEvent {
+  documentId: string;
+  status: LeegalityStatus | "";
+}
+
+/**
+ * Parse an inbound Leegality webhook body into a normalized event.
+ *
+ * Leegality wraps response payloads in a `data` envelope everywhere else in
+ * this API (see uploadForEStampAndSigning / getSigningStatus), and field
+ * names have shown up as both camelCase and snake_case across endpoints.
+ * The webhook body has never been confirmed against a real callback, so we
+ * apply the same defensive fallbacks here rather than trusting one shape.
+ */
+export function parseWebhookPayload(
+  payload: Record<string, unknown>
+): LeegalityWebhookEvent {
+  const data = (payload.data as Record<string, unknown>) ?? payload;
+
+  const documentId = String(
+    data.documentId ?? data.document_id ?? data.id ?? ""
+  );
+
+  const rawStatus =
+    data.status ?? data.docStatus ?? data.doc_status ?? data.event ?? "";
+  const status = rawStatus ? normalizeStatus(rawStatus) : "";
+
+  return { documentId, status };
+}
+
+// ================================================================
 // Webhook signature verification
 // ================================================================
 
@@ -426,8 +473,10 @@ export function verifyWebhookSignature(
 ): boolean {
   const salt = process.env.LEEGALITY_PRIVATE_SALT;
   if (!salt) {
-    console.warn("[Leegality] LEEGALITY_PRIVATE_SALT not set — skipping verification.");
-    return true; // allow through in dev if salt not set
+    // Fail closed: an unconfigured secret must never be treated as "no verification needed" —
+    // that would let anyone forge a signing-completion callback.
+    console.error("[Leegality] LEEGALITY_PRIVATE_SALT not set — rejecting webhook.");
+    return false;
   }
   const expected = crypto
     .createHmac("sha256", salt)
