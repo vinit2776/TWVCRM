@@ -539,11 +539,6 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         {/* Work action buttons: owner or override tier only */}
         {canAct && (
           <>
-            {allowedNext.includes("acknowledged") && (
-              <Button size="sm" onClick={() => changeStatus("acknowledged")} disabled={busy}>
-                <CheckCircle2 className="h-4 w-4 mr-1" /> Acknowledge
-              </Button>
-            )}
             {allowedNext.includes("in_progress") && (
               <Button size="sm" onClick={() => changeStatus("in_progress")} disabled={busy}>
                 <Wrench className="h-4 w-4 mr-1" /> Start Work

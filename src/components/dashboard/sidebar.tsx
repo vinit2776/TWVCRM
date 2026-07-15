@@ -179,7 +179,7 @@ const navSections: NavSection[] = [
     items: [
       { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
       { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/facility/issues",        label: "Internal Tasks",      icon: ClipboardList, roles: null },
+      { href: "/facility/issues",        label: "Tasks / Work Orders", icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",     label: "My Tasks",            icon: Ticket,        roles: null },
       { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "fms", "viewer", "floor_manager", "office_admin"] },
       { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["admin", "manager", "it_manager", "fms", "viewer"] },

@@ -189,7 +189,7 @@ function FacilityIssuesPageInner() {
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold">Internal Tasks</h1>
+          <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
           <p className="text-xs md:text-sm text-muted-foreground">
             {showGrouped ? "All tickets · grouped by status" : "IT infrastructure tickets across all locations"}
           </p>
