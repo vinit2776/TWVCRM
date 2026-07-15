@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES, logIssueEvent, computeSlaTarget } from "@/lib/facility";
+import { notifyIssueAssignee } from "@/lib/facility-notifications";
 import type { FacilityIssuePriority } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
+const PRIORITY_RANK: Record<FacilityIssuePriority, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
 export async function GET(
   _request: NextRequest,
@@ -90,8 +92,22 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid priority" }, { status: 400 });
   }
 
-  // If priority changed, recompute SLA target
-  if (updates.priority && updates.priority !== existing.priority && existing.category) {
+  // Manual TAT override — reported_problem only (delegated tasks track TAT via due_date).
+  if ("tat_hours" in body && body.tat_hours != null && body.tat_hours !== "" && existing.task_type === "reported_problem") {
+    const hours = Number(body.tat_hours);
+    if (!isFinite(hours) || hours <= 0) {
+      return NextResponse.json({ error: "tat_hours must be a positive number" }, { status: 400 });
+    }
+    updates.tat_hours = hours;
+    updates.tat_manual_override = true;
+    updates.sla_target_at = new Date(new Date(existing.reported_at).getTime() + hours * 3600 * 1000).toISOString();
+    updates.sla_breached = false;
+  } else if (
+    // If priority changed, recompute SLA target from category defaults — unless
+    // a manual TAT override is already in effect, which should survive a
+    // priority change instead of being silently overwritten.
+    updates.priority && updates.priority !== existing.priority && existing.category && !existing.tat_manual_override
+  ) {
     updates.sla_target_at = computeSlaTarget(
       existing.category,
       updates.priority as FacilityIssuePriority,
@@ -112,6 +128,16 @@ export async function PUT(
       message: `Priority changed: ${existing.priority} → ${updates.priority}`,
       payload: { from: existing.priority, to: updates.priority },
     });
+
+    // Only an escalation (severity increased) broadcasts across every channel —
+    // a de-escalation isn't urgent enough to page the assignee.
+    const isEscalation = PRIORITY_RANK[updates.priority as FacilityIssuePriority] > PRIORITY_RANK[existing.priority as FacilityIssuePriority];
+    if (isEscalation) {
+      await notifyIssueAssignee(
+        { id, category_id: existing.category_id, assigned_to: existing.assigned_to, issue_number: existing.issue_number, title: existing.title },
+        { type: "priority_escalated", from: existing.priority, to: updates.priority as string, actorName: dbUser!.full_name }
+      );
+    }
   }
 
   logAudit(supabase, {

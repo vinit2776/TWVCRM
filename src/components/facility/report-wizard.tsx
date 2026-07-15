@@ -84,6 +84,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
+  const [tatHours, setTatHours] = useState("");
 
   // asset search
   const [assetQuery, setAssetQuery] = useState("");
@@ -99,6 +100,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     if (!open) return;
     setStep(prefilled ? 2 : 1);
     setPhotos([]);
+    setTatHours("");
     setTitle("");
     setDescription("");
     setReportedVia("walk_in");
@@ -191,6 +193,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           title: title.trim(),
           description: description.trim() || null,
           priority,
+          tat_hours: tatHours.trim() ? Number(tatHours) : undefined,
           reported_via: reportedVia,
           reporter_name: reporterName.trim() || null,
           reporter_email: reporterEmail.trim() || null,
@@ -456,6 +459,25 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       </div>
 
       <div>
+        <Label htmlFor="tat-hours" className="text-sm font-medium">TAT override (optional)</Label>
+        <div className="flex items-center gap-2 mt-1">
+          <Input
+            id="tat-hours"
+            type="number"
+            min={1}
+            step={1}
+            value={tatHours}
+            onChange={(e) => setTatHours(e.target.value)}
+            placeholder="Hours"
+            className="max-w-[140px]"
+          />
+          <span className="text-xs text-muted-foreground">
+            Leave blank to use the category/priority default
+          </span>
+        </div>
+      </div>
+
+      <div>
         <Label htmlFor="title" className="text-sm font-medium">Title</Label>
         <Input
           id="title"
@@ -570,8 +592,8 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
         <DialogHeader className="p-4 pb-3 border-b">
-          <DialogTitle className="text-base">Report a facility issue</DialogTitle>
-          <DialogDescription className="sr-only">3-step wizard to report a new issue</DialogDescription>
+          <DialogTitle className="text-base">New Work Order</DialogTitle>
+          <DialogDescription className="sr-only">3-step wizard to raise a new work order</DialogDescription>
           <div className="flex items-center gap-3 pt-2">
             {!prefilled && <>{StepHeader(1, "Where")}<ChevronRight className="h-3 w-3 text-muted-foreground" /></>}
             {StepHeader(2, prefilled ? "Details" : "What")}

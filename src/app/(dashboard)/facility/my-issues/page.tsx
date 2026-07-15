@@ -4,17 +4,17 @@
  * My Issues — mobile-first technician home.
  * Mode toggle: Assigned to Me / Reported by Me — each with its own
  * Open / In Progress / Resolved Today tabs (same 3 tabs, different source list).
- * Sticky bottom: Report Issue.
+ * Sticky bottom: Work Order.
  */
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Wrench, AlertTriangle, ChevronRight, UserPlus, UserX } from "lucide-react";
+import { Plus, Wrench, AlertTriangle, ChevronRight, UserPlus, UserX, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  PRIORITY_STYLES, STATUS_STYLES, timeAgo, timeUntil,
+  PRIORITY_STYLES, STATUS_STYLES, timeAgo, timeUntil, kpiPointsStyle,
 } from "@/lib/facility-ui";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
@@ -51,6 +51,11 @@ export default function MyFacilityIssuesPage() {
 
   // Counts for tabs (co-located with fetchData so both update on tab/mode change)
   const [counts, setCounts] = useState({ open: 0, in_progress: 0, resolved_today: 0 });
+  const [kpi, setKpi] = useState<{ total_points: number; month_points: number; tickets_scored: number } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/facility/my-kpi").then((r) => r.json()).then((j) => setKpi(j.data ?? null)).catch(() => null);
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
@@ -111,13 +116,36 @@ export default function MyFacilityIssuesPage() {
         </div>
         <div className="hidden md:flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setDelegateOpen(true)}>
-            <UserPlus className="h-4 w-4 mr-1" /> Delegate
+            <UserPlus className="h-4 w-4 mr-1" /> Task
           </Button>
           <Button size="sm" onClick={() => setWizardOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" /> New Task
+            <Plus className="h-4 w-4 mr-1" /> Work Order
           </Button>
         </div>
       </div>
+
+      {/* Your Score — private, self only */}
+      {kpi && kpi.tickets_scored > 0 && (
+        <div className="rounded-lg border bg-gradient-to-br from-[#015E65]/5 to-transparent p-3 flex items-center gap-4">
+          <div className="h-9 w-9 rounded-full bg-[#015E65]/10 flex items-center justify-center shrink-0">
+            <Trophy className="h-4 w-4 text-[#015E65]" />
+          </div>
+          <div className="flex-1 flex items-center gap-6">
+            <div>
+              <div className="text-lg font-semibold leading-none">{kpi.total_points}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">Total points</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold leading-none">{kpi.month_points}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">This month</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold leading-none">{kpi.tickets_scored}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">Tickets scored</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mode toggle — Assigned to Me / Reported by Me */}
       <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted/40 p-1">
@@ -215,7 +243,7 @@ function Card({ issue, showAssignee }: { issue: FacilityIssue; showAssignee: boo
             <code className="text-[10px] font-mono text-muted-foreground">{issue.issue_number}</code>
             {issue.task_type === "delegated_task" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
-                <UserPlus className="h-2.5 w-2.5" /> Delegated
+                <UserPlus className="h-2.5 w-2.5" /> Task
               </span>
             )}
             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
@@ -224,6 +252,11 @@ function Card({ issue, showAssignee }: { issue: FacilityIssue; showAssignee: boo
             {issue.sla_breached && open && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
                 <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> Breached
+              </span>
+            )}
+            {issue.kpi_points != null && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium", kpiPointsStyle(issue.kpi_points).className)}>
+                {kpiPointsStyle(issue.kpi_points).label}
               </span>
             )}
           </div>

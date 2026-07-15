@@ -8,7 +8,7 @@
  * visible so the team can reference them without changing filters.
  *
  * Filters: search, scope, status, priority, location, assigned_to, sla_breached.
- * Top-right action: Report Issue → opens FacilityReportWizard.
+ * Top-right action: Work Order → opens FacilityReportWizard.
  */
 
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import {
-  PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES,
+  PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
   timeAgo, timeUntil,
 } from "@/lib/facility-ui";
 import type {
@@ -199,10 +199,10 @@ function FacilityIssuesPageInner() {
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setDelegateOpen(true)}>
-            <UserPlus className="h-4 w-4 mr-1" /> Delegate
+            <UserPlus className="h-4 w-4 mr-1" /> Task
           </Button>
           <Button size="sm" onClick={() => setWizardOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" /> New Task
+            <Plus className="h-4 w-4 mr-1" /> Work Order
           </Button>
         </div>
       </div>
@@ -461,7 +461,7 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
             <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
             {issue.task_type === "delegated_task" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
-                <UserPlus className="h-2.5 w-2.5" /> Delegated
+                <UserPlus className="h-2.5 w-2.5" /> Task
               </span>
             )}
             {isUnowned && (
@@ -480,6 +480,11 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
             {issue.sla_breached && isOpen && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
                 <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> SLA Breached
+              </span>
+            )}
+            {issue.kpi_points != null && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium", kpiPointsStyle(issue.kpi_points).className)}>
+                {kpiPointsStyle(issue.kpi_points).label}
               </span>
             )}
           </div>

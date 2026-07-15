@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logIssueEvent } from "@/lib/facility";
+import { computeKpiPoints } from "@/lib/facility-kpi";
+import type { FacilityIssuePriority } from "@/types";
 
 /**
  * Public endpoint — keyed by satisfaction_token, NO auth required.
@@ -16,7 +18,7 @@ async function loadByToken(supabase: ReturnType<typeof createAdminClient>, token
     .from("facility_issues")
     .select(`
       id, issue_number, title, status, resolved_at, satisfaction_rating, satisfaction_received_at,
-      reopen_count, satisfaction_token,
+      reopen_count, satisfaction_token, priority, sla_breached,
       location:locations(id, name)
     `)
     .eq("satisfaction_token", token)
@@ -78,6 +80,24 @@ export async function POST(
     updates.closed_at = null;
     updates.reopen_count = (issue.reopen_count ?? 0) + 1;
     reopened = true;
+    // Revoke the provisional score — it needs to be resolved properly again.
+    updates.kpi_points = null;
+  } else if (issue.status === "resolved" || issue.status === "closed") {
+    // Top up the KPI score with the satisfaction bonus now that it's known.
+    const { data: latestExt } = await supabase
+      .from("facility_issue_tat_extensions")
+      .select("kpi_exempt")
+      .eq("issue_id", issue.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    updates.kpi_points = computeKpiPoints({
+      priority: issue.priority as FacilityIssuePriority,
+      slaBreached: issue.sla_breached ?? false,
+      reopenCount: issue.reopen_count ?? 0,
+      satisfactionRating: rating,
+      latestExtensionExempt: latestExt?.kpi_exempt ?? null,
+    });
   }
 
   const { error: upErr } = await supabase

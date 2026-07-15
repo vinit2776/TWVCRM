@@ -153,6 +153,76 @@ export async function sendPushToAll(payload: PushPayload): Promise<void> {
 }
 
 /**
+ * Like sendPushToUsers, but logs each attempt to push_delivery_log under the
+ * given batchId so delivered/clicked status can be read back later (the SW
+ * beacons those events to /api/push/track using the batchId+endpoint baked
+ * into the payload — see broadcastPush for the same mechanism at scale).
+ */
+export async function sendTrackedPushToUsers(
+  userIds: string[],
+  payload: PushPayload,
+  batchId: string
+): Promise<{ sent: number; failed: number }> {
+  ensureVapid();
+  if (!vapidConfigured || !userIds.length) return { sent: 0, failed: 0 };
+
+  const supabase = createAdminClient();
+  const { data: subs } = await supabase
+    .from("push_subscriptions")
+    .select("user_id, endpoint, p256dh, auth")
+    .in("user_id", userIds);
+
+  if (!subs?.length) return { sent: 0, failed: 0 };
+
+  const queuedRows = subs.map((sub) => ({
+    batch_id: batchId,
+    user_id: sub.user_id,
+    endpoint: sub.endpoint,
+    payload: { ...payload, batchId },
+    status: "queued",
+  }));
+  await supabase.from("push_delivery_log").insert(queuedRows);
+
+  let sent = 0;
+  let failed = 0;
+  await Promise.all(
+    subs.map(async (sub) => {
+      const enriched = JSON.stringify({ ...payload, batchId, endpoint: sub.endpoint });
+      try {
+        await webPush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          enriched
+        );
+        sent++;
+        await supabase
+          .from("push_delivery_log")
+          .update({ status: "sent", sent_at: new Date().toISOString() })
+          .eq("batch_id", batchId)
+          .eq("endpoint", sub.endpoint);
+      } catch (err: unknown) {
+        failed++;
+        const e = err as { statusCode?: number; body?: string; message?: string };
+        await supabase
+          .from("push_delivery_log")
+          .update({
+            status: "failed",
+            error_code: e.statusCode || null,
+            error_message: e.body || e.message || "unknown",
+          })
+          .eq("batch_id", batchId)
+          .eq("endpoint", sub.endpoint);
+
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+        }
+      }
+    })
+  );
+
+  return { sent, failed };
+}
+
+/**
  * Roles that have access to the Procurement module (mirrors sidebar role arrays).
  * Used to scope procurement push notifications to relevant staff only.
  */

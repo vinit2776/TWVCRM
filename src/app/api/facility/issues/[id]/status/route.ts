@@ -6,6 +6,7 @@ import {
   resolutionMinutes, metSla, logIssueEvent, computeSlaTarget,
 } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
+import { computeKpiPoints } from "@/lib/facility-kpi";
 import type { FacilityIssueStatus, FacilityIssuePriority, FacilityRootCause } from "@/types";
 
 const VALID_ROOT: FacilityRootCause[] = [
@@ -41,7 +42,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
+    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -101,6 +102,24 @@ export async function PATCH(
 
     // Mark for satisfaction request
     updates.satisfaction_requested_at = new Date().toISOString();
+
+    // KPI score — satisfaction isn't known yet (requested just above), so this
+    // is the base score; the satisfaction endpoint tops it up once a rating
+    // comes in (or recomputes on an auto-reopen from a low rating).
+    const { data: latestExt } = await supabase
+      .from("facility_issue_tat_extensions")
+      .select("kpi_exempt")
+      .eq("issue_id", id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    updates.kpi_points = computeKpiPoints({
+      priority: existing.priority as FacilityIssuePriority,
+      slaBreached: (updates.sla_breached ?? existing.sla_breached ?? false) as boolean,
+      reopenCount: existing.reopen_count ?? 0,
+      satisfactionRating: null,
+      latestExtensionExempt: latestExt?.kpi_exempt ?? null,
+    });
   }
 
   const { data, error } = await supabase

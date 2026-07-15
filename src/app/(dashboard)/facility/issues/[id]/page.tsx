@@ -20,7 +20,8 @@ import Link from "next/link";
 import {
   ArrowLeft, AlertTriangle, Loader2, MessageSquare, MapPin, User,
   Server, Clock, RefreshCw, CheckCircle2, Wrench, Star, ImagePlus,
-  Phone, Mail, ExternalLink, ShieldAlert,
+  Phone, Mail, ExternalLink, ShieldAlert, Bell, Check, CheckCheck, X,
+  TimerReset, Trophy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,19 +31,31 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { cn, formatDate } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
+  TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import type {
-  FacilityIssue, FacilityIssueStatus, FacilityRootCause,
+  FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
 } from "@/types";
 
 interface AssigneeOption { id: string; full_name: string; role: string }
 interface Collaborator { id: string; user_id: string; user: { id: string; full_name: string; email: string; role: string } }
 interface CurrentUser { id: string; full_name: string; role: string }
+interface NudgeRecord {
+  id: string;
+  channel: "push" | "whatsapp" | "email";
+  status: "sent" | "delivered" | "read" | "opened" | "failed";
+  sent_at: string;
+  error_message: string | null;
+  sender?: { full_name: string } | null;
+}
 
 interface AssetAmcSummary {
   amc_status: string | null;
@@ -108,6 +121,14 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [collabOpen, setCollabOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [assetDetail, setAssetDetail] = useState<AssetDetail | null>(null);
+  const [nudges, setNudges] = useState<NudgeRecord[]>([]);
+  const [nudging, setNudging] = useState(false);
+  const [extensions, setExtensions] = useState<FacilityIssueTatExtension[]>([]);
+  const [extendOpen, setExtendOpen] = useState(false);
+  const [extendHours, setExtendHours] = useState("24");
+  const [extendReason, setExtendReason] = useState<FacilityTatReason | "">("");
+  const [extendExplanation, setExtendExplanation] = useState("");
+  const [extending, setExtending] = useState(false);
   const assetFetchedRef = useRef<string | null>(null);
 
   const fetchIssue = async () => {
@@ -125,9 +146,23 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     if (res.ok) setCollaborators(json.data ?? []);
   };
 
+  const fetchNudges = async () => {
+    const res = await fetch(`/api/facility/issues/${id}/nudge`);
+    const json = await res.json();
+    if (res.ok) setNudges(json.data ?? []);
+  };
+
+  const fetchExtensions = async () => {
+    const res = await fetch(`/api/facility/issues/${id}/extend`);
+    const json = await res.json();
+    if (res.ok) setExtensions(json.data ?? []);
+  };
+
   useEffect(() => {
     fetchIssue();
     fetchCollaborators();
+    fetchNudges();
+    fetchExtensions();
     fetch("/api/me")
       .then((r) => r.json())
       .then((j) => setCurrentUser(j ?? null))
@@ -196,6 +231,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const isOwner = !!currentUser && issue?.assigned_to === currentUser.id;
   const isUnowned = !!issue && !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const canAct = isOwner || isOverrideTier;
+  const canNudge = !!issue?.assigned_to && !!currentUser &&
+    (isOverrideTier || issue.reported_by === currentUser.id);
+  const canExtend = isOwner && open && (issue?.tat_extension_count ?? 0) < 2;
 
   const claimCountdownMs = useClaimCountdown(isUnowned ? issue?.claim_sla_target_at : null);
 
@@ -256,6 +294,66 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       await fetchIssue();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Take-over failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendNudge = async () => {
+    if (!issue) return;
+    setNudging(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${issue.id}/nudge`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Nudge failed");
+      const sentChannels = (json.data ?? []).filter((r: { status: string }) => r.status === "sent").length;
+      toast.success(sentChannels > 0 ? `Nudge sent on ${sentChannels} channel${sentChannels > 1 ? "s" : ""}` : "Nudge attempted — no channels available");
+      await fetchNudges();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Nudge failed");
+    } finally {
+      setNudging(false);
+    }
+  };
+
+  const submitExtend = async () => {
+    if (!issue || !extendReason || !extendExplanation.trim() || !extendHours) return;
+    setExtending(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${issue.id}/extend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hours: Number(extendHours), reason_category: extendReason, explanation: extendExplanation.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Extension failed");
+      toast.success("TAT extended");
+      setExtendOpen(false);
+      setExtendReason("");
+      setExtendExplanation("");
+      setExtendHours("24");
+      await Promise.all([fetchIssue(), fetchExtensions()]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Extension failed");
+    } finally {
+      setExtending(false);
+    }
+  };
+
+  const passCard = async (extensionId: string, kpiExempt: boolean) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}/extend/${extensionId}/pass-card`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kpi_exempt: kpiExempt }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Pass card failed");
+      toast.success(`Extension marked ${kpiExempt ? "KPI-exempt" : "counts against KPI"}`);
+      await Promise.all([fetchIssue(), fetchExtensions()]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Pass card failed");
     } finally {
       setBusy(false);
     }
@@ -395,6 +493,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                 <Clock className="h-2.5 w-2.5 mr-0.5" /> SLA {timeUntil(issue.sla_target_at)}
               </span>
             )}
+            {issue.kpi_points != null && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium inline-flex items-center gap-1", kpiPointsStyle(issue.kpi_points).className)}>
+                <Trophy className="h-2.5 w-2.5" /> {kpiPointsStyle(issue.kpi_points).label}
+              </span>
+            )}
           </div>
           <h1 className="text-base md:text-lg font-semibold mt-1 break-words">{issue.title}</h1>
         </div>
@@ -468,6 +571,21 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         {isOverrideTier && (
           <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)} disabled={busy}>
             <User className="h-4 w-4 mr-1" /> {issue.assignee?.full_name ? "Reassign" : "Assign to…"}
+          </Button>
+        )}
+
+        {/* Nudge: override tier or the reporter/delegator, only when someone owns it */}
+        {canNudge && (
+          <Button size="sm" variant="outline" onClick={sendNudge} disabled={nudging}>
+            {nudging ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
+            Ask for update
+          </Button>
+        )}
+
+        {/* Extend TAT: owner only, up to 2 per ticket */}
+        {canExtend && (
+          <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)} disabled={busy}>
+            <TimerReset className="h-4 w-4 mr-1" /> Extend ({2 - (issue.tat_extension_count ?? 0)} left)
           </Button>
         )}
       </div>
@@ -747,6 +865,76 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             >+ Add people</button>
           </section>
 
+          {/* Nudge history */}
+          {nudges.length > 0 && (
+            <section className="rounded-lg border bg-card p-4 space-y-2">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Nudges</div>
+              <div className="space-y-1.5">
+                {nudges.slice(0, 6).map((n) => {
+                  const label = { push: "Push", whatsapp: "WhatsApp", email: "Email" }[n.channel];
+                  const statusStyle: Record<string, { icon: typeof Check; text: string; className: string }> = {
+                    sent: { icon: Check, text: "Sent", className: "text-muted-foreground" },
+                    delivered: { icon: CheckCheck, text: "Delivered", className: "text-blue-600" },
+                    read: { icon: CheckCheck, text: "Read", className: "text-emerald-600" },
+                    opened: { icon: CheckCheck, text: "Opened", className: "text-emerald-600" },
+                    failed: { icon: X, text: "Failed", className: "text-red-600" },
+                  };
+                  const s = statusStyle[n.status] ?? statusStyle.sent;
+                  const StatusIcon = s.icon;
+                  return (
+                    <div key={n.id} className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">{label} · {timeAgo(n.sent_at)}</span>
+                      <span className={cn("flex items-center gap-1 font-medium", s.className)} title={n.error_message ?? undefined}>
+                        <StatusIcon className="h-3 w-3" /> {s.text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* TAT extension history */}
+          {extensions.length > 0 && (
+            <section className="rounded-lg border bg-card p-4 space-y-3">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">TAT Extensions</div>
+              <div className="space-y-3">
+                {extensions.map((ext) => (
+                  <div key={ext.id} className="text-xs space-y-1 border-l-2 pl-2" style={{ borderColor: ext.kpi_exempt ? "#059669" : "#dc2626" }}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">+{ext.added_hours}h — {TAT_REASON_LABEL[ext.reason_category]}</span>
+                      <span className={cn("px-1.5 py-0.5 rounded-full ring-1 text-[10px] font-medium",
+                        ext.kpi_exempt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-red-50 text-red-700 ring-red-200")}>
+                        {ext.kpi_exempt ? "KPI exempt" : "Counts vs KPI"}
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground">{ext.explanation}</div>
+                    <div className="text-muted-foreground">{ext.requester?.full_name ?? "—"} · {timeAgo(ext.created_at)}</div>
+                    {ext.pass_card_by && (
+                      <div className="text-muted-foreground italic">Pass-carded{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
+                    )}
+                    {isOverrideTier && (
+                      <div className="flex gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => passCard(ext.id, true)}
+                          disabled={busy || ext.kpi_exempt}
+                          className="text-[10px] text-emerald-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Mark exempt</button>
+                        <button
+                          type="button"
+                          onClick={() => passCard(ext.id, false)}
+                          disabled={busy || !ext.kpi_exempt}
+                          className="text-[10px] text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Mark counts vs KPI</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Reporter */}
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Reporter</div>
@@ -781,6 +969,56 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           )}
         </aside>
       </div>
+
+      {/* ───── Extend TAT dialog (owner only) ──────────────────────────────── */}
+      <Dialog open={extendOpen} onOpenChange={setExtendOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Extend TAT</DialogTitle>
+            <DialogDescription>
+              {2 - (issue.tat_extension_count ?? 0)} extension{2 - (issue.tat_extension_count ?? 0) === 1 ? "" : "s"} left on this ticket.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Additional hours</Label>
+              <Input type="number" min={1} value={extendHours} onChange={(e) => setExtendHours(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Reason</Label>
+              <Select value={extendReason} onValueChange={(v) => setExtendReason(v as FacilityTatReason)}>
+                <SelectTrigger><SelectValue placeholder="Select a reason" /></SelectTrigger>
+                <SelectContent>
+                  {TAT_REASON_LIST_EXEMPT.map((r) => (
+                    <SelectItem key={r} value={r}>{TAT_REASON_LABEL[r]}</SelectItem>
+                  ))}
+                  {TAT_REASON_LIST_CONTROLLABLE.map((r) => (
+                    <SelectItem key={r} value={r}>{TAT_REASON_LABEL[r]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {extendReason && (
+                <p className="text-[11px] text-muted-foreground">
+                  {TAT_REASON_LIST_EXEMPT.includes(extendReason)
+                    ? "Outside your control — won't count against your KPI."
+                    : "Within your control — counts against your KPI if still late."}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Explanation</Label>
+              <Textarea value={extendExplanation} onChange={(e) => setExtendExplanation(e.target.value)} rows={3} placeholder="What's causing the delay?" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExtendOpen(false)}>Cancel</Button>
+            <Button onClick={submitExtend} disabled={extending || !extendReason || !extendExplanation.trim() || !extendHours}>
+              {extending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Extend
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ───── Resolve dialog ──────────────────────────────────────────────── */}
       <ResolveDialog

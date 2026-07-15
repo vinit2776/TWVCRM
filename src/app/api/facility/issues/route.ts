@@ -111,6 +111,7 @@ export async function POST(request: NextRequest) {
     linked_feedback_id,
     assigned_to: delegateAssignedTo,   // delegated_task only — the person being delegated to
     due_date,                          // delegated_task only — manual TAT, required (D4)
+    tat_hours: manualTatHours,         // reported_problem only — manual override of the computed TAT
     attachments,           // optional array of { file_url, file_path, file_type, caption }
   } = body;
 
@@ -171,28 +172,56 @@ export async function POST(request: NextRequest) {
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
   // Delegated tasks use the caller-supplied due date directly as the TAT — they
   // bypass computeSlaTarget() (category/priority-derived), which still runs
-  // unchanged for reported_problem.
+  // unchanged for reported_problem unless a manual TAT override was supplied.
+  const hasManualTat = task_type === "reported_problem" && manualTatHours != null && manualTatHours !== "";
+  const computedTatHours = task_type === "delegated_task"
+    ? null // delegated tasks track TAT via due_date, not tat_hours
+    : hasManualTat
+      ? Number(manualTatHours)
+      : (() => {
+          const hoursMap: Record<FacilityIssuePriority, number> = {
+            critical: Number(slaSource.default_sla_critical_hrs) || 2,
+            high: Number(slaSource.default_sla_high_hrs) || 8,
+            medium: Number(slaSource.default_sla_medium_hrs) || 24,
+            low: Number(slaSource.default_sla_low_hrs) || 72,
+          };
+          return hoursMap[priority as FacilityIssuePriority];
+        })();
   const slaTargetAt = task_type === "delegated_task"
     ? new Date(due_date).toISOString()
-    : computeSlaTarget(slaSource, priority);
+    : hasManualTat
+      ? new Date(Date.now() + Number(manualTatHours) * 3600 * 1000).toISOString()
+      : computeSlaTarget(slaSource, priority);
   const claimSlaTargetAt = computeClaimSlaTarget(priority);
 
-  // Auto-assign based on category's default_assignee_id — reported_problem only.
-  // Delegated tasks are assigned explicitly (delegatedAssignee above), not via
-  // category defaults.
+  // Auto-assign, reported_problem only. Delegated tasks are assigned explicitly
+  // (delegatedAssignee above), not via category/department defaults. Priority
+  // order: category's default_assignee_id (most specific) → department head
+  // for the ticket's scope (broader fallback) → left unassigned for manual claim.
   let autoAssignee: { id: string; full_name: string } | null = null;
-  if (task_type === "reported_problem" && categoryDefaultAssigneeId) {
+  if (task_type === "reported_problem") {
     const adminClient = createAdminClient();
-    const { data: assignee } = await adminClient
-      .from("users")
-      .select("id, full_name")
-      .eq("id", categoryDefaultAssigneeId)
-      .eq("is_active", true)
-      .single();
-    autoAssignee = assignee ?? null;
+    if (categoryDefaultAssigneeId) {
+      const { data: assignee } = await adminClient
+        .from("users")
+        .select("id, full_name")
+        .eq("id", categoryDefaultAssigneeId)
+        .eq("is_active", true)
+        .single();
+      autoAssignee = assignee ?? null;
+      if (!autoAssignee) {
+        // UUID set but user is inactive — alert admins so they fix the routing in /facility/settings
+        notifyAdminsStaleAssignee({ categoryId: category_id!, issueNumber, issueTitle: title.trim() });
+      }
+    }
     if (!autoAssignee) {
-      // UUID set but user is inactive — alert admins so they fix the routing in /facility/settings
-      notifyAdminsStaleAssignee({ categoryId: category_id!, issueNumber, issueTitle: title.trim() });
+      const { data: department } = await adminClient
+        .from("facility_departments")
+        .select("head_user_id, head:users!facility_departments_head_user_id_fkey(id, full_name, is_active)")
+        .eq("scope", scope)
+        .single();
+      const head = department?.head as unknown as { id: string; full_name: string; is_active: boolean } | null;
+      if (head?.is_active) autoAssignee = { id: head.id, full_name: head.full_name };
     }
   }
 
@@ -221,6 +250,8 @@ export async function POST(request: NextRequest) {
       linked_feedback_id: linked_feedback_id || null,
       sla_target_at: slaTargetAt,
       claim_sla_target_at: claimSlaTargetAt,
+      tat_hours: computedTatHours,
+      tat_manual_override: hasManualTat,
       ...(finalAssignee ? {
         assigned_to: finalAssignee.id,
         assigned_at: now,
