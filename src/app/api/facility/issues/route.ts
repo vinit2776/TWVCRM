@@ -128,6 +128,9 @@ export async function POST(request: NextRequest) {
   if (!VALID_TASK_TYPE.includes(task_type)) {
     return NextResponse.json({ error: `Invalid task_type. Use one of: ${VALID_TASK_TYPE.join(", ")}` }, { status: 400 });
   }
+  if (manualTatHours != null && manualTatHours !== "" && (!isFinite(Number(manualTatHours)) || Number(manualTatHours) <= 0)) {
+    return NextResponse.json({ error: "tat_hours must be a positive number" }, { status: 400 });
+  }
 
   // Delegated tasks: required assignee + TAT, validated before any DB writes.
   let delegatedAssignee: { id: string; full_name: string; is_active: boolean } | null = null;

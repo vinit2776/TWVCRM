@@ -81,7 +81,9 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
+  const [tatMode, setTatMode] = useState<"hours" | "datetime">("hours");
   const [tatHours, setTatHours] = useState("");
+  const [tatDateTime, setTatDateTime] = useState("");
 
   // asset search
   const [assetQuery, setAssetQuery] = useState("");
@@ -97,7 +99,9 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     if (!open) return;
     setStep(prefilled ? 2 : 1);
     setPhotos([]);
+    setTatMode("hours");
     setTatHours("");
+    setTatDateTime("");
     setTitle("");
     setDescription("");
     setReporterName("");
@@ -172,9 +176,24 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const canNext2 = !!scope && title.trim().length >= 3;
   const canSubmit = canNext1 && canNext2;
 
+  // TAT override, resolved from whichever mode is active — hours directly,
+  // or a target date/time converted to hours-from-now (fractional is fine).
+  const resolveTatHours = (): number | undefined => {
+    if (tatMode === "hours") {
+      return tatHours.trim() ? Number(tatHours) : undefined;
+    }
+    if (!tatDateTime) return undefined;
+    return (new Date(tatDateTime).getTime() - Date.now()) / 3_600_000;
+  };
+
   // submit
   const submit = async () => {
     if (!canSubmit) return;
+    const tatHoursValue = resolveTatHours();
+    if (tatMode === "datetime" && tatDateTime && (tatHoursValue == null || tatHoursValue <= 0)) {
+      toast.error("TAT date & time must be in the future");
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch("/api/facility/issues", {
@@ -189,7 +208,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           title: title.trim(),
           description: description.trim() || null,
           priority,
-          tat_hours: tatHours.trim() ? Number(tatHours) : undefined,
+          tat_hours: tatHoursValue,
           reporter_name: reporterName.trim() || null,
           reporter_email: reporterEmail.trim() || null,
           reporter_phone: reporterPhone.trim() || null,
@@ -454,22 +473,53 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       </div>
 
       <div>
-        <Label htmlFor="tat-hours" className="text-sm font-medium">TAT override (optional)</Label>
-        <div className="flex items-center gap-2 mt-1">
-          <Input
-            id="tat-hours"
-            type="number"
-            min={1}
-            step={1}
-            value={tatHours}
-            onChange={(e) => setTatHours(e.target.value)}
-            placeholder="Hours"
-            className="max-w-[140px]"
-          />
-          <span className="text-xs text-muted-foreground">
-            Leave blank to use the category/priority default
-          </span>
+        <Label className="text-sm font-medium">TAT override (optional)</Label>
+        <div className="flex items-center gap-1 mt-1.5 mb-2">
+          <button
+            type="button"
+            onClick={() => setTatMode("hours")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-full border",
+              tatMode === "hours" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+            )}
+          >Hours</button>
+          <button
+            type="button"
+            onClick={() => setTatMode("datetime")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-full border",
+              tatMode === "datetime" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+            )}
+          >Date &amp; time</button>
         </div>
+        {tatMode === "hours" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              id="tat-hours"
+              type="number"
+              min={1}
+              step={1}
+              value={tatHours}
+              onChange={(e) => setTatHours(e.target.value)}
+              placeholder="Hours"
+              className="max-w-[140px]"
+            />
+            <span className="text-xs text-muted-foreground">
+              Leave blank to use the category/priority default
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input
+              id="tat-datetime"
+              type="datetime-local"
+              value={tatDateTime}
+              onChange={(e) => setTatDateTime(e.target.value)}
+              className="max-w-[220px]"
+            />
+            <span className="text-xs text-muted-foreground">Due by this date &amp; time</span>
+          </div>
+        )}
       </div>
 
       <div>
