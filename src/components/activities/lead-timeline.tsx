@@ -21,6 +21,7 @@ import {
   BellRing,
   CheckCircle2,
   XCircle,
+  ExternalLink,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
@@ -40,8 +41,10 @@ import type {
   Contract,
   Booking,
   Lead,
+  CommunicationLogEntry,
 } from "@/types";
 import { ActivityForm } from "@/components/activities/activity-form";
+import { CommunicationLogRow } from "@/components/communications/communication-log-row";
 
 // ─── Billing communication event (from /api/leads/[id]/billing-communications) ─
 interface BillingCommEvent {
@@ -55,6 +58,9 @@ interface BillingCommEvent {
   recipient?: string;
   status?: "sent" | "failed";
   amount?: number;
+  /** Full content when this send went through logCommunication() — renders
+   *  the same expandable row used in the post-send modal / inline card. */
+  commLogEntry?: CommunicationLogEntry | null;
 }
 
 // ─── Unified timeline item type ───────────────────────────────────────────────
@@ -420,10 +426,20 @@ const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
   proposal_prorata_paid: "Pro-rata",
 };
 
+// PDF-serving routes exist for these two kinds — link directly to them rather
+// than the commLogEntry attachment (a signed URL that expires and is only
+// present when the send went through logCommunication()). This works for
+// every proforma/GST-invoice send regardless of enrichment status.
+const BILLING_COMM_PDF_HREF: Partial<Record<BillingCommEvent["kind"], string>> = {
+  proforma_sent: "proforma-pdf",
+  gst_invoice_sent: "gst-invoice-pdf",
+};
+
 function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: boolean }) {
   const Icon = BILLING_COMM_ICONS[event.kind];
   const colorClass = BILLING_COMM_COLORS[event.kind];
   const failed = event.status === "failed";
+  const pdfSlug = BILLING_COMM_PDF_HREF[event.kind];
 
   return (
     <div className="flex gap-3">
@@ -435,7 +451,19 @@ function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: 
               <Badge variant="outline" className="text-xs">
                 {BILLING_COMM_LABELS[event.kind]}
               </Badge>
-              <span className="font-medium text-sm">{event.detail}</span>
+              {pdfSlug && !failed ? (
+                <a
+                  href={`/api/billing-statements/${event.statement_id}/${pdfSlug}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-sm text-primary hover:underline inline-flex items-center gap-1"
+                >
+                  {event.detail}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : (
+                <span className="font-medium text-sm">{event.detail}</span>
+              )}
               {failed && (
                 <span className="flex items-center gap-0.5 text-xs text-red-600">
                   <XCircle className="h-3 w-3" /> failed
@@ -455,6 +483,11 @@ function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: 
             {formatDate(event.occurred_at)}
           </p>
         </div>
+        {event.commLogEntry && (
+          <div className="mt-2">
+            <CommunicationLogRow entry={event.commLogEntry} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -505,6 +538,7 @@ interface LeadTimelineProps {
 }
 
 const BILLING_COMMS_PAGE_SIZE = 50;
+const ACTIVITIES_PAGE_SIZE = 50;
 
 export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -516,6 +550,13 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
   const [billingComms, setBillingComms] = useState<BillingCommEvent[]>([]);
   const [billingCommsHasMore, setBillingCommsHasMore] = useState(false);
   const [billingCommsLoadingMore, setBillingCommsLoadingMore] = useState(false);
+
+  // Activities are paginated the same way — a lead can accumulate hundreds of
+  // calls/notes/meetings over time, so only the most recent page loads by
+  // default and "Load more" fetches the next one.
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [activitiesHasMore, setActivitiesHasMore] = useState(false);
+  const [activitiesLoadingMore, setActivitiesLoadingMore] = useState(false);
 
   // Stable refs — avoid re-creating fetchAll (and re-fetching) on every parent render.
   // The lead object changes reference on every parent render; keeping it in useCallback
@@ -531,7 +572,7 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
       const opts = signal ? { signal } : {};
       const [activitiesRes, proposalsRes, invoicesRes, contractsRes, bookingsRes, billingCommsRes] =
         await Promise.all([
-          fetch(`/api/leads/${leadId}/activities`, opts),
+          fetch(`/api/leads/${leadId}/activities?limit=${ACTIVITIES_PAGE_SIZE}&offset=0`, opts),
           fetch(`/api/proposals?lead_id=${leadId}`, opts),
           fetch(`/api/invoices?lead_id=${leadId}`, opts),
           fetch(`/api/contracts?lead_id=${leadId}`, opts),
@@ -545,9 +586,11 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
 
       if (activitiesRes.ok) {
         const json = await activitiesRes.json();
-        (json.data || []).forEach((a: Activity) =>
-          merged.push({ kind: "activity", date: a.created_at, activity: a })
-        );
+        setActivities(json.data || []);
+        setActivitiesHasMore(Boolean(json.has_more));
+      } else {
+        setActivities([]);
+        setActivitiesHasMore(false);
       }
       if (proposalsRes.ok) {
         const json = await proposalsRes.json();
@@ -623,9 +666,28 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
     }
   }, [leadId, billingComms.length]);
 
-  // Merge the currently-loaded billing comm events into the sorted item list.
-  // Kept separate from `items` (see fetchAll) so "Load more" only appends here
-  // instead of re-fetching activities/proposals/contracts/bookings.
+  const loadMoreActivities = useCallback(async () => {
+    setActivitiesLoadingMore(true);
+    try {
+      const res = await fetch(
+        `/api/leads/${leadId}/activities?limit=${ACTIVITIES_PAGE_SIZE}&offset=${activities.length}`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        setActivities((prev) => [...prev, ...(json.data || [])]);
+        setActivitiesHasMore(Boolean(json.has_more));
+      }
+    } catch (err) {
+      console.error("[timeline] load more activities failed:", err);
+    } finally {
+      setActivitiesLoadingMore(false);
+    }
+  }, [leadId, activities.length]);
+
+  // Merge the currently-loaded billing comm events and activities into the
+  // sorted item list. Both are kept separate from `items` (see fetchAll) so
+  // "Load more" only appends to its own list instead of re-fetching
+  // proposals/invoices/contracts/bookings.
   const displayItems = useMemo(() => {
     const created = items[items.length - 1];
     const rest = items.slice(0, -1);
@@ -634,12 +696,17 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
       date: e.occurred_at,
       event: e,
     }));
-    const merged = [...rest, ...billingItems].sort(
+    const activityItems: TimelineItem[] = activities.map((a) => ({
+      kind: "activity",
+      date: a.created_at,
+      activity: a,
+    }));
+    const merged = [...rest, ...billingItems, ...activityItems].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
     if (created) merged.push(created);
     return merged;
-  }, [items, billingComms]);
+  }, [items, billingComms, activities]);
 
   if (loading) {
     return (
@@ -777,7 +844,19 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
         </div>
       )}
 
-      {items.length === 1 && items[0].kind === "created" && (
+      {activitiesHasMore && (
+        <div className="flex justify-center pb-6">
+          <button
+            onClick={loadMoreActivities}
+            disabled={activitiesLoadingMore}
+            className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
+          >
+            {activitiesLoadingMore ? "Loading…" : "Load more activities"}
+          </button>
+        </div>
+      )}
+
+      {items.length === 1 && items[0].kind === "created" && activities.length === 0 && billingComms.length === 0 && (
         <p className="text-sm text-muted-foreground text-center py-6">
           No activities yet. Log your first interaction above.
         </p>

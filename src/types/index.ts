@@ -856,6 +856,33 @@ export interface AuditLog {
 }
 
 // ==========================================
+// Communications Log Types
+// ==========================================
+export type CommunicationEntityType = "billing_statement" | "contract" | "proposal" | "booking" | "lead";
+export type CommunicationChannel = "email" | "whatsapp" | "sms";
+export type CommunicationStatus = "sent" | "failed";
+
+/** A single outbound email/WhatsApp/SMS send, with full content + attachment
+ *  reference — powers the post-send confirmation dialog, the inline
+ *  "Recent communications" card on record pages, and the lead activity
+ *  timeline. All three render the same row via <CommunicationLogRow>. */
+export interface CommunicationLogEntry {
+  id: string;
+  entity_type: CommunicationEntityType;
+  entity_id: string;
+  channel: CommunicationChannel;
+  recipient: string;
+  subject: string | null;
+  body: string;
+  attachment_url: string | null;
+  attachment_name: string | null;
+  status: CommunicationStatus;
+  error_message: string | null;
+  sent_by: string | null;
+  created_at: string;
+}
+
+// ==========================================
 // Space Types
 // ==========================================
 export interface SpaceOperatingDay {

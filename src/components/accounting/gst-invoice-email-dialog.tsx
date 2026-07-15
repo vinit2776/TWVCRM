@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Mail, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
+import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
+import type { CommunicationLogEntry } from "@/types";
 
 interface GstInvoiceEmailDialogProps {
   open: boolean;
@@ -46,6 +48,8 @@ export function GstInvoiceEmailDialog({
   );
   const [sending, setSending] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(false);
+  const [sentEntry, setSentEntry] = useState<CommunicationLogEntry | null>(null);
+  const [showSentDialog, setShowSentDialog] = useState(false);
 
   const availableEmails = [leadEmail, leadSecondaryEmail].filter(Boolean) as string[];
 
@@ -82,15 +86,19 @@ export function GstInvoiceEmailDialog({
         }),
       });
 
+      const json = await res.json();
       if (!res.ok) {
-        const err = await res.json();
-        toast.error(err.error || "Failed to send email");
+        toast.error(json.error || "Failed to send email");
         return;
       }
 
       toast.success("GST invoice emailed successfully");
       onSuccess();
       onOpenChange(false);
+      if (json.commLogEntry) {
+        setSentEntry(json.commLogEntry);
+        setShowSentDialog(true);
+      }
     } catch {
       toast.error("Network error");
     } finally {
@@ -99,6 +107,7 @@ export function GstInvoiceEmailDialog({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
@@ -173,5 +182,12 @@ export function GstInvoiceEmailDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <CommunicationSentDialog
+      entry={sentEntry}
+      open={showSentDialog}
+      onOpenChange={setShowSentDialog}
+    />
+    </>
   );
 }

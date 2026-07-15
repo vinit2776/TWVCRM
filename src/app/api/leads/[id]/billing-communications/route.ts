@@ -21,6 +21,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveAttachmentUrls } from "@/lib/communications-log";
+import type { CommunicationLogEntry } from "@/types";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +37,11 @@ interface CommEvent {
   recipient?: string;
   status?: "sent" | "failed";
   amount?: number;
+  /** Full content (subject/body/attachment) when this send went through
+   *  logCommunication() — lets the timeline row expand to show exactly what
+   *  was sent, matched by statement + kind + closest timestamp. Absent for
+   *  sends from routes not yet migrated to communications_log. */
+  commLogEntry?: CommunicationLogEntry | null;
 }
 
 const DEFAULT_LIMIT = 50;
@@ -135,7 +142,7 @@ export async function GET(
     return finish();
   }
 
-  const [sendLogRes, reminderRes, paymentsRes] = await Promise.all([
+  const [sendLogRes, reminderRes, paymentsRes, commsLogRes] = await Promise.all([
     supabase
       .from("billing_send_log")
       .select("billing_statement_id, send_type, recipient, status, sent_at")
@@ -148,7 +155,37 @@ export async function GET(
       .from("billing_payments")
       .select("billing_statement_id, amount, payment_date, payment_mode, created_at")
       .in("billing_statement_id", statementIds),
+    supabase
+      .from("communications_log")
+      .select("*")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds),
   ]);
+
+  // communications_log rows carry full content (subject/body/attachment) for
+  // sends that went through logCommunication() — billing_send_log does not.
+  // Match each billing_send_log row to the comm-log row from the same send
+  // (same statement, compatible kind, within a few seconds of each other —
+  // both writes happen back-to-back in the same request) so the timeline can
+  // show an expandable row instead of just a one-line summary where available.
+  const commsLogEntries = await resolveAttachmentUrls((commsLogRes.data || []) as CommunicationLogEntry[]);
+  const findMatchingCommLog = (statementId: string, sendType: string, sentAt: string): CommunicationLogEntry | null => {
+    const sentMs = new Date(sentAt).getTime();
+    const isProforma = sendType === "proforma";
+    let best: CommunicationLogEntry | null = null;
+    let bestDiff = Infinity;
+    for (const entry of commsLogEntries) {
+      if (entry.entity_id !== statementId) continue;
+      const subjectIsProforma = (entry.subject || "").startsWith("Proforma Invoice");
+      if (subjectIsProforma !== isProforma) continue;
+      const diff = Math.abs(new Date(entry.created_at).getTime() - sentMs);
+      if (diff < bestDiff && diff <= 120_000) {
+        best = entry;
+        bestDiff = diff;
+      }
+    }
+    return best;
+  };
 
   for (const row of sendLogRes.data || []) {
     const meta = statementMeta.get(row.billing_statement_id);
@@ -161,6 +198,7 @@ export async function GET(
       detail: row.send_type === "proforma" ? "Proforma invoice sent" : "GST tax invoice sent",
       recipient: row.recipient,
       status: row.status as "sent" | "failed",
+      commLogEntry: findMatchingCommLog(row.billing_statement_id, row.send_type, row.sent_at),
     });
   }
 
