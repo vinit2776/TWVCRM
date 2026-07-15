@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateUsageStatements } from "@/lib/billing";
-import { dispatchProforma } from "@/lib/send-proforma";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
 import { calcGst } from "@/lib/tax";
 
@@ -306,8 +307,27 @@ export async function POST(request: NextRequest) {
     changes: { status: { old: "draft", new: "finalized" }, due_date: { old: null, new: dueDate } },
   });
 
-  // ── 3. Dispatch proforma. Roll back on failure. ────────────────────────
-  const r = await dispatchProforma(admin, existing.id, dbUser.id, additionalCc);
+  // ── 3. Dispatch. GST Direct contracts skip the PI and either issue a tax
+  //     invoice directly or (v2 handoff) route to the Tally Inbox instead. ──
+  const { data: contract } = await admin
+    .from("contracts")
+    .select("billing_mode")
+    .eq("id", contractId)
+    .single();
+  const isGstDirect = (contract?.billing_mode as string | null) === "gst_direct";
+
+  const handoff = await handleStatementFinalized(
+    admin,
+    existing.id,
+    (contract?.billing_mode as "proforma_first" | "gst_direct" | null) ?? null,
+    "usage_finalize_and_send_for_contract",
+  );
+
+  const r = handoff.skipLegacyDispatch
+    ? { success: true, noContact: false, emailedTo: null, razorpayLinkUrl: null, proformaRef: null, totalAmount: existing.total_amount, error: undefined }
+    : isGstDirect
+      ? await dispatchGstDirect(admin, existing.id, dbUser.id, additionalCc)
+      : await dispatchProforma(admin, existing.id, dbUser.id, additionalCc);
   if (!r.success) {
     await admin.from("billing_statements")
       .update({ status: "draft", finalized_at: null })
