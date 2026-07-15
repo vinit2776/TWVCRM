@@ -22,11 +22,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { PRIORITY_LIST, PRIORITY_STYLES, REPORTED_VIA_LABEL, SCOPE_LABEL } from "@/lib/facility-ui";
+import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type {
-  FacilityAsset, FacilityIssuePriority, FacilityReportedVia, FacilityScope,
+  FacilityAsset, FacilityIssuePriority, FacilityScope,
 } from "@/types";
 
 interface Location { id: string; name: string; code: string }
@@ -48,8 +48,6 @@ interface Props {
 }
 
 type Step = 1 | 2 | 3;
-
-const VIAS: FacilityReportedVia[] = ["walk_in", "phone", "whatsapp", "email", "proactive"];
 
 const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
 
@@ -79,7 +77,6 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [reportedVia, setReportedVia] = useState<FacilityReportedVia>("walk_in");
   const [reporterName, setReporterName] = useState("");
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
@@ -103,7 +100,6 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setTatHours("");
     setTitle("");
     setDescription("");
-    setReportedVia("walk_in");
     setReporterName("");
     setReporterPhone("");
     setReporterEmail("");
@@ -194,7 +190,6 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           description: description.trim() || null,
           priority,
           tat_hours: tatHours.trim() ? Number(tatHours) : undefined,
-          reported_via: reportedVia,
           reporter_name: reporterName.trim() || null,
           reporter_email: reporterEmail.trim() || null,
           reporter_phone: reporterPhone.trim() || null,
@@ -519,23 +514,6 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   // ── Step 3: Who ────────────────────────────────────────────────
   const Step3 = (
     <div className="space-y-4">
-      <div>
-        <Label className="text-sm font-medium">How was this reported?</Label>
-        <div className="flex flex-wrap gap-2 mt-2">
-          {VIAS.map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setReportedVia(v)}
-              className={cn(
-                "px-3 py-1.5 text-xs rounded-full border",
-                reportedVia === v ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
-              )}
-            >{REPORTED_VIA_LABEL[v]}</button>
-          ))}
-        </div>
-      </div>
-
       <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
         <p className="text-xs text-muted-foreground">
           If you&apos;re reporting on someone else&apos;s behalf, add their contact so they get the resolution update. Skip if not applicable.
