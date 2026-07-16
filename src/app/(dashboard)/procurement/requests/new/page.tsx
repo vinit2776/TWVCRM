@@ -107,6 +107,13 @@ function NewPurchaseRequestForm() {
     financial_year: number;
   } | null>(null);
 
+  // ── Reimbursement fields (used when department === "reimbursement") ────────
+  // Which customer this spend will be billed back to — required at submit.
+  const [reimbursementContracts, setReimbursementContracts] = useState<
+    { id: string; contract_number: string; lead?: { first_name: string; last_name: string; company?: string } }[]
+  >([]);
+  const [billableContractId, setBillableContractId] = useState("");
+
   // expenditure_type is derived automatically from department:
   // department="amc" → expenditure_type="amc"; everything else → "operational"
   const expenditureType = department === "amc" ? "amc" : "operational";
@@ -132,6 +139,15 @@ function NewPurchaseRequestForm() {
       .then((j) => setAssets(j.data ?? []))
       .catch(() => setAssets([]));
   }, [department, assets.length]);
+
+  // Fetch active contracts for the reimbursement billable-contract picker
+  useEffect(() => {
+    if (department !== "reimbursement" || reimbursementContracts.length > 0) return;
+    fetch("/api/contracts?status=active&limit=100")
+      .then((r) => r.json())
+      .then((j) => setReimbursementContracts(j.data ?? []))
+      .catch(() => setReimbursementContracts([]));
+  }, [department, reimbursementContracts.length]);
 
   // Auto-fill service name + end date when asset/start date change.
   const handleAssetSelect = (assetId: string) => {
@@ -303,6 +319,10 @@ function NewPurchaseRequestForm() {
           advance_notes: advanceNotes.trim() || null,
         }),
       }),
+      // Reimbursement-specific field — which customer this will be billed to.
+      ...(department === "reimbursement" && {
+        billable_contract_id: billableContractId || null,
+      }),
     };
   };
 
@@ -394,6 +414,9 @@ function NewPurchaseRequestForm() {
         if (!advanceMode) return "Select an advance payment mode";
       }
       return null;
+    }
+    if (department === "reimbursement" && !billableContractId) {
+      return "Select which customer's contract this reimbursement work will be billed to";
     }
     for (const li of items) {
       if (!li.isCustom && !li.item_id) return "Please select all catalog items from the catalog, or use the Custom Item option for unlisted items";
@@ -630,6 +653,29 @@ function NewPurchaseRequestForm() {
               ) : (
                 <p className="text-xs text-purple-700">No AMC annual budget configured for this financial year. This request will be marked as provisional.</p>
               )}
+            </div>
+          )}
+
+          {/* Reimbursement: which customer this spend will be billed back to */}
+          {department === "reimbursement" && (
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label htmlFor="billable-contract">Bill to Customer (Contract) <span className="text-red-500">*</span></Label>
+              <Select value={billableContractId} onValueChange={setBillableContractId}>
+                <SelectTrigger id="billable-contract">
+                  <SelectValue placeholder={reimbursementContracts.length === 0 ? "Loading contracts…" : "Select a contract"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {reimbursementContracts.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.contract_number}
+                      {c.lead ? ` — ${c.lead.company || `${c.lead.first_name} ${c.lead.last_name}`}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                This spend is outside department budgets and will be recovered from this customer once approved — via a manually marked-up invoice, from the Material Request page.
+              </p>
             </div>
           )}
 

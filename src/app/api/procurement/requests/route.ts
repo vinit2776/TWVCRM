@@ -14,12 +14,16 @@ const createPrItemSchema = z.object({
 });
 
 const createPrSchema = z.object({
-  department: z.enum(["pantry", "maintenance", "administration", "asset", "amc"]),
+  department: z.enum(["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   expenditure_type: z.enum(["operational", "amc"]).default("operational"),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
+
+  // Reimbursement fields — only used when department='reimbursement'. Identifies
+  // which customer/contract this spend will ultimately be billed back to.
+  billable_contract_id: z.string().uuid().optional().nullable(),
 
   // AMC fields — only used when department='amc'. Validated leniently here;
   // the form gates the required ones client-side and the PO step re-validates.
@@ -39,6 +43,9 @@ const createPrSchema = z.object({
   advance_amount: z.number().min(0).optional().nullable(),
   advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
   advance_notes: z.string().optional().nullable(),
+}).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
+  message: "billable_contract_id is required when department is 'reimbursement'",
+  path: ["billable_contract_id"],
 });
 
 function generatePrNumber(count: number): string {
