@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { rescheduleReminderEvent } from "@/lib/google-calendar";
 
 export async function PATCH(
   request: NextRequest,
@@ -36,7 +37,7 @@ export async function PATCH(
   // Resolve auth user → internal users row for audit
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, email")
     .eq("auth_id", user.id)
     .single();
 
@@ -69,6 +70,38 @@ export async function PATCH(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  if (action === "reschedule" && dbUser?.email && data.follow_up_date) {
+    const { data: lead } = await supabase
+      .from("leads")
+      .select("first_name, last_name, company")
+      .eq("id", data.lead_id)
+      .single();
+
+    const leadName =
+      lead?.company ||
+      [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") ||
+      "this lead";
+
+    const calendarEventId = await rescheduleReminderEvent({
+      activityId: data.id,
+      leadId: data.lead_id,
+      leadName,
+      activityType: data.type,
+      subject: data.subject,
+      followUpDate: data.follow_up_date,
+      followUpNotes: data.follow_up_notes,
+      ownerEmail: dbUser.email,
+      calendarEventId: data.calendar_event_id,
+    });
+
+    if (calendarEventId && calendarEventId !== data.calendar_event_id) {
+      await supabase
+        .from("activities")
+        .update({ calendar_event_id: calendarEventId })
+        .eq("id", data.id);
+    }
   }
 
   return NextResponse.json({ data });

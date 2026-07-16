@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { createReminderEvent } from "@/lib/google-calendar";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -68,7 +69,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, email")
     .eq("auth_id", user.id)
     .single();
 
@@ -91,7 +92,7 @@ export async function POST(
   if (dbUser?.id) {
     const { data: oldLead } = await supabase
       .from("leads")
-      .select("claimed_by, claimed_at, resolved_at")
+      .select("claimed_by, claimed_at, resolved_at, first_name, last_name, company")
       .eq("id", id)
       .single();
 
@@ -118,6 +119,31 @@ export async function POST(
             claimed_at: { old: oldLead?.claimed_at ?? null, new: claimedAt },
           },
         });
+      }
+    }
+
+    if (result.data.follow_up_date && dbUser.email) {
+      const leadName =
+        oldLead?.company ||
+        [oldLead?.first_name, oldLead?.last_name].filter(Boolean).join(" ") ||
+        "this lead";
+
+      const calendarEventId = await createReminderEvent({
+        activityId: data.id,
+        leadId: id,
+        leadName,
+        activityType: result.data.type,
+        subject: result.data.subject,
+        followUpDate: result.data.follow_up_date,
+        followUpNotes: result.data.follow_up_notes,
+        ownerEmail: dbUser.email,
+      });
+
+      if (calendarEventId) {
+        await supabase
+          .from("activities")
+          .update({ calendar_event_id: calendarEventId })
+          .eq("id", data.id);
       }
     }
   }
