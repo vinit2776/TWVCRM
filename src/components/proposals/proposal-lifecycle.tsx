@@ -1,5 +1,6 @@
 "use client";
 
+import { Fragment } from "react";
 import { CheckCircle2, Circle, XCircle, Clock } from "lucide-react";
 import type { Proposal } from "@/types";
 
@@ -182,78 +183,74 @@ export function ProposalLifecycle({ proposal }: Props) {
     });
   }
 
-  const activeIndex = stages.findIndex((s) => s.state === "active");
-
   return (
-    <div className="relative">
-      {/* Vertical connector line */}
-      <div className="absolute left-3.5 top-5 bottom-5 w-px bg-border" aria-hidden />
-
-      <ol className="space-y-0 relative">
+    <div className="w-full overflow-x-auto">
+      <div className="flex items-start min-w-[720px] px-1">
         {stages.map((stage, i) => {
-          const isLast = i === stages.length - 1;
+          const prevDone = i > 0 && stages[i - 1].state === "done";
 
           return (
-            <li key={stage.key} className="flex gap-3 min-h-[44px]">
-              {/* Icon */}
-              <div className="relative z-10 flex-shrink-0 flex items-start pt-0.5">
+            <Fragment key={stage.key}>
+              {i > 0 && (
+                <div
+                  className={`flex-1 h-px mt-3 ${prevDone ? "bg-green-500" : "bg-border"}`}
+                  aria-hidden
+                />
+              )}
+              <div className="flex flex-col items-center text-center shrink-0 w-[130px] px-1">
+                {/* Icon */}
                 {stage.state === "done" && (
-                  <CheckCircle2 className="h-7 w-7 text-green-600 bg-background rounded-full" />
+                  <CheckCircle2 className="h-6 w-6 text-green-600 bg-background rounded-full" />
                 )}
                 {stage.state === "active" && (
-                  <Clock className="h-7 w-7 text-amber-500 bg-background rounded-full" />
+                  <Clock className="h-6 w-6 text-amber-500 bg-background rounded-full" />
                 )}
                 {stage.state === "pending" && (
-                  <Circle className="h-7 w-7 text-muted-foreground/40 bg-background rounded-full" />
+                  <Circle className="h-6 w-6 text-muted-foreground/40 bg-background rounded-full" />
                 )}
                 {stage.state === "rejected" && (
-                  <XCircle className="h-7 w-7 text-destructive bg-background rounded-full" />
+                  <XCircle className="h-6 w-6 text-destructive bg-background rounded-full" />
                 )}
                 {stage.state === "skipped" && (
-                  <Circle className="h-7 w-7 text-muted-foreground/20 bg-background rounded-full" />
+                  <Circle className="h-6 w-6 text-muted-foreground/20 bg-background rounded-full" />
                 )}
-              </div>
 
-              {/* Content */}
-              <div className={`pb-${isLast ? "0" : "4"} flex-1 min-w-0`}>
-                <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                  <p className={`text-sm font-medium leading-tight ${
-                    stage.state === "done" ? "text-foreground"
-                    : stage.state === "active" ? "text-amber-700"
-                    : stage.state === "rejected" ? "text-destructive"
-                    : "text-muted-foreground"
+                {/* Content */}
+                <p className={`text-xs font-medium leading-tight mt-1.5 ${
+                  stage.state === "done" ? "text-foreground"
+                  : stage.state === "active" ? "text-amber-700"
+                  : stage.state === "rejected" ? "text-destructive"
+                  : "text-muted-foreground"
+                }`}>
+                  {stage.label}
+                </p>
+                {stage.state === "active" && (
+                  <span className="mt-1 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                    {AWAITING_LABEL[stage.key] ?? "In Progress"}
+                  </span>
+                )}
+                {stage.amount !== undefined && (
+                  <p className={`text-[11px] font-semibold mt-0.5 ${
+                    stage.state === "done" ? "text-green-700" : "text-muted-foreground"
                   }`}>
-                    {stage.label}
-                    {stage.state === "active" && (
-                      <span className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full align-middle">
-                        {AWAITING_LABEL[stage.key] ?? "In Progress"}
-                      </span>
-                    )}
+                    ₹{stage.amount.toLocaleString("en-IN")}
                   </p>
-                  {stage.amount !== undefined && (
-                    <span className={`text-xs font-semibold shrink-0 ${
-                      stage.state === "done" ? "text-green-700" : "text-muted-foreground"
-                    }`}>
-                      ₹{stage.amount.toLocaleString("en-IN")}
-                    </span>
-                  )}
-                </div>
+                )}
                 {stage.date && (
-                  <p className="text-xs text-muted-foreground mt-0.5">{fmt(stage.date)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{fmt(stage.date)}</p>
                 )}
                 {stage.sub && (
-                  <p className={`text-xs mt-0.5 truncate ${
+                  <p className={`text-[10px] mt-0.5 line-clamp-2 ${
                     stage.state === "rejected" ? "text-destructive/70" : "text-muted-foreground"
                   }`}>
                     {stage.sub}
                   </p>
                 )}
-                {!isLast && <div className="pb-3" />}
               </div>
-            </li>
+            </Fragment>
           );
         })}
-      </ol>
+      </div>
     </div>
   );
 }
