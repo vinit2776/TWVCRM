@@ -511,14 +511,14 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     );
   }
 
-  // Qualitative, live-ticking status while open (see tatStatus above) — resolved/
-  // closed tickets fall back to the retrospective sla_breached DB field, which is
-  // only meaningful once resolution has actually happened.
-  const slaChipClass = tatStatus === "overdue" || (tatStatus == null && issue.sla_breached)
-    ? "bg-red-50 text-red-700 ring-red-200"
+  // Qualitative, live-ticking status while open (see tatStatus above) — drives
+  // the full-width TAT banner below the header, matching the claim-countdown
+  // banner's visual language (rounded-lg border px-4 py-3 flex items-center).
+  const tatBannerStyle = tatStatus === "overdue"
+    ? { wrap: "bg-red-50 border-red-200", icon: "text-red-600", text: "text-red-700" }
     : tatStatus === "at_risk"
-    ? "bg-amber-50 text-amber-700 ring-amber-200"
-    : "bg-emerald-50 text-emerald-700 ring-emerald-200";
+    ? { wrap: "bg-amber-50 border-amber-200", icon: "text-amber-600", text: "text-amber-700" }
+    : { wrap: "bg-emerald-50 border-emerald-200", icon: "text-emerald-600", text: "text-emerald-700" };
 
   const statusLabel = isUnowned ? "Unclaimed" : STATUS_STYLES[issue.status].label;
   const statusChipClass = isUnowned ? "bg-amber-50 text-amber-700 ring-amber-200" : STATUS_STYLES[issue.status].chip;
@@ -540,12 +540,6 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               <span className={cn("h-1.5 w-1.5 rounded-full", PRIORITY_STYLES[issue.priority].dot)} />
               {PRIORITY_STYLES[issue.priority].label}
             </span>
-            {open && issue.sla_target_at && (
-              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 inline-flex items-center", slaChipClass)}>
-                <Clock className="h-2.5 w-2.5 mr-0.5" /> {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
-                <span className="opacity-60 ml-0.5">(TAT)</span>
-              </span>
-            )}
             {issue.kpi_points != null && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium inline-flex items-center gap-1", kpiPointsStyle(issue.kpi_points).className)}>
                 <Trophy className="h-2.5 w-2.5" /> {kpiPointsStyle(issue.kpi_points).label}
@@ -558,6 +552,19 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
       </div>
+
+      {/* ───── TAT status banner — bold, full-width, same treatment as the claim
+          countdown banner below. Replaces the small header pill; deadline
+          urgency deserves the same visual weight as ownership urgency. ──── */}
+      {open && issue.sla_target_at && (
+        <div className={cn("rounded-lg border px-4 py-3 flex items-center gap-3", tatBannerStyle.wrap)}>
+          <Clock className={cn("h-4 w-4 shrink-0", tatBannerStyle.icon)} />
+          <span className={cn("text-sm font-semibold", tatBannerStyle.text)}>
+            {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
+          </span>
+          <span className="text-xs text-muted-foreground">(TAT)</span>
+        </div>
+      )}
 
       {/* ───── Reporter — kept near the top so contact info is reachable without
           scrolling past 8 other cards; this is who to call/message first. ── */}
