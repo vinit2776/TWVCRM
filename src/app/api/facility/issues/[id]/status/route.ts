@@ -81,6 +81,15 @@ export async function PATCH(
       if (cat) {
         updates.sla_target_at = computeSlaTarget(cat, existing.priority as FacilityIssuePriority);
       }
+    } else {
+      // Category-less tickets (delegated tasks, or tickets with no asset
+      // category) previously kept their old, already-passed deadline on
+      // reopen — computeSlaTarget's own priority-only fallback (2/8/24/72h)
+      // gives them a fresh one too, same as category-linked tickets get.
+      updates.sla_target_at = computeSlaTarget(
+        { default_sla_critical_hrs: 0, default_sla_high_hrs: 0, default_sla_medium_hrs: 0, default_sla_low_hrs: 0 },
+        existing.priority as FacilityIssuePriority
+      );
     }
   }
 

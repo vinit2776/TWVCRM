@@ -95,6 +95,24 @@ export function timeUntil(dateLike: string | Date | null | undefined): string {
   return overdue ? `${label} overdue` : `in ${label}`;
 }
 
+export type TatStatus = "on_track" | "at_risk" | "overdue" | "pending";
+
+/**
+ * Qualitative TAT status for the live ticket-detail chip. 'pending' covers
+ * a null sla_target_at (e.g. a brand-new ticket before SLA/category
+ * assignment finishes) — deliberately distinct from 'on_track' so the UI
+ * doesn't claim a false-positive "you're fine" when there's actually no
+ * deadline set yet.
+ */
+export function getTatStatus(slaTargetAt: string | null | undefined, now: Date = new Date()): TatStatus {
+  if (!slaTargetAt) return "pending";
+  const target = new Date(slaTargetAt).getTime();
+  const diffMs = target - now.getTime();
+  if (diffMs <= 0) return "overdue";
+  if (diffMs <= 60 * 60 * 1000) return "at_risk"; // 1 hour
+  return "on_track";
+}
+
 /** Format a numeric duration in minutes to "1h 24m" / "45m" / "2d 4h". */
 export function formatDuration(minutes: number | null | undefined): string {
   if (minutes == null || !isFinite(minutes)) return "—";

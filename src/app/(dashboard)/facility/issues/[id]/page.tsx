@@ -42,7 +42,7 @@ import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
-  STATUS_ACTION_PRIORITY,
+  STATUS_ACTION_PRIORITY, getTatStatus,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import type {
@@ -242,6 +242,21 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   }, [assignOpen, collabOpen]);
 
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
+
+  // Live-ticks the TAT chip's qualitative status (on_track/at_risk/overdue)
+  // so it doesn't go stale while a technician just sits on the page watching
+  // a deadline approach. Independent of useClaimCountdown below on purpose —
+  // that hook counts down to zero and fires a terminal action; this ticks
+  // indefinitely past deadline and derives a category, a different enough
+  // shape that sharing one hook would bend both to fit neither well.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, [open]);
+  const tatStatus = open ? getTatStatus(issue?.sla_target_at, now) : null;
+
   const allowedNext = useMemo(() => issue ? nextStatusOptions(issue.status) : [], [issue]);
   const primaryStatusAction = useMemo(
     () => STATUS_ACTION_PRIORITY.find((s) => allowedNext.includes(s)) ?? null,
@@ -496,8 +511,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     );
   }
 
-  const slaChipClass = issue.sla_breached
+  // Qualitative, live-ticking status while open (see tatStatus above) — resolved/
+  // closed tickets fall back to the retrospective sla_breached DB field, which is
+  // only meaningful once resolution has actually happened.
+  const slaChipClass = tatStatus === "overdue" || (tatStatus == null && issue.sla_breached)
     ? "bg-red-50 text-red-700 ring-red-200"
+    : tatStatus === "at_risk"
+    ? "bg-amber-50 text-amber-700 ring-amber-200"
     : "bg-emerald-50 text-emerald-700 ring-emerald-200";
 
   const statusLabel = isUnowned ? "Unclaimed" : STATUS_STYLES[issue.status].label;
@@ -522,7 +542,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             </span>
             {open && issue.sla_target_at && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 inline-flex items-center", slaChipClass)}>
-                <Clock className="h-2.5 w-2.5 mr-0.5" /> {issue.sla_breached ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
+                <Clock className="h-2.5 w-2.5 mr-0.5" /> {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
                 <span className="opacity-60 ml-0.5">(TAT)</span>
               </span>
             )}
