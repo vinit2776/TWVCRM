@@ -151,6 +151,25 @@ export default function ProposalDetailPage({
           })
           .catch(() => {});
       }
+
+      // Auto-generate the deposit Razorpay link (balance, net of any credit)
+      // if not yet created, so it's visible here without requiring an
+      // explicit send first.
+      if (
+        p &&
+        !p.deposit_razorpay_link_url &&
+        p.deposit_payment_status === "pending" &&
+        ["sent", "viewed", "accepted"].includes(p.status)
+      ) {
+        fetch(`/api/proposals/${id}/deposit-payment-link`, { method: "POST" })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data?.deposit_razorpay_link_url) {
+              setProposal((prev) => prev ? { ...prev, ...data } : prev);
+            }
+          })
+          .catch(() => {});
+      }
     }
     setLoading(false);
   }, [id]);
@@ -1004,7 +1023,7 @@ export default function ProposalDetailPage({
                     onClick={openDepositEmailDialog}
                   >
                     <Mail className="mr-2 h-3.5 w-3.5" />
-                    {proposal.deposit_razorpay_link_url ? "Preview & Resend Deposit Email" : "Preview & Send Deposit Email"}
+                    {proposal.deposit_email_sent_at ? "Preview & Resend Deposit Email" : "Preview & Send Deposit Email"}
                   </Button>
                 )}
 
