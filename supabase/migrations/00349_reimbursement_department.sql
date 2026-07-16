@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 00348: Reimbursement department
+-- Migration 00349: Reimbursement department
 --
 -- Introduces a "reimbursement" procurement department: spend
 -- incurred on behalf of a customer (maintenance, furniture,
