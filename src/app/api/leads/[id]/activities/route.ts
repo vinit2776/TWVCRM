@@ -3,7 +3,6 @@ import { createClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
-import { sendFollowUpReminderEmail } from "@/lib/reminder-email";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -69,7 +68,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, email, full_name")
+    .select("id")
     .eq("auth_id", user.id)
     .single();
 
@@ -92,7 +91,7 @@ export async function POST(
   if (dbUser?.id) {
     const { data: oldLead } = await supabase
       .from("leads")
-      .select("claimed_by, claimed_at, resolved_at, first_name, last_name, company")
+      .select("claimed_by, claimed_at, resolved_at")
       .eq("id", id)
       .single();
 
@@ -120,24 +119,6 @@ export async function POST(
           },
         });
       }
-    }
-
-    if (result.data.follow_up_date && dbUser.email) {
-      const leadName =
-        oldLead?.company ||
-        [oldLead?.first_name, oldLead?.last_name].filter(Boolean).join(" ") ||
-        "this lead";
-      sendFollowUpReminderEmail({
-        activityId: data.id,
-        leadId: id,
-        leadName,
-        activityType: result.data.type,
-        subject: result.data.subject,
-        followUpDate: result.data.follow_up_date,
-        followUpNotes: result.data.follow_up_notes,
-        recipientEmail: dbUser.email,
-        recipientName: dbUser.full_name ?? "there",
-      });
     }
   }
 
