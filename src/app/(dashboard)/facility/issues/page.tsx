@@ -489,22 +489,26 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
   const isOpen = ACTIVE_STATUSES.has(issue.status);
   const isUnowned = !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const claimOverdue = isUnowned && issue.claim_sla_breached;
+  const isTask = issue.task_type === "delegated_task";
 
   return (
     <Link
       href={`/facility/issues/${issue.id}`}
       className={cn(
-        "block bg-card hover:bg-muted/20 transition-colors p-3 rounded-lg border hover:border-foreground/20 hover:shadow-sm",
-        claimOverdue && "border-amber-300",
+        "block hover:shadow-sm transition-colors p-3 rounded-lg",
+        isTask
+          ? "bg-teal-100 border-2 border-teal-400 hover:border-teal-500"
+          : "bg-card border hover:bg-muted/20 hover:border-foreground/20",
+        claimOverdue && !isTask && "border-amber-300",
       )}
     >
       <div className="flex items-start gap-3">
         <span className={cn("mt-1 h-2.5 w-2.5 rounded-full shrink-0", PRIORITY_STYLES[issue.priority].dot)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
-            {issue.task_type === "delegated_task" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
+            <code className={cn("text-xs font-mono", isTask ? "text-teal-800" : "text-muted-foreground")}>{issue.issue_number}</code>
+            {isTask && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5">
                 <UserPlus className="h-2.5 w-2.5" /> Task
               </span>
             )}
@@ -532,8 +536,8 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
               </span>
             )}
           </div>
-          <div className="text-sm font-medium mt-0.5 truncate">{issue.title}</div>
-          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
+          <div className={cn("text-sm font-medium mt-0.5 truncate", isTask && "text-teal-950")}>{issue.title}</div>
+          <div className={cn("text-xs mt-1 flex flex-wrap gap-2", isTask ? "text-teal-700" : "text-muted-foreground")}>
             <span>{issue.location?.name ?? "—"}</span>
             {issue.category?.name && <><span>·</span><span>{issue.category.name}</span></>}
             <span>·</span>
