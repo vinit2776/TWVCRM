@@ -33,7 +33,7 @@ function flowBadgeClass(state: HandoffState | null | undefined): string {
 
 export default function ProposalsPage() {
   const router = useRouter();
-  const [proposals, setProposals] = useState<(Proposal & { lead?: { id: string; first_name: string; last_name: string }; latest_billing_statement?: LatestBillingStatement })[]>([]);
+  const [proposals, setProposals] = useState<(Proposal & { lead?: { id: string; first_name: string; last_name: string; company?: string | null }; latest_billing_statement?: LatestBillingStatement })[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -75,6 +75,7 @@ export default function ProposalsPage() {
               <th className="px-4 py-3 text-left font-medium">Proposal #</th>
               <th className="px-4 py-3 text-left font-medium">Title</th>
               <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Lead</th>
+              <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Company</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Location</th>
               <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Amount</th>
@@ -85,6 +86,7 @@ export default function ProposalsPage() {
                 <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                 <td className="px-4 py-3 font-medium">{p.title}</td>
                 <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
+                <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{p.lead?.company || "—"}</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge>
