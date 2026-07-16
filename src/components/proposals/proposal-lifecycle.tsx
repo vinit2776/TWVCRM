@@ -118,8 +118,23 @@ export function ProposalLifecycle({ proposal }: Props) {
     });
   }
 
-  // 5. Security Deposit (only if required)
+  // 5. Deposit Credit Applied (only if a credit was netted off the required deposit)
+  const creditApplied = Number(proposal.deposit_credit_amount || 0);
+  if (hasDeposit && !isRejected && creditApplied > 0) {
+    stages.push({
+      key: "deposit_credit",
+      label: "Deposit Credit Applied",
+      date: proposal.deposit_credit_applied_at,
+      sub: proposal.deposit_credit_reason || undefined,
+      amount: creditApplied,
+      state: "done",
+    });
+  }
+
+  // 6. Security Deposit (only if required) — amount shown while pending is the
+  // balance actually due (required minus any credit applied above).
   if (hasDeposit && !isRejected) {
+    const balanceDue = Math.max(0, Number(proposal.security_deposit_amount || 0) - creditApplied);
     stages.push({
       key: "deposit",
       label: "Security Deposit Received",
@@ -128,15 +143,15 @@ export function ProposalLifecycle({ proposal }: Props) {
         ? `Ref: ${proposal.deposit_payment_reference}`
         : undefined,
       amount: proposal.deposit_payment_status === "paid"
-        ? Number(proposal.deposit_payment_amount || proposal.security_deposit_amount || 0)
-        : Number(proposal.security_deposit_amount || 0),
+        ? Number(proposal.deposit_payment_amount || balanceDue || 0)
+        : balanceDue,
       state: proposal.deposit_payment_status === "paid" ? "done"
         : proposal.accepted_at ? "active"
         : "pending",
     });
   }
 
-  // 6. GST Invoice / Occupation start
+  // 7. GST Invoice / Occupation start
   if (!isRejected) {
     stages.push({
       key: "invoice",
@@ -151,7 +166,7 @@ export function ProposalLifecycle({ proposal }: Props) {
     });
   }
 
-  // 7. Monthly Charge Paid
+  // 8. Monthly Charge Paid
   if (!isRejected) {
     stages.push({
       key: "paid",

@@ -64,8 +64,8 @@ export async function POST(
     return NextResponse.json({ error: "No deposit required for this proposal" }, { status: 400 });
   }
 
-  // Shortfall tolerance check — expected deposit amount (pre-GST)
-  const expectedAmount = Number(proposal.security_deposit_amount || 0);
+  // Shortfall tolerance check — expected deposit amount (pre-GST), net of any credit applied
+  const expectedAmount = Math.max(0, Number(proposal.security_deposit_amount || 0) - Number(proposal.deposit_credit_amount || 0));
   let shortfallApprovedById: string | null = null;
 
   if (expectedAmount > 0 && amount < expectedAmount) {

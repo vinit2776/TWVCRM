@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   ReceiptText,
   ScrollText,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -93,6 +94,14 @@ export default function ProposalDetailPage({
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
   const [manualPayShortfallApproved, setManualPayShortfallApproved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Apply deposit credit dialog (admin/manager — deposit held from a prior contract)
+  const [depositCreditOpen, setDepositCreditOpen] = useState(false);
+  const [depositCreditAmount, setDepositCreditAmount] = useState("");
+  const [depositCreditReason, setDepositCreditReason] = useState("");
+  const [depositCreditProofFile, setDepositCreditProofFile] = useState<File | null>(null);
+  const [depositCreditSubmitting, setDepositCreditSubmitting] = useState(false);
+  const creditFileInputRef = useRef<HTMLInputElement>(null);
 
   // Deposit email preview dialog
   const [depositEmailOpen, setDepositEmailOpen] = useState(false);
@@ -216,6 +225,54 @@ export default function ProposalDetailPage({
     setManualPayFile(null);
     setManualPayShortfallApproved(false);
     setManualPayDialogOpen(true);
+  };
+
+  const openDepositCreditDialog = () => {
+    setDepositCreditAmount(String(proposal?.deposit_credit_amount || ""));
+    setDepositCreditReason(proposal?.deposit_credit_reason || "");
+    setDepositCreditProofFile(null);
+    if (creditFileInputRef.current) creditFileInputRef.current.value = "";
+    setDepositCreditOpen(true);
+  };
+
+  const submitDepositCredit = async () => {
+    const amount = parseFloat(depositCreditAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast.error("Enter a valid credit amount");
+      return;
+    }
+    if (!depositCreditReason.trim()) {
+      toast.error("A reason is required — this is kept for audit");
+      return;
+    }
+    if (!depositCreditProofFile) {
+      toast.error("Proof of the held deposit is required");
+      return;
+    }
+    setDepositCreditSubmitting(true);
+    try {
+      const formData = new FormData();
+      formData.append("amount", String(amount));
+      formData.append("reason", depositCreditReason.trim());
+      formData.append("proof", depositCreditProofFile);
+
+      const res = await fetch(`/api/proposals/${id}/deposit-credit`, {
+        method: "POST",
+        body: formData,
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Deposit credit applied");
+        setDepositCreditOpen(false);
+        fetchProposal();
+      } else {
+        toast.error(json?.error || "Failed to apply deposit credit");
+      }
+    } catch {
+      toast.error("Unexpected error applying deposit credit");
+    } finally {
+      setDepositCreditSubmitting(false);
+    }
   };
 
   // ── Deposit email preview + send ─────────────────────────────────────────
@@ -856,9 +913,49 @@ export default function ProposalDetailPage({
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>Amount (pre-GST)</span>
+                  <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>
+                    {Number(proposal.deposit_credit_amount || 0) > 0 ? "Required Deposit (pre-GST)" : "Amount (pre-GST)"}
+                  </span>
                   <span className="font-semibold">₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}</span>
                 </div>
+
+                {Number(proposal.deposit_credit_amount || 0) > 0 && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>Credit Applied</span>
+                      <span className="font-semibold">− ₹{Number(proposal.deposit_credit_amount).toLocaleString("en-IN")}</span>
+                    </div>
+                    {proposal.deposit_credit_reason && (
+                      <p className="text-xs text-muted-foreground italic">{proposal.deposit_credit_reason}</p>
+                    )}
+                    {proposal.deposit_credit_proof_url && (
+                      <a
+                        href={proposal.deposit_credit_proof_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex items-center gap-1.5 text-xs underline ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}
+                      >
+                        <Upload className="h-3 w-3" />
+                        View credit proof
+                      </a>
+                    )}
+                    <div className={`flex justify-between pt-1.5 mt-1 border-t ${proposal.deposit_payment_status === "paid" ? "border-green-200" : "border-amber-200"}`}>
+                      <span className={`font-medium ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>Balance to Collect</span>
+                      <span className="font-bold">₹{Math.max(0, Number(proposal.security_deposit_amount || 0) - Number(proposal.deposit_credit_amount || 0)).toLocaleString("en-IN")}</span>
+                    </div>
+                  </>
+                )}
+
+                {proposal.deposit_payment_status === "pending" && ["admin", "manager"].includes(currentUser?.role || "") && (
+                  <button
+                    type="button"
+                    onClick={openDepositCreditDialog}
+                    className="text-xs text-amber-700 hover:text-amber-900 underline flex items-center gap-1"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    {Number(proposal.deposit_credit_amount || 0) > 0 ? "Edit deposit credit" : "Apply a held deposit credit"}
+                  </button>
+                )}
 
                 {proposal.deposit_payment_status === "paid" && (
                   <>
@@ -1608,6 +1705,113 @@ export default function ProposalDetailPage({
               >
                 {manualPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {manualPaySubmitting ? "Saving…" : "Mark as Paid & Notify Customer"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Apply Deposit Credit Dialog (admin/manager) */}
+      <Dialog open={depositCreditOpen} onOpenChange={setDepositCreditOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="h-5 w-5 text-amber-600" />
+              Apply Deposit Credit
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — Required deposit ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="dc-amount">Credit Amount (₹) <span className="text-destructive">*</span></Label>
+              <Input
+                id="dc-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={depositCreditAmount}
+                onChange={(e) => setDepositCreditAmount(e.target.value)}
+                placeholder="e.g. 23000"
+              />
+              <p className="text-xs text-muted-foreground">
+                Deposit already held from a prior contract, to be netted off. The required deposit stays unchanged — only the balance below is collected.
+              </p>
+              {(() => {
+                const required = Number(proposal.security_deposit_amount || 0);
+                const credit = parseFloat(depositCreditAmount) || 0;
+                const balance = Math.max(0, required - credit);
+                return (
+                  <p className="text-xs font-medium text-amber-800">
+                    Balance to collect: ₹{balance.toLocaleString("en-IN")}
+                  </p>
+                );
+              })()}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="dc-reason">Reason <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="dc-reason"
+                value={depositCreditReason}
+                onChange={(e) => setDepositCreditReason(e.target.value)}
+                placeholder="e.g. Refundable deposit held from terminated contract TWV-C-00xx, confirmed by accounts"
+                rows={2}
+              />
+              <p className="text-xs text-muted-foreground">Kept on record for audit — explains why less deposit was collected.</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Proof (accounts confirmation) <span className="text-destructive">*</span></Label>
+              <input
+                ref={creditFileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setDepositCreditProofFile(e.target.files?.[0] || null)}
+              />
+              {depositCreditProofFile ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="truncate text-muted-foreground">{depositCreditProofFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => { setDepositCreditProofFile(null); if (creditFileInputRef.current) creditFileInputRef.current.value = ""; }}
+                    className="ml-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => creditFileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload proof
+                </Button>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setDepositCreditOpen(false)}
+                disabled={depositCreditSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={submitDepositCredit}
+                disabled={depositCreditSubmitting}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {depositCreditSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {depositCreditSubmitting ? "Saving…" : "Apply Credit"}
               </Button>
             </div>
           </div>
