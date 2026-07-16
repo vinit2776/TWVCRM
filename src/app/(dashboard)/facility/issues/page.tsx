@@ -267,7 +267,7 @@ function FacilityIssuesPageInner() {
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
-          <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(SLA)</span>
+          <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(TAT)</span>
         </Chip>
         {(statusFilters.length > 0 || priority || locationId || assignedToFilter) && (
           <button
@@ -576,7 +576,7 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
             )}
             {issue.sla_breached && isOpen && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
-                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> SLA Breached
+                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> TAT Breached
               </span>
             )}
             {issue.kpi_points != null && (
@@ -594,7 +594,7 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
             {isOpen && sla && (
               <>
                 <span>·</span>
-                <span className={issue.sla_breached ? "text-red-600 font-medium" : ""}>SLA {timeUntil(sla)}</span>
+                <span className={issue.sla_breached ? "text-red-600 font-medium" : ""}>TAT {timeUntil(sla)}</span>
               </>
             )}
             {isUnowned && issue.claim_sla_target_at && (
