@@ -20,7 +20,7 @@ export async function GET(_req: NextRequest) {
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "accounts", "sales_rep"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

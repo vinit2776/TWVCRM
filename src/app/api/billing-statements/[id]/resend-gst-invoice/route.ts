@@ -8,7 +8,7 @@ import { formatCurrency } from "@/lib/utils";
  * POST /api/billing-statements/[id]/resend-gst-invoice
  *
  * Resends the uploaded Tally GST invoice PDF to the customer.
- * Available to accounts + admin. Does not gate on tally_delivered_at —
+ * Available to accounts + admin + sales_rep. Does not gate on tally_delivered_at —
  * explicit resend is intentional. Logs every attempt (success or failure)
  * to audit_trail.
  */
@@ -33,7 +33,7 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-  if (!["accounts", "admin"].includes(dbUser.role)) {
+  if (!["accounts", "admin", "sales_rep"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

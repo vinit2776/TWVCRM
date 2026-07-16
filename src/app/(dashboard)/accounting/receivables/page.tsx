@@ -186,6 +186,7 @@ export default function AccountsReceivablePage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("detail");
+  const [canRecordPayment, setCanRecordPayment] = useState(false);
 
   // Record-payment dialog state (form lives in RecordPaymentDialog)
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
@@ -234,6 +235,13 @@ export default function AccountsReceivablePage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((res) => res.json())
+      .then((me) => setCanRecordPayment(["admin", "manager", "accounts"].includes(me.role)))
+      .catch(() => setCanRecordPayment(false));
+  }, []);
 
   const filtered = useMemo(() => {
     let r = rows;
@@ -658,9 +666,11 @@ export default function AccountsReceivablePage() {
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1 justify-end">
-                            <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
-                              <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
-                            </Button>
+                            {canRecordPayment && (
+                              <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
+                                <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
+                              </Button>
+                            )}
                             <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
                               {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
                             </Button>
@@ -778,8 +788,8 @@ export default function AccountsReceivablePage() {
                   ))
                 )}
               </div>
-              {/* Payment link renewal option — only for proforma statements with an existing link */}
-              {!resendRow.gst_invoice_number && !!resendRow.razorpay_payment_link_url && (
+              {/* Payment link renewal option — only for proforma statements with an existing link, and only for roles allowed to reissue payment links */}
+              {canRecordPayment && !resendRow.gst_invoice_number && !!resendRow.razorpay_payment_link_url && (
                 <div className="rounded-md border border-blue-200 bg-blue-50 p-3 space-y-2">
                   <p className="text-xs font-medium text-blue-800">Payment link</p>
                   <div className="flex flex-col gap-1.5">
