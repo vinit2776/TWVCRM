@@ -177,6 +177,8 @@ export interface Activity {
   meeting_end_at?: string;
   follow_up_date?: string;
   follow_up_notes?: string;
+  calendar_event_id?: string;
+  followup_wa_reminder_sent_at?: string;
   is_follow_up_done: boolean;
   follow_up_actioned_by?: string;
   follow_up_actor?: User;

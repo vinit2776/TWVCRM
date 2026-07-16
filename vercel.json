@@ -53,6 +53,10 @@
       "schedule": "30 18 * * *"
     },
     {
+      "path": "/api/cron/lead-reminder-digest",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/cron/vo-renewal",
       "schedule": "0 4 * * *"
     },
@@ -82,6 +86,10 @@
     },
     {
       "path": "/api/cron/cosec-events",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/lead-reminder-whatsapp",
       "schedule": "*/5 * * * *"
     },
     {

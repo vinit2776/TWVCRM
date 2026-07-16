@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
-import { sendFollowUpReminderEmail } from "@/lib/reminder-email";
+import { createReminderEvent } from "@/lib/google-calendar";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -69,7 +69,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, email, full_name")
+    .select("id, email")
     .eq("auth_id", user.id)
     .single();
 
@@ -127,7 +127,8 @@ export async function POST(
         oldLead?.company ||
         [oldLead?.first_name, oldLead?.last_name].filter(Boolean).join(" ") ||
         "this lead";
-      sendFollowUpReminderEmail({
+
+      const calendarEventId = await createReminderEvent({
         activityId: data.id,
         leadId: id,
         leadName,
@@ -135,9 +136,15 @@ export async function POST(
         subject: result.data.subject,
         followUpDate: result.data.follow_up_date,
         followUpNotes: result.data.follow_up_notes,
-        recipientEmail: dbUser.email,
-        recipientName: dbUser.full_name ?? "there",
+        ownerEmail: dbUser.email,
       });
+
+      if (calendarEventId) {
+        await supabase
+          .from("activities")
+          .update({ calendar_event_id: calendarEventId })
+          .eq("id", data.id);
+      }
     }
   }
 

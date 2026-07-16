@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { sendFollowUpReminderEmail } from "@/lib/reminder-email";
+import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
 
 export async function PATCH(
   request: NextRequest,
@@ -37,7 +37,7 @@ export async function PATCH(
   // Resolve auth user → internal users row for audit
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, email, full_name")
+    .select("id, email")
     .eq("auth_id", user.id)
     .single();
 
@@ -57,6 +57,9 @@ export async function PATCH(
           follow_up_actioned_by: dbUser?.id ?? null,
           follow_up_actioned_at: now,
           updated_at: now,
+          // Reset so the WhatsApp cron sends a fresh nudge for the new time
+          // instead of staying silent because the old time already fired.
+          followup_wa_reminder_sent_at: null,
         };
 
   const { data, error } = await supabase
@@ -84,7 +87,7 @@ export async function PATCH(
       [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") ||
       "this lead";
 
-    sendFollowUpReminderEmail({
+    const reminderParams = {
       activityId: data.id,
       leadId: data.lead_id,
       leadName,
@@ -92,9 +95,38 @@ export async function PATCH(
       subject: data.subject,
       followUpDate: data.follow_up_date,
       followUpNotes: data.follow_up_notes,
-      recipientEmail: dbUser.email,
-      recipientName: dbUser.full_name ?? "there",
-    });
+      ownerEmail: dbUser.email,
+    };
+
+    if (data.calendar_event_id) {
+      // An event already exists — patching it is idempotent, so two
+      // concurrent reschedules racing here just apply the same update
+      // twice. No claim needed.
+      await rescheduleReminderEvent({ ...reminderParams, calendarEventId: data.calendar_event_id });
+    } else {
+      // No event yet. Atomically claim the "create" step with a
+      // conditional update (NULL -> sentinel) so two concurrent
+      // reschedules of a never-synced reminder can't both create a
+      // duplicate calendar event — only the request that wins the claim
+      // proceeds to call the Calendar API.
+      const { data: claimedRow } = await supabase
+        .from("activities")
+        .update({ calendar_event_id: "pending" })
+        .eq("id", data.id)
+        .is("calendar_event_id", null)
+        .select("id")
+        .maybeSingle();
+
+      if (claimedRow) {
+        const calendarEventId = await createReminderEvent(reminderParams);
+        // Writing null here (creation failed/skipped) releases the claim
+        // so a future reschedule can retry instead of staying stuck.
+        await supabase
+          .from("activities")
+          .update({ calendar_event_id: calendarEventId })
+          .eq("id", data.id);
+      }
+    }
   }
 
   return NextResponse.json({ data });
