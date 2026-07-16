@@ -327,6 +327,15 @@ export interface Proposal {
   deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_screenshot_url?: string;
   deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
+  // Deposit credit — a deposit already held from a prior contract, netted
+  // off the required deposit above. security_deposit_amount is never
+  // changed by this; the balance to actually collect is
+  // security_deposit_amount - deposit_credit_amount.
+  deposit_credit_amount?: number;
+  deposit_credit_reason?: string;
+  deposit_credit_proof_url?: string;
+  deposit_credit_applied_by?: string;
+  deposit_credit_applied_at?: string;
   // Accounting
   deposit_accounted?: boolean;
   deposit_accounted_at?: string;
