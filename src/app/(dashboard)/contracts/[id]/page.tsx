@@ -787,7 +787,7 @@ export default function ContractDetailPage({
             baseMonthlyRate={contract.subtotal ?? contract.total_amount}
             phases={contract.rate_phases ?? []}
             canEdit={
-              ["admin", "manager"].includes(userRole ?? "") &&
+              ["admin", "manager", "sales_rep"].includes(userRole ?? "") &&
               !(CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)
             }
             onPhasesUpdated={() => fetchContract(false)}
