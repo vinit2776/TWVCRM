@@ -160,6 +160,7 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
 
   const [
     collections,
+    billingCollections,
     bookingRevenue,
     invoices,
     pettyCash,
@@ -173,12 +174,21 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     contracts,
     tickets,
   ] = await Promise.all([
+    // Keyed on created_at (when the payment was recorded), not payment_date
+    // (the receipt date the recorder enters, which can be backdated) — so a
+    // manually-entered payment always surfaces in the digest for the day it
+    // was actually logged, even if it's for an earlier receipt date.
     supabase
       .from("contract_payments")
       .select("amount")
       .eq("status", "verified")
-      .gte("payment_date", fromDate)
-      .lte("payment_date", toDate),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
+    supabase
+      .from("billing_payments")
+      .select("amount")
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("booking_payments")
       .select("amount")
@@ -249,7 +259,7 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     (rows || []).reduce((s, r) => s + Number((r as Record<string, unknown>)[field] || 0), 0);
 
   return {
-    collections: sum(collections.data, "amount"),
+    collections: sum(collections.data, "amount") + sum(billingCollections.data, "amount"),
     bookingRevenue: sum(bookingRevenue.data, "amount"),
     invoiceCount: (invoices.data || []).length,
     invoiceAmount: sum(invoices.data, "total_amount"),
@@ -289,13 +299,21 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
 
   const locationIds = locs.map((l: { id: string; name: string }) => l.id);
 
-  // Fetch payments, leads, and bookings for all locations in parallel using batched queries
-  const [paymentsRes, leadsRes, bookingsRes] = await Promise.all([
+  // Fetch payments, leads, and bookings for all locations in parallel using batched queries.
+  // Payments are keyed on created_at (when recorded), not payment_date (the
+  // possibly-backdated receipt date) — see fetchMetricsRange for why.
+  const [paymentsRes, billingPaymentsRes, leadsRes, bookingsRes] = await Promise.all([
     supabase
       .from("contract_payments")
       .select("amount, contract:contracts!contract_payments_contract_id_fkey(location_id)")
       .eq("status", "verified")
-      .eq("payment_date", date),
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    supabase
+      .from("billing_payments")
+      .select("amount, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(contract:contracts!billing_statements_contract_id_fkey(location_id))")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
     supabase
       .from("leads")
       .select("location_id", { count: "exact", head: false })
@@ -332,11 +350,21 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (p: any) => p.contract?.location_id === loc.id
     );
-    const colTotal = locPayments.reduce(
+    const locBillingPayments = (billingPaymentsRes.data || []).filter(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (s: number, r: any) => s + Number(r.amount || 0),
-      0
+      (p: any) => p.billing_statement?.contract?.location_id === loc.id
     );
+    const colTotal =
+      locPayments.reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: number, r: any) => s + Number(r.amount || 0),
+        0
+      ) +
+      locBillingPayments.reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: number, r: any) => s + Number(r.amount || 0),
+        0
+      );
 
     return {
       name: loc.name,
