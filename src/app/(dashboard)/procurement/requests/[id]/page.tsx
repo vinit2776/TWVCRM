@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
   Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart, ShieldCheck,
-  Activity, ArrowRight,
+  Activity, ArrowRight, Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
+import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -29,6 +30,7 @@ import {
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
+  BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
@@ -200,6 +202,8 @@ export default function PurchaseRequestDetailPage() {
   const [quotationOverrideReason, setQuotationOverrideReason] = useState("");
   // Edit-prices-and-resubmit (only available on rejected MRs)
   const [editPricesOpen, setEditPricesOpen] = useState(false);
+  // Bill Customer (reimbursement department only)
+  const [billCustomerOpen, setBillCustomerOpen] = useState(false);
   // Keyed by line item id → string (so empty input is preserved)
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
 
@@ -239,6 +243,10 @@ export default function PurchaseRequestDetailPage() {
   // Only admins and managers are approvers — budget info is never shown to MR creators/requesters
   const isApprover = ["admin", "manager"].includes(userRole);
   const hasNoQuotations = (pr?.material_request_quotations?.length ?? 0) === 0;
+  const canBillCustomer =
+    pr?.department === "reimbursement" &&
+    !!pr?.approved_at &&
+    ["admin", "manager", "accounts"].includes(userRole);
 
   const openApproveDialog = useCallback(async () => {
     setActionDialog("approve");
@@ -395,6 +403,16 @@ export default function PurchaseRequestDetailPage() {
               Submit for Approval
             </Button>
           )}
+          {canBillCustomer && (
+            <Button
+              size="sm"
+              variant="default"
+              className="bg-pink-600 hover:bg-pink-700"
+              onClick={() => setBillCustomerOpen(true)}
+            >
+              <Receipt className="h-4 w-4 mr-1" /> Bill Customer
+            </Button>
+          )}
           {pr.status === "submitted" && (
             <>
               <Button
@@ -496,6 +514,54 @@ export default function PurchaseRequestDetailPage() {
                 </p>
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Reimbursement: billed-to-customer rollup */}
+      {pr.department === "reimbursement" && (
+        <Card className="border-pink-200 bg-pink-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-pink-800">
+              <Receipt className="h-4 w-4" /> Billed to Customer
+              {pr.billable_contract && (
+                <span className="font-normal text-pink-700">
+                  — {pr.billable_contract.contract_number}
+                  {pr.billable_contract.lead
+                    ? ` (${pr.billable_contract.lead.company || `${pr.billable_contract.lead.first_name} ${pr.billable_contract.lead.last_name}`})`
+                    : ""}
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {(() => {
+              const activeStatements = (pr.reimbursement_statements ?? []).filter((s) => !s.voided_at);
+              const totalBilled = activeStatements.reduce((sum, s) => sum + Number(s.total_amount ?? 0), 0);
+              return (
+                <>
+                  <p className="text-sm text-pink-900">
+                    <span className="font-semibold">{formatCurrency(totalBilled)}</span> billed so far
+                    {" · "}MR estimate: {formatCurrency(pr.total_estimated_amount)}
+                  </p>
+                  {activeStatements.length > 0 ? (
+                    <div className="space-y-1">
+                      {activeStatements.map((s) => (
+                        <div key={s.id} className="flex items-center justify-between text-xs bg-white/70 rounded px-2 py-1.5 border border-pink-100">
+                          <span className="font-mono">{s.statement_number}</span>
+                          <Badge className={BILLING_STATEMENT_STATUS_COLORS[s.status] ?? ""} variant="secondary">
+                            {BILLING_STATEMENT_STATUS_LABELS[s.status] ?? s.status}
+                          </Badge>
+                          <span className="font-medium">{formatCurrency(s.total_amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-pink-600">Not billed yet.</p>
+                  )}
+                </>
+              );
+            })()}
           </CardContent>
         </Card>
       )}
@@ -1434,6 +1500,22 @@ export default function PurchaseRequestDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {pr.department === "reimbursement" && pr.billable_contract && (
+        <BillCustomerDialog
+          open={billCustomerOpen}
+          onOpenChange={setBillCustomerOpen}
+          prId={pr.id}
+          prNumber={pr.pr_number}
+          contractLabel={`${pr.billable_contract.contract_number}${
+            pr.billable_contract.lead
+              ? ` — ${pr.billable_contract.lead.company || `${pr.billable_contract.lead.first_name} ${pr.billable_contract.lead.last_name}`}`
+              : ""
+          }`}
+          seedItems={(pr.purchase_request_items ?? []).map((it) => ({ item_name: it.item_name, quantity: Number(it.quantity) }))}
+          onSuccess={fetchPr}
+        />
+      )}
     </div>
   );
 }

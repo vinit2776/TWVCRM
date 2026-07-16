@@ -186,6 +186,21 @@ export async function POST(
         });
       }
 
+      if (contract.lead_id) {
+        supabase
+          .from("activities")
+          .insert({
+            lead_id: contract.lead_id,
+            type: "note",
+            subject: "📝 Sent for e-Signing via Leegality",
+            description: `Membership agreement ${contract.contract_number} sent to ${signatoryName} (${memberEmail}) for e-signature.`,
+            created_by: dbUser?.id ?? null,
+          })
+          .then(({ error }) => {
+            if (error) console.error("[contract/sign] Failed to log activity:", error.message);
+          });
+      }
+
       return NextResponse.json({
         data: {
           documentId: result.documentId,

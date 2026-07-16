@@ -729,8 +729,11 @@ export interface BillingStatement {
   billing_payments?: BillingPayment[];
   // Accounting head (receivables classification)
   primary_head?: string | null;
-  // Auto-proforma split: 'combined' (legacy), 'rent' (auto-dispatched), 'usage' (admin review)
-  statement_type?: 'combined' | 'rent' | 'usage' | 'electricity' | null;
+  // Auto-proforma split: 'combined' (legacy), 'rent' (auto-dispatched), 'usage' (admin review),
+  // 'reimbursement' (manually billed from an approved reimbursement purchase_request)
+  statement_type?: 'combined' | 'rent' | 'usage' | 'electricity' | 'reimbursement' | null;
+  // Set when statement_type === 'reimbursement' — traces back to the purchase_request it was billed from
+  source_pr_id?: string | null;
   // Proforma tracking
   proforma_sent_at?: string | null;
   proforma_sent_by?: string | null;
@@ -1861,7 +1864,7 @@ export interface AggregatorInvoiceLineItem {
 // Procurement Module
 // ==========================================
 
-export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc";
+export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc" | "reimbursement";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
 export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
@@ -2004,6 +2007,8 @@ export interface PurchaseRequest {
   advance_amount?: number | null;
   advance_payment_mode?: "neft" | "rtgs" | "imps" | "bank_transfer" | "cheque" | "cash" | null;
   advance_notes?: string | null;
+  // Reimbursement fields — only populated when department === "reimbursement"
+  billable_contract_id?: string | null;
   // Joined fields
   locations?: { id: string; name: string } | null;
   requester?: { id: string; full_name?: string; email?: string } | null;
@@ -2011,6 +2016,21 @@ export interface PurchaseRequest {
   purchase_request_items?: PurchaseRequestItem[];
   material_request_quotations?: MaterialRequestQuotation[];
   linked_asset?: { id: string; name: string; asset_code: string } | null;
+  billable_contract?: {
+    id: string;
+    contract_number: string;
+    tax_percentage?: number;
+    billing_mode?: string;
+    lead?: { id: string; first_name: string; last_name: string; company?: string } | null;
+  } | null;
+  reimbursement_statements?: Array<{
+    id: string;
+    statement_number: string;
+    status: string;
+    total_amount: number;
+    voided_at: string | null;
+    created_at: string;
+  }>;
 }
 
 export interface MaterialRequestQuotation {
