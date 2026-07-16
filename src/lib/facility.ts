@@ -224,6 +224,10 @@ export const FACILITY_ROLES = {
   // Bypasses ownership rules (assign to others, act on tickets they don't own) —
   // mirrors OVERRIDE_ROLES in the issue detail page.
   override: ["admin", "manager", "office_admin"] as const,
+  // Narrower than override — flipping a TAT extension's KPI-exempt flag is
+  // restricted to admin/manager only (office_admin can do everything else
+  // in the override tier, but not this).
+  passCard: ["admin", "manager"] as const,
   // Anyone authenticated can report.
 };
 

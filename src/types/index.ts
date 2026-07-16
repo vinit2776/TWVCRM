@@ -2993,6 +2993,7 @@ export interface FacilityIssue {
   tat_extension_count?: number;
   tat_extensions?: FacilityIssueTatExtension[];
   kpi_points?: number | null;
+  kpi_breakdown?: { label: string; delta: number }[] | null;
   claimed_at?: string | null;
   claim_sla_target_at?: string | null;
   claim_sla_breached?: boolean;
