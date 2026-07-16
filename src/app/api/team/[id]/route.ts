@@ -94,7 +94,7 @@ export async function PATCH(
   // Handle profile and role updates
   const allowedFields: Record<string, unknown> = {};
 
-  if (body.role && ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"].includes(body.role)) {
+  if (body.role && ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "it_manager", "it_technician", "viewer"].includes(body.role)) {
     allowedFields.role = body.role;
   }
   if (typeof body.is_active === "boolean") {
