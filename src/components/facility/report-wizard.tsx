@@ -520,6 +520,12 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
             <span className="text-xs text-muted-foreground">Due by this date &amp; time</span>
           </div>
         )}
+        {!tatHours.trim() && !tatDateTime && (
+          <div className="flex items-start gap-1.5 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>No deadline set — this ticket will use the category/priority default TAT instead.</span>
+          </div>
+        )}
       </div>
 
       <div>
