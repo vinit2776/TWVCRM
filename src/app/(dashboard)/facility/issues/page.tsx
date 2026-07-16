@@ -484,25 +484,70 @@ function Chip({ active, onClick, children }: {
   );
 }
 
+type TatBarStatus = "on_track" | "at_risk" | "overdue";
+
+const TAT_BAR_TRACK: Record<TatBarStatus, string> = {
+  on_track: "bg-emerald-100",
+  at_risk: "bg-amber-100",
+  overdue: "bg-red-200",
+};
+const TAT_BAR_FILL: Record<TatBarStatus, string> = {
+  on_track: "bg-emerald-500",
+  at_risk: "bg-amber-500",
+  overdue: "bg-red-600",
+};
+
+/**
+ * Time-elapsed bar toward the TAT deadline, clocked from creation. Returns
+ * duration/delay in seconds for the shared `.tat-bar-fill` CSS animation
+ * (see globals.css) rather than a live-computed width — the browser
+ * interpolates continuously with zero JS ticking. `status` is a one-time
+ * snapshot (on_track/at_risk/overdue) used only for the bar/track color,
+ * refreshed whenever the list itself refetches — same cadence every other
+ * time-based label on this page already uses.
+ */
+function computeTatBar(issue: FacilityIssue): { status: TatBarStatus; durationSec: number; delaySec: number } | null {
+  if (!issue.sla_target_at) return null;
+  const start = new Date(issue.created_at).getTime();
+  const end = new Date(issue.sla_target_at).getTime();
+  const now = Date.now();
+  const total = Math.max(end - start, 1000);
+  const elapsed = now - start;
+  const remaining = end - now;
+  const status: TatBarStatus = remaining <= 0 ? "overdue" : remaining <= 60 * 60 * 1000 ? "at_risk" : "on_track";
+  return { status, durationSec: total / 1000, delaySec: -(elapsed / 1000) };
+}
+
 function IssueCard({ issue }: { issue: FacilityIssue }) {
   const sla = issue.sla_target_at;
   const isOpen = ACTIVE_STATUSES.has(issue.status);
   const isUnowned = !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const claimOverdue = isUnowned && issue.claim_sla_breached;
   const isTask = issue.task_type === "delegated_task";
+  const tatBar = isOpen ? computeTatBar(issue) : null;
+  const breached = tatBar?.status === "overdue";
 
   return (
     <Link
       href={`/facility/issues/${issue.id}`}
       className={cn(
-        "block hover:shadow-sm transition-colors p-3 rounded-lg",
+        "block hover:shadow-sm transition-colors rounded-lg overflow-hidden",
         isTask
           ? "bg-teal-100 border-2 border-teal-400 hover:border-teal-500"
           : "bg-card border hover:bg-muted/20 hover:border-foreground/20",
-        claimOverdue && !isTask && "border-amber-300",
+        breached && (isTask ? "border-red-500" : "bg-red-50 border-red-300"),
+        claimOverdue && !isTask && !breached && "border-amber-300",
       )}
     >
-      <div className="flex items-start gap-3">
+      {tatBar && (
+        <div className={cn("h-[3px] w-full", TAT_BAR_TRACK[tatBar.status])}>
+          <div
+            className={cn("tat-bar-fill h-full", TAT_BAR_FILL[tatBar.status])}
+            style={{ animationDuration: `${tatBar.durationSec}s`, animationDelay: `${tatBar.delaySec}s` }}
+          />
+        </div>
+      )}
+      <div className="flex items-start gap-3 p-3">
         <span className={cn("mt-1 h-2.5 w-2.5 rounded-full shrink-0", PRIORITY_STYLES[issue.priority].dot)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">

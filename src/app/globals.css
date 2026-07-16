@@ -114,3 +114,24 @@ body {
   animation: next-action-pulse 2s ease-in-out infinite;
   transition: box-shadow 200ms ease-out;
 }
+
+/* ────────────────────────────────────────────────────────────
+   TAT progress fill — thin edge bar on Facility ticket cards
+   showing time elapsed toward the TAT deadline. Duration/delay
+   are set per-card via inline style (computed once from
+   created_at/sla_target_at), so the same shared keyframe drives
+   every card's fill without any JS ticking — the browser
+   compositor animates continuously at zero JS cost, and
+   animation-fill-mode: forwards holds it at 100% once the
+   deadline passes (including cards that were already overdue
+   at page load, via a negative delay larger than the duration).
+   ──────────────────────────────────────────────────────────── */
+@keyframes tat-bar-fill {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+.tat-bar-fill {
+  animation-name: tat-bar-fill;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
