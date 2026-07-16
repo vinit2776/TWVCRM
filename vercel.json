@@ -89,6 +89,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/lead-reminder-whatsapp",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/cosec-booking-cleanup",
       "schedule": "*/30 * * * *"
     },

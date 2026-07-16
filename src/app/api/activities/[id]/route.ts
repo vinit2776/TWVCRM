@@ -57,6 +57,9 @@ export async function PATCH(
           follow_up_actioned_by: dbUser?.id ?? null,
           follow_up_actioned_at: now,
           updated_at: now,
+          // Reset so the WhatsApp cron sends a fresh nudge for the new time
+          // instead of staying silent because the old time already fired.
+          followup_wa_reminder_sent_at: null,
         };
 
   const { data, error } = await supabase
