@@ -231,7 +231,7 @@ function FacilityIssuesPageInner() {
       {/* ───── Quick filter chips (always visible) ────────────────────────── */}
       <div className="flex flex-wrap gap-1.5">
         <Chip active={onlyUnowned} onClick={() => { setOnlyUnowned((v) => !v); setOnlyOpen(false); setOnlyMine(false); setAssignedToFilter(""); setStatusFilters([]); }}>
-          Unowned{issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length > 0 && !onlyUnowned && (
+          Unclaimed{issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length > 0 && !onlyUnowned && (
             <span className="ml-1 bg-amber-500 text-white text-[9px] px-1 py-0.5 rounded-full font-bold">
               {issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length}
             </span>
@@ -240,7 +240,7 @@ function FacilityIssuesPageInner() {
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
-          <AlertTriangle className="h-3 w-3 mr-1 inline" /> SLA breached
+          <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(SLA)</span>
         </Chip>
         {(statusFilters.length > 0 || priority || locationId || assignedToFilter) && (
           <button
@@ -265,7 +265,7 @@ function FacilityIssuesPageInner() {
                   type="button"
                   onClick={() => setPriority((cur) => cur === p ? "" : p)}
                   className={cn(
-                    "px-2.5 py-1 text-xs rounded-full border inline-flex items-center gap-1",
+                    "min-h-[44px] px-3 py-1 text-xs rounded-full border inline-flex items-center gap-1",
                     priority === p ? "bg-[#015E65] text-white border-[#015E65]" : "bg-background",
                   )}
                 >
@@ -292,7 +292,7 @@ function FacilityIssuesPageInner() {
                       );
                     }}
                     className={cn(
-                      "px-2.5 py-1 text-xs rounded-full border",
+                      "min-h-[44px] px-3 py-1 text-xs rounded-full border",
                       sel ? "bg-[#015E65] text-white border-[#015E65]" : "bg-background",
                     )}
                   >{STATUS_STYLES[s].label}</button>
@@ -430,7 +430,7 @@ function Chip({ active, onClick, children }: {
       type="button"
       onClick={onClick}
       className={cn(
-        "px-2.5 py-1 text-xs rounded-full border inline-flex items-center",
+        "min-h-[44px] px-3 py-1 text-xs rounded-full border inline-flex items-center",
         active ? "bg-[#015E65] text-white border-[#015E65]" : "bg-background hover:bg-muted/40",
       )}
     >
@@ -469,7 +469,7 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
                 "text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium",
                 claimOverdue ? "bg-red-50 text-red-700 ring-red-200" : "bg-amber-50 text-amber-700 ring-amber-200",
               )}>
-                {claimOverdue ? "Claim overdue" : "Unowned"}
+                {claimOverdue ? "Claim overdue" : "Unclaimed"}
               </span>
             )}
             {!inGroup && !isUnowned && (

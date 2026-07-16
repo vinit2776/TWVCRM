@@ -199,15 +199,16 @@ export default function FacilityDashboardPage() {
         {data.trend.length === 0 ? (
           <p className="text-sm text-muted-foreground italic py-4">No data.</p>
         ) : (
-          <div className="flex items-end gap-1 h-32">
+          <div className="flex items-stretch gap-1 h-32">
             {data.trend.map((t) => {
               const max = Math.max(...data.trend.map((x) => x.total));
               const h = max > 0 ? (t.total / max) * 100 : 0;
               return (
-                <div key={t.bucket} className="flex-1 flex flex-col items-center gap-1 group">
-                  <div className="w-full bg-[#015E65]/70 hover:bg-[#015E65] rounded-t" style={{ height: `${h}%` }} />
+                <div key={t.bucket} className="flex-1 flex flex-col items-center justify-end gap-1">
+                  {/* Value shown inline (not on :hover) so it's readable on touch devices */}
+                  <div className="text-[10px] font-medium tabular-nums text-muted-foreground">{t.total}</div>
+                  <div className="w-full bg-[#015E65]/70 rounded-t" style={{ height: `${h}%` }} />
                   <div className="text-[9px] text-muted-foreground hidden md:block">{t.bucket.split("-W").pop()}</div>
-                  <div className="opacity-0 group-hover:opacity-100 absolute -mt-8 bg-foreground text-background text-[10px] px-1.5 py-0.5 rounded">{t.total}</div>
                 </div>
               );
             })}

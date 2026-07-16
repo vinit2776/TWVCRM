@@ -81,7 +81,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
-  const [tatMode, setTatMode] = useState<"hours" | "datetime">("hours");
+  const [tatMode, setTatMode] = useState<"hours" | "datetime">("datetime");
   const [tatHours, setTatHours] = useState("");
   const [tatDateTime, setTatDateTime] = useState("");
 
@@ -99,7 +99,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     if (!open) return;
     setStep(prefilled ? 2 : 1);
     setPhotos([]);
-    setTatMode("hours");
+    setTatMode("datetime");
     setTatHours("");
     setTatDateTime("");
     setTitle("");
@@ -473,7 +473,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       </div>
 
       <div>
-        <Label className="text-sm font-medium">TAT override (optional)</Label>
+        <Label className="text-sm font-medium">Deadline override <span className="font-normal text-muted-foreground">— optional (TAT)</span></Label>
         <div className="flex items-center gap-1 mt-1.5 mb-2">
           <button
             type="button"

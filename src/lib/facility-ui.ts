@@ -109,6 +109,9 @@ export function formatDuration(minutes: number | null | undefined): string {
   return h === 0 ? `${d}d` : `${d}d ${h}h`;
 }
 
+/** Preferred order for picking the single "primary" action button out of several valid next statuses. */
+export const STATUS_ACTION_PRIORITY: FacilityIssueStatus[] = ["in_progress", "resolved", "closed", "reopened"];
+
 /** Status-flow guard — what the user is allowed to transition TO from a given state. */
 export function nextStatusOptions(current: FacilityIssueStatus): FacilityIssueStatus[] {
   switch (current) {

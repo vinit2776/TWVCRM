@@ -190,7 +190,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
           </div>
 
           <div className="space-y-2">
-            <Label>Due Date / TAT *</Label>
+            <Label>Due date <span className="font-normal text-muted-foreground">— required (TAT)</span> *</Label>
             <div className="flex items-center gap-1">
               <button
                 type="button"
