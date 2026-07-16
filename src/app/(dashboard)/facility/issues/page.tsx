@@ -17,7 +17,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus, User,
+  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus, User, Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -507,9 +507,13 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <code className={cn("text-xs font-mono", isTask ? "text-teal-800" : "text-muted-foreground")}>{issue.issue_number}</code>
-            {isTask && (
+            {isTask ? (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5">
                 <UserPlus className="h-2.5 w-2.5" /> Task
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5">
+                <Wrench className="h-2.5 w-2.5" /> Work Order
               </span>
             )}
             {isUnowned && (
