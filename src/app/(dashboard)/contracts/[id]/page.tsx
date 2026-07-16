@@ -37,6 +37,7 @@ import { ContractMembersAccessSection } from "@/components/contracts/contract-me
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
+import { ContractRatePhasesSection } from "@/components/contracts/contract-rate-phases-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
@@ -776,6 +777,20 @@ export default function ContractDetailPage({
             contractStartDate={contract.start_date}
             contractEndDate={contract.end_date}
             taxPercentage={contract.tax_percentage ?? 18}
+          />
+
+          {/* Tiered Rate Schedule — only editable pre-activation, mirrors the
+              API's own lock gate (same statuses as quota locking). */}
+          <ContractRatePhasesSection
+            contractId={id}
+            tenureMonths={contract.tenure_months}
+            baseMonthlyRate={contract.subtotal ?? contract.total_amount}
+            phases={contract.rate_phases ?? []}
+            canEdit={
+              ["admin", "manager"].includes(userRole ?? "") &&
+              !(CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)
+            }
+            onPhasesUpdated={() => fetchContract(false)}
           />
 
           {/* Security Deposit Snapshot */}

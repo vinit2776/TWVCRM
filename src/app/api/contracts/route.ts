@@ -174,6 +174,9 @@ export async function POST(request: NextRequest) {
       tenure_months: d.tenure_months,
       start_date: d.start_date,
       end_date: endDateStr,
+      // Tiered rate-phase clock anchor — defaults to start_date, same as the
+      // one-time backfill for pre-existing contracts (see 00315 migration).
+      phase_start_date: d.start_date,
       next_billing_date: nextBillingDate.toISOString().split("T")[0],
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,
