@@ -41,6 +41,8 @@ export interface AddendumData {
   renewal_sequence: number;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   renewal_items: { description: string; quantity: number; unit_price: number; total: number }[];
+  /** Tiered rate schedule for the renewal contract, if configured (see contract_rate_phases). */
+  renewal_rate_phases?: { phase_order: number; duration_months: number; monthly_rate: number }[];
 
   // Parent (original) contract
   parent_contract_number: string;
@@ -222,7 +224,23 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   doc.text("Revised Service Fee", ctx.marginLeft + 6, ctx.y);
   ctx.y += 5;
 
-  if (data.renewal_escalation_waived) {
+  const ratePhases = (data.renewal_rate_phases ?? []).slice().sort((a, b) => a.phase_order - b.phase_order);
+
+  if (ratePhases.length > 0) {
+    let cursor = 1;
+    const lines = ratePhases.map((p) => {
+      const start = cursor;
+      const end = cursor + p.duration_months - 1;
+      cursor = end + 1;
+      return `Month ${start}–${end}: INR ${formatCurrency(p.monthly_rate).replace("Rs. ", "")} + GST per month`;
+    });
+    const lastRate = ratePhases[ratePhases.length - 1].monthly_rate;
+    lines.push(`Month ${cursor} onwards: INR ${formatCurrency(lastRate).replace("Rs. ", "")} + GST per month (flat, subject to escalation on renewal)`);
+    ctx.addWrappedText(
+      `The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below, commencing ${formatDate(data.renewal_start_date)}:\n${lines.join("\n")}`,
+      ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
+    );
+  } else if (data.renewal_escalation_waived) {
     ctx.addWrappedText(
       `The Parties agree that the escalation has been waived for this renewal period. The monthly service fee shall remain at INR ${formatCurrency(data.renewal_subtotal).replace("Rs. ", "")} (Rupees ${numberToWords(Math.round(data.renewal_subtotal))} Only), the same as the previous term.`,
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
@@ -487,7 +505,8 @@ export async function buildAddendumPdfBuffer(
         street, city, state, zip_code, country,
         pan_number, gst_number, entity_type
       ),
-      location:locations!contracts_location_id_fkey(id, name, address, city, state)
+      location:locations!contracts_location_id_fkey(id, name, address, city, state),
+      rate_phases:contract_rate_phases(phase_order, duration_months, monthly_rate)
     `)
     .eq("id", contractId)
     .single();
@@ -536,6 +555,7 @@ export async function buildAddendumPdfBuffer(
     renewal_billing_cycle: contract.billing_cycle || "monthly",
     renewal_sequence: contract.renewal_sequence || 2,
     renewal_items: (contract.items || []) as AddendumData["renewal_items"],
+    renewal_rate_phases: (contract.rate_phases || []) as AddendumData["renewal_rate_phases"],
 
     parent_contract_number: parentData.contract_number,
     parent_start_date: parentData.start_date,
