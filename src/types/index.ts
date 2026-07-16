@@ -321,6 +321,7 @@ export interface Proposal {
   deposit_payment_status?: string; // "not_required" | "pending" | "paid"
   deposit_razorpay_link_id?: string;
   deposit_razorpay_link_url?: string;
+  deposit_email_sent_at?: string;
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;

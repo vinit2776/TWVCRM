@@ -201,6 +201,7 @@ export async function POST(
     return NextResponse.json({ error: "Customer email not found on the lead" }, { status: 400 });
   }
 
+  const emailSentAt = new Date().toISOString();
   await resend.emails.send({
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
@@ -208,6 +209,11 @@ export async function POST(
     subject,
     html,
   }).catch(console.error);
+
+  await supabase
+    .from("proposals")
+    .update({ deposit_email_sent_at: emailSentAt })
+    .eq("id", id);
 
   // WhatsApp — fire to phone if available (fire-and-forget)
   if (customerPhone && depositLinkUrl) {

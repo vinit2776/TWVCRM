@@ -51,7 +51,7 @@ import {
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
@@ -989,6 +989,12 @@ export default function ProposalDetailPage({
                       </a>
                     )}
                   </>
+                )}
+
+                {proposal.deposit_payment_status === "pending" && proposal.deposit_email_sent_at && (
+                  <p className="text-xs text-amber-700/80">
+                    Last sent: {formatDateTime(proposal.deposit_email_sent_at)}
+                  </p>
                 )}
 
                 {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
