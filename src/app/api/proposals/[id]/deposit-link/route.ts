@@ -52,9 +52,11 @@ export async function POST(
     return NextResponse.json({ error: proposal.deposit_payment_status === "paid" ? "Deposit already paid" : "No deposit required for this proposal" }, { status: 400 });
   }
 
-  const depositAmount = Number(proposal.security_deposit_amount || 0);
+  const requiredDeposit = Number(proposal.security_deposit_amount || 0);
+  const creditApplied = Number(proposal.deposit_credit_amount || 0);
+  const depositAmount = Math.max(0, requiredDeposit - creditApplied);
   if (depositAmount <= 0) {
-    return NextResponse.json({ error: "Deposit amount is zero" }, { status: 400 });
+    return NextResponse.json({ error: creditApplied > 0 ? "Deposit credit fully covers the required deposit — nothing to collect" : "Deposit amount is zero" }, { status: 400 });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,7 +156,13 @@ export async function POST(
         <p style="color:#333;font-size:14px;">Thank you for accepting our proposal <strong>${proposal.proposal_number}</strong>. To proceed with the contract, please pay the refundable security deposit of <strong>${proposal.security_deposit_months} month(s)</strong>.</p>
         <table style="border-collapse:collapse;margin:20px 0;width:100%;background:#f0faf5;border-radius:6px;">
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Proposal</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${proposal.proposal_number}</td></tr>
+          ${creditApplied > 0 ? `
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Required Deposit</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">₹${requiredDeposit.toLocaleString("en-IN")}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Credit Applied</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">− ₹${creditApplied.toLocaleString("en-IN")}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Balance Due</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;font-size:18px;">₹${depositAmount.toLocaleString("en-IN")}</td></tr>
+          ` : `
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Deposit Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;font-size:18px;">₹${depositAmount.toLocaleString("en-IN")}</td></tr>
+          `}
           <tr><td style="padding:10px 16px;color:#666;">Type</td><td style="padding:10px 16px;color:#333;">Refundable (${proposal.security_deposit_months} month${proposal.security_deposit_months > 1 ? "s" : ""})</td></tr>
         </table>
         ${payButton}
@@ -193,6 +201,7 @@ export async function POST(
     return NextResponse.json({ error: "Customer email not found on the lead" }, { status: 400 });
   }
 
+  const emailSentAt = new Date().toISOString();
   await resend.emails.send({
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
@@ -200,6 +209,11 @@ export async function POST(
     subject,
     html,
   }).catch(console.error);
+
+  await supabase
+    .from("proposals")
+    .update({ deposit_email_sent_at: emailSentAt })
+    .eq("id", id);
 
   // WhatsApp — fire to phone if available (fire-and-forget)
   if (customerPhone && depositLinkUrl) {
