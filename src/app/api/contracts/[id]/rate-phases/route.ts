@@ -27,8 +27,8 @@ export async function PUT(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  if (!["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admin or manager can edit rate phases" }, { status: 403 });
+  if (!["admin", "manager", "sales_rep"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or sales rep can edit rate phases" }, { status: 403 });
   }
 
   const body = await request.json().catch(() => null);
