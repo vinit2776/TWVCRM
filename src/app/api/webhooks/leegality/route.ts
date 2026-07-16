@@ -1,6 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
-import { verifyWebhookSignature, parseWebhookPayload } from "@/lib/leegality";
+import { verifyWebhookSignature, parseWebhookPayload, downloadStampedDocument } from "@/lib/leegality";
+
+/**
+ * Fetch the signed PDF from Leegality and store it in crm-documents.
+ * Returns the new documents.id, or null if the download/upload failed —
+ * callers must not let this block the signing-status update, since the
+ * document itself already exists at Leegality even if our copy fails.
+ */
+async function storeSignedDocument(
+  adminSupabase: SupabaseClient,
+  params: {
+    documentId: string;
+    title: string;
+    storagePathPrefix: string;
+  }
+): Promise<{ documentRecordId: string | null; error: string | null }> {
+  try {
+    const { pdfBase64, fileName } = await downloadStampedDocument(params.documentId);
+    if (!pdfBase64) {
+      return { documentRecordId: null, error: "Leegality returned an empty document" };
+    }
+
+    const fileBuffer = Buffer.from(pdfBase64, "base64");
+    const storagePath = `${params.storagePathPrefix}/leegality-signed-${Date.now()}.pdf`;
+
+    const { error: uploadError } = await adminSupabase.storage
+      .from("crm-documents")
+      .upload(storagePath, fileBuffer, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+    if (uploadError) {
+      return { documentRecordId: null, error: `Storage upload failed: ${uploadError.message}` };
+    }
+
+    const { data: docRecord, error: insertError } = await adminSupabase
+      .from("documents")
+      .insert({
+        title: params.title,
+        file_name: fileName,
+        file_path: storagePath,
+        mime_type: "application/pdf",
+        size_bytes: fileBuffer.length,
+        category: "contract_document",
+      })
+      .select("id")
+      .single();
+    if (insertError) {
+      return { documentRecordId: null, error: `documents insert failed: ${insertError.message}` };
+    }
+
+    return { documentRecordId: docRecord.id, error: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { documentRecordId: null, error: `Document fetch failed: ${message}` };
+  }
+}
 
 /**
  * POST /api/webhooks/leegality
@@ -76,7 +133,7 @@ export async function POST(request: NextRequest) {
   // Look up contracts (membership agreements) by Leegality document ID
   const { data: contract } = await adminSupabase
     .from("contracts")
-    .select("id, lead_id")
+    .select("id, lead_id, contract_number")
     .eq("leegality_document_id", documentId)
     .maybeSingle();
 
@@ -93,17 +150,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true });
   }
 
+  const documentNotes: string[] = [];
+
   if (status === "COMPLETED") {
     const now = new Date().toISOString();
 
     // Update L&L case agreement
     if (agreement) {
+      const { documentRecordId, error: docError } = await storeSignedDocument(adminSupabase, {
+        documentId,
+        title: `${agreement.type === "leave_license" ? "Leave & License Agreement" : "Agreement"} — Signed via Leegality`,
+        storagePathPrefix: `case-agreements/${agreement.case_id}`,
+      });
+      if (docError) {
+        console.error(`[Leegality Webhook] Failed to store signed document for agreement ${agreement.id}:`, docError);
+        documentNotes.push(`case_agreement document store failed: ${docError}`);
+      }
+
       await adminSupabase
         .from("case_agreements")
         .update({
           status: "executed",
           signed_at: now,
           leegality_status: "COMPLETED",
+          ...(documentRecordId ? { generated_document_id: documentRecordId } : {}),
         })
         .eq("id", agreement.id);
 
@@ -117,15 +187,37 @@ export async function POST(request: NextRequest) {
 
     // Update membership contract
     if (contract) {
+      const { documentRecordId, error: docError } = await storeSignedDocument(adminSupabase, {
+        documentId,
+        title: `Membership Agreement ${contract.contract_number} — Signed via Leegality`,
+        storagePathPrefix: `contracts/${contract.id}`,
+      });
+      if (docError) {
+        console.error(`[Leegality Webhook] Failed to store signed document for contract ${contract.id}:`, docError);
+        documentNotes.push(`contract document store failed: ${docError}`);
+      }
+
       await adminSupabase
         .from("contracts")
         .update({
           leegality_status: "COMPLETED",
           signed_at: now,
+          ...(documentRecordId ? { signed_document_id: documentRecordId } : {}),
         })
         .eq("id", contract.id);
 
       console.log(`[Leegality Webhook] Contract ${contract.id} marked signed.`);
+
+      if (contract.lead_id) {
+        await adminSupabase.from("activities").insert({
+          lead_id: contract.lead_id,
+          type: "note",
+          subject: "✅ Agreement Signed via Leegality",
+          description: documentRecordId
+            ? `Membership agreement ${contract.contract_number} has been fully signed. Signed copy stored on the contract.`
+            : `Membership agreement ${contract.contract_number} has been fully signed. (Signed PDF could not be retrieved from Leegality — check the contract for the sign status and retry downloading manually.)`,
+        });
+      }
     }
   } else if (status === "EXPIRED" || status === "CANCELLED") {
     // Mark as signing failed so staff can re-initiate
@@ -140,6 +232,15 @@ export async function POST(request: NextRequest) {
         .from("contracts")
         .update({ leegality_status: status })
         .eq("id", contract.id);
+
+      if (contract.lead_id) {
+        await adminSupabase.from("activities").insert({
+          lead_id: contract.lead_id,
+          type: "note",
+          subject: status === "EXPIRED" ? "⚠️ e-Signing Expired" : "⚠️ e-Signing Cancelled",
+          description: `Leegality signing request for membership agreement ${contract.contract_number} was ${status.toLowerCase()}. Re-send for e-signing to continue.`,
+        });
+      }
     }
   }
 
@@ -150,6 +251,7 @@ export async function POST(request: NextRequest) {
     outcome_detail: [
       agreement ? `case_agreement:${agreement.id}` : null,
       contract ? `contract:${contract.id}` : null,
+      ...documentNotes,
     ]
       .filter(Boolean)
       .join(", "),
