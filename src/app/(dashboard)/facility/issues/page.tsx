@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * Facility Issues — list page (mobile-first; desktop uses table layout).
+ * Facility Issues — list page (mobile-first; card grid on every breakpoint).
  *
- * Default view: all tickets grouped by status. Active groups (new, acknowledged,
- * in_progress, reopened) are expanded. Resolved / closed start collapsed but are
- * visible so the team can reference them without changing filters.
+ * Default view: grouped by assignee, "Unclaimed" pinned first so unowned
+ * tickets stay visible instead of disappearing until someone claims them.
+ * Each assignee's tickets split into Open/Closed tabs (Closed = resolved +
+ * closed — anything off their plate, whether or not it's gone through the
+ * final admin-only Close step).
  *
  * Filters: search, scope, status, priority, location, assigned_to, sla_breached.
  * Top-right action: Work Order → opens FacilityReportWizard.
@@ -15,12 +17,12 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus,
+  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus, User,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, getInitials } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import {
@@ -33,11 +35,19 @@ import type {
 
 interface Location { id: string; name: string; code: string }
 
-// Active statuses rendered first; resolved/closed appended at bottom
-const STATUS_ORDER: FacilityIssueStatus[] = [
-  "reopened", "new", "acknowledged", "in_progress", "resolved", "closed",
-];
 const ACTIVE_STATUSES = new Set<FacilityIssueStatus>(["new", "acknowledged", "in_progress", "reopened"]);
+// "Closed" from an assignee's own point of view — resolved-but-not-yet-closed
+// still reads as done to them, even though an admin hasn't closed it yet.
+const DONE_STATUSES = new Set<FacilityIssueStatus>(["resolved", "closed"]);
+
+const UNCLAIMED_KEY = "__unclaimed";
+
+interface AssigneeGroup {
+  key: string;
+  name: string;
+  openItems: FacilityIssue[];
+  closedItems: FacilityIssue[];
+}
 
 export default function FacilityIssuesPage() {
   return (
@@ -54,10 +64,12 @@ function FacilityIssuesPageInner() {
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [delegateOpen, setDelegateOpen] = useState(false);
-  // resolved + closed start collapsed; active groups start expanded
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<FacilityIssueStatus>>(
-    new Set(["resolved", "closed"]),
-  );
+  // Groups that are all-closed (nothing open) start collapsed; anyone with
+  // open work stays visible by default.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Per-group Open/Closed tab — defaults to whichever bucket actually has
+  // items, computed lazily the first time each group is seen (see render).
+  const [groupTab, setGroupTab] = useState<Record<string, "open" | "closed">>({});
 
   // ---- filters -------------------------------------------------------------
   // Seeded from the URL on first render so links like Team KPI's
@@ -161,28 +173,43 @@ function FacilityIssuesPageInner() {
     return result;
   }, [issues, search, onlyUnowned, assignedToFilter]);
 
-  // Group by status in canonical order; only include groups that have issues
-  const grouped = useMemo(() => {
-    const map = new Map<FacilityIssueStatus, FacilityIssue[]>();
-    for (const s of STATUS_ORDER) map.set(s, []);
+  // Group by assignee — "Unclaimed" pinned first (own bucket so tickets
+  // nobody owns stay visible instead of disappearing until claimed), then
+  // one group per person alphabetically. Each group splits into open/closed
+  // so a technician can see "what's on my plate" vs "what I've finished"
+  // without status jargon.
+  const groupedByAssignee = useMemo(() => {
+    const map = new Map<string, { name: string; items: FacilityIssue[] }>();
     for (const issue of filtered) {
-      map.get(issue.status)?.push(issue);
+      const key = issue.assignee?.id ?? UNCLAIMED_KEY;
+      const name = issue.assignee?.full_name ?? "Unclaimed";
+      if (!map.has(key)) map.set(key, { name, items: [] });
+      map.get(key)!.items.push(issue);
     }
-    return STATUS_ORDER
-      .map((s) => ({ status: s, items: map.get(s) ?? [] }))
-      .filter(({ items }) => items.length > 0);
+    const groups: AssigneeGroup[] = [...map.entries()].map(([key, { name, items }]) => ({
+      key,
+      name,
+      openItems: items.filter((i) => ACTIVE_STATUSES.has(i.status)),
+      closedItems: items.filter((i) => DONE_STATUSES.has(i.status)),
+    }));
+    groups.sort((a, b) => {
+      if (a.key === UNCLAIMED_KEY) return -1;
+      if (b.key === UNCLAIMED_KEY) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return groups;
   }, [filtered]);
 
-  // Show grouped view unless the user has drilled into specific statuses or is in unowned view
-  const showGrouped = statusFilters.length === 0 && !onlyUnowned;
-
-  const toggleGroup = (status: FacilityIssueStatus) => {
+  const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(status)) next.delete(status); else next.add(status);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
+
+  const tabFor = (group: AssigneeGroup): "open" | "closed" =>
+    groupTab[group.key] ?? (group.openItems.length > 0 ? "open" : "closed");
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
@@ -191,7 +218,7 @@ function FacilityIssuesPageInner() {
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
           <p className="text-xs md:text-sm text-muted-foreground">
-            {showGrouped ? "All tickets · grouped by status" : "IT infrastructure tickets across all locations"}
+            All tickets · grouped by assignee
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -339,7 +366,7 @@ function FacilityIssuesPageInner() {
         </div>
       )}
 
-      {/* ───── Issue list ──────────────────────────────────────────────────── */}
+      {/* ───── Issue list — grouped by assignee ─────────────────────────────── */}
       {loading ? (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading issues…</div>
       ) : filtered.length === 0 ? (
@@ -347,63 +374,81 @@ function FacilityIssuesPageInner() {
           <Wifi className="h-10 w-10 mx-auto opacity-30 mb-3" />
           No issues match these filters.
         </div>
-      ) : showGrouped ? (
-        /* ── Grouped view ─────────────────────────────────────────────────── */
-        <div className="space-y-2">
-          {grouped.map(({ status, items }) => {
-            const collapsed = collapsedGroups.has(status);
-            const isActive = ACTIVE_STATUSES.has(status);
-            const breachedCount = items.filter((i) => i.sla_breached).length;
+      ) : (
+        <div className="space-y-3">
+          {groupedByAssignee.map((group) => {
+            const collapsed = collapsedGroups.has(group.key);
+            const tab = tabFor(group);
+            const activeItems = tab === "open" ? group.openItems : group.closedItems;
+            const breachedCount = group.openItems.filter((i) => i.sla_breached).length;
+            const isUnclaimed = group.key === UNCLAIMED_KEY;
+
             return (
-              <div key={status} className="rounded-lg border overflow-hidden">
+              <div key={group.key} className="rounded-lg border overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => toggleGroup(status)}
+                  onClick={() => toggleGroup(group.key)}
                   className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors",
-                    isActive ? "bg-muted/10" : "bg-muted/40",
+                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors",
+                    isUnclaimed ? "bg-amber-50/60" : "bg-muted/10",
                   )}
                 >
-                  <span className={cn("text-[11px] px-2 py-0.5 rounded-full ring-1 font-medium shrink-0", STATUS_STYLES[status].chip)}>
-                    {STATUS_STYLES[status].label}
+                  <span className={cn(
+                    "h-7 w-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0",
+                    isUnclaimed ? "bg-amber-200 text-amber-800" : "bg-[#015E65]/15 text-[#015E65]",
+                  )}>
+                    {isUnclaimed ? <User className="h-3.5 w-3.5" /> : getInitials(group.name)}
                   </span>
+                  <span className="text-sm font-medium shrink-0">{group.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {items.length} {items.length === 1 ? "issue" : "issues"}
+                    {group.openItems.length} open · {group.closedItems.length} closed
                   </span>
-                  {isActive && breachedCount > 0 && (
+                  {breachedCount > 0 && (
                     <span className="text-[10px] text-red-600 font-medium inline-flex items-center gap-0.5 ml-1">
                       <AlertTriangle className="h-2.5 w-2.5" />
-                      {breachedCount} SLA breach{breachedCount > 1 ? "es" : ""}
+                      {breachedCount} overdue
                     </span>
-                  )}
-                  {!isActive && (
-                    <span className="text-[10px] text-muted-foreground/50 ml-1">· for reference</span>
                   )}
                   <ChevronDown
                     className={cn(
-                      "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150",
+                      "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150 shrink-0",
                       collapsed && "-rotate-90",
                     )}
                   />
                 </button>
 
                 {!collapsed && (
-                  <div className="divide-y">
-                    {items.map((i) => (
-                      <IssueCard key={i.id} issue={i} inGroup />
-                    ))}
+                  <div className="p-3 space-y-3">
+                    {group.openItems.length > 0 && group.closedItems.length > 0 && (
+                      <div className="flex items-center gap-1 rounded-md bg-muted/40 p-0.5 w-fit">
+                        <button
+                          type="button"
+                          onClick={() => setGroupTab((prev) => ({ ...prev, [group.key]: "open" }))}
+                          className={cn(
+                            "px-3 py-1 text-xs font-medium rounded-sm transition min-h-[36px]",
+                            tab === "open" ? "bg-background shadow-sm" : "text-muted-foreground",
+                          )}
+                        >Open ({group.openItems.length})</button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupTab((prev) => ({ ...prev, [group.key]: "closed" }))}
+                          className={cn(
+                            "px-3 py-1 text-xs font-medium rounded-sm transition min-h-[36px]",
+                            tab === "closed" ? "bg-background shadow-sm" : "text-muted-foreground",
+                          )}
+                        >Closed ({group.closedItems.length})</button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {activeItems.map((i) => (
+                        <IssueCard key={i.id} issue={i} />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             );
           })}
-        </div>
-      ) : (
-        /* ── Flat view (when status filter is active) ─────────────────────── */
-        <div className="space-y-2">
-          {filtered.map((i) => (
-            <IssueCard key={i.id} issue={i} />
-          ))}
         </div>
       )}
 
@@ -439,7 +484,7 @@ function Chip({ active, onClick, children }: {
   );
 }
 
-function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean }) {
+function IssueCard({ issue }: { issue: FacilityIssue }) {
   const sla = issue.sla_target_at;
   const isOpen = ACTIVE_STATUSES.has(issue.status);
   const isUnowned = !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
@@ -449,9 +494,8 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
     <Link
       href={`/facility/issues/${issue.id}`}
       className={cn(
-        "block bg-card hover:bg-muted/20 transition-colors p-3",
-        !inGroup && "rounded-lg border hover:border-foreground/20 hover:shadow-sm",
-        claimOverdue && !inGroup && "border-amber-300",
+        "block bg-card hover:bg-muted/20 transition-colors p-3 rounded-lg border hover:border-foreground/20 hover:shadow-sm",
+        claimOverdue && "border-amber-300",
       )}
     >
       <div className="flex items-start gap-3">
@@ -472,7 +516,7 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
                 {claimOverdue ? "Claim overdue" : "Unclaimed"}
               </span>
             )}
-            {!inGroup && !isUnowned && (
+            {!isUnowned && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
                 {STATUS_STYLES[issue.status].label}
               </span>
@@ -492,7 +536,6 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
           <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
             <span>{issue.location?.name ?? "—"}</span>
             {issue.category?.name && <><span>·</span><span>{issue.category.name}</span></>}
-            {issue.assignee?.full_name && <><span>·</span><span>👤 {issue.assignee.full_name}</span></>}
             <span>·</span>
             <span>{timeAgo(issue.created_at)}</span>
             {isOpen && sla && (
