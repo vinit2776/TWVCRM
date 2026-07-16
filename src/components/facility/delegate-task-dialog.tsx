@@ -23,6 +23,7 @@ import {
 import { LocationSelector } from "@/components/shared/location-selector";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { PRIORITY_STYLES } from "@/lib/facility-ui";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { FacilityIssuePriority } from "@/types";
 
@@ -40,7 +41,6 @@ interface Props {
 }
 
 const PRIORITY_ORDER: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
-const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const [locationId, setLocationId] = useState<string | null>(null);
@@ -48,7 +48,9 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [assignedTo, setAssignedTo] = useState("");
-  const [dueDate, setDueDate] = useState("");
+  const [dueMode, setDueMode] = useState<"hours" | "datetime">("datetime");
+  const [dueHours, setDueHours] = useState("");
+  const [dueDateTime, setDueDateTime] = useState("");
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -70,15 +72,39 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setDescription("");
     setPriority("medium");
     setAssignedTo("");
-    setDueDate("");
+    setDueMode("datetime");
+    setDueHours("");
+    setDueDateTime("");
     setPhotos([]);
   };
 
-  const canSubmit = !!locationId && !!title.trim() && !!assignedTo && !!dueDate;
+  // Due date, resolved from whichever mode is active — hours-from-now, or a
+  // specific date/time picked directly. Mirrors the Work Order TAT toggle.
+  // Only called from the submit handler (not render) since it reads Date.now().
+  const resolveDueDate = (): Date | null => {
+    if (dueMode === "hours") {
+      const hours = Number(dueHours);
+      if (!dueHours.trim() || !isFinite(hours) || hours <= 0) return null;
+      return new Date(Date.now() + hours * 3_600_000);
+    }
+    if (!dueDateTime) return null;
+    const d = new Date(dueDateTime);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const hasValidDueInput = dueMode === "hours"
+    ? !!dueHours.trim() && isFinite(Number(dueHours)) && Number(dueHours) > 0
+    : !!dueDateTime && !isNaN(new Date(dueDateTime).getTime());
+  const canSubmit = !!locationId && !!title.trim() && !!assignedTo && hasValidDueInput;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
+    const resolvedDueDate = resolveDueDate();
+    if (!resolvedDueDate || resolvedDueDate.getTime() <= Date.now()) {
+      toast.error("Due date must be in the future");
+      return;
+    }
     setSubmitting(true);
 
     const res = await fetch("/api/facility/issues", {
@@ -91,7 +117,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
         description: description || undefined,
         priority,
         assigned_to: assignedTo,
-        due_date: new Date(dueDate).toISOString(),
+        due_date: resolvedDueDate.toISOString(),
         attachments: photos.map((p) => ({
           file_url: p.file_url, file_path: p.file_path,
           file_type: p.file_type, caption: p.caption ?? null,
@@ -147,32 +173,65 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Assign To *</Label>
-              <Select value={assignedTo} onValueChange={setAssignedTo}>
-                <SelectTrigger>
-                  <SelectValue placeholder={loadingAssignees ? "Loading..." : "Select teammate"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {assignees.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.full_name} ({a.role})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="space-y-2">
+            <Label>Assign To *</Label>
+            <Select value={assignedTo} onValueChange={setAssignedTo}>
+              <SelectTrigger>
+                <SelectValue placeholder={loadingAssignees ? "Loading..." : "Select teammate"} />
+              </SelectTrigger>
+              <SelectContent>
+                {assignees.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.full_name} ({a.role})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Due Date / TAT *</Label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setDueMode("hours")}
+                className={cn(
+                  "px-2.5 py-1 text-xs rounded-full border",
+                  dueMode === "hours" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+                )}
+              >Hours</button>
+              <button
+                type="button"
+                onClick={() => setDueMode("datetime")}
+                className={cn(
+                  "px-2.5 py-1 text-xs rounded-full border",
+                  dueMode === "datetime" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+                )}
+              >Date &amp; time</button>
             </div>
-            <div className="space-y-2">
-              <Label>Due Date (TAT) *</Label>
+            {dueMode === "hours" ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={dueHours}
+                  onChange={(e) => setDueHours(e.target.value)}
+                  placeholder="Hours"
+                  className="max-w-[140px]"
+                  required
+                />
+                <span className="text-xs text-muted-foreground">from now</span>
+              </div>
+            ) : (
               <Input
-                type="date"
-                min={todayIso()}
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
+                type="datetime-local"
+                value={dueDateTime}
+                onChange={(e) => setDueDateTime(e.target.value)}
+                className="max-w-[220px]"
                 required
               />
-            </div>
+            )}
           </div>
 
           <div className="space-y-2">

@@ -82,22 +82,22 @@ export async function POST(
     reopened = true;
     // Revoke the provisional score — it needs to be resolved properly again.
     updates.kpi_points = null;
+    updates.kpi_breakdown = null;
   } else if (issue.status === "resolved" || issue.status === "closed") {
     // Top up the KPI score with the satisfaction bonus now that it's known.
-    const { data: latestExt } = await supabase
+    const { data: exts } = await supabase
       .from("facility_issue_tat_extensions")
       .select("kpi_exempt")
-      .eq("issue_id", issue.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    updates.kpi_points = computeKpiPoints({
+      .eq("issue_id", issue.id);
+    const kpiResult = computeKpiPoints({
       priority: issue.priority as FacilityIssuePriority,
       slaBreached: issue.sla_breached ?? false,
       reopenCount: issue.reopen_count ?? 0,
       satisfactionRating: rating,
-      latestExtensionExempt: latestExt?.kpi_exempt ?? null,
+      extensionExemptFlags: (exts ?? []).map((e) => e.kpi_exempt),
     });
+    updates.kpi_points = kpiResult.total;
+    updates.kpi_breakdown = kpiResult.lines;
   }
 
   const { error: upErr } = await supabase

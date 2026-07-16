@@ -24,8 +24,8 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!hasRole(dbUser?.role, FACILITY_ROLES.override)) {
-    return NextResponse.json({ error: "Admin, manager or office_admin access required" }, { status: 403 });
+  if (!hasRole(dbUser?.role, FACILITY_ROLES.passCard)) {
+    return NextResponse.json({ error: "Admin or manager access required" }, { status: 403 });
   }
 
   const body = await request.json();
@@ -60,21 +60,18 @@ export async function PATCH(
     .eq("id", id).single();
 
   if (issue && issue.kpi_points != null && (issue.status === "resolved" || issue.status === "closed")) {
-    const { data: latestExt } = await supabase
+    const { data: exts } = await supabase
       .from("facility_issue_tat_extensions")
       .select("kpi_exempt")
-      .eq("issue_id", id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const newPoints = computeKpiPoints({
+      .eq("issue_id", id);
+    const kpiResult = computeKpiPoints({
       priority: issue.priority as FacilityIssuePriority,
       slaBreached: issue.sla_breached ?? false,
       reopenCount: issue.reopen_count ?? 0,
       satisfactionRating: issue.satisfaction_rating,
-      latestExtensionExempt: latestExt?.kpi_exempt ?? null,
+      extensionExemptFlags: (exts ?? []).map((e) => e.kpi_exempt),
     });
-    await supabase.from("facility_issues").update({ kpi_points: newPoints }).eq("id", id);
+    await supabase.from("facility_issues").update({ kpi_points: kpiResult.total, kpi_breakdown: kpiResult.lines }).eq("id", id);
   }
 
   await logIssueEvent(supabase, {
