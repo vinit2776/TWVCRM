@@ -1432,7 +1432,7 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
   ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
 };
 
-export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc"] as const;
+export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
 /**
@@ -1473,6 +1473,7 @@ export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   administration: "Administration",
   asset: "Asset",
   amc: "AMC",
+  reimbursement: "Reimbursement",
 };
 
 /** Example items per department — shown as guidance when selecting a department on a Material Request. */
@@ -1482,6 +1483,7 @@ export const PROCUREMENT_DEPARTMENT_EXAMPLES: Record<string, string> = {
   administration: "Machine rent, ISP bills, stationery",
   asset: "Chairs, AC, WS, vacuum cleaner, TV, projector, HVAC, UPS, DG, RO",
   amc: "HVAC, UPS, DG, RO and other AMC-covered assets",
+  reimbursement: "Work done on behalf of a customer — furniture, maintenance, housekeeping — billed back to them with markup",
 };
 
 export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
@@ -1490,6 +1492,7 @@ export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
   administration: "bg-purple-100 text-purple-800",
   asset: "bg-emerald-100 text-emerald-800",
   amc: "bg-violet-100 text-violet-800",
+  reimbursement: "bg-pink-100 text-pink-800",
 };
 
 export const VENDOR_CATEGORIES = ["pantry", "maintenance", "administration", "general"] as const;

@@ -77,7 +77,7 @@ export async function GET(
     supabase
       .from("purchase_requests")
       .select(
-        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code)`
+        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at)`
       )
       .eq("id", id)
       .single(),
@@ -203,7 +203,10 @@ export async function PATCH(
       // AMC MRs check against the annual FY AMC budget.
       // Operational MRs check against the department's monthly budget.
       // Admins can always approve regardless of budget.
-      if (dbUser.role === "manager") {
+      // Reimbursement spend is recovered from the customer, not drawn from any
+      // department's allocated budget — it never has a department_budgets row
+      // and is exempt from this gate entirely, for managers and admins alike.
+      if (dbUser.role === "manager" && pr.department !== "reimbursement") {
         if (pr.expenditure_type === "amc") {
           // AMC: check annual FY budget (committed spend only — approved and beyond)
           const now = new Date();
