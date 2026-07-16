@@ -74,12 +74,12 @@ function buildEventBody(params: ReminderEventParams) {
     description,
     start: { dateTime: startDate.toISOString() },
     end: { dateTime: endDate.toISOString() },
+    // Popup only — no "email" override here. Google Calendar's own server
+    // would otherwise email the owner from every synced event, which is
+    // exactly the per-activity email spam this whole feature removed.
     reminders: {
       useDefault: false,
-      overrides: [
-        { method: "popup", minutes: 30 },
-        { method: "email", minutes: 60 },
-      ],
+      overrides: [{ method: "popup", minutes: 30 }],
     },
   };
 }

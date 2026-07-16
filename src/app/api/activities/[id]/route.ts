@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { rescheduleReminderEvent } from "@/lib/google-calendar";
+import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
 
 export async function PATCH(
   request: NextRequest,
@@ -87,7 +87,7 @@ export async function PATCH(
       [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") ||
       "this lead";
 
-    const calendarEventId = await rescheduleReminderEvent({
+    const reminderParams = {
       activityId: data.id,
       leadId: data.lead_id,
       leadName,
@@ -96,14 +96,36 @@ export async function PATCH(
       followUpDate: data.follow_up_date,
       followUpNotes: data.follow_up_notes,
       ownerEmail: dbUser.email,
-      calendarEventId: data.calendar_event_id,
-    });
+    };
 
-    if (calendarEventId && calendarEventId !== data.calendar_event_id) {
-      await supabase
+    if (data.calendar_event_id) {
+      // An event already exists — patching it is idempotent, so two
+      // concurrent reschedules racing here just apply the same update
+      // twice. No claim needed.
+      await rescheduleReminderEvent({ ...reminderParams, calendarEventId: data.calendar_event_id });
+    } else {
+      // No event yet. Atomically claim the "create" step with a
+      // conditional update (NULL -> sentinel) so two concurrent
+      // reschedules of a never-synced reminder can't both create a
+      // duplicate calendar event — only the request that wins the claim
+      // proceeds to call the Calendar API.
+      const { data: claimedRow } = await supabase
         .from("activities")
-        .update({ calendar_event_id: calendarEventId })
-        .eq("id", data.id);
+        .update({ calendar_event_id: "pending" })
+        .eq("id", data.id)
+        .is("calendar_event_id", null)
+        .select("id")
+        .maybeSingle();
+
+      if (claimedRow) {
+        const calendarEventId = await createReminderEvent(reminderParams);
+        // Writing null here (creation failed/skipped) releases the claim
+        // so a future reschedule can retry instead of staying stuck.
+        await supabase
+          .from("activities")
+          .update({ calendar_event_id: calendarEventId })
+          .eq("id", data.id);
+      }
     }
   }
 
