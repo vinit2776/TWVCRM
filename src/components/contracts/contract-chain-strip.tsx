@@ -32,6 +32,55 @@ interface ContractChainStripProps {
   leadId: string;
 }
 
+/**
+ * Shows the monthly-fee change from one contract in the chain to the next
+ * (renewal escalation, a waiver, or a flat carry-over). Derived from the
+ * actual subtotal delta rather than the stored escalation_percentage field,
+ * so it stays accurate even if seats or items were renegotiated at renewal
+ * (escalation_percentage alone wouldn't reflect that).
+ */
+function EscalationBadge({ prev, next }: { prev: ChainContract; next: ChainContract }) {
+  const delta = next.subtotal - prev.subtotal;
+  const pct = prev.subtotal > 0 ? (delta / prev.subtotal) * 100 : 0;
+  const pctLabel = `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${Math.abs(pct).toFixed(Number.isInteger(pct) ? 0 : 1)}%`;
+  const deltaLabel = `${delta > 0 ? "+" : delta < 0 ? "−" : ""}${formatCurrency(Math.abs(delta))}/mo`;
+
+  if (next.escalation_waived) {
+    return (
+      <div className="flex flex-col items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 whitespace-nowrap">
+        <span className="text-[9px] font-bold text-amber-700">Waived</span>
+        <span className="text-[8px] text-amber-600">{formatCurrency(next.subtotal)}/mo</span>
+      </div>
+    );
+  }
+
+  if (delta === 0) {
+    return (
+      <div className="flex flex-col items-center gap-0.5 px-1.5 py-0.5 rounded bg-muted border border-muted-foreground/20 whitespace-nowrap">
+        <span className="text-[9px] font-bold text-muted-foreground">Flat</span>
+      </div>
+    );
+  }
+
+  const positive = delta > 0;
+  return (
+    <div
+      className={`flex flex-col items-center gap-0.5 px-1.5 py-0.5 rounded border whitespace-nowrap ${
+        positive
+          ? "bg-emerald-50 border-emerald-200"
+          : "bg-rose-50 border-rose-200"
+      }`}
+    >
+      <span className={`text-[9px] font-bold ${positive ? "text-emerald-700" : "text-rose-700"}`}>
+        {pctLabel}
+      </span>
+      <span className={`text-[8px] ${positive ? "text-emerald-600" : "text-rose-600"}`}>
+        {deltaLabel}
+      </span>
+    </div>
+  );
+}
+
 export function ContractChainStrip({ contractId, leadId }: ContractChainStripProps) {
   const [chain, setChain] = useState<ChainContract[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,19 +175,15 @@ export function ContractChainStrip({ contractId, leadId }: ContractChainStripPro
 
             return (
               <div key={c.id} className="flex items-stretch shrink-0">
-                {/* Gap indicator */}
+                {/* Gap + escalation indicator */}
                 {idx > 0 && (
-                  <div className="flex flex-col items-center justify-center px-1">
-                    {gap > 0 ? (
-                      <div className="flex flex-col items-center">
-                        <div className="border-l-2 border-dashed border-amber-400 h-3" />
-                        <span className="text-[8px] text-amber-600 font-medium px-1 py-0.5 bg-amber-50 rounded">
-                          {gap}d gap
-                        </span>
-                        <div className="border-l-2 border-dashed border-amber-400 h-3" />
-                      </div>
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5 text-blue-400" />
+                  <div className="flex flex-col items-center justify-center gap-1 px-1.5">
+                    <ChevronRight className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                    <EscalationBadge prev={chain[idx - 1]} next={c} />
+                    {gap > 0 && (
+                      <span className="text-[8px] text-amber-600 font-medium px-1 py-0.5 bg-amber-50 rounded whitespace-nowrap">
+                        {gap}d gap
+                      </span>
                     )}
                   </div>
                 )}
