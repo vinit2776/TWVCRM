@@ -21,7 +21,7 @@ import {
   ArrowLeft, AlertTriangle, Loader2, MessageSquare, MapPin, User,
   Server, Clock, RefreshCw, CheckCircle2, Wrench, Star, ImagePlus,
   Phone, Mail, ExternalLink, ShieldAlert, Bell, Check, CheckCheck, X,
-  TimerReset, Trophy,
+  TimerReset, Trophy, MoreHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -34,11 +34,15 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, formatDate } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
+  STATUS_ACTION_PRIORITY,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import type {
@@ -81,6 +85,19 @@ interface AssetDetail {
 }
 
 const OVERRIDE_ROLES = ["admin", "manager", "office_admin"];
+
+const STATUS_ACTION_LABEL: Record<string, string> = {
+  in_progress: "Start Work",
+  resolved: "Resolve",
+  closed: "Close",
+  reopened: "Reopen",
+};
+const STATUS_ACTION_ICON: Record<string, typeof Wrench> = {
+  in_progress: Wrench,
+  resolved: CheckCircle2,
+  closed: CheckCircle2,
+  reopened: RefreshCw,
+};
 
 function useClaimCountdown(claimSlaTargetAt: string | null | undefined) {
   const [remaining, setRemaining] = useState<number | null>(null);
@@ -226,12 +243,24 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
   const allowedNext = useMemo(() => issue ? nextStatusOptions(issue.status) : [], [issue]);
+  const primaryStatusAction = useMemo(
+    () => STATUS_ACTION_PRIORITY.find((s) => allowedNext.includes(s)) ?? null,
+    [allowedNext]
+  );
+  const overflowStatusActions = useMemo(
+    () => allowedNext.filter((s) => s !== primaryStatusAction),
+    [allowedNext, primaryStatusAction]
+  );
 
   const isOverrideTier = OVERRIDE_ROLES.includes(currentUser?.role ?? "");
   const isOwner = !!currentUser && issue?.assigned_to === currentUser.id;
   const isUnowned = !!issue && !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const canAct = isOwner || isOverrideTier;
-  const canNudge = !!issue?.assigned_to && !!currentUser &&
+  // Nudging prompts the assignee for an update — never show it to the assignee
+  // themselves or to collaborators already on the ticket's team, even if they'd
+  // otherwise qualify via override tier or being the reporter.
+  const isCollaborator = collaborators.some((c) => c.user_id === currentUser?.id);
+  const canNudge = !!issue?.assigned_to && !!currentUser && !isOwner && !isCollaborator &&
     (isOverrideTier || issue.reported_by === currentUser.id);
   const canExtend = isOwner && open && (issue?.tat_extension_count ?? 0) < 2;
   // Narrower than isOverrideTier — flipping an extension's KPI-exempt flag
@@ -471,7 +500,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     ? "bg-red-50 text-red-700 ring-red-200"
     : "bg-emerald-50 text-emerald-700 ring-emerald-200";
 
-  const statusLabel = isUnowned ? "Unowned" : STATUS_STYLES[issue.status].label;
+  const statusLabel = isUnowned ? "Unclaimed" : STATUS_STYLES[issue.status].label;
   const statusChipClass = isUnowned ? "bg-amber-50 text-amber-700 ring-amber-200" : STATUS_STYLES[issue.status].chip;
 
   return (
@@ -493,7 +522,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             </span>
             {open && issue.sla_target_at && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 inline-flex items-center", slaChipClass)}>
-                <Clock className="h-2.5 w-2.5 mr-0.5" /> SLA {timeUntil(issue.sla_target_at)}
+                <Clock className="h-2.5 w-2.5 mr-0.5" /> {issue.sla_breached ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
+                <span className="opacity-60 ml-0.5">(TAT)</span>
               </span>
             )}
             {issue.kpi_points != null && (
@@ -509,6 +539,28 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         </Button>
       </div>
 
+      {/* ───── Reporter — kept near the top so contact info is reachable without
+          scrolling past 8 other cards; this is who to call/message first. ── */}
+      <section className="rounded-lg border bg-card p-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] text-muted-foreground uppercase tracking-wide">Reported by</div>
+          <div className="text-sm font-medium truncate">{issue.reporter?.full_name ?? issue.reporter_name ?? "—"}</div>
+          <div className="text-xs text-muted-foreground">{timeAgo(issue.reported_at)} · via {REPORTED_VIA_LABEL[issue.reported_via]}</div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {issue.reporter_phone && (
+            <a href={`tel:${issue.reporter_phone}`} className="h-11 w-11 rounded-full border flex items-center justify-center text-primary hover:bg-muted/40" title="Call reporter">
+              <Phone className="h-4 w-4" />
+            </a>
+          )}
+          {issue.reporter_email && (
+            <a href={`mailto:${issue.reporter_email}`} className="h-11 w-11 rounded-full border flex items-center justify-center text-primary hover:bg-muted/40" title="Email reporter">
+              <Mail className="h-4 w-4" />
+            </a>
+          )}
+        </div>
+      </section>
+
       {/* ───── Claim countdown banner (unowned tickets only) ─────────────── */}
       {isUnowned && claimCountdownMs !== null && (
         <div className={cn(
@@ -523,68 +575,66 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         </div>
       )}
 
-      {/* ───── Action row ──────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-2">
-        {/* Unowned: Claim (any user) */}
-        {isUnowned && (
-          <Button size="sm" onClick={claimTicket} disabled={busy} className="bg-amber-600 hover:bg-amber-700 text-white">
+      {/* ───── Action row — one obvious primary, up to 2 secondary, rest in
+          "More actions" so a phone never shows 6+ same-weight buttons. ──── */}
+      <div className="flex items-stretch gap-2">
+        {/* Primary — the single obvious next step */}
+        {isUnowned ? (
+          <Button onClick={claimTicket} disabled={busy} className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 text-white">
             <User className="h-4 w-4 mr-1" /> Claim this ticket
           </Button>
-        )}
-
-        {/* Owned by someone else: Take over (any user) */}
-        {!isUnowned && !isOwner && issue.assigned_to && open && (
-          <Button size="sm" variant="outline" onClick={takeOver} disabled={busy}>
+        ) : !isOwner && issue.assigned_to && open ? (
+          <Button onClick={takeOver} disabled={busy} className="flex-1 sm:flex-none">
             <User className="h-4 w-4 mr-1" /> Take over
           </Button>
-        )}
-
-        {/* Work action buttons: owner or override tier only */}
-        {canAct && (
-          <>
-            {allowedNext.includes("in_progress") && (
-              <Button size="sm" onClick={() => changeStatus("in_progress")} disabled={busy}>
-                <Wrench className="h-4 w-4 mr-1" /> Start Work
-              </Button>
-            )}
-            {allowedNext.includes("resolved") && (
-              <Button size="sm" variant="default" onClick={() => setResolveOpen(true)} disabled={busy}>
-                <CheckCircle2 className="h-4 w-4 mr-1" /> Resolve
-              </Button>
-            )}
-            {allowedNext.includes("reopened") && (
-              <Button size="sm" variant="outline" onClick={() => changeStatus("reopened")} disabled={busy}>
-                Reopen
-              </Button>
-            )}
-            {allowedNext.includes("closed") && (
-              <Button size="sm" variant="outline" onClick={() => changeStatus("closed")} disabled={busy}>
-                Close
-              </Button>
-            )}
-          </>
-        )}
-
-        {/* Assign button: override tier (or unowned so anyone can assign-to-other via dialog) */}
-        {isOverrideTier && (
-          <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)} disabled={busy}>
-            <User className="h-4 w-4 mr-1" /> {issue.assignee?.full_name ? "Reassign" : "Assign to…"}
+        ) : canAct && primaryStatusAction ? (
+          <Button
+            onClick={() => primaryStatusAction === "resolved" ? setResolveOpen(true) : changeStatus(primaryStatusAction)}
+            disabled={busy}
+            className="flex-1 sm:flex-none"
+          >
+            {(() => { const Icon = STATUS_ACTION_ICON[primaryStatusAction]; return <Icon className="h-4 w-4 mr-1" />; })()}
+            {STATUS_ACTION_LABEL[primaryStatusAction]}
           </Button>
-        )}
+        ) : null}
 
-        {/* Nudge: override tier or the reporter/delegator, only when someone owns it */}
+        {/* Secondary — up to 2 frequent actions stay visible */}
         {canNudge && (
           <Button size="sm" variant="outline" onClick={sendNudge} disabled={nudging}>
             {nudging ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
             Ask for update
           </Button>
         )}
-
-        {/* Extend TAT: owner only, up to 2 per ticket */}
         {canExtend && (
           <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)} disabled={busy}>
             <TimerReset className="h-4 w-4 mr-1" /> Extend ({2 - (issue.tat_extension_count ?? 0)} left)
           </Button>
+        )}
+
+        {/* Overflow — everything else */}
+        {(isOverrideTier || (canAct && overflowStatusActions.length > 0)) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" disabled={busy} title="More actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {canAct && overflowStatusActions.map((s) => (
+                <DropdownMenuItem
+                  key={s}
+                  onClick={() => s === "resolved" ? setResolveOpen(true) : changeStatus(s)}
+                >
+                  {STATUS_ACTION_LABEL[s]}
+                </DropdownMenuItem>
+              ))}
+              {isOverrideTier && (
+                <DropdownMenuItem onClick={() => setAssignOpen(true)}>
+                  {issue.assignee?.full_name ? "Reassign" : "Assign to…"}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 
@@ -711,7 +761,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               number, so it's clear what to repeat or fix next time. */}
           {issue.kpi_points != null && (
             <section className="rounded-lg border bg-card p-4 space-y-3">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">KPI Score</div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Score impact <span className="normal-case opacity-70">(KPI)</span></div>
               <div className={cn(
                 "text-3xl font-bold",
                 issue.kpi_points > 0 ? "text-emerald-600" : issue.kpi_points < 0 ? "text-red-600" : "text-muted-foreground",
@@ -740,7 +790,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               status/impact is immediately visible without scrolling. */}
           {extensions.length > 0 && (
             <section className="rounded-lg border bg-card p-4 space-y-3">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">TAT Extensions</div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Deadline extensions <span className="normal-case opacity-70">(TAT)</span></div>
               <div className="space-y-3">
                 {extensions.map((ext) => (
                   <div key={ext.id} className="text-xs space-y-1 border-l-2 pl-2" style={{ borderColor: ext.kpi_exempt ? "#059669" : "#dc2626" }}>
@@ -748,28 +798,28 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                       <span className="font-medium">+{ext.added_hours}h — {TAT_REASON_LABEL[ext.reason_category]}</span>
                       <span className={cn("px-1.5 py-0.5 rounded-full ring-1 text-[10px] font-medium",
                         ext.kpi_exempt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-red-50 text-red-700 ring-red-200")}>
-                        {ext.kpi_exempt ? "KPI exempt" : "Counts vs KPI"}
+                        {ext.kpi_exempt ? "Doesn't count against score" : "Counts against score"}
                       </span>
                     </div>
                     <div className="text-muted-foreground">{ext.explanation}</div>
                     <div className="text-muted-foreground">{ext.requester?.full_name ?? "—"} · {timeAgo(ext.created_at)}</div>
                     {ext.pass_card_by && (
-                      <div className="text-muted-foreground italic">Pass-carded{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
+                      <div className="text-muted-foreground italic">Overridden by {ext.pass_card_by === currentUser?.id ? "you" : "admin/manager"}{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
                     )}
                     {canPassCard && (
-                      <div className="flex gap-2 pt-0.5">
+                      <div className="flex gap-3 pt-1">
                         <button
                           type="button"
                           onClick={() => passCard(ext.id, true)}
                           disabled={busy || ext.kpi_exempt}
-                          className="text-[10px] text-emerald-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        >Mark exempt</button>
+                          className="min-h-[28px] px-1 text-xs font-medium text-emerald-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Don&apos;t count this against score</button>
                         <button
                           type="button"
                           onClick={() => passCard(ext.id, false)}
                           disabled={busy || !ext.kpi_exempt}
-                          className="text-[10px] text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        >Mark counts vs KPI</button>
+                          className="min-h-[28px] px-1 text-xs font-medium text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Count this against score</button>
                       </div>
                     )}
                   </div>
@@ -963,18 +1013,6 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             </section>
           )}
 
-          {/* Reporter */}
-          <section className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Reporter</div>
-            <div className="text-sm">{issue.reporter?.full_name ?? issue.reporter_name ?? "—"}</div>
-            <div className="text-xs text-muted-foreground space-y-0.5">
-              {issue.reporter_email && <div>{issue.reporter_email}</div>}
-              {issue.reporter_phone && <div>{issue.reporter_phone}</div>}
-              <div>via {REPORTED_VIA_LABEL[issue.reported_via]}</div>
-              <div>{timeAgo(issue.reported_at)}</div>
-            </div>
-          </section>
-
           {issue.satisfaction_rating != null && (
             <section className="rounded-lg border bg-card p-4 space-y-1">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">Satisfaction</div>
@@ -1002,7 +1040,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       <Dialog open={extendOpen} onOpenChange={setExtendOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Extend TAT</DialogTitle>
+            <DialogTitle>Push back the deadline <span className="text-muted-foreground font-normal">(TAT)</span></DialogTitle>
             <DialogDescription>
               {2 - (issue.tat_extension_count ?? 0)} extension{2 - (issue.tat_extension_count ?? 0) === 1 ? "" : "s"} left on this ticket.
             </DialogDescription>
@@ -1017,9 +1055,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               <Select value={extendReason} onValueChange={(v) => setExtendReason(v as FacilityTatReason)}>
                 <SelectTrigger><SelectValue placeholder="Select a reason" /></SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">Outside your control</div>
                   {TAT_REASON_LIST_EXEMPT.map((r) => (
                     <SelectItem key={r} value={r}>{TAT_REASON_LABEL[r]}</SelectItem>
                   ))}
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">Within your control</div>
                   {TAT_REASON_LIST_CONTROLLABLE.map((r) => (
                     <SelectItem key={r} value={r}>{TAT_REASON_LABEL[r]}</SelectItem>
                   ))}

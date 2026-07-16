@@ -177,7 +177,7 @@ const navSections: NavSection[] = [
     label: "Facility",
     icon: Wrench,
     items: [
-      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
+      { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "it_technician", "fms", "floor_manager", "office_admin", "viewer"] },
       { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/facility/issues",        label: "Tasks / Work Orders", icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",     label: "My Tasks",            icon: Ticket,        roles: null },
