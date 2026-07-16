@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * Facility Issues — list page (mobile-first; desktop uses table layout).
+ * Facility Issues — list page (mobile-first; card grid on every breakpoint).
  *
- * Default view: all tickets grouped by status. Active groups (new, acknowledged,
- * in_progress, reopened) are expanded. Resolved / closed start collapsed but are
- * visible so the team can reference them without changing filters.
+ * Default view: grouped by assignee, "Unclaimed" pinned first so unowned
+ * tickets stay visible instead of disappearing until someone claims them.
+ * Each assignee's tickets split into Open/Closed tabs (Closed = resolved +
+ * closed — anything off their plate, whether or not it's gone through the
+ * final admin-only Close step).
  *
  * Filters: search, scope, status, priority, location, assigned_to, sla_breached.
  * Top-right action: Work Order → opens FacilityReportWizard.
@@ -15,12 +17,12 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
-  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus,
+  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus, User, Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, getInitials } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import {
@@ -33,11 +35,19 @@ import type {
 
 interface Location { id: string; name: string; code: string }
 
-// Active statuses rendered first; resolved/closed appended at bottom
-const STATUS_ORDER: FacilityIssueStatus[] = [
-  "reopened", "new", "acknowledged", "in_progress", "resolved", "closed",
-];
 const ACTIVE_STATUSES = new Set<FacilityIssueStatus>(["new", "acknowledged", "in_progress", "reopened"]);
+// "Closed" from an assignee's own point of view — resolved-but-not-yet-closed
+// still reads as done to them, even though an admin hasn't closed it yet.
+const DONE_STATUSES = new Set<FacilityIssueStatus>(["resolved", "closed"]);
+
+const UNCLAIMED_KEY = "__unclaimed";
+
+interface AssigneeGroup {
+  key: string;
+  name: string;
+  openItems: FacilityIssue[];
+  closedItems: FacilityIssue[];
+}
 
 export default function FacilityIssuesPage() {
   return (
@@ -54,10 +64,12 @@ function FacilityIssuesPageInner() {
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [delegateOpen, setDelegateOpen] = useState(false);
-  // resolved + closed start collapsed; active groups start expanded
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<FacilityIssueStatus>>(
-    new Set(["resolved", "closed"]),
-  );
+  // Groups that are all-closed (nothing open) start collapsed; anyone with
+  // open work stays visible by default.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Per-group Open/Closed tab — defaults to whichever bucket actually has
+  // items, computed lazily the first time each group is seen (see render).
+  const [groupTab, setGroupTab] = useState<Record<string, "open" | "closed">>({});
 
   // ---- filters -------------------------------------------------------------
   // Seeded from the URL on first render so links like Team KPI's
@@ -161,28 +173,43 @@ function FacilityIssuesPageInner() {
     return result;
   }, [issues, search, onlyUnowned, assignedToFilter]);
 
-  // Group by status in canonical order; only include groups that have issues
-  const grouped = useMemo(() => {
-    const map = new Map<FacilityIssueStatus, FacilityIssue[]>();
-    for (const s of STATUS_ORDER) map.set(s, []);
+  // Group by assignee — "Unclaimed" pinned first (own bucket so tickets
+  // nobody owns stay visible instead of disappearing until claimed), then
+  // one group per person alphabetically. Each group splits into open/closed
+  // so a technician can see "what's on my plate" vs "what I've finished"
+  // without status jargon.
+  const groupedByAssignee = useMemo(() => {
+    const map = new Map<string, { name: string; items: FacilityIssue[] }>();
     for (const issue of filtered) {
-      map.get(issue.status)?.push(issue);
+      const key = issue.assignee?.id ?? UNCLAIMED_KEY;
+      const name = issue.assignee?.full_name ?? "Unclaimed";
+      if (!map.has(key)) map.set(key, { name, items: [] });
+      map.get(key)!.items.push(issue);
     }
-    return STATUS_ORDER
-      .map((s) => ({ status: s, items: map.get(s) ?? [] }))
-      .filter(({ items }) => items.length > 0);
+    const groups: AssigneeGroup[] = [...map.entries()].map(([key, { name, items }]) => ({
+      key,
+      name,
+      openItems: items.filter((i) => ACTIVE_STATUSES.has(i.status)),
+      closedItems: items.filter((i) => DONE_STATUSES.has(i.status)),
+    }));
+    groups.sort((a, b) => {
+      if (a.key === UNCLAIMED_KEY) return -1;
+      if (b.key === UNCLAIMED_KEY) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return groups;
   }, [filtered]);
 
-  // Show grouped view unless the user has drilled into specific statuses or is in unowned view
-  const showGrouped = statusFilters.length === 0 && !onlyUnowned;
-
-  const toggleGroup = (status: FacilityIssueStatus) => {
+  const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(status)) next.delete(status); else next.add(status);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
+
+  const tabFor = (group: AssigneeGroup): "open" | "closed" =>
+    groupTab[group.key] ?? (group.openItems.length > 0 ? "open" : "closed");
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
@@ -191,7 +218,7 @@ function FacilityIssuesPageInner() {
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
           <p className="text-xs md:text-sm text-muted-foreground">
-            {showGrouped ? "All tickets · grouped by status" : "IT infrastructure tickets across all locations"}
+            All tickets · grouped by assignee
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -240,7 +267,7 @@ function FacilityIssuesPageInner() {
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
-          <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(SLA)</span>
+          <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(TAT)</span>
         </Chip>
         {(statusFilters.length > 0 || priority || locationId || assignedToFilter) && (
           <button
@@ -339,7 +366,7 @@ function FacilityIssuesPageInner() {
         </div>
       )}
 
-      {/* ───── Issue list ──────────────────────────────────────────────────── */}
+      {/* ───── Issue list — grouped by assignee ─────────────────────────────── */}
       {loading ? (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading issues…</div>
       ) : filtered.length === 0 ? (
@@ -347,63 +374,81 @@ function FacilityIssuesPageInner() {
           <Wifi className="h-10 w-10 mx-auto opacity-30 mb-3" />
           No issues match these filters.
         </div>
-      ) : showGrouped ? (
-        /* ── Grouped view ─────────────────────────────────────────────────── */
-        <div className="space-y-2">
-          {grouped.map(({ status, items }) => {
-            const collapsed = collapsedGroups.has(status);
-            const isActive = ACTIVE_STATUSES.has(status);
-            const breachedCount = items.filter((i) => i.sla_breached).length;
+      ) : (
+        <div className="space-y-3">
+          {groupedByAssignee.map((group) => {
+            const collapsed = collapsedGroups.has(group.key);
+            const tab = tabFor(group);
+            const activeItems = tab === "open" ? group.openItems : group.closedItems;
+            const breachedCount = group.openItems.filter((i) => i.sla_breached).length;
+            const isUnclaimed = group.key === UNCLAIMED_KEY;
+
             return (
-              <div key={status} className="rounded-lg border overflow-hidden">
+              <div key={group.key} className="rounded-lg border overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => toggleGroup(status)}
+                  onClick={() => toggleGroup(group.key)}
                   className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors",
-                    isActive ? "bg-muted/10" : "bg-muted/40",
+                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors",
+                    isUnclaimed ? "bg-amber-50/60" : "bg-muted/10",
                   )}
                 >
-                  <span className={cn("text-[11px] px-2 py-0.5 rounded-full ring-1 font-medium shrink-0", STATUS_STYLES[status].chip)}>
-                    {STATUS_STYLES[status].label}
+                  <span className={cn(
+                    "h-7 w-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0",
+                    isUnclaimed ? "bg-amber-200 text-amber-800" : "bg-[#015E65]/15 text-[#015E65]",
+                  )}>
+                    {isUnclaimed ? <User className="h-3.5 w-3.5" /> : getInitials(group.name)}
                   </span>
+                  <span className="text-sm font-medium shrink-0">{group.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {items.length} {items.length === 1 ? "issue" : "issues"}
+                    {group.openItems.length} open · {group.closedItems.length} closed
                   </span>
-                  {isActive && breachedCount > 0 && (
+                  {breachedCount > 0 && (
                     <span className="text-[10px] text-red-600 font-medium inline-flex items-center gap-0.5 ml-1">
                       <AlertTriangle className="h-2.5 w-2.5" />
-                      {breachedCount} SLA breach{breachedCount > 1 ? "es" : ""}
+                      {breachedCount} overdue
                     </span>
-                  )}
-                  {!isActive && (
-                    <span className="text-[10px] text-muted-foreground/50 ml-1">· for reference</span>
                   )}
                   <ChevronDown
                     className={cn(
-                      "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150",
+                      "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150 shrink-0",
                       collapsed && "-rotate-90",
                     )}
                   />
                 </button>
 
                 {!collapsed && (
-                  <div className="divide-y">
-                    {items.map((i) => (
-                      <IssueCard key={i.id} issue={i} inGroup />
-                    ))}
+                  <div className="p-3 space-y-3">
+                    {group.openItems.length > 0 && group.closedItems.length > 0 && (
+                      <div className="flex items-center gap-1 rounded-md bg-muted/40 p-0.5 w-fit">
+                        <button
+                          type="button"
+                          onClick={() => setGroupTab((prev) => ({ ...prev, [group.key]: "open" }))}
+                          className={cn(
+                            "px-3 py-1 text-xs font-medium rounded-sm transition min-h-[36px]",
+                            tab === "open" ? "bg-background shadow-sm" : "text-muted-foreground",
+                          )}
+                        >Open ({group.openItems.length})</button>
+                        <button
+                          type="button"
+                          onClick={() => setGroupTab((prev) => ({ ...prev, [group.key]: "closed" }))}
+                          className={cn(
+                            "px-3 py-1 text-xs font-medium rounded-sm transition min-h-[36px]",
+                            tab === "closed" ? "bg-background shadow-sm" : "text-muted-foreground",
+                          )}
+                        >Closed ({group.closedItems.length})</button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {activeItems.map((i) => (
+                        <IssueCard key={i.id} issue={i} />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             );
           })}
-        </div>
-      ) : (
-        /* ── Flat view (when status filter is active) ─────────────────────── */
-        <div className="space-y-2">
-          {filtered.map((i) => (
-            <IssueCard key={i.id} issue={i} />
-          ))}
         </div>
       )}
 
@@ -439,29 +484,81 @@ function Chip({ active, onClick, children }: {
   );
 }
 
-function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean }) {
+type TatBarStatus = "on_track" | "at_risk" | "overdue";
+
+const TAT_BAR_TRACK: Record<TatBarStatus, string> = {
+  on_track: "bg-emerald-100",
+  at_risk: "bg-amber-100",
+  overdue: "bg-red-200",
+};
+const TAT_BAR_FILL: Record<TatBarStatus, string> = {
+  on_track: "bg-emerald-500",
+  at_risk: "bg-amber-500",
+  overdue: "bg-red-600",
+};
+
+/**
+ * Time-elapsed bar toward the TAT deadline, clocked from creation. Returns
+ * duration/delay in seconds for the shared `.tat-bar-fill` CSS animation
+ * (see globals.css) rather than a live-computed width — the browser
+ * interpolates continuously with zero JS ticking. `status` is a one-time
+ * snapshot (on_track/at_risk/overdue) used only for the bar/track color,
+ * refreshed whenever the list itself refetches — same cadence every other
+ * time-based label on this page already uses.
+ */
+function computeTatBar(issue: FacilityIssue): { status: TatBarStatus; durationSec: number; delaySec: number } | null {
+  if (!issue.sla_target_at) return null;
+  const start = new Date(issue.created_at).getTime();
+  const end = new Date(issue.sla_target_at).getTime();
+  const now = Date.now();
+  const total = Math.max(end - start, 1000);
+  const elapsed = now - start;
+  const remaining = end - now;
+  const status: TatBarStatus = remaining <= 0 ? "overdue" : remaining <= 60 * 60 * 1000 ? "at_risk" : "on_track";
+  return { status, durationSec: total / 1000, delaySec: -(elapsed / 1000) };
+}
+
+function IssueCard({ issue }: { issue: FacilityIssue }) {
   const sla = issue.sla_target_at;
   const isOpen = ACTIVE_STATUSES.has(issue.status);
   const isUnowned = !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const claimOverdue = isUnowned && issue.claim_sla_breached;
+  const isTask = issue.task_type === "delegated_task";
+  const tatBar = isOpen ? computeTatBar(issue) : null;
+  const breached = tatBar?.status === "overdue";
 
   return (
     <Link
       href={`/facility/issues/${issue.id}`}
       className={cn(
-        "block bg-card hover:bg-muted/20 transition-colors p-3",
-        !inGroup && "rounded-lg border hover:border-foreground/20 hover:shadow-sm",
-        claimOverdue && !inGroup && "border-amber-300",
+        "block hover:shadow-sm transition-colors rounded-lg overflow-hidden",
+        isTask
+          ? "bg-teal-100 border-2 border-teal-400 hover:border-teal-500"
+          : "bg-card border hover:bg-muted/20 hover:border-foreground/20",
+        breached && (isTask ? "border-red-500" : "bg-red-50 border-red-300"),
+        claimOverdue && !isTask && !breached && "border-amber-300",
       )}
     >
-      <div className="flex items-start gap-3">
+      {tatBar && (
+        <div className={cn("h-[3px] w-full", TAT_BAR_TRACK[tatBar.status])}>
+          <div
+            className={cn("tat-bar-fill h-full", TAT_BAR_FILL[tatBar.status])}
+            style={{ animationDuration: `${tatBar.durationSec}s`, animationDelay: `${tatBar.delaySec}s` }}
+          />
+        </div>
+      )}
+      <div className="flex items-start gap-3 p-3">
         <span className={cn("mt-1 h-2.5 w-2.5 rounded-full shrink-0", PRIORITY_STYLES[issue.priority].dot)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
-            {issue.task_type === "delegated_task" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
+            <code className={cn("text-xs font-mono", isTask ? "text-teal-800" : "text-muted-foreground")}>{issue.issue_number}</code>
+            {isTask ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5">
                 <UserPlus className="h-2.5 w-2.5" /> Task
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5">
+                <Wrench className="h-2.5 w-2.5" /> Work Order
               </span>
             )}
             {isUnowned && (
@@ -472,14 +569,14 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
                 {claimOverdue ? "Claim overdue" : "Unclaimed"}
               </span>
             )}
-            {!inGroup && !isUnowned && (
+            {!isUnowned && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
                 {STATUS_STYLES[issue.status].label}
               </span>
             )}
             {issue.sla_breached && isOpen && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
-                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> SLA Breached
+                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> TAT Breached
               </span>
             )}
             {issue.kpi_points != null && (
@@ -488,17 +585,16 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
               </span>
             )}
           </div>
-          <div className="text-sm font-medium mt-0.5 truncate">{issue.title}</div>
-          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
+          <div className={cn("text-sm font-medium mt-0.5 truncate", isTask && "text-teal-950")}>{issue.title}</div>
+          <div className={cn("text-xs mt-1 flex flex-wrap gap-2", isTask ? "text-teal-700" : "text-muted-foreground")}>
             <span>{issue.location?.name ?? "—"}</span>
             {issue.category?.name && <><span>·</span><span>{issue.category.name}</span></>}
-            {issue.assignee?.full_name && <><span>·</span><span>👤 {issue.assignee.full_name}</span></>}
             <span>·</span>
             <span>{timeAgo(issue.created_at)}</span>
             {isOpen && sla && (
               <>
                 <span>·</span>
-                <span className={issue.sla_breached ? "text-red-600 font-medium" : ""}>SLA {timeUntil(sla)}</span>
+                <span className={issue.sla_breached ? "text-red-600 font-medium" : ""}>TAT {timeUntil(sla)}</span>
               </>
             )}
             {isUnowned && issue.claim_sla_target_at && (
