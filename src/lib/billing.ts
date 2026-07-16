@@ -176,6 +176,62 @@ async function fetchLocationNamesByContract(
   return map;
 }
 
+type RatePhaseDetail = { phase_order: number; duration_months: number; monthly_rate: number };
+
+/** contract_id → its tiered rate_phases (any order), for a set of contracts. */
+async function fetchRatePhasesByContract(
+  supabase: SupabaseClient,
+  contractIds: string[]
+): Promise<Map<string, RatePhaseDetail[]>> {
+  const map = new Map<string, RatePhaseDetail[]>();
+  if (contractIds.length === 0) return map;
+
+  const { data } = await supabase
+    .from("contract_rate_phases")
+    .select("contract_id, phase_order, duration_months, monthly_rate")
+    .in("contract_id", contractIds);
+
+  for (const row of (data ?? []) as Array<RatePhaseDetail & { contract_id: string }>) {
+    const list = map.get(row.contract_id) ?? [];
+    list.push({ phase_order: row.phase_order, duration_months: row.duration_months, monthly_rate: row.monthly_rate });
+    map.set(row.contract_id, list);
+  }
+  return map;
+}
+
+/**
+ * Resolves the monthly rent that applies for a given prepaid month, honouring
+ * any tiered rate_phases anchored at phaseStartDate (falls back to the
+ * contract's own start_date when phase_start_date isn't set — e.g. renewal
+ * contracts, which anchor their own fresh phase clock). Returns flatAmount
+ * unchanged when the contract has no phases configured. Once the configured
+ * phases are exhausted, the last phase's rate continues flat — matches the
+ * "After month N: flat at X/mo until renewed" copy shown in the rate-phase
+ * editor.
+ */
+function resolveMonthlyRate(
+  flatAmount: number,
+  phaseAnchorDate: string | null | undefined,
+  phases: RatePhaseDetail[] | null | undefined,
+  prepaidMonth: number,
+  prepaidYear: number
+): number {
+  if (!phases || phases.length === 0 || !phaseAnchorDate) return flatAmount;
+
+  const [anchorYear, anchorMonth] = phaseAnchorDate.split("-").map(Number);
+  // 1-indexed: the month containing phaseAnchorDate is month 1.
+  const monthIndex = (prepaidYear - anchorYear) * 12 + (prepaidMonth - anchorMonth) + 1;
+  if (monthIndex < 1) return flatAmount; // prepaid month precedes the phase clock — shouldn't happen
+
+  const sorted = [...phases].sort((a, b) => a.phase_order - b.phase_order);
+  let cursor = 0;
+  for (const phase of sorted) {
+    cursor += phase.duration_months;
+    if (monthIndex <= cursor) return Number(phase.monthly_rate);
+  }
+  return Number(sorted[sorted.length - 1].monthly_rate); // past all phases — flat continuation
+}
+
 /**
  * Splits a rent amount into one line item per allocated space unit
  * (Location/Name/Type/Seats), falling back to a single plain line when the
@@ -357,7 +413,7 @@ export async function generateMonthlyStatements(
     .from("contracts")
     .select(`
       id, contract_number, title, total_amount, subtotal, tax_percentage, tax_amount,
-      billing_cycle, start_date, end_date, next_billing_date, seats,
+      billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
       location_id, lead_id,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number)
     `)
@@ -490,6 +546,9 @@ export async function generateMonthlyStatements(
     contracts as Array<{ id: string; location_id?: string | null }>
   );
 
+  // 3d. Pre-fetch tiered rate phases, for contracts using tiered pricing
+  const ratePhasesByContract = await fetchRatePhasesByContract(supabase, contractIds);
+
   // 4. Generate drafts
   for (const contract of contracts as Array<Record<string, unknown>>) {
     if (alreadyBilled.has(contract.id as string)) {
@@ -526,7 +585,14 @@ export async function generateMonthlyStatements(
         `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-${prepaidDaysInMonth}T00:00:00Z`
       );
 
-      const baseAmount = Number(contract.subtotal || contract.total_amount);
+      const flatAmount = Number(contract.subtotal || contract.total_amount);
+      const baseAmount = resolveMonthlyRate(
+        flatAmount,
+        (contract.phase_start_date as string | null) || (contract.start_date as string | null),
+        ratePhasesByContract.get(cid) ?? null,
+        prepaid.month,
+        prepaid.year
+      );
       let prepaidRentAmount: number;
       // set when prorated — persisted on the line item so the PDF can show the calculation
       let rentBillableDays: number | null = null;
@@ -849,7 +915,7 @@ export async function generateRentProformas(
     .from("contracts")
     .select(`
       id, contract_number, title, total_amount, subtotal, tax_percentage,
-      billing_cycle, start_date, end_date, next_billing_date, seats,
+      billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
       location_id, lead_id, billing_mode,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
@@ -936,6 +1002,9 @@ export async function generateRentProformas(
     contracts as Array<{ id: string; location_id?: string | null }>
   );
 
+  // Pre-fetch tiered rate phases, for contracts using tiered pricing
+  const ratePhasesByContract = await fetchRatePhasesByContract(adminSupabase, contractIds);
+
   for (const contract of contracts as Array<Record<string, unknown>>) {
     const cid            = contract.id as string;
     const contractNumber = contract.contract_number as string;
@@ -965,7 +1034,14 @@ export async function generateRentProformas(
       const toSupersede = supersedable.get(cid); // may be undefined
 
       // ── 3. Proration ────────────────────────────────────────────────────
-      const baseAmount    = Number(contract.subtotal || contract.total_amount);
+      const flatAmount    = Number(contract.subtotal || contract.total_amount);
+      const baseAmount    = resolveMonthlyRate(
+        flatAmount,
+        (contract.phase_start_date as string | null) || (contract.start_date as string | null),
+        ratePhasesByContract.get(cid) ?? null,
+        prepaid.month,
+        prepaid.year
+      );
       const contractEnd   = new Date(String(contract.end_date) + "T00:00:00Z");
       const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
       const pFirst        = new Date(prepaidFirstOfMonth + "T00:00:00Z");
