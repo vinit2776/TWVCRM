@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -231,6 +231,12 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
                 className="max-w-[220px]"
                 required
               />
+            )}
+            {!hasValidDueInput && (
+              <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>A due date is required — this task can&apos;t be created without one.</span>
+              </div>
             )}
           </div>
 
