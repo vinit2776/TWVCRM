@@ -202,6 +202,7 @@ export async function POST(request: NextRequest) {
   // order: category's default_assignee_id (most specific) → department head
   // for the ticket's scope (broader fallback) → left unassigned for manual claim.
   let autoAssignee: { id: string; full_name: string } | null = null;
+  let departmentId: string | null = null;
   if (task_type === "reported_problem") {
     const adminClient = createAdminClient();
     if (categoryDefaultAssigneeId) {
@@ -217,12 +218,15 @@ export async function POST(request: NextRequest) {
         notifyAdminsStaleAssignee({ categoryId: category_id!, issueNumber, issueTitle: title.trim() });
       }
     }
+    // Looked up regardless of whether a category default already supplied autoAssignee —
+    // department id is also needed below to seed roster members as collaborators.
+    const { data: department } = await adminClient
+      .from("facility_departments")
+      .select("id, head_user_id, head:users!facility_departments_head_user_id_fkey(id, full_name, is_active)")
+      .eq("scope", scope)
+      .single();
+    departmentId = department?.id ?? null;
     if (!autoAssignee) {
-      const { data: department } = await adminClient
-        .from("facility_departments")
-        .select("head_user_id, head:users!facility_departments_head_user_id_fkey(id, full_name, is_active)")
-        .eq("scope", scope)
-        .single();
       const head = department?.head as unknown as { id: string; full_name: string; is_active: boolean } | null;
       if (head?.is_active) autoAssignee = { id: head.id, full_name: head.full_name };
     }
@@ -275,6 +279,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Conflict — please retry" }, { status: 409 });
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Auto-add the ticket's department roster as collaborators so they flow through
+  // the existing notification pipeline (assignment, escalation, etc.) without any
+  // separate notification logic. The assignee is excluded — already the primary
+  // recipient via assigned_to, so adding them again would be a redundant row.
+  if (departmentId) {
+    const adminClient = createAdminClient();
+    const { data: members } = await adminClient
+      .from("facility_department_members")
+      .select("user_id")
+      .eq("department_id", departmentId);
+    const collaboratorIds = (members ?? [])
+      .map((m) => m.user_id as string)
+      .filter((uid) => uid !== finalAssignee?.id);
+    if (collaboratorIds.length > 0) {
+      await adminClient
+        .from("facility_issue_collaborators")
+        .upsert(
+          collaboratorIds.map((user_id) => ({ issue_id: issue.id, user_id, added_by: dbUser.id })),
+          { onConflict: "issue_id,user_id", ignoreDuplicates: true }
+        );
+    }
   }
 
   // Optional attachments uploaded ahead of issue creation
