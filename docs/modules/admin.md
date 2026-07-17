@@ -169,6 +169,12 @@ Created in `00011_payments_gateway.sql`.
 
 **PUBLIC_KEYS exposed via `GET /api/settings/public`** (any authenticated user): `razorpay_enabled`, `razorpay_key_id`, `upi_id`, `upi_qr_code_path`, `crm_gst_enabled`, `tally_sync_enabled`. The endpoint also fetches the QR image from B2 storage and returns it as `upi_qr_code_base64` for PDF embedding.
 
+### Daily Digest (`GET /api/digest`)
+
+Cron-triggered (`vercel.json`, `0 15 * * *` UTC = 8:30 PM IST) email sent to `digest_recipients`. Supports `?date=YYYY-MM-DD` to generate for a specific day, and `?preview=1` to return the rendered HTML directly (`Content-Type: text/html`) instead of sending — use this for local/staging QA so testing against production data never fans out real emails.
+
+The email opens with a **Today's Storyline** section (`buildStoryboardHtml()` in `src/app/api/digest/route.ts`): up to 5 of the day's highest-significance `audit_trail` events as an icon timeline (ranked by entity weight, `create` actions, and ₹ amounts found in the `changes` diff — one event per record, latest touch wins), followed by a single deterministic headline sentence synthesizing the day's biggest facts plus the most urgent open item (`buildStoryHeadline()`). Event labels reuse `summarizeAuditEvent()` from `src/lib/audit-labels.ts`. No LLM call — everything is a rule-based template so the section is free and renders identically every day. It does not duplicate the KPI tiles or "Needs Attention" section further down the same email — it leads into them.
+
 ### Table: `locations`
 
 Created in `00006_multi_location.sql`; columns added across later migrations.

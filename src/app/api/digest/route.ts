@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { summarizeAuditEvent } from "@/lib/audit-labels";
 
 export const maxDuration = 60;
 
@@ -69,7 +70,7 @@ export async function GET(request: Request) {
   const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
@@ -77,6 +78,7 @@ export async function GET(request: Request) {
     fetchReceivablesAging(supabase, todayIST),
     fetchMetrics(supabase, yesterdayIST),
     fetchLocationBreakdown(supabase, yesterdayIST),
+    fetchStoryboardHighlights(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -88,7 +90,13 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard);
+
+  // ?preview=1 renders the HTML without sending — used for local/staging QA so
+  // testing against real (prod) data never fans out real emails to recipients.
+  if (searchParams.get("preview") === "1") {
+    return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
 
   let sent = 0;
   for (const email of recipients) {
@@ -782,6 +790,187 @@ async function fetchExtended(supabase: any, date: string): Promise<ExtendedData>
 }
 
 // ---------------------------------------------------------------------------
+// Storyboard — today's storyline, synthesised from the audit trail
+// ---------------------------------------------------------------------------
+
+interface StoryboardEvent {
+  icon: string;
+  time: string;
+  label: string;
+  detail?: string;
+}
+
+interface AuditRow {
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  created_at: string;
+}
+
+const ENTITY_ICON: Record<string, string> = {
+  lead: "📥",
+  proposal: "📄",
+  contract: "✅",
+  contract_payment: "₹",
+  billing_payment: "₹",
+  booking_payment: "₹",
+  billing_statement: "🧮",
+  proforma_invoice: "🧾",
+  vendor_bill: "🧾",
+  purchase_order: "📦",
+  purchase_request: "📦",
+  support_ticket: "🎫",
+  task: "✔️",
+  petty_cash_entry: "💵",
+  booking: "🛋️",
+};
+
+// Entity types whose daily movement matters most to management — weighted
+// higher so a contract or payment event beats a routine record edit.
+const ENTITY_WEIGHT: Record<string, number> = {
+  contract: 3, billing_statement: 3, contract_payment: 3, billing_payment: 3,
+  booking_payment: 3, vendor_bill: 3, proposal: 3, proforma_invoice: 3, purchase_order: 3,
+  lead: 2, task: 2, support_ticket: 2, purchase_request: 2, petty_cash_entry: 2,
+};
+
+function entityDisplayName(entityType: string): string {
+  return entityType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Largest numeric value under an amount-like key in the changes diff — used both to rank and to display ₹ figures. */
+function largestAmountInChanges(changes: AuditRow["changes"]): number {
+  if (!changes) return 0;
+  let max = 0;
+  for (const [key, val] of Object.entries(changes)) {
+    if (!/amount|fee|total/i.test(key)) continue;
+    const n = Number((val as { new: unknown })?.new);
+    if (!isNaN(n) && n > max) max = n;
+  }
+  return max;
+}
+
+/**
+ * Picks the day's 5 most narratable audit_trail events — weighted toward new
+ * records, status transitions, and large ₹ amounts — collapsing an entity
+ * touched more than once today to its latest event so the timeline doesn't
+ * repeat the same record.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchStoryboardHighlights(supabase: any, date: string): Promise<StoryboardEvent[]> {
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+
+  const { data: rows } = await supabase
+    .from("audit_trail")
+    .select("entity_type, entity_id, action, changes, created_at")
+    .gte("created_at", dayStart)
+    .lte("created_at", dayEnd)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (!rows || rows.length === 0) return [];
+
+  const latestByEntity = new Map<string, AuditRow>();
+  for (const row of rows as AuditRow[]) {
+    latestByEntity.set(`${row.entity_type}:${row.entity_id}`, row);
+  }
+
+  const scored = Array.from(latestByEntity.values()).map((row) => {
+    const amount = largestAmountInChanges(row.changes);
+    const score =
+      (ENTITY_WEIGHT[row.entity_type] || 1) +
+      (row.action === "create" ? 3 : 0) +
+      (amount > 0 ? Math.min(5, Math.floor(amount / 50000)) + 2 : 0);
+    return { row, score, amount };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  return scored
+    .slice(0, 5)
+    .sort((a, b) => new Date(a.row.created_at).getTime() - new Date(b.row.created_at).getTime())
+    .map(({ row, amount }) => {
+      const summary = summarizeAuditEvent(row);
+      const time = new Date(row.created_at).toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit",
+      });
+      return {
+        icon: ENTITY_ICON[row.entity_type] || "📌",
+        time,
+        label: `${entityDisplayName(row.entity_type)} ${summary.label.toLowerCase()}`,
+        detail: amount > 0 ? rupees(amount) : summary.detail,
+      };
+    });
+}
+
+/**
+ * One-sentence executive synthesis — the 2-3 highest-magnitude facts of the
+ * day (money, contracts won) plus, inline, the single most urgent open item.
+ * Deterministic template, no external calls. Full detail for every flag
+ * still lives in "Needs Attention" further down — this just leads with it.
+ */
+function buildStoryHeadline(
+  todayIST: string,
+  today: Metrics,
+  extended: ExtendedData,
+  attention: AttentionItems,
+  revenueToday: number
+): string {
+  const parts: string[] = [
+    revenueToday > 0 ? `${rupees(revenueToday)} collected` : "a quiet day on collections",
+  ];
+
+  if (today.newContracts > 0) {
+    parts.push(`${today.newContracts} contract${today.newContracts > 1 ? "s" : ""} activated`);
+  } else if (today.leadsWon > 0) {
+    parts.push(`${today.leadsWon} lead${today.leadsWon > 1 ? "s" : ""} won`);
+  }
+
+  const headline = parts.join(", ");
+
+  const overdueBills = attention.unpaidBills.filter((b) => b.due_date && b.due_date <= todayIST);
+  const overdueInvoices = extended.pendingClientInvoices.filter((i) => i.isOverdue);
+
+  let urgent: string | null = null;
+  if (overdueBills.length > 0) {
+    urgent = `${overdueBills.length} vendor bill${overdueBills.length > 1 ? "s" : ""} (${rupees(overdueBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))}) overdue`;
+  } else if (overdueInvoices.length > 0) {
+    urgent = `${overdueInvoices.length} client invoice${overdueInvoices.length > 1 ? "s" : ""} overdue`;
+  } else if (attention.expiringContracts > 0) {
+    urgent = `${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring within 30 days`;
+  } else if (extended.stuckProposals.length > 0) {
+    urgent = `${extended.stuckProposals.length} proposal${extended.stuckProposals.length > 1 ? "s" : ""} stuck with no response`;
+  }
+
+  return `${headline}${urgent ? ` — but ${urgent}` : ""}.`;
+}
+
+function storyboardNode(ev: StoryboardEvent): string {
+  return `
+    <td style="text-align:center;padding:0 4px;">
+      <div style="width:30px;height:30px;line-height:30px;border-radius:50%;background:#eef4f3;color:#015E65;font-size:13px;margin:0 auto 6px;">${ev.icon}</div>
+      <p style="margin:0;font-size:9.5px;font-weight:600;color:#999;">${ev.time}</p>
+      <p style="margin:2px 0 0;font-size:11px;font-weight:600;color:#333;line-height:1.3;">${ev.label}</p>
+      ${ev.detail ? `<p style="margin:2px 0 0;font-size:10px;color:#015E65;font-weight:600;">${ev.detail}</p>` : ""}
+    </td>`;
+}
+
+function buildStoryboardHtml(highlights: StoryboardEvent[], headline: string): string {
+  const timelineHtml = highlights.length > 0 ? `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <tr>${highlights.map(storyboardNode).join("")}</tr>
+    </table>` : "";
+
+  return `
+    <div style="background:#f7fbfa;border:1px solid #d1fae5;border-radius:8px;padding:18px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 12px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.5px;">Today's Storyline</p>
+      ${timelineHtml}
+      <p style="margin:0;font-size:15px;line-height:1.5;color:#222;font-weight:500;">${headline}</p>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
 // HTML helpers
 // ---------------------------------------------------------------------------
 
@@ -982,10 +1171,15 @@ function buildDigestHtml(
   attention: AttentionItems,
   portfolio: Portfolio,
   extended: ExtendedData,
-  receivables: ReceivablesAging
+  receivables: ReceivablesAging,
+  storyboard: StoryboardEvent[]
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
   const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
+
+  // ── Today's Storyline ───────────────────────────────────────────────────
+  const storyHeadline = buildStoryHeadline(todayIST, today, extended, attention, revenueToday);
+  const storyboardHtml = buildStoryboardHtml(storyboard, storyHeadline);
 
   // ── Yesterday's Collections ───────────────────────────────────────────────
   const yesterdayLabel = new Date(yesterdayIST + "T00:00:00").toLocaleDateString("en-IN", {
@@ -1245,6 +1439,9 @@ function buildDigestHtml(
   </div>
 
   <div style="padding:28px 32px;">
+
+    <!-- Today's Storyline -->
+    ${storyboardHtml}
 
     <!-- Yesterday's Collections -->
     ${yesterdayHtml}
