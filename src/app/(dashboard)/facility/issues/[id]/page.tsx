@@ -42,7 +42,7 @@ import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
-  STATUS_ACTION_PRIORITY, getTatStatus,
+  STATUS_ACTION_PRIORITY, getTatStatus, SCOPE_LABEL,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import type {
@@ -563,6 +563,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-600 ring-slate-200">
+              {SCOPE_LABEL[issue.scope]}
+            </span>
             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", statusChipClass)}>
               {statusLabel}
             </span>
