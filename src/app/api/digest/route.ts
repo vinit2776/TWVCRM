@@ -149,6 +149,8 @@ interface Metrics {
   newBookings: number;
   newContracts: number;
   supportTickets: number;
+  workOrdersOpened: number;
+  workOrdersClosed: number;
 }
 
 /** Single-day shorthand — delegates to the range version */
@@ -181,6 +183,8 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     bookings,
     contracts,
     tickets,
+    workOrdersOpened,
+    workOrdersClosed,
   ] = await Promise.all([
     // Keyed on created_at (when the payment was recorded), not payment_date
     // (the receipt date the recorder enters, which can be backdated) — so a
@@ -261,6 +265,17 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
       .select("id", { count: "exact", head: true })
       .gte("created_at", rangeStart)
       .lte("created_at", rangeEnd),
+    // Facility "Work Orders" — reported_at is the creation timestamp (no created_at column).
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .gte("reported_at", rangeStart)
+      .lte("reported_at", rangeEnd),
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .gte("closed_at", rangeStart)
+      .lte("closed_at", rangeEnd),
   ]);
 
   const sum = (rows: { amount?: number; total_amount?: number; total_ordered_amount?: number }[] | null, field: string) =>
@@ -282,6 +297,8 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     newBookings: bookings.count || 0,
     newContracts: contracts.count || 0,
     supportTickets: tickets.count || 0,
+    workOrdersOpened: workOrdersOpened.count || 0,
+    workOrdersClosed: workOrdersClosed.count || 0,
   };
 }
 
@@ -394,11 +411,16 @@ interface UnpaidBill {
 
 interface AttentionItems {
   overdueTasks: number;
+  overdueTasksUrgent: number;
   unpaidBills: UnpaidBill[];
   unpaidBillsTotal: number;
   expiringContracts: number;
   pendingFollowups: number;
+  workOrdersSlaAtRisk: number;
+  workOrdersOpenCritical: number;
 }
+
+const OPEN_WORK_ORDER_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchAttentionItems(supabase: any, date: string): Promise<AttentionItems> {
@@ -406,10 +428,10 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
     .toISOString()
     .slice(0, 10);
 
-  const [overdue, bills, expiring, followups] = await Promise.all([
+  const [overdue, bills, expiring, followups, workOrdersSla, workOrdersCritical] = await Promise.all([
     supabase
       .from("tasks")
-      .select("id", { count: "exact", head: true })
+      .select("id, priority")
       .lt("due_date", date)
       .neq("status", "done"),
     supabase
@@ -428,7 +450,24 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .select("id", { count: "exact", head: true })
       .eq("is_follow_up_done", false)
       .not("follow_up_date", "is", null),
+    // Open work orders already past their SLA target — `sla_breached` on the row
+    // is only computed at resolve time, so an open-but-overdue issue needs its
+    // own live comparison against sla_target_at, not that column.
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .in("status", OPEN_WORK_ORDER_STATUSES)
+      .lt("sla_target_at", `${date}T23:59:59`),
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .in("status", OPEN_WORK_ORDER_STATUSES)
+      .eq("priority", "critical"),
   ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overdueRows = (overdue.data || []) as any[];
+  const overdueTasksUrgent = overdueRows.filter((t) => t.priority === "urgent" || t.priority === "high").length;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const billRows: UnpaidBill[] = (bills.data || []).map((b: any) => ({
@@ -441,11 +480,14 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
   }));
 
   return {
-    overdueTasks: overdue.count || 0,
+    overdueTasks: overdueRows.length,
+    overdueTasksUrgent,
     unpaidBills: billRows,
     unpaidBillsTotal: billRows.reduce((s, r) => s + (r.total_amount - r.amount_paid), 0),
     expiringContracts: expiring.count || 0,
     pendingFollowups: followups.count || 0,
+    workOrdersSlaAtRisk: workOrdersSla.count || 0,
+    workOrdersOpenCritical: workOrdersCritical.count || 0,
   };
 }
 
@@ -821,6 +863,7 @@ const ENTITY_ICON: Record<string, string> = {
   purchase_order: "📦",
   purchase_request: "📦",
   support_ticket: "🎫",
+  facility_issue: "🔧",
   task: "✔️",
   petty_cash_entry: "💵",
   booking: "🛋️",
@@ -831,6 +874,7 @@ const ENTITY_ICON: Record<string, string> = {
 const ENTITY_WEIGHT: Record<string, number> = {
   contract: 3, billing_statement: 3, contract_payment: 3, billing_payment: 3,
   booking_payment: 3, vendor_bill: 3, proposal: 3, proforma_invoice: 3, purchase_order: 3,
+  facility_issue: 3,
   lead: 2, task: 2, support_ticket: 2, purchase_request: 2, petty_cash_entry: 2,
 };
 
@@ -1298,7 +1342,7 @@ function buildDigestHtml(
 
   // Act Today
   if (attention.overdueTasks > 0)
-    overdueItems.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}`);
+    overdueItems.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}${attention.overdueTasksUrgent > 0 ? ` (${attention.overdueTasksUrgent} urgent/high)` : ""}`);
 
   const overdueInvoices = extended.pendingClientInvoices.filter(i => i.isOverdue);
   if (overdueInvoices.length > 0)
@@ -1308,11 +1352,16 @@ function buildDigestHtml(
   if (overdueBills.length > 0)
     overdueItems.push(`${overdueBills.length} vendor bill${overdueBills.length > 1 ? "s" : ""} overdue (${rupees(overdueBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))})`);
 
+  if (attention.workOrdersSlaAtRisk > 0)
+    overdueItems.push(`${attention.workOrdersSlaAtRisk} work order${attention.workOrdersSlaAtRisk > 1 ? "s" : ""} past SLA target, still open`);
+
   // This Week
   if (attention.expiringContracts > 0)
     thisWeekItems.push(`${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring in 30 days`);
   if (attention.pendingFollowups > 0)
     thisWeekItems.push(`${attention.pendingFollowups} follow-up${attention.pendingFollowups > 1 ? "s" : ""} pending`);
+  if (attention.workOrdersOpenCritical > 0)
+    thisWeekItems.push(`${attention.workOrdersOpenCritical} critical work order${attention.workOrdersOpenCritical > 1 ? "s" : ""} open`);
 
   const upcomingBills = attention.unpaidBills.filter(b => b.due_date && b.due_date > todayIST);
   if (upcomingBills.length > 0)
@@ -1361,6 +1410,14 @@ function buildDigestHtml(
     metricRow("Bookings", `${today.newBookings}`, `${wtd.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
     metricRow("New Contracts", `${today.newContracts}`, `${wtd.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
     metricRow("Support Tickets", `${today.supportTickets}`, `${wtd.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
+    metricRow(
+      "Work Orders (opened/closed)",
+      `${today.workOrdersOpened}/${today.workOrdersClosed}`,
+      `${wtd.workOrdersOpened}/${wtd.workOrdersClosed}`,
+      `${lw.workOrdersOpened}/${lw.workOrdersClosed}`,
+      `${ly.workOrdersOpened}/${ly.workOrdersClosed}`,
+      today.workOrdersOpened, lw.workOrdersOpened
+    ),
   ].join("");
 
   // ── Center-wise ─────────────────────────────────────────────────────────

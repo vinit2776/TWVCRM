@@ -171,9 +171,11 @@ Created in `00011_payments_gateway.sql`.
 
 ### Daily Digest (`GET /api/digest`)
 
-Cron-triggered (`vercel.json`, `0 15 * * *` UTC = 8:30 PM IST) email sent to `digest_recipients`. Supports `?date=YYYY-MM-DD` to generate for a specific day, and `?preview=1` to return the rendered HTML directly (`Content-Type: text/html`) instead of sending — use this for local/staging QA so testing against production data never fans out real emails.
+Cron-triggered (`vercel.json`, `0 15 * * *` UTC = 8:30 PM IST). Recipients are resolved fresh on every send — every `users` row with `role='admin' AND is_active=true` — rather than a manually-maintained list, so it can't drift stale. (Three other unrelated crons — `electricity-nag`, `vendor-email-digest`, `kyc-reminder` — still read the static `app_settings.digest_recipients` list independently.) Supports `?date=YYYY-MM-DD` to generate for a specific day, and `?preview=1` to return the rendered HTML directly (`Content-Type: text/html`) instead of sending — use this for local/staging QA so testing against production data never fans out real emails.
 
 The email opens with a **Today's Storyline** section (`buildStoryboardHtml()` in `src/app/api/digest/route.ts`): up to 5 of the day's highest-significance `audit_trail` events as an icon timeline (ranked by entity weight, `create` actions, and ₹ amounts found in the `changes` diff — one event per record, latest touch wins), followed by a single deterministic headline sentence synthesizing the day's biggest facts plus the most urgent open item (`buildStoryHeadline()`). Event labels reuse `summarizeAuditEvent()` from `src/lib/audit-labels.ts`. No LLM call — everything is a rule-based template so the section is free and renders identically every day. It does not duplicate the KPI tiles or "Needs Attention" section further down the same email — it leads into them.
+
+**Work Orders (`facility_issues`) coverage**: the Operations table shows an "opened/closed" count per period (keyed on `reported_at`/`closed_at`). "Needs Attention" adds two facility signals the schema already tracked but the digest never surfaced: open work orders already past `sla_target_at` (Act Today — note `facility_issues.sla_breached` is only computed at resolve time, so open-but-overdue issues need a live comparison against `sla_target_at`, not that column) and open `priority='critical'` work orders (This Week). The overdue-tasks line in "Needs Attention" also now breaks out how many are `urgent`/`high` priority.
 
 ### Table: `locations`
 
