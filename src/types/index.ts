@@ -599,6 +599,50 @@ export interface BillingPayment {
 }
 
 // ==========================================
+// Deposit Adjustment Types
+// ==========================================
+export type DepositAdjustmentStatus = "pending_approval" | "approved" | "rejected" | "reversed";
+
+export interface DepositAdjustment {
+  id: string;
+  contract_id: string;
+  source_proposal_id: string;
+  billing_statement_id: string;
+  billing_payment_id?: string | null;
+  amount: number;
+  status: DepositAdjustmentStatus;
+  requested_by: string;
+  requested_at: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejected_by?: string | null;
+  rejected_at?: string | null;
+  rejection_reason?: string | null;
+  reversed_by?: string | null;
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
+  notify_customer: boolean;
+  customer_notified_at?: string | null;
+  accounts_notified_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined display fields (populated by API routes, not stored)
+  requested_by_name?: string;
+  approved_by_name?: string;
+  rejected_by_name?: string;
+  reversed_by_name?: string;
+}
+
+export interface DepositBalance {
+  source_contract_id: string;
+  source_proposal_id: string | null;
+  deposit_collected: number;
+  committed: number;
+  available: number;
+}
+
+// ==========================================
 // Voucher Types
 // ==========================================
 export type VoucherStatus = "available" | "issued" | "expired" | "revoked";
@@ -773,7 +817,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -859,7 +903,8 @@ export type AuditEntityType =
   | "user_location"
   | "transfer_billing_policy"
   | "unifi_device_label"
-  | "unifi_ap_alert";
+  | "unifi_ap_alert"
+  | "deposit_adjustment";
 
 export interface AuditLog {
   id: string;

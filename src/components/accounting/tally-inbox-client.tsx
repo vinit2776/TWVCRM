@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
 import {
   AGING_ESCALATE_HOURS,
@@ -156,6 +157,12 @@ export function TallyInboxClient() {
   const [payTdsEnabled, setPayTdsEnabled] = useState(false);
   const [payTdsSection, setPayTdsSection] = useState("194I");
   const [payTdsAmount, setPayTdsAmount] = useState("");
+  // Adjustment against deposit — same split-payment behavior as the shared
+  // AR/Billing Record Payment dialog (record-payment-dialog.tsx).
+  const [payDepositAvailable, setPayDepositAvailable] = useState<number | null>(null);
+  const [payNotifyCustomer, setPayNotifyCustomer] = useState(false);
+  const [payRemainderMode, setPayRemainderMode] = useState("bank_transfer");
+  const [payRemainderRef, setPayRemainderRef] = useState("");
 
   // Auto-expand the first pi_paid_awaiting_gst row on initial load so accounts
   // can see the upload form without an extra click.
@@ -379,10 +386,71 @@ export function TallyInboxClient() {
     setPayTdsEnabled(false);
     setPayTdsSection("194I");
     setPayTdsAmount("");
+    setPayNotifyCustomer(false);
+    setPayRemainderMode("bank_transfer");
+    setPayRemainderRef("");
+    setPayDepositAvailable(null);
+    fetch(`/api/billing-statements/${row.statement_id}/deposit-balance`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setPayDepositAvailable(json?.data?.available ?? 0))
+      .catch(() => setPayDepositAvailable(0));
   }, []);
+
+  const isPayDepositMode = payMode === "deposit_adjustment";
+  const payRequestedAmount = parseFloat(payAmount || "0");
+  const payDepositLeg = isPayDepositMode ? Math.min(payRequestedAmount, payDepositAvailable ?? 0) : 0;
+  const payRemainderLeg = isPayDepositMode ? Math.max(0, payRequestedAmount - (payDepositAvailable ?? 0)) : 0;
 
   const submitPayment = useCallback(async () => {
     if (!payRow) return;
+
+    if (isPayDepositMode) {
+      if (payDepositLeg <= 0) { setActionError("Enter a valid amount"); return; }
+      if (payRemainderLeg > 0 && !payRemainderMode) { setActionError("Select a payment mode for the remainder"); return; }
+      setPaySubmitting(true);
+      setActionError(null);
+      try {
+        const depositRes = await fetch(`/api/billing-statements/${payRow.id}/deposit-adjustment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: payDepositLeg, notify_customer: payNotifyCustomer }),
+        });
+        const depositJson = await depositRes.json();
+        if (!depositRes.ok) throw new Error(depositJson.error || "Failed to submit deposit adjustment request");
+
+        if (payRemainderLeg > 0) {
+          const remainderRes = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount: payRemainderLeg,
+              payment_date: payDate,
+              payment_mode: payRemainderMode,
+              payment_reference: payRemainderRef || null,
+              notes: payNotes || null,
+            }),
+          });
+          if (!remainderRes.ok) {
+            const remainderJson = await remainderRes.json().catch(() => ({}));
+            setActionError(
+              `Deposit adjustment of ${formatCurrency(payDepositLeg)} submitted for approval, but recording the ` +
+              `${formatCurrency(payRemainderLeg)} remainder failed: ${remainderJson.error || "unknown error"}. Record it separately.`
+            );
+            setPayRow(null);
+            await load();
+            return;
+          }
+        }
+        setPayRow(null);
+        await load();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : "Failed to submit deposit adjustment");
+      } finally {
+        setPaySubmitting(false);
+      }
+      return;
+    }
+
     const amt = parseFloat(payAmount);
     if (!amt || amt <= 0) { setActionError("Enter a valid amount"); return; }
     const tdsAmt = payTdsEnabled ? Math.max(0, Number(payTdsAmount) || 0) : 0;
@@ -413,7 +481,7 @@ export function TallyInboxClient() {
     } finally {
       setPaySubmitting(false);
     }
-  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, load]);
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, load, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
 
   const handleAccounted = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -807,19 +875,74 @@ export function TallyInboxClient() {
                     <SelectItem value="cash">Cash</SelectItem>
                     <SelectItem value="razorpay">Razorpay (manually reconciled)</SelectItem>
                     <SelectItem value="other">Other</SelectItem>
+                    {(payDepositAvailable ?? 0) > 0 && (
+                      <SelectItem value="deposit_adjustment">Adjustment against deposit</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label>Reference (UTR / cheque # / txn id)</Label>
-                <Input value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="optional" />
-              </div>
+              {!isPayDepositMode && (
+                <div>
+                  <Label>Reference (UTR / cheque # / txn id)</Label>
+                  <Input value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="optional" />
+                </div>
+              )}
               <div>
                 <Label>Notes</Label>
                 <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
               </div>
 
+              {/* ── Adjustment against deposit block ── */}
+              {isPayDepositMode && (
+                <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Available deposit balance: <span className="font-semibold text-foreground">{formatCurrency(payDepositAvailable ?? 0)}</span>
+                  </p>
+                  <div className="rounded px-2.5 py-1.5 text-xs font-medium bg-white border border-teal-200">
+                    {formatCurrency(payDepositLeg)} from deposit
+                    {payRemainderLeg > 0 && <> + {formatCurrency(payRemainderLeg)} via another mode</>}
+                    {" = "}{formatCurrency(payDepositLeg + payRemainderLeg)}
+                  </div>
+                  {payRemainderLeg > 0 && (
+                    <div className="grid grid-cols-2 gap-3 pt-1 border-t border-teal-200">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Remainder payment mode</Label>
+                        <Select value={payRemainderMode} onValueChange={setPayRemainderMode}>
+                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="bank_transfer">Bank transfer / NEFT / RTGS</SelectItem>
+                            <SelectItem value="upi">UPI</SelectItem>
+                            <SelectItem value="cheque">Cheque</SelectItem>
+                            <SelectItem value="cash">Cash</SelectItem>
+                            <SelectItem value="razorpay">Razorpay (manually reconciled)</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Remainder reference</Label>
+                        <Input
+                          value={payRemainderRef}
+                          onChange={(e) => setPayRemainderRef(e.target.value)}
+                          placeholder="UTR or cheque number"
+                          className="h-9 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 text-xs cursor-pointer">
+                    <Checkbox checked={payNotifyCustomer} onCheckedChange={(v) => setPayNotifyCustomer(v === true)} />
+                    Email the customer a confirmation of this adjustment
+                  </label>
+                  <p className="text-[11px] text-muted-foreground">
+                    This requires admin or manager approval before it settles — the deposit portion won&apos;t reduce
+                    the balance due until approved.
+                  </p>
+                </div>
+              )}
+
               {/* ── TDS deduction block (mirrors AR Receivables Record Payment) ── */}
+              {!isPayDepositMode && (
               <div className="rounded-lg border border-border">
                 <button
                   type="button"
@@ -885,12 +1008,15 @@ export function TallyInboxClient() {
                   </div>
                 )}
               </div>
+              )}
             </div>
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPayRow(null)} disabled={paySubmitting}>Cancel</Button>
             <Button onClick={() => void submitPayment()} disabled={paySubmitting}>
-              {paySubmitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording…</> : "Record payment"}
+              {paySubmitting
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />{isPayDepositMode ? "Submitting…" : "Recording…"}</>
+                : (isPayDepositMode ? "Submit for Approval" : "Record payment")}
             </Button>
           </DialogFooter>
         </DialogContent>
