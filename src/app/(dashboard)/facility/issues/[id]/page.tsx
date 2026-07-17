@@ -37,7 +37,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
@@ -541,6 +541,15 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     ? { wrap: "bg-amber-50 border-amber-200", icon: "text-amber-600", text: "text-amber-700" }
     : { wrap: "bg-emerald-50 border-emerald-200", icon: "text-emerald-600", text: "text-emerald-700" };
 
+  // Delegated tasks always have a creator-supplied due date (mandatory at
+  // creation, no auto-compute path) — tat_manual_override only applies to
+  // reported_problem tickets, which default to a priority-based auto value
+  // unless the reporter explicitly overrode it at creation time.
+  const creatorName = issue.reporter?.full_name ?? issue.reporter_name ?? "creator";
+  const tatSourceLabel = issue.task_type === "delegated_task" || issue.tat_manual_override
+    ? `Set by ${creatorName}`
+    : "Auto-set from priority default";
+
   const statusLabel = isUnowned ? "Unclaimed" : STATUS_STYLES[issue.status].label;
   const statusChipClass = isUnowned ? "bg-amber-50 text-amber-700 ring-amber-200" : STATUS_STYLES[issue.status].chip;
 
@@ -576,14 +585,24 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
       {/* ───── TAT status banner — bold, full-width, same treatment as the claim
           countdown banner below. Replaces the small header pill; deadline
-          urgency deserves the same visual weight as ownership urgency. ──── */}
+          urgency deserves the same visual weight as ownership urgency. Second
+          line answers "what exact date/time, and who set it" — the relative
+          countdown alone doesn't say whether a human chose this deadline or
+          the system defaulted it from priority. ──────────────────────────── */}
       {open && issue.sla_target_at && (
-        <div className={cn("rounded-lg border px-4 py-3 flex items-center gap-3", tatBannerStyle.wrap)}>
-          <Clock className={cn("h-4 w-4 shrink-0", tatBannerStyle.icon)} />
-          <span className={cn("text-sm font-semibold", tatBannerStyle.text)}>
-            {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
-          </span>
-          <span className="text-xs text-muted-foreground">(TAT)</span>
+        <div className={cn("rounded-lg border px-4 py-3 flex items-start gap-3", tatBannerStyle.wrap)}>
+          <Clock className={cn("h-4 w-4 shrink-0 mt-0.5", tatBannerStyle.icon)} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={cn("text-sm font-semibold", tatBannerStyle.text)}>
+                {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
+              </span>
+              <span className="text-xs text-muted-foreground">(TAT)</span>
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {formatDateTime(issue.sla_target_at)} · {tatSourceLabel}
+            </div>
+          </div>
         </div>
       )}
 
