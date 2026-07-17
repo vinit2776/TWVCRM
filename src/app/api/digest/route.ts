@@ -409,18 +409,35 @@ interface UnpaidBill {
   payment_status: string;
 }
 
+interface WorkOrderBreakdownRow {
+  location: string;
+  department: string;
+  open: number;
+  slaBreached: number;
+  critical: number;
+}
+
 interface AttentionItems {
   overdueTasks: number;
   overdueTasksUrgent: number;
+  overdueTasksByAssignee: { name: string; overdue: number }[];
   unpaidBills: UnpaidBill[];
   unpaidBillsTotal: number;
   expiringContracts: number;
   pendingFollowups: number;
   workOrdersSlaAtRisk: number;
   workOrdersOpenCritical: number;
+  workOrderBreakdown: WorkOrderBreakdownRow[];
 }
 
 const OPEN_WORK_ORDER_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+
+// facility_issues has no department_id — "department" is the `scope` enum,
+// matched 1:1 onto the facility_departments table by value, not a stored FK.
+const WORK_ORDER_DEPARTMENT_LABEL: Record<string, string> = {
+  it: "IT", hvac: "HVAC", plumbing: "Plumbing", electrical: "Electrical",
+  housekeeping: "Housekeeping", security: "Security", other: "Other", facility: "Facility",
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchAttentionItems(supabase: any, date: string): Promise<AttentionItems> {
@@ -428,10 +445,10 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
     .toISOString()
     .slice(0, 10);
 
-  const [overdue, bills, expiring, followups, workOrdersSla, workOrdersCritical] = await Promise.all([
+  const [overdue, bills, expiring, followups, workOrders] = await Promise.all([
     supabase
       .from("tasks")
-      .select("id, priority")
+      .select("id, priority, assignee:users!tasks_assigned_to_fkey(full_name)")
       .lt("due_date", date)
       .neq("status", "done"),
     supabase
@@ -450,24 +467,52 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .select("id", { count: "exact", head: true })
       .eq("is_follow_up_done", false)
       .not("follow_up_date", "is", null),
-    // Open work orders already past their SLA target — `sla_breached` on the row
-    // is only computed at resolve time, so an open-but-overdue issue needs its
-    // own live comparison against sla_target_at, not that column.
+    // All open work orders, fetched once and grouped client-side below for
+    // both the headline counts and the location × department breakdown.
+    // `sla_breached` on the row is only computed at resolve time, so an
+    // open-but-overdue issue needs a live comparison against sla_target_at.
     supabase
       .from("facility_issues")
-      .select("id", { count: "exact", head: true })
-      .in("status", OPEN_WORK_ORDER_STATUSES)
-      .lt("sla_target_at", `${date}T23:59:59`),
-    supabase
-      .from("facility_issues")
-      .select("id", { count: "exact", head: true })
-      .in("status", OPEN_WORK_ORDER_STATUSES)
-      .eq("priority", "critical"),
+      .select("scope, priority, sla_target_at, location:locations(name)")
+      .in("status", OPEN_WORK_ORDER_STATUSES),
   ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const overdueRows = (overdue.data || []) as any[];
   const overdueTasksUrgent = overdueRows.filter((t) => t.priority === "urgent" || t.priority === "high").length;
+
+  const assigneeCounts = new Map<string, number>();
+  for (const t of overdueRows) {
+    const name = t.assignee?.full_name || "Unassigned";
+    assigneeCounts.set(name, (assigneeCounts.get(name) || 0) + 1);
+  }
+  const overdueTasksByAssignee = Array.from(assigneeCounts.entries())
+    .map(([name, overdue]) => ({ name, overdue }))
+    .sort((a, b) => b.overdue - a.overdue);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const workOrderRows = (workOrders.data || []) as any[];
+  const slaCutoff = new Date(`${date}T23:59:59Z`).getTime();
+  const woGroups = new Map<string, WorkOrderBreakdownRow>();
+  let workOrdersSlaAtRisk = 0;
+  let workOrdersOpenCritical = 0;
+  for (const w of workOrderRows) {
+    const location = w.location?.name || "Unknown";
+    const department = WORK_ORDER_DEPARTMENT_LABEL[w.scope] || w.scope || "Other";
+    const breached = !!w.sla_target_at && new Date(w.sla_target_at).getTime() < slaCutoff;
+    const critical = w.priority === "critical";
+    if (breached) workOrdersSlaAtRisk++;
+    if (critical) workOrdersOpenCritical++;
+
+    const key = `${location}|${department}`;
+    const row = woGroups.get(key) || { location, department, open: 0, slaBreached: 0, critical: 0 };
+    row.open++;
+    if (breached) row.slaBreached++;
+    if (critical) row.critical++;
+    woGroups.set(key, row);
+  }
+  const workOrderBreakdown = Array.from(woGroups.values())
+    .sort((a, b) => b.slaBreached - a.slaBreached || b.open - a.open);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const billRows: UnpaidBill[] = (bills.data || []).map((b: any) => ({
@@ -482,12 +527,14 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
   return {
     overdueTasks: overdueRows.length,
     overdueTasksUrgent,
+    overdueTasksByAssignee,
     unpaidBills: billRows,
     unpaidBillsTotal: billRows.reduce((s, r) => s + (r.total_amount - r.amount_paid), 0),
     expiringContracts: expiring.count || 0,
     pendingFollowups: followups.count || 0,
-    workOrdersSlaAtRisk: workOrdersSla.count || 0,
-    workOrdersOpenCritical: workOrdersCritical.count || 0,
+    workOrdersSlaAtRisk,
+    workOrdersOpenCritical,
+    workOrderBreakdown,
   };
 }
 
@@ -1392,6 +1439,38 @@ function buildDigestHtml(
       </p>
     </div>` : "";
 
+  // ── Overdue Tasks by Assignee ────────────────────────────────────────────
+  const overdueTasksByAssigneeHtml = attention.overdueTasksByAssignee.length > 0 ? `
+    <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+      <p style="margin:0 0 8px;font-weight:600;color:#c53030;font-size:12px;text-transform:uppercase;letter-spacing:0.4px;">Overdue Tasks by Assignee</p>
+      <p style="margin:0;color:#333;font-size:13px;">
+        ${attention.overdueTasksByAssignee.map((a, i) =>
+          `<span style="color:#c53030;font-weight:600;">${a.name}</span> <span style="color:#888;">${a.overdue} overdue</span>${i < attention.overdueTasksByAssignee.length - 1 ? ' <span style="color:#fed7d7;margin:0 6px;">·</span>' : ""}`
+        ).join("")}
+      </p>
+    </div>` : "";
+
+  // ── Work Orders by Location ───────────────────────────────────────────────
+  const WO_BREAKDOWN_LIMIT = 8;
+  const woBreakdownRows = attention.workOrderBreakdown.slice(0, WO_BREAKDOWN_LIMIT);
+  const workOrderBreakdownHtml = woBreakdownRows.length > 0 ? `
+    ${sectionHeader(`Work Orders by Location${attention.workOrderBreakdown.length > WO_BREAKDOWN_LIMIT ? ` (top ${WO_BREAKDOWN_LIMIT} of ${attention.workOrderBreakdown.length})` : ""}`)}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <tr style="background:#f7f8fa;">
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Location</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Department</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Open</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">SLA Breached</td>
+      </tr>
+      ${woBreakdownRows.map(row => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${row.location}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${row.department}${row.critical > 0 ? ` <span style="color:#e53e3e;font-size:10px;font-weight:700;">(${row.critical} critical)</span>` : ""}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${row.open}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:${row.slaBreached > 0 ? "#e53e3e" : "#333"};font-size:12px;text-align:right;">${row.slaBreached > 0 ? row.slaBreached : "—"}</td>
+      </tr>`).join("")}
+    </table>` : "";
+
   // ── Financial Summary ───────────────────────────────────────────────────
   const financialRows = [
     metricRow("Collections", rupees(today.collections), rupees(wtd.collections), rupees(lw.collections), rupees(ly.collections), today.collections, lw.collections),
@@ -1524,8 +1603,14 @@ function buildDigestHtml(
     <!-- Needs Attention -->
     ${attentionHtml}
 
+    <!-- Work Orders by Location -->
+    ${workOrderBreakdownHtml}
+
     <!-- Team Activity -->
     ${teamHtml}
+
+    <!-- Overdue Tasks by Assignee -->
+    ${overdueTasksByAssigneeHtml}
 
     <!-- Financial Summary -->
     ${sectionHeader("Financial Summary")}
