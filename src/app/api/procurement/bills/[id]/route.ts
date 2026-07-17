@@ -105,6 +105,20 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("update_amount_and_resubmit"),
     total_amount: z.number().positive("Amount must be greater than zero"),
   }),
+  z.object({
+    /**
+     * Corrects a wrong invoice upload (wrong file, misread number/date/amount) on an
+     * in-progress bill. Allowed any time before payment approval — once approved the
+     * amount has already been sent to Finance, so it locks.
+     */
+    action: z.literal("edit_invoice_details"),
+    invoice_number: z.string().nullish(),
+    invoice_date: z.string().min(1, "Invoice date is required"),
+    due_date: z.string().nullish(),
+    total_amount: z.number().positive("Total amount must be greater than 0"),
+    notes: z.string().nullish(),
+    invoice_file_url: z.string().url().nullish(),
+  }),
 ]);
 
 export async function GET(
@@ -914,6 +928,108 @@ export async function PATCH(
         url: `/procurement/bills/${id}`,
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] resubmit notification failed:", err));
+
+      break;
+    }
+
+    case "edit_invoice_details": {
+      // Same roles that can upload/create a bill in the first place.
+      if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+      if (bill.approval_status === "approved") {
+        return NextResponse.json(
+          { error: "This invoice has already been approved for payment and can no longer be edited." },
+          { status: 422 }
+        );
+      }
+
+      const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
+
+      // Re-validate against PO ceiling (mirrors creation rule). Skip when there is no PO.
+      if (bill.po_id) {
+        const { data: linkedPo } = await supabase
+          .from("purchase_orders")
+          .select("po_type, total_amount, unit_cost_per_cycle")
+          .eq("id", bill.po_id)
+          .single();
+        if (linkedPo) {
+          const ceiling = linkedPo.po_type === "service" && linkedPo.unit_cost_per_cycle
+            ? Number(linkedPo.unit_cost_per_cycle)
+            : Number(linkedPo.total_amount ?? 0);
+          if (ceiling > 0 && newTotal > ceiling) {
+            return NextResponse.json(
+              {
+                error: `Corrected amount (₹${newTotal.toLocaleString("en-IN")}) cannot exceed the ${linkedPo.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
+              },
+              { status: 422 }
+            );
+          }
+        }
+      }
+
+      // Duplicate invoice-number guard (mirrors creation), excluding this bill itself.
+      const trimmedInvoiceNumber = parsed.data.invoice_number?.trim() || null;
+      if (trimmedInvoiceNumber) {
+        const { count: dupCount } = await supabase
+          .from("vendor_bills")
+          .select("*", { count: "exact", head: true })
+          .eq("vendor_id", bill.vendor_id)
+          .eq("invoice_number", trimmedInvoiceNumber)
+          .neq("approval_status", "rejected")
+          .neq("id", id);
+        if (dupCount && dupCount > 0) {
+          return NextResponse.json(
+            { error: `Invoice number "${trimmedInvoiceNumber}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+            { status: 409 }
+          );
+        }
+      }
+
+      // A corrected upload on a previously rejected bill re-enters the approval
+      // queue — otherwise it would sit "rejected" forever with nobody to review it.
+      const wasRejected = bill.approval_status === "rejected";
+
+      updatePayload = {
+        invoice_number: trimmedInvoiceNumber,
+        invoice_date: parsed.data.invoice_date,
+        due_date: parsed.data.due_date ?? null,
+        total_amount: newTotal,
+        base_amount: newTotal,
+        invoice_file_url: parsed.data.invoice_file_url ?? bill.invoice_file_url,
+        notes: parsed.data.notes ?? null,
+        ...(wasRejected
+          ? {
+              approval_status: "pending",
+              approved_by: null,
+              approved_at: null,
+              approval_code: null,
+              approved_amount: null,
+              approved_amount_note: null,
+              rejection_reason: null,
+              rejection_outcome: null,
+              payment_batch_type: null,
+              payment_batch_date: null,
+              payment_batch_assigned_by: null,
+              payment_batch_assigned_at: null,
+              gst_rate: 0,
+              gst_amount: 0,
+              gst_set_by: null,
+              gst_set_at: null,
+              gst_zero_confirmed: false,
+              gst_zero_confirmed_by: null,
+            }
+          : {}),
+      };
+
+      if (wasRejected) {
+        sendPushToProcurementRoles({
+          title: "Invoice corrected — needs re-approval",
+          body: `${bill.bill_number} corrected and resubmitted for approval`,
+          url: `/procurement/bills/${id}`,
+          tag: `bill-approval-${id}`,
+        }).catch((err) => console.error("[push] resubmit notification failed:", err));
+      }
 
       break;
     }

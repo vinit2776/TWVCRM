@@ -28,6 +28,16 @@ const createDeliverySchema = z.object({
   },
 );
 
+// Correcting an existing DC (wrong file, mistyped number/date/notes). Quantities are
+// intentionally not editable here — reject-and-recreate is still the path for qty
+// corrections, since that already handles stock/PO-status reversal safely.
+const editDeliverySchema = z.object({
+  dc_number: z.string().nullish(),
+  dc_date: z.string().min(1, "Delivery date is required"),
+  file_url: z.string().url("Delivery challan file URL is required"),
+  notes: z.string().nullish(),
+});
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -302,6 +312,98 @@ export async function POST(
   });
 
   return NextResponse.json({ data: { id: receipt.id, received_at: receipt.received_at } }, { status: 201 });
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: poId } = await params;
+  const deliveryId = request.nextUrl.searchParams.get("delivery_id");
+  if (!deliveryId) {
+    return NextResponse.json({ error: "delivery_id query parameter is required" }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  const { data: po, error: poErr } = await supabase
+    .from("purchase_orders")
+    .select("id, status")
+    .eq("id", poId)
+    .single();
+  if (poErr || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
+
+  // Locks the moment the linked invoice is approved for payment — at that point
+  // the DC has already backed a payment decision and must not move underneath it.
+  if (po.status === "invoice_approved") {
+    return NextResponse.json(
+      { error: "This purchase order's invoice has already been approved for payment — delivery challans can no longer be edited." },
+      { status: 422 }
+    );
+  }
+
+  const { data: receipt, error: receiptErr } = await supabase
+    .from("po_delivery_receipts")
+    .select("id, dc_number, dc_date, file_url, notes")
+    .eq("id", deliveryId)
+    .eq("po_id", poId)
+    .single();
+  if (receiptErr || !receipt) {
+    return NextResponse.json({ error: "Delivery receipt not found" }, { status: 404 });
+  }
+
+  const body = await request.json();
+  const parsed = editDeliverySchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  const { dc_number, dc_date, file_url, notes } = parsed.data;
+
+  const { data: updated, error: updateError } = await supabase
+    .from("po_delivery_receipts")
+    .update({
+      dc_number: dc_number ?? null,
+      dc_date,
+      file_url,
+      notes: notes ?? null,
+    })
+    .eq("id", deliveryId)
+    .eq("po_id", poId)
+    .select("id, dc_number, dc_date, file_url, notes")
+    .single();
+
+  if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+  await logAudit(supabase, {
+    entityType: "purchase_order",
+    entityId: poId,
+    action: "update",
+    performedBy: dbUser.id,
+    changes: {
+      dc_number: { old: receipt.dc_number, new: updated.dc_number },
+      dc_date: { old: receipt.dc_date, new: updated.dc_date },
+      file_url: { old: receipt.file_url, new: updated.file_url },
+      notes: { old: receipt.notes, new: updated.notes },
+    },
+  });
+
+  return NextResponse.json({ data: updated });
 }
 
 export async function DELETE(
