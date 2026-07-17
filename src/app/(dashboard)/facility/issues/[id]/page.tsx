@@ -37,12 +37,12 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
   REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
-  STATUS_ACTION_PRIORITY,
+  STATUS_ACTION_PRIORITY, getTatStatus,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import type {
@@ -146,7 +146,18 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [extendReason, setExtendReason] = useState<FacilityTatReason | "">("");
   const [extendExplanation, setExtendExplanation] = useState("");
   const [extending, setExtending] = useState(false);
+  // Defaults to true (hidden) until the effect below checks localStorage, so
+  // the hint never flashes on for a user who already dismissed it.
+  const [extendHintDismissed, setExtendHintDismissed] = useState(true);
   const assetFetchedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setExtendHintDismissed(localStorage.getItem("facility_extend_hint_dismissed") === "1");
+  }, []);
+  const dismissExtendHint = () => {
+    localStorage.setItem("facility_extend_hint_dismissed", "1");
+    setExtendHintDismissed(true);
+  };
 
   const fetchIssue = async () => {
     setLoading(true);
@@ -242,6 +253,20 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   }, [assignOpen, collabOpen]);
 
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
+
+  // Live-ticks the TAT banner's status (on_track/at_risk/overdue) so it
+  // doesn't go stale while a technician just sits on the page. Local
+  // interval, not a shared hook — this ticks indefinitely past deadline and
+  // derives a category, a different enough shape from the claim countdown
+  // (which counts to zero and fires a terminal action) to not share one.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, [open]);
+  const tatStatus = open ? getTatStatus(issue?.sla_target_at, now) : null;
+
   const allowedNext = useMemo(() => issue ? nextStatusOptions(issue.status) : [], [issue]);
   const primaryStatusAction = useMemo(
     () => STATUS_ACTION_PRIORITY.find((s) => allowedNext.includes(s)) ?? null,
@@ -268,6 +293,18 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const canPassCard = ["admin", "manager"].includes(currentUser?.role ?? "");
 
   const claimCountdownMs = useClaimCountdown(isUnowned ? issue?.claim_sla_target_at : null);
+
+  // Self-claim ownership action available to ANY user (claim if unowned, take
+  // over if owned by someone else). For override tier, moving ownership to
+  // the right person — Assign/Reassign — is the prime action instead; the
+  // self-claim option doesn't disappear, it just drops to a secondary slot.
+  const ownershipAction: { type: "claim" | "take_over"; label: string } | null = isUnowned
+    ? { type: "claim", label: "Claim this ticket" }
+    : (!isOwner && issue?.assigned_to && open)
+    ? { type: "take_over", label: "Take over" }
+    : null;
+  const showAssignAsPrimary = isOverrideTier && !!ownershipAction;
+  const assignLabel = issue?.assignee?.full_name ? "Reassign" : "Assign to…";
 
   // ---- transitions ---------------------------------------------------------
   const changeStatus = async (next: FacilityIssueStatus, extra?: Record<string, unknown>) => {
@@ -496,9 +533,22 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     );
   }
 
-  const slaChipClass = issue.sla_breached
-    ? "bg-red-50 text-red-700 ring-red-200"
-    : "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  // Drives the full-width TAT banner below the header (not a small pill —
+  // deadline urgency deserves the same visual weight as ownership urgency).
+  const tatBannerStyle = tatStatus === "overdue"
+    ? { wrap: "bg-red-50 border-red-200", icon: "text-red-600", text: "text-red-700" }
+    : tatStatus === "at_risk"
+    ? { wrap: "bg-amber-50 border-amber-200", icon: "text-amber-600", text: "text-amber-700" }
+    : { wrap: "bg-emerald-50 border-emerald-200", icon: "text-emerald-600", text: "text-emerald-700" };
+
+  // Delegated tasks always have a creator-supplied due date (mandatory at
+  // creation, no auto-compute path) — tat_manual_override only applies to
+  // reported_problem tickets, which default to a priority-based auto value
+  // unless the reporter explicitly overrode it at creation time.
+  const creatorName = issue.reporter?.full_name ?? issue.reporter_name ?? "creator";
+  const tatSourceLabel = issue.task_type === "delegated_task" || issue.tat_manual_override
+    ? `Set by ${creatorName}`
+    : "Auto-set from priority default";
 
   const statusLabel = isUnowned ? "Unclaimed" : STATUS_STYLES[issue.status].label;
   const statusChipClass = isUnowned ? "bg-amber-50 text-amber-700 ring-amber-200" : STATUS_STYLES[issue.status].chip;
@@ -520,12 +570,6 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               <span className={cn("h-1.5 w-1.5 rounded-full", PRIORITY_STYLES[issue.priority].dot)} />
               {PRIORITY_STYLES[issue.priority].label}
             </span>
-            {open && issue.sla_target_at && (
-              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 inline-flex items-center", slaChipClass)}>
-                <Clock className="h-2.5 w-2.5 mr-0.5" /> {issue.sla_breached ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
-                <span className="opacity-60 ml-0.5">(TAT)</span>
-              </span>
-            )}
             {issue.kpi_points != null && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium inline-flex items-center gap-1", kpiPointsStyle(issue.kpi_points).className)}>
                 <Trophy className="h-2.5 w-2.5" /> {kpiPointsStyle(issue.kpi_points).label}
@@ -538,6 +582,29 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
       </div>
+
+      {/* ───── TAT status banner — bold, full-width, same treatment as the claim
+          countdown banner below. Replaces the small header pill; deadline
+          urgency deserves the same visual weight as ownership urgency. Second
+          line answers "what exact date/time, and who set it" — the relative
+          countdown alone doesn't say whether a human chose this deadline or
+          the system defaulted it from priority. ──────────────────────────── */}
+      {open && issue.sla_target_at && (
+        <div className={cn("rounded-lg border px-4 py-3 flex items-start gap-3", tatBannerStyle.wrap)}>
+          <Clock className={cn("h-4 w-4 shrink-0 mt-0.5", tatBannerStyle.icon)} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={cn("text-sm font-semibold", tatBannerStyle.text)}>
+                {tatStatus === "overdue" ? "Overdue" : "Due"} {timeUntil(issue.sla_target_at)}
+              </span>
+              <span className="text-xs text-muted-foreground">(TAT)</span>
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {formatDateTime(issue.sla_target_at)} · {tatSourceLabel}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ───── Reporter — kept near the top so contact info is reachable without
           scrolling past 8 other cards; this is who to call/message first. ── */}
@@ -576,16 +643,26 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       )}
 
       {/* ───── Action row — one obvious primary, up to 2 secondary, rest in
-          "More actions" so a phone never shows 6+ same-weight buttons. ──── */}
-      <div className="flex items-stretch gap-2">
+          "More actions" so a phone never shows 6+ same-weight buttons.
+          For override tier, moving ownership to the right person (Assign/
+          Reassign) is the prime action on an unowned or other-owned ticket —
+          not self-claiming, which drops to a secondary slot instead. ────── */}
+      <div className="flex items-stretch gap-2 flex-wrap">
         {/* Primary — the single obvious next step */}
-        {isUnowned ? (
-          <Button onClick={claimTicket} disabled={busy} className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 text-white">
-            <User className="h-4 w-4 mr-1" /> Claim this ticket
+        {showAssignAsPrimary ? (
+          <Button onClick={() => setAssignOpen(true)} disabled={busy} className="flex-1 sm:flex-none">
+            <User className="h-4 w-4 mr-1" /> {assignLabel}
           </Button>
-        ) : !isOwner && issue.assigned_to && open ? (
-          <Button onClick={takeOver} disabled={busy} className="flex-1 sm:flex-none">
-            <User className="h-4 w-4 mr-1" /> Take over
+        ) : ownershipAction ? (
+          <Button
+            onClick={ownershipAction.type === "claim" ? claimTicket : takeOver}
+            disabled={busy}
+            className={cn(
+              "flex-1 sm:flex-none",
+              ownershipAction.type === "claim" && "bg-amber-600 hover:bg-amber-700 text-white",
+            )}
+          >
+            <User className="h-4 w-4 mr-1" /> {ownershipAction.label}
           </Button>
         ) : canAct && primaryStatusAction ? (
           <Button
@@ -598,7 +675,19 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           </Button>
         ) : null}
 
-        {/* Secondary — up to 2 frequent actions stay visible */}
+        {/* Secondary — up to 2-3 frequent actions stay visible. Self-claim
+            reappears here (not gone, just demoted) when Assign/Reassign took
+            the primary slot. */}
+        {showAssignAsPrimary && ownershipAction && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={ownershipAction.type === "claim" ? claimTicket : takeOver}
+            disabled={busy}
+          >
+            <User className="h-4 w-4 mr-1" /> {ownershipAction.label}
+          </Button>
+        )}
         {canNudge && (
           <Button size="sm" variant="outline" onClick={sendNudge} disabled={nudging}>
             {nudging ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
@@ -607,11 +696,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         )}
         {canExtend && (
           <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)} disabled={busy}>
-            <TimerReset className="h-4 w-4 mr-1" /> Extend ({2 - (issue.tat_extension_count ?? 0)} left)
+            <TimerReset className="h-4 w-4 mr-1" /> Push back deadline ({2 - (issue.tat_extension_count ?? 0)} left)
           </Button>
         )}
 
-        {/* Overflow — everything else */}
+        {/* Overflow — everything else. Assign/Reassign still lives here for
+            override tier when it's NOT already shown as primary above (e.g.
+            they already own the ticket, or it's resolved/closed). */}
         {(isOverrideTier || (canAct && overflowStatusActions.length > 0)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -628,15 +719,36 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {STATUS_ACTION_LABEL[s]}
                 </DropdownMenuItem>
               ))}
-              {isOverrideTier && (
+              {isOverrideTier && !showAssignAsPrimary && (
                 <DropdownMenuItem onClick={() => setAssignOpen(true)}>
-                  {issue.assignee?.full_name ? "Reassign" : "Assign to…"}
+                  {assignLabel}
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </div>
+
+      {/* One-time hint explaining "Push back deadline" — dismissed once,
+          never shown again for this user. Doesn't gate visibility by time
+          (explicit product decision — always-available once owned), just
+          teaches what the button does the first time someone sees it. */}
+      {canExtend && !extendHintDismissed && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span className="flex-1">
+            Running behind? &ldquo;Push back deadline&rdquo; gives this ticket more time — up to 2 uses per ticket.
+          </span>
+          <button
+            type="button"
+            onClick={dismissExtendHint}
+            className="text-amber-700 hover:text-amber-900 shrink-0"
+            aria-label="Dismiss hint"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Owned-by-other notice (not owner, not override tier) */}
       {!isUnowned && !isOwner && !isOverrideTier && issue.assigned_to && (
