@@ -188,7 +188,7 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
         toast.error(err.error || "Failed to queue retry");
         return;
       }
-      toast.success("Job queued for retry — will process on the next minute tick");
+      toast.success("Retrying now — this should update within a few seconds");
       // Re-open polling if run was terminal
       if (run && TERMINAL_STATUSES.has(run.status)) {
         setRun((r) => r ? { ...r, status: "running" } : r);
