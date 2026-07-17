@@ -1500,7 +1500,12 @@ function buildDigestHtml(
   ].join("");
 
   // ── Center-wise ─────────────────────────────────────────────────────────
-  const locationRows = locations.map(l => `
+  // Same "only show centers with something to report" filter already used
+  // for Yesterday's Collections (activeYesterdayLocations above) — most
+  // locations sit at zero on any given day, and a table that's mostly
+  // zero rows reads as a data problem rather than a quiet day.
+  const activeLocationsToday = locations.filter(l => l.collections > 0 || l.leads > 0 || l.bookings > 0);
+  const locationRows = activeLocationsToday.map(l => `
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;">${l.name}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#015E65;font-size:13px;text-align:right;">${rupees(l.collections)}</td>
@@ -1627,6 +1632,7 @@ function buildDigestHtml(
     </table>
 
     <!-- Center-wise -->
+    ${activeLocationsToday.length > 0 ? `
     ${sectionHeader("Center-wise (Today)")}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
@@ -1636,7 +1642,7 @@ function buildDigestHtml(
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Bookings</td>
       </tr>
       ${locationRows}
-    </table>
+    </table>` : ""}
 
     <!-- Outstanding Client Invoices -->
     ${clientInvHtml}
