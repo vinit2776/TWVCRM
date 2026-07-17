@@ -146,7 +146,18 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [extendReason, setExtendReason] = useState<FacilityTatReason | "">("");
   const [extendExplanation, setExtendExplanation] = useState("");
   const [extending, setExtending] = useState(false);
+  // Defaults to true (hidden) until the effect below checks localStorage, so
+  // the hint never flashes on for a user who already dismissed it.
+  const [extendHintDismissed, setExtendHintDismissed] = useState(true);
   const assetFetchedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setExtendHintDismissed(localStorage.getItem("facility_extend_hint_dismissed") === "1");
+  }, []);
+  const dismissExtendHint = () => {
+    localStorage.setItem("facility_extend_hint_dismissed", "1");
+    setExtendHintDismissed(true);
+  };
 
   const fetchIssue = async () => {
     setLoading(true);
@@ -268,6 +279,18 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const canPassCard = ["admin", "manager"].includes(currentUser?.role ?? "");
 
   const claimCountdownMs = useClaimCountdown(isUnowned ? issue?.claim_sla_target_at : null);
+
+  // Self-claim ownership action available to ANY user (claim if unowned, take
+  // over if owned by someone else). For override tier, moving ownership to
+  // the right person — Assign/Reassign — is the prime action instead; the
+  // self-claim option doesn't disappear, it just drops to a secondary slot.
+  const ownershipAction: { type: "claim" | "take_over"; label: string } | null = isUnowned
+    ? { type: "claim", label: "Claim this ticket" }
+    : (!isOwner && issue?.assigned_to && open)
+    ? { type: "take_over", label: "Take over" }
+    : null;
+  const showAssignAsPrimary = isOverrideTier && !!ownershipAction;
+  const assignLabel = issue?.assignee?.full_name ? "Reassign" : "Assign to…";
 
   // ---- transitions ---------------------------------------------------------
   const changeStatus = async (next: FacilityIssueStatus, extra?: Record<string, unknown>) => {
@@ -576,16 +599,26 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       )}
 
       {/* ───── Action row — one obvious primary, up to 2 secondary, rest in
-          "More actions" so a phone never shows 6+ same-weight buttons. ──── */}
-      <div className="flex items-stretch gap-2">
+          "More actions" so a phone never shows 6+ same-weight buttons.
+          For override tier, moving ownership to the right person (Assign/
+          Reassign) is the prime action on an unowned or other-owned ticket —
+          not self-claiming, which drops to a secondary slot instead. ────── */}
+      <div className="flex items-stretch gap-2 flex-wrap">
         {/* Primary — the single obvious next step */}
-        {isUnowned ? (
-          <Button onClick={claimTicket} disabled={busy} className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 text-white">
-            <User className="h-4 w-4 mr-1" /> Claim this ticket
+        {showAssignAsPrimary ? (
+          <Button onClick={() => setAssignOpen(true)} disabled={busy} className="flex-1 sm:flex-none">
+            <User className="h-4 w-4 mr-1" /> {assignLabel}
           </Button>
-        ) : !isOwner && issue.assigned_to && open ? (
-          <Button onClick={takeOver} disabled={busy} className="flex-1 sm:flex-none">
-            <User className="h-4 w-4 mr-1" /> Take over
+        ) : ownershipAction ? (
+          <Button
+            onClick={ownershipAction.type === "claim" ? claimTicket : takeOver}
+            disabled={busy}
+            className={cn(
+              "flex-1 sm:flex-none",
+              ownershipAction.type === "claim" && "bg-amber-600 hover:bg-amber-700 text-white",
+            )}
+          >
+            <User className="h-4 w-4 mr-1" /> {ownershipAction.label}
           </Button>
         ) : canAct && primaryStatusAction ? (
           <Button
@@ -598,7 +631,19 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           </Button>
         ) : null}
 
-        {/* Secondary — up to 2 frequent actions stay visible */}
+        {/* Secondary — up to 2-3 frequent actions stay visible. Self-claim
+            reappears here (not gone, just demoted) when Assign/Reassign took
+            the primary slot. */}
+        {showAssignAsPrimary && ownershipAction && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={ownershipAction.type === "claim" ? claimTicket : takeOver}
+            disabled={busy}
+          >
+            <User className="h-4 w-4 mr-1" /> {ownershipAction.label}
+          </Button>
+        )}
         {canNudge && (
           <Button size="sm" variant="outline" onClick={sendNudge} disabled={nudging}>
             {nudging ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
@@ -607,11 +652,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         )}
         {canExtend && (
           <Button size="sm" variant="outline" onClick={() => setExtendOpen(true)} disabled={busy}>
-            <TimerReset className="h-4 w-4 mr-1" /> Extend ({2 - (issue.tat_extension_count ?? 0)} left)
+            <TimerReset className="h-4 w-4 mr-1" /> Push back deadline ({2 - (issue.tat_extension_count ?? 0)} left)
           </Button>
         )}
 
-        {/* Overflow — everything else */}
+        {/* Overflow — everything else. Assign/Reassign still lives here for
+            override tier when it's NOT already shown as primary above (e.g.
+            they already own the ticket, or it's resolved/closed). */}
         {(isOverrideTier || (canAct && overflowStatusActions.length > 0)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -628,15 +675,36 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {STATUS_ACTION_LABEL[s]}
                 </DropdownMenuItem>
               ))}
-              {isOverrideTier && (
+              {isOverrideTier && !showAssignAsPrimary && (
                 <DropdownMenuItem onClick={() => setAssignOpen(true)}>
-                  {issue.assignee?.full_name ? "Reassign" : "Assign to…"}
+                  {assignLabel}
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </div>
+
+      {/* One-time hint explaining "Push back deadline" — dismissed once,
+          never shown again for this user. Doesn't gate visibility by time
+          (explicit product decision — always-available once owned), just
+          teaches what the button does the first time someone sees it. */}
+      {canExtend && !extendHintDismissed && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span className="flex-1">
+            Running behind? &ldquo;Push back deadline&rdquo; gives this ticket more time — up to 2 uses per ticket.
+          </span>
+          <button
+            type="button"
+            onClick={dismissExtendHint}
+            className="text-amber-700 hover:text-amber-900 shrink-0"
+            aria-label="Dismiss hint"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Owned-by-other notice (not owner, not override tier) */}
       {!isUnowned && !isOwner && !isOverrideTier && issue.assigned_to && (
