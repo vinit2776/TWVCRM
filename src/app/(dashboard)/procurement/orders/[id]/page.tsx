@@ -49,6 +49,8 @@ type ActionType =
   | "record_service_report"
   | "add_invoice"
   | "reject_delivery"
+  | "edit_delivery"
+  | "edit_invoice"
   | "process_advance"
   | "approve_advance"
   | "reject_advance"
@@ -65,6 +67,8 @@ interface TimelineItem {
   fileUrl?: string | null;
   fileLabel?: string;
   deliveryReceiptId?: string;
+  billId?: string;
+  billApprovalStatus?: string;
 }
 
 function buildTimeline(
@@ -169,6 +173,8 @@ function buildTimeline(
       subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved for Payment" : bill.approval_status === "rejected" ? " · Rejected" : " · Pending Payment Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
       fileUrl: bill.invoice_file_url,
       fileLabel: "View Invoice",
+      billId: bill.id,
+      billApprovalStatus: bill.approval_status,
     });
   }
 
@@ -325,6 +331,29 @@ export default function PurchaseOrderDetailPage() {
   const invFileRef = useRef<HTMLInputElement>(null);
   // Service PO invoice: which service report this invoice covers
   const [invServiceReportId, setInvServiceReportId] = useState("");
+
+  // Edit Delivery (correct a wrong DC upload — file/number/date/notes only, no qty changes)
+  const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null);
+  const [editDcNumber, setEditDcNumber] = useState("");
+  const [editDcDate, setEditDcDate] = useState("");
+  const [editDcFile, setEditDcFile] = useState<File | null>(null);
+  const [editDcExistingUrl, setEditDcExistingUrl] = useState("");
+  const [editDcNotes, setEditDcNotes] = useState("");
+  const [editDcSaving, setEditDcSaving] = useState(false);
+  const editDcFileRef = useRef<HTMLInputElement>(null);
+
+  // Edit Invoice (correct a wrong invoice upload — locked once approved for payment)
+  const [editBillId, setEditBillId] = useState<string | null>(null);
+  const [editInvNumber, setEditInvNumber] = useState("");
+  const [editInvDate, setEditInvDate] = useState("");
+  const [editInvDueDate, setEditInvDueDate] = useState("");
+  const [editInvAmount, setEditInvAmount] = useState("");
+  const [editInvFile, setEditInvFile] = useState<File | null>(null);
+  const [editInvExistingUrl, setEditInvExistingUrl] = useState("");
+  const [editInvNotes, setEditInvNotes] = useState("");
+  const [editInvLoading, setEditInvLoading] = useState(false);
+  const [editInvSaving, setEditInvSaving] = useState(false);
+  const editInvFileRef = useRef<HTMLInputElement>(null);
 
   // Process Advance
   const [advancePaymentDate, setAdvancePaymentDate] = useState("");
@@ -547,6 +576,66 @@ export default function PurchaseOrderDetailPage() {
     }
   };
 
+  // ── Edit Delivery (correct a wrong DC upload) ──────────────────────────────
+  const openEditDelivery = (deliveryId: string) => {
+    const receipt = (po?.po_delivery_receipts ?? []).find((dr) => dr.id === deliveryId);
+    if (!receipt) return;
+    setEditDeliveryId(deliveryId);
+    setEditDcNumber(receipt.dc_number ?? "");
+    setEditDcDate(receipt.dc_date ?? "");
+    setEditDcNotes(receipt.notes ?? "");
+    setEditDcExistingUrl(receipt.file_url ?? "");
+    setEditDcFile(null);
+    setActionDialog("edit_delivery");
+  };
+
+  const submitEditDelivery = async () => {
+    if (!editDeliveryId) return;
+    if (!editDcDate) { toast.error("Delivery date is required"); return; }
+    if (!editDcFile && !editDcExistingUrl) { toast.error("Please upload the delivery challan file"); return; }
+
+    setEditDcSaving(true);
+    try {
+      let fileUrl = editDcExistingUrl;
+      if (editDcFile) {
+        try {
+          fileUrl = await uploadFile(editDcFile, "delivery-challans");
+        } catch (err) {
+          toast.error(`File upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+          return;
+        }
+      }
+
+      const res = await fetch(
+        `/api/procurement/orders/${id}/deliveries?delivery_id=${editDeliveryId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dc_number: editDcNumber.trim() || null,
+            dc_date: editDcDate,
+            file_url: fileUrl,
+            notes: editDcNotes.trim() || null,
+          }),
+        }
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(typeof json.error === "string" ? json.error : "Failed to update delivery challan");
+        return;
+      }
+
+      toast.success("Delivery challan corrected");
+      setActionDialog(null);
+      setEditDeliveryId(null);
+      setEditDcFile(null);
+      if (editDcFileRef.current) editDcFileRef.current.value = "";
+      await fetchPo();
+    } finally {
+      setEditDcSaving(false);
+    }
+  };
+
   // ── Record Service Report ──────────────────────────────────────────────────
   const submitServiceReport = async () => {
     const cycleNum = parseInt(srCycleNumber);
@@ -687,6 +776,84 @@ export default function PurchaseOrderDetailPage() {
       await fetchPo();
     } finally {
       setInvUploading(false);
+    }
+  };
+
+  // ── Edit Invoice (correct a wrong invoice upload) ──────────────────────────
+  const openEditInvoice = async (billId: string) => {
+    setEditBillId(billId);
+    setActionDialog("edit_invoice");
+    setEditInvLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${billId}`);
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to load invoice details");
+        setActionDialog(null);
+        return;
+      }
+      const bill = json.data;
+      setEditInvNumber(bill.invoice_number ?? "");
+      setEditInvDate(bill.invoice_date ?? "");
+      setEditInvDueDate(bill.due_date ?? "");
+      setEditInvAmount(bill.total_amount != null ? String(bill.total_amount) : "");
+      setEditInvNotes(bill.notes ?? "");
+      setEditInvExistingUrl(bill.invoice_file_url ?? "");
+      setEditInvFile(null);
+    } finally {
+      setEditInvLoading(false);
+    }
+  };
+
+  const submitEditInvoice = async () => {
+    if (!editBillId) return;
+    if (!editInvDate) { toast.error("Invoice date is required"); return; }
+    const amount = parseFloat(editInvAmount);
+    if (!editInvAmount || isNaN(amount) || amount <= 0) {
+      toast.error("Invoice amount must be greater than 0");
+      return;
+    }
+    if (!editInvFile && !editInvExistingUrl) { toast.error("Please upload the vendor invoice file"); return; }
+
+    setEditInvSaving(true);
+    try {
+      let fileUrl = editInvExistingUrl;
+      if (editInvFile) {
+        try {
+          fileUrl = await uploadFile(editInvFile, "vendor-invoices");
+        } catch (err) {
+          toast.error(`File upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+          return;
+        }
+      }
+
+      const res = await fetch(`/api/procurement/bills/${editBillId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "edit_invoice_details",
+          invoice_number: editInvNumber.trim() || null,
+          invoice_date: editInvDate,
+          due_date: editInvDueDate || null,
+          total_amount: amount,
+          notes: editInvNotes.trim() || null,
+          invoice_file_url: fileUrl,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(typeof json.error === "string" ? json.error : "Failed to update invoice");
+        return;
+      }
+
+      toast.success("Invoice corrected");
+      setActionDialog(null);
+      setEditBillId(null);
+      setEditInvFile(null);
+      if (editInvFileRef.current) editInvFileRef.current.value = "";
+      await fetchPo();
+    } finally {
+      setEditInvSaving(false);
     }
   };
 
@@ -1725,6 +1892,16 @@ export default function PurchaseOrderDetailPage() {
                             {item.fileLabel ?? "View Document"}
                           </a>
                         )}
+                        {item.deliveryReceiptId && !["invoice_approved", "cancelled", "partially_cancelled"].includes(po.status) && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            onClick={() => openEditDelivery(item.deliveryReceiptId!)}
+                          >
+                            <Edit3 className="h-3 w-3" />
+                            Edit
+                          </button>
+                        )}
                         {item.deliveryReceiptId && ["partially_received", "received"].includes(po.status) && (
                           <button
                             type="button"
@@ -1733,6 +1910,16 @@ export default function PurchaseOrderDetailPage() {
                           >
                             <Undo2 className="h-3 w-3" />
                             Reject
+                          </button>
+                        )}
+                        {item.billId && item.billApprovalStatus !== "approved" && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            onClick={() => openEditInvoice(item.billId!)}
+                          >
+                            <Edit3 className="h-3 w-3" />
+                            Edit
                           </button>
                         )}
                       </div>
@@ -2292,6 +2479,214 @@ export default function PurchaseOrderDetailPage() {
             <Button disabled={invUploading} onClick={submitInvoice}>
               {invUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Save Invoice
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Delivery dialog (correct a wrong DC upload) ───────────────── */}
+      <Dialog
+        open={actionDialog === "edit_delivery"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setEditDeliveryId(null);
+          setEditDcFile(null);
+          if (editDcFileRef.current) editDcFileRef.current.value = "";
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Delivery Challan — {po?.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-xs text-muted-foreground">
+              Corrects the challan on file — quantities received are unaffected. To fix a wrong
+              quantity, reject this delivery and record it again.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>DC Number</Label>
+                <Input
+                  placeholder="Challan no. (optional)"
+                  value={editDcNumber}
+                  onChange={(e) => setEditDcNumber(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>DC Date <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={editDcDate}
+                  onChange={(e) => setEditDcDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Delivery Challan File <span className="text-red-500">*</span></Label>
+              {editDcFile ? (
+                <FileAttachment
+                  file={editDcFile}
+                  onRemove={() => { setEditDcFile(null); if (editDcFileRef.current) editDcFileRef.current.value = ""; }}
+                />
+              ) : (
+                <>
+                  {editDcExistingUrl && (
+                    <a
+                      href={editDcExistingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline mb-1.5"
+                    >
+                      <Paperclip className="h-3 w-3" />
+                      View current file
+                    </a>
+                  )}
+                  <FileDropzone
+                    fileRef={editDcFileRef}
+                    label="Click to replace with a corrected file (PDF, JPG, PNG — max 10 MB)"
+                    onChange={setEditDcFile}
+                  />
+                </>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Input
+                placeholder="Optional notes..."
+                value={editDcNotes}
+                onChange={(e) => setEditDcNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setActionDialog(null); setEditDeliveryId(null); setEditDcFile(null); }}
+            >
+              Cancel
+            </Button>
+            <Button disabled={editDcSaving} onClick={submitEditDelivery}>
+              {editDcSaving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save Correction
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Invoice dialog (correct a wrong invoice upload) ───────────── */}
+      <Dialog
+        open={actionDialog === "edit_invoice"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setEditBillId(null);
+          setEditInvFile(null);
+          if (editInvFileRef.current) editInvFileRef.current.value = "";
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Invoice — {po?.po_number}</DialogTitle>
+          </DialogHeader>
+          {editInvLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-4 py-2">
+              <p className="text-xs text-muted-foreground">
+                Correcting a pending or rejected invoice. This is locked once the invoice has been
+                approved for payment.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Invoice Number</Label>
+                  <Input
+                    placeholder="Vendor's invoice #"
+                    value={editInvNumber}
+                    onChange={(e) => setEditInvNumber(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Invoice Amount (₹) <span className="text-red-500">*</span></Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={editInvAmount}
+                    onChange={(e) => setEditInvAmount(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Invoice Date <span className="text-red-500">*</span></Label>
+                  <Input
+                    type="date"
+                    value={editInvDate}
+                    onChange={(e) => setEditInvDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Due Date</Label>
+                  <Input
+                    type="date"
+                    value={editInvDueDate}
+                    onChange={(e) => setEditInvDueDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Invoice File <span className="text-red-500">*</span></Label>
+                {editInvFile ? (
+                  <FileAttachment
+                    file={editInvFile}
+                    onRemove={() => { setEditInvFile(null); if (editInvFileRef.current) editInvFileRef.current.value = ""; }}
+                  />
+                ) : (
+                  <>
+                    {editInvExistingUrl && (
+                      <a
+                        href={editInvExistingUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline mb-1.5"
+                      >
+                        <Paperclip className="h-3 w-3" />
+                        View current file
+                      </a>
+                    )}
+                    <FileDropzone
+                      fileRef={editInvFileRef}
+                      label="Click to replace with a corrected file (PDF, JPG, PNG — max 10 MB)"
+                      onChange={setEditInvFile}
+                    />
+                  </>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Notes</Label>
+                <Textarea
+                  placeholder="Any additional notes..."
+                  value={editInvNotes}
+                  onChange={(e) => setEditInvNotes(e.target.value)}
+                  rows={2}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setActionDialog(null); setEditBillId(null); setEditInvFile(null); }}
+            >
+              Cancel
+            </Button>
+            <Button disabled={editInvSaving || editInvLoading} onClick={submitEditInvoice}>
+              {editInvSaving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save Correction
             </Button>
           </DialogFooter>
         </DialogContent>

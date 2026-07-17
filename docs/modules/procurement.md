@@ -281,6 +281,8 @@ Computed at API time (not DB columns): `already_ordered_qty`, `remaining_qty`.
 | `received_by` | UUID NOT NULL → users | |
 | `received_at` | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 
+`dc_number`/`dc_date`/`file_url`/`notes` can be corrected in place via `PATCH /api/procurement/orders/[id]/deliveries?delivery_id=` (admin/manager/office_admin) — used to fix a wrong upload without touching quantities or stock. Locked (422) once the PO's `status` reaches `invoice_approved`. Quantity corrections still go through reject (`DELETE`, same endpoint) + re-record, which handles stock/PO-status reversal.
+
 #### `po_delivery_receipt_items`
 | Column | Type | Notes |
 |--------|------|-------|
@@ -457,9 +459,13 @@ pending → approved   (admin/manager — approve or approve_partial)
 pending → rejected   (admin/manager — reject with reason)
 approved → approved  (approve_balance — elevates partial approval to full)
 rejected → pending   (update_amount_and_resubmit — corrects amount and re-queues)
+pending → pending    (edit_invoice_details — corrects invoice_number/date/due_date/amount/file/notes)
+rejected → pending   (edit_invoice_details — same correction, also resubmits for approval)
 ```
 
 **Special case**: When a service PO bill is rejected, the bill is **deleted** from the database (not marked rejected). The response returns `{ data: null }`. Client must navigate away.
+
+**Correcting a wrong upload**: `edit_invoice_details` (PATCH action on `/api/procurement/bills/[id]`, admin/manager/office_admin) lets you fix a misread invoice number/date/amount or swap the uploaded file for `pending` and `rejected` bills. It is blocked (422) once `approval_status = 'approved'` — the invoice has already been handed to Finance for payment at that point. Re-validates the PO ceiling and duplicate-invoice-number rules exactly like bill creation.
 
 ### Vendor Bill Payment Status
 
