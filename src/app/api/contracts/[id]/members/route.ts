@@ -100,6 +100,21 @@ export async function POST(
     return NextResponse.json({ error: memberErr?.message ?? "Failed to create member" }, { status: 500 });
   }
 
+  // Mirror into Contract Contacts so members don't need re-entering there.
+  // Name/phone/email stay owned by the member record (edited only here);
+  // designation/role/notes are free to customize independently on the contact.
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  await admin.from("contract_contacts").insert({
+    contract_id: contractId,
+    full_name: parsed.data.name,
+    email: parsed.data.email || null,
+    phone: parsed.data.phone,
+    contact_role: "occupant",
+    is_active: true,
+    source_member_id: member.id,
+    created_by: dbUser?.id || null,
+  });
+
   // Provision on all COSEC devices at this location (fire-and-forget)
   if (contract.status === "active" && contract.location_id) {
     (async () => {
@@ -191,6 +206,10 @@ export async function DELETE(
 
   // Deactivate member
   await admin.from("contract_members").update({ is_active: false, updated_at: now }).eq("id", member_id);
+
+  // Deactivate the mirrored Contract Contacts entry — kept as a historical
+  // record (not deleted), consistent with how vouchers/COSEC are handled below.
+  await admin.from("contract_contacts").update({ is_active: false, updated_at: now }).eq("source_member_id", member_id);
 
   // Revoke active voucher issuance linked to this member (fire-and-forget)
   (async () => {

@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Fingerprint,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,6 +45,7 @@ interface ContractContact {
   contact_role: string;
   notes: string | null;
   is_active: boolean;
+  source_member_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -178,6 +180,9 @@ export function ContractContactsPanel({
     setShowForm(true);
   };
 
+  const editingContact = editingId ? contacts.find((c) => c.id === editingId) : null;
+  const isEditingMemberLinked = !!editingContact?.source_member_id;
+
   const cancelForm = () => {
     setShowForm(false);
     setEditingId(null);
@@ -283,6 +288,12 @@ export function ContractContactsPanel({
               <p className="text-sm font-medium">
                 {editingId ? "Edit Contact" : "New Contact"}
               </p>
+              {isEditingMemberLinked && (
+                <p className="text-xs text-muted-foreground bg-muted/60 rounded px-2 py-1.5">
+                  Name, email, and phone come from Members &amp; Access Control — edit them there.
+                  Designation, role, and notes are specific to this contact entry.
+                </p>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs">
@@ -295,6 +306,7 @@ export function ContractContactsPanel({
                     }
                     placeholder="John Doe"
                     className="mt-1"
+                    disabled={isEditingMemberLinked}
                   />
                 </div>
                 <div>
@@ -318,6 +330,7 @@ export function ContractContactsPanel({
                     }
                     placeholder="email@example.com"
                     className="mt-1"
+                    disabled={isEditingMemberLinked}
                   />
                 </div>
                 <div>
@@ -329,6 +342,7 @@ export function ContractContactsPanel({
                     }
                     placeholder="+91 ..."
                     className="mt-1"
+                    disabled={isEditingMemberLinked}
                   />
                 </div>
                 <div>
@@ -403,13 +417,26 @@ export function ContractContactsPanel({
               {contacts.map((c) => (
                 <div
                   key={c.id}
-                  className="flex items-start justify-between gap-3 py-3 first:pt-0"
+                  className={`flex items-start justify-between gap-3 py-3 first:pt-0 ${
+                    !c.is_active ? "opacity-50" : ""
+                  }`}
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="text-sm font-medium">{c.full_name}</span>
                       {roleBadge(c.contact_role)}
+                      {c.source_member_id && (
+                        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-teal-100 text-teal-800">
+                          <Fingerprint className="h-3 w-3" />
+                          From Members
+                        </span>
+                      )}
+                      {!c.is_active && (
+                        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-gray-200 text-gray-600">
+                          Removed member
+                        </span>
+                      )}
                       {c.designation && (
                         <span className="text-xs text-muted-foreground flex items-center gap-1">
                           <Briefcase className="h-3 w-3" />
@@ -455,8 +482,10 @@ export function ContractContactsPanel({
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      className="h-7 w-7 text-destructive hover:text-destructive disabled:opacity-30"
                       onClick={() => handleDelete(c.id)}
+                      disabled={!!c.source_member_id}
+                      title={c.source_member_id ? "Remove this person from Members & Access Control instead" : undefined}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
