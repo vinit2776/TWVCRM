@@ -39,22 +39,22 @@ export async function GET(request: Request) {
 
   const supabase = await createAdminClient();
 
-  // Fetch recipients
-  const { data: setting } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "digest_recipients")
-    .single();
+  // Recipients — every active admin, resolved fresh on each send so the list
+  // never drifts from who actually holds the role (previously a manually
+  // maintained app_settings list, which had gone stale). Other crons still
+  // read the static `digest_recipients` setting independently — unaffected.
+  const { data: admins } = await supabase
+    .from("users")
+    .select("email")
+    .eq("role", "admin")
+    .eq("is_active", true);
 
-  let recipients: string[] = [];
-  try {
-    recipients = JSON.parse(setting?.value || "[]");
-  } catch {
-    recipients = [];
-  }
+  const recipients = (admins || [])
+    .map((u: { email: string }) => u.email)
+    .filter(Boolean);
 
   if (recipients.length === 0) {
-    return NextResponse.json({ error: "No digest recipients configured" }, { status: 400 });
+    return NextResponse.json({ error: "No active admin recipients found" }, { status: 400 });
   }
 
   // Aggregate data for 3 date windows + week-to-date
