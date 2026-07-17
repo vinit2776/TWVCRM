@@ -6,6 +6,11 @@ import { createClient } from "@/lib/supabase/server";
  * Personal KPI score for the current user — Work Orders + Tasks combined
  * (both live in facility_issues, distinguished only by task_type). Private
  * by design: this endpoint only ever returns the caller's own numbers.
+ *
+ * Reads facility_issue_kpi_credits rather than filtering facility_issues by
+ * assigned_to directly, so department-roster members who collaborated on a
+ * ticket (role 'member', weighted below the primary assignee) are counted
+ * alongside tickets the user was the primary assignee on (role 'primary').
  */
 export async function GET() {
   const supabase = await createClient();
@@ -17,10 +22,9 @@ export async function GET() {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const { data: rows, error } = await supabase
-    .from("facility_issues")
-    .select("kpi_points, resolved_at, task_type")
-    .eq("assigned_to", dbUser.id)
-    .not("kpi_points", "is", null);
+    .from("facility_issue_kpi_credits")
+    .select("role, points, issue:facility_issues!facility_issue_kpi_credits_issue_id_fkey(resolved_at)")
+    .eq("user_id", dbUser.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const monthStart = new Date();
@@ -33,10 +37,11 @@ export async function GET() {
   let monthTicketsScored = 0;
 
   for (const row of rows ?? []) {
-    const points = Number(row.kpi_points) || 0;
+    const points = Number(row.points) || 0;
+    const resolvedAt = (row.issue as unknown as { resolved_at: string | null } | null)?.resolved_at;
     totalPoints += points;
     ticketsScored += 1;
-    if (row.resolved_at && new Date(row.resolved_at) >= monthStart) {
+    if (resolvedAt && new Date(resolvedAt) >= monthStart) {
       monthPoints += points;
       monthTicketsScored += 1;
     }
