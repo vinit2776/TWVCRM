@@ -42,7 +42,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, scope, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
+    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, scope, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, satisfaction_token, assignee:users!facility_issues_assigned_to_fkey(full_name)")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -150,7 +150,10 @@ export async function PATCH(
 
   await notifyIssueAssignee(
     { id, category_id: existing.category_id, assigned_to: existing.assigned_to, issue_number: existing.issue_number, title: existing.title },
-    { type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name, reporterEmail: existing.reporter_email ?? null }
+    {
+      type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name,
+      reporterEmail: existing.reporter_email ?? null, satisfactionToken: existing.satisfaction_token ?? null,
+    }
   );
 
   // Auto-log maintenance event on the linked asset when issue is resolved

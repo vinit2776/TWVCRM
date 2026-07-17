@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logIssueEvent } from "@/lib/facility";
 import { computeKpiPoints, writeKpiCredits } from "@/lib/facility-kpi";
+import { notifyIssueAssignee } from "@/lib/facility-notifications";
 import type { FacilityIssuePriority } from "@/types";
 
 /**
@@ -18,7 +19,7 @@ async function loadByToken(supabase: ReturnType<typeof createAdminClient>, token
     .from("facility_issues")
     .select(`
       id, issue_number, title, status, resolved_at, satisfaction_rating, satisfaction_received_at,
-      reopen_count, satisfaction_token, priority, sla_breached, scope, assigned_to,
+      reopen_count, satisfaction_token, priority, sla_breached, scope, assigned_to, category_id,
       location:locations(id, name)
     `)
     .eq("satisfaction_token", token)
@@ -106,6 +107,16 @@ export async function POST(
 
   if (reopened) {
     await supabase.from("facility_issue_kpi_credits").delete().eq("issue_id", issue.id);
+    // Auto-reopen is a silent DB transition otherwise — the assignee would have no
+    // idea their resolved ticket bounced back until they happened to check it.
+    // Mirrors the manual-reopen path so it hits the same full-broadcast tier.
+    await notifyIssueAssignee(
+      { id: issue.id, category_id: issue.category_id, assigned_to: issue.assigned_to, issue_number: issue.issue_number, title: issue.title },
+      {
+        type: "status_changed", from: "resolved", to: "reopened",
+        actorName: `Auto-reopened — ${rating}★ satisfaction rating`,
+      }
+    );
   } else if (updates.kpi_points != null) {
     await writeKpiCredits(supabase, {
       issueId: issue.id,
