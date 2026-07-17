@@ -14,7 +14,10 @@ type IssueRef = {
 
 export type FacilityNotifyEvent =
   | { type: "created"; priority: string; reportedBy: string }
-  | { type: "status_changed"; from: string; to: string; actorName: string; reporterEmail?: string | null }
+  | {
+      type: "status_changed"; from: string; to: string; actorName: string;
+      reporterEmail?: string | null; satisfactionToken?: string | null;
+    }
   | { type: "priority_escalated"; from: string; to: string; actorName: string }
   | { type: "assigned"; assigneeName: string | null; actorName: string }
   | { type: "claimed"; claimerName: string }
@@ -158,8 +161,13 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailSubject = `[${issue.issue_number}] Status: ${event.from} → ${event.to}`;
         emailHeadline = broadcastKey === "reopened" ? "Ticket Reopened" : "Ticket Status Updated";
         emailDetail = `<strong>Status:</strong> ${event.from} → ${event.to}<br/><strong>Updated by:</strong> ${event.actorName}`;
-        // Also email the reporter when resolved or closed
+        // Also email the reporter when resolved or closed. Resolved tickets append a
+        // satisfaction-survey CTA — satisfaction_token is stamped on every issue at
+        // creation (DB default), so it's always available once resolved.
         if ((event.to === "resolved" || event.to === "closed") && event.reporterEmail) {
+          const surveyUrl = event.to === "resolved" && event.satisfactionToken
+            ? `${(process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com")}/facility/satisfaction/${event.satisfactionToken}`
+            : null;
           resend.emails.send({
             from: EMAIL_FROM,
             to: event.reporterEmail,
@@ -168,7 +176,8 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
               headline: `Ticket ${event.to === "resolved" ? "Resolved" : "Closed"}`,
               issueNumber: issue.issue_number,
               title: issue.title,
-              detail: `Your facility ticket has been marked <strong>${event.to}</strong> by ${event.actorName}. Thank you for reporting!`,
+              detail: `Your facility ticket has been marked <strong>${event.to}</strong> by ${event.actorName}. Thank you for reporting!`
+                + (surveyUrl ? `<br/><br/>How did we do? <a href="${surveyUrl}" style="color:#2563eb">Rate your experience</a> — it takes 10 seconds.` : ""),
               url,
             }),
             replyTo: EMAIL_REPLY_TO,
