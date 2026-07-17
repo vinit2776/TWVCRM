@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { processDispatchRun, triggerDispatchContinuation } from "@/lib/billing-dispatch";
 
 type Mode = "rent" | "usage" | "both";
 
@@ -141,6 +143,16 @@ export async function POST(request: NextRequest) {
     .from("billing_dispatch_runs")
     .update({ status: "running", started_at: now.toISOString() })
     .eq("id", run.id);
+
+  // Start processing immediately instead of waiting for the next scheduled
+  // pump tick — after() runs this without delaying the response below, so
+  // the page still gets { run_id } back right away to start polling.
+  after(async () => {
+    const result = await processDispatchRun(run.id);
+    if (result.hasMoreWork) {
+      await triggerDispatchContinuation();
+    }
+  });
 
   return NextResponse.json({ run_id: run.id, total_jobs: contractList.length });
 }

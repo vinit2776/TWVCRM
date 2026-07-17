@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { processDispatchRun, triggerDispatchContinuation } from "@/lib/billing-dispatch";
 
 /**
  * POST /api/billing/dispatch-run/[id]/retry-job/[jobId]
@@ -60,6 +62,15 @@ export async function POST(
     .update({ status: "running", completed_at: null })
     .eq("id", runId)
     .in("status", ["completed", "partial", "failed"]);
+
+  // Process this retry immediately instead of waiting for the next
+  // scheduled pump tick.
+  after(async () => {
+    const result = await processDispatchRun(runId);
+    if (result.hasMoreWork) {
+      await triggerDispatchContinuation();
+    }
+  });
 
   return NextResponse.json({ ok: true });
 }
