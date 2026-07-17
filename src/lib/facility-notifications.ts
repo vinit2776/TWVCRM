@@ -139,6 +139,14 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
     let emailSubject: string;
     let emailHeadline: string;
     let emailDetail: string;
+    // Built inside the switch below (resolved/closed reporter email) and joined
+    // into the Promise.allSettled batch further down — NOT fired standalone.
+    // A detached, unawaited promise here would race the serverless function's
+    // teardown: the handler can return (and the runtime can freeze/kill the
+    // function) before an unawaited SMTP send finishes, silently dropping the
+    // email. This bit TWV before — the reporter email had never actually
+    // delivered despite existing in code.
+    let reporterEmailPromise: Promise<unknown> = Promise.resolve(null);
 
     switch (event.type) {
       case "created":
@@ -168,7 +176,7 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
           const surveyUrl = event.to === "resolved" && event.satisfactionToken
             ? `${(process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com")}/facility/satisfaction/${event.satisfactionToken}`
             : null;
-          resend.emails.send({
+          reporterEmailPromise = resend.emails.send({
             from: EMAIL_FROM,
             to: event.reporterEmail,
             subject: `[${issue.issue_number}] Your ticket has been ${event.to}`,
@@ -181,7 +189,7 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
               url,
             }),
             replyTo: EMAIL_REPLY_TO,
-          }).catch((err) => console.error("[facility-notify] reporter email failed:", err));
+          });
         }
         break;
       case "assigned":
@@ -244,7 +252,7 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         )
       : [];
 
-    const [pushResult, emailResult, inAppResult, ...waResults] = await Promise.allSettled([
+    const [pushResult, emailResult, inAppResult, reporterEmailResult, ...waResults] = await Promise.allSettled([
       sendPushToUsers(pushUserIds, { title: pushTitle, body: pushBody, url, tag: `facility-${issue.id}` }),
       emailPromise,
       createNotificationsForUsers(pushUserIds, {
@@ -255,12 +263,14 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         entityType: "facility_issue",
         entityId: issue.id,
       }),
+      reporterEmailPromise,
       ...waPromises,
     ]);
 
     if (pushResult.status === "rejected") console.error("[facility-notify] push failed:", pushResult.reason);
     if (emailResult.status === "rejected") console.error("[facility-notify] email failed:", emailResult.reason);
     if (inAppResult.status === "rejected") console.error("[facility-notify] in-app failed:", inAppResult.reason);
+    if (reporterEmailResult.status === "rejected") console.error("[facility-notify] reporter email failed:", reporterEmailResult.reason);
     waResults.forEach((r) => { if (r.status === "rejected") console.error("[facility-notify] whatsapp failed:", r.reason); });
     console.log(`[facility-notify] ${event.type} — push/in-app to ${pushUserIds.length} users, email to ${emailTo.join(", ")}${isFullBroadcast ? `, whatsapp to ${waPhones.length}` : ""}`);
   } catch (err) {
