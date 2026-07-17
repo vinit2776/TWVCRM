@@ -10,7 +10,11 @@
  * scored, even if the ticket's fields change later (e.g. a later reopen).
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FacilityIssuePriority } from "@/types";
+
+/** A member collaborator's share of the ticket's kpi_points — primary gets 100%. */
+export const MEMBER_KPI_WEIGHT = 0.25;
 
 export const KPI_BASE_POINTS: Record<FacilityIssuePriority, number> = {
   critical: 400,
@@ -78,4 +82,57 @@ export function computeKpiPoints(params: {
 
   const total = lines.reduce((sum, l) => sum + l.delta, 0);
   return { total, lines };
+}
+
+/**
+ * Writes per-user KPI credit rows for a scored ticket: the assignee gets the
+ * full total (role 'primary'), and any collaborator who is also a current
+ * member of the ticket's department roster gets MEMBER_KPI_WEIGHT of the same
+ * total, penalties included (role 'member'). Existing rows for the issue are
+ * cleared first since this runs on every recompute (resolve, satisfaction
+ * top-up, reopen, pass-card override) and past credits shouldn't linger.
+ *
+ * Deliberately scoped to department-roster members, not every collaborator —
+ * someone added just to be looped in (not on the roster) doesn't get scored.
+ */
+export async function writeKpiCredits(
+  supabase: SupabaseClient,
+  params: { issueId: string; scope: string; assignedTo: string | null; total: number }
+): Promise<void> {
+  const { issueId, scope, assignedTo, total } = params;
+
+  await supabase.from("facility_issue_kpi_credits").delete().eq("issue_id", issueId);
+
+  const rows: { issue_id: string; user_id: string; role: "primary" | "member"; points: number }[] = [];
+  if (assignedTo) {
+    rows.push({ issue_id: issueId, user_id: assignedTo, role: "primary", points: total });
+  }
+
+  const { data: department } = await supabase
+    .from("facility_departments")
+    .select("id")
+    .eq("scope", scope)
+    .single();
+
+  if (department?.id) {
+    const [{ data: members }, { data: collaborators }] = await Promise.all([
+      supabase.from("facility_department_members").select("user_id").eq("department_id", department.id),
+      supabase.from("facility_issue_collaborators").select("user_id").eq("issue_id", issueId),
+    ]);
+    const memberIds = new Set((members ?? []).map((m) => m.user_id as string));
+    const collaboratorIds = (collaborators ?? []).map((c) => c.user_id as string);
+    for (const userId of collaboratorIds) {
+      if (userId === assignedTo || !memberIds.has(userId)) continue;
+      rows.push({
+        issue_id: issueId,
+        user_id: userId,
+        role: "member",
+        points: Math.round(total * MEMBER_KPI_WEIGHT * 100) / 100,
+      });
+    }
+  }
+
+  if (rows.length > 0) {
+    await supabase.from("facility_issue_kpi_credits").upsert(rows, { onConflict: "issue_id,user_id" });
+  }
 }

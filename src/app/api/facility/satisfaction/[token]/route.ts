@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logIssueEvent } from "@/lib/facility";
-import { computeKpiPoints } from "@/lib/facility-kpi";
+import { computeKpiPoints, writeKpiCredits } from "@/lib/facility-kpi";
 import type { FacilityIssuePriority } from "@/types";
 
 /**
@@ -18,7 +18,7 @@ async function loadByToken(supabase: ReturnType<typeof createAdminClient>, token
     .from("facility_issues")
     .select(`
       id, issue_number, title, status, resolved_at, satisfaction_rating, satisfaction_received_at,
-      reopen_count, satisfaction_token, priority, sla_breached,
+      reopen_count, satisfaction_token, priority, sla_breached, scope, assigned_to,
       location:locations(id, name)
     `)
     .eq("satisfaction_token", token)
@@ -103,6 +103,17 @@ export async function POST(
   const { error: upErr } = await supabase
     .from("facility_issues").update(updates).eq("id", issue.id);
   if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+
+  if (reopened) {
+    await supabase.from("facility_issue_kpi_credits").delete().eq("issue_id", issue.id);
+  } else if (updates.kpi_points != null) {
+    await writeKpiCredits(supabase, {
+      issueId: issue.id,
+      scope: issue.scope as string,
+      assignedTo: issue.assigned_to,
+      total: updates.kpi_points as number,
+    });
+  }
 
   await logIssueEvent(supabase, {
     issueId: issue.id,

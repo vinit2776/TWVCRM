@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES, logIssueEvent } from "@/lib/facility";
-import { computeKpiPoints } from "@/lib/facility-kpi";
+import { computeKpiPoints, writeKpiCredits } from "@/lib/facility-kpi";
 import type { FacilityIssuePriority } from "@/types";
 
 /**
@@ -56,7 +56,7 @@ export async function PATCH(
   // If this is the most recent extension on an already-scored ticket, recompute.
   const { data: issue } = await supabase
     .from("facility_issues")
-    .select("id, priority, sla_breached, reopen_count, satisfaction_rating, kpi_points, status")
+    .select("id, priority, sla_breached, reopen_count, satisfaction_rating, kpi_points, status, scope, assigned_to")
     .eq("id", id).single();
 
   if (issue && issue.kpi_points != null && (issue.status === "resolved" || issue.status === "closed")) {
@@ -72,6 +72,12 @@ export async function PATCH(
       extensionExemptFlags: (exts ?? []).map((e) => e.kpi_exempt),
     });
     await supabase.from("facility_issues").update({ kpi_points: kpiResult.total, kpi_breakdown: kpiResult.lines }).eq("id", id);
+    await writeKpiCredits(supabase, {
+      issueId: id,
+      scope: issue.scope as string,
+      assignedTo: issue.assigned_to,
+      total: kpiResult.total,
+    });
   }
 
   await logIssueEvent(supabase, {

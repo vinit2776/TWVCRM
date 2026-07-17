@@ -6,7 +6,7 @@ import {
   resolutionMinutes, metSla, logIssueEvent, computeSlaTarget,
 } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
-import { computeKpiPoints } from "@/lib/facility-kpi";
+import { computeKpiPoints, writeKpiCredits } from "@/lib/facility-kpi";
 import type { FacilityIssueStatus, FacilityIssuePriority, FacilityRootCause } from "@/types";
 
 const VALID_ROOT: FacilityRootCause[] = [
@@ -42,7 +42,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
+    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, scope, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -124,6 +124,15 @@ export async function PATCH(
   const { data, error } = await supabase
     .from("facility_issues").update(updates).eq("id", id).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (next === "resolved" && updates.kpi_points != null) {
+    await writeKpiCredits(supabase, {
+      issueId: id,
+      scope: existing.scope as string,
+      assignedTo: existing.assigned_to,
+      total: updates.kpi_points as number,
+    });
+  }
 
   await logIssueEvent(supabase, {
     issueId: id,
