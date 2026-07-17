@@ -98,11 +98,31 @@ export async function PATCH(
     return NextResponse.json({ error: "contact_id is required" }, { status: 400 });
   }
 
+  const { data: existing } = await supabase
+    .from("contract_contacts")
+    .select("source_member_id")
+    .eq("id", body.contact_id)
+    .eq("contract_id", id)
+    .single();
+  if (!existing) return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+
+  // Name/phone/email on a member-linked contact are owned by the member
+  // record — edit them from Members & Access Control instead.
+  const isMemberLinked = !!existing.source_member_id;
+  if (isMemberLinked && (body.full_name !== undefined || body.email !== undefined || body.phone !== undefined)) {
+    return NextResponse.json(
+      { error: "Name, email, and phone for a member-linked contact can only be edited from Members & Access Control" },
+      { status: 400 }
+    );
+  }
+
   const updates: Record<string, unknown> = {};
-  if (body.full_name !== undefined) updates.full_name = body.full_name?.trim() || null;
+  if (!isMemberLinked) {
+    if (body.full_name !== undefined) updates.full_name = body.full_name?.trim() || null;
+    if (body.email !== undefined) updates.email = body.email?.trim() || null;
+    if (body.phone !== undefined) updates.phone = body.phone?.trim() || null;
+  }
   if (body.designation !== undefined) updates.designation = body.designation?.trim() || null;
-  if (body.email !== undefined) updates.email = body.email?.trim() || null;
-  if (body.phone !== undefined) updates.phone = body.phone?.trim() || null;
   if (body.mobile !== undefined) updates.mobile = body.mobile?.trim() || null;
   if (body.contact_role !== undefined) updates.contact_role = body.contact_role;
   if (body.notes !== undefined) updates.notes = body.notes?.trim() || null;
@@ -137,6 +157,20 @@ export async function DELETE(
   const body = await request.json();
   if (!body.contact_id) {
     return NextResponse.json({ error: "contact_id is required" }, { status: 400 });
+  }
+
+  const { data: existing } = await supabase
+    .from("contract_contacts")
+    .select("source_member_id")
+    .eq("id", body.contact_id)
+    .eq("contract_id", id)
+    .single();
+  if (!existing) return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+  if (existing.source_member_id) {
+    return NextResponse.json(
+      { error: "This contact is linked to a member — remove them from Members & Access Control instead" },
+      { status: 400 }
+    );
   }
 
   const { error } = await supabase

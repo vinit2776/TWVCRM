@@ -1,11 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
@@ -22,6 +31,7 @@ interface Statement {
   gst_invoice_path: string | null;
   razorpay_payment_link_url: string | null;
   finalized_at: string | null;
+  pi_cancelled_at: string | null;
 }
 
 const STATEMENT_STATUS_LABELS: Record<string, string> = {
@@ -73,21 +83,49 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
   const [loading, setLoading] = useState(true);
   const [savingMode, setSavingMode] = useState(false);
   const [currentMode, setCurrentMode] = useState<'proforma_first' | 'gst_direct'>(billingMode || 'proforma_first');
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [pendingModeDialogOpen, setPendingModeDialogOpen] = useState(false);
+  const [convertReason, setConvertReason] = useState(
+    "Contract billing mode switched to GST Direct — clearing pending proforma."
+  );
+  const [convertingId, setConvertingId] = useState<string | null>(null);
 
   useEffect(() => {
     setCurrentMode(billingMode || 'proforma_first');
   }, [billingMode]);
 
-  useEffect(() => {
-    fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
+  const refreshStatements = () => {
+    return fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
       .then((r) => r.json())
       .then((d) => setStatements((d.data || []) as Statement[]))
-      .catch(() => setStatements([]))
-      .finally(() => setLoading(false));
+      .catch(() => setStatements([]));
+  };
+
+  useEffect(() => {
+    refreshStatements().finally(() => setLoading(false));
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((d) => setUserRole(d.role ?? null))
+      .catch(() => setUserRole(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contractId]);
 
-  const handleModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
-    if (newMode === currentMode) return;
+  // Proformas still open under the old Proforma First flow — switching to
+  // GST Direct only affects future cycles, so these are left behind unless
+  // resolved via the GST override (convert-to-gst-early).
+  const pendingUnpaidStatements = useMemo(
+    () =>
+      statements.filter(
+        (s) =>
+          s.status === "finalized" &&
+          s.payment_status !== "paid" &&
+          !s.gst_invoice_number &&
+          !s.pi_cancelled_at
+      ),
+    [statements]
+  );
+
+  const applyModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
     setSavingMode(true);
     try {
       const res = await fetch(`/api/contracts/${contractId}`, {
@@ -106,6 +144,37 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
       toast.error("Failed to update billing mode");
     } finally {
       setSavingMode(false);
+    }
+  };
+
+  const handleModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
+    if (newMode === currentMode) return;
+    if (newMode === 'gst_direct' && pendingUnpaidStatements.length > 0) {
+      setPendingModeDialogOpen(true);
+      return;
+    }
+    await applyModeChange(newMode);
+  };
+
+  const handleConvertToGst = async (statementId: string) => {
+    setConvertingId(statementId);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/convert-to-gst-early`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: convertReason }),
+      });
+      if (res.ok) {
+        toast.success("PI cancelled — queued for GST invoice in Tally Inbox");
+        await refreshStatements();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to convert to GST");
+      }
+    } catch {
+      toast.error("Failed to convert to GST");
+    } finally {
+      setConvertingId(null);
     }
   };
 
@@ -260,6 +329,97 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
           </div>
         )}
       </CardContent>
+
+      <Dialog open={pendingModeDialogOpen} onOpenChange={setPendingModeDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {pendingUnpaidStatements.length} pending proforma{pendingUnpaidStatements.length > 1 ? "s" : ""} on Proforma First
+            </DialogTitle>
+            <DialogDescription>
+              Switching to GST Direct only changes future billing cycles — it won&apos;t touch these
+              existing unpaid proformas. Use the GST override below to cancel a PI and queue it for a
+              direct tax invoice instead, or switch now and resolve them later from Accounting → Tally Inbox.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="border rounded-md max-h-64 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs text-muted-foreground sticky top-0">
+                <tr>
+                  <th className="text-left font-medium py-2 px-3">Period</th>
+                  <th className="text-left font-medium py-2 px-3">PI #</th>
+                  <th className="text-right font-medium py-2 px-3">Amount</th>
+                  <th className="text-left font-medium py-2 px-3">Payment</th>
+                  <th className="py-2 px-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {pendingUnpaidStatements.map((s) => (
+                  <tr key={s.id}>
+                    <td className="py-2 px-3 whitespace-nowrap">{periodLabel(s.period_start, s.period_end)}</td>
+                    <td className="py-2 px-3 font-mono text-xs">{s.statement_number}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(s.total_amount)}</td>
+                    <td className="py-2 px-3">
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] ${PAYMENT_STATUS_COLORS[s.payment_status ?? ""] ?? ""}`}
+                      >
+                        {PAYMENT_STATUS_LABELS[s.payment_status ?? ""] ?? s.payment_status}
+                      </Badge>
+                    </td>
+                    <td className="py-2 px-3 text-right whitespace-nowrap">
+                      {userRole && ["admin", "manager"].includes(userRole) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={convertingId === s.id}
+                          onClick={() => handleConvertToGst(s.id)}
+                        >
+                          {convertingId === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Convert to GST"}
+                        </Button>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground italic">Admin/manager only</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Reason (used for any override triggered above)
+            </label>
+            <Textarea
+              value={convertReason}
+              onChange={(e) => setConvertReason(e.target.value)}
+              className="text-xs"
+              rows={2}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingModeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-violet-700 hover:bg-violet-800 text-white"
+              disabled={savingMode}
+              onClick={async () => {
+                setPendingModeDialogOpen(false);
+                await applyModeChange("gst_direct");
+              }}
+            >
+              {savingMode ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+              Switch to GST Direct anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
