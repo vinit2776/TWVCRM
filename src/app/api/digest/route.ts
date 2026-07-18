@@ -49,9 +49,15 @@ export async function GET(request: Request) {
     .eq("role", "admin")
     .eq("is_active", true);
 
-  const recipients = (admins || [])
-    .map((u: { email: string }) => u.email)
-    .filter(Boolean);
+  // Stakeholders who want the digest without holding the admin role (and
+  // its permissions) — kept as a short hardcoded list rather than a
+  // role/setting, since it's a visibility-only exception, not an access grant.
+  const EXTRA_DIGEST_RECIPIENTS = ["vijay@chordia.asia"];
+
+  const recipients = Array.from(new Set([
+    ...(admins || []).map((u: { email: string }) => u.email).filter(Boolean),
+    ...EXTRA_DIGEST_RECIPIENTS,
+  ]));
 
   if (recipients.length === 0) {
     return NextResponse.json({ error: "No active admin recipients found" }, { status: 400 });
