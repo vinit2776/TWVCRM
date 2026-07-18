@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { Inbox } from "lucide-react";
 import { isInboxRole } from "@/lib/tally-handoff";
-import { TallyInboxClient } from "@/components/accounting/tally-inbox-client";
+import { InboxTabs } from "@/components/accounting/inbox-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -42,20 +42,7 @@ export default async function TallyInboxPage() {
         records receipts, and resolves discrepancies here.
       </p>
 
-      {!flagEnabled ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="font-medium mb-1">Tally handoff v2 is not enabled.</p>
-          <p>
-            An admin can enable it via Admin → Settings →{" "}
-            <code className="font-mono text-xs bg-amber-100 px-1 py-0.5 rounded">
-              tally_handoff_v2_enabled
-            </code>
-            . Until then this page is a placeholder.
-          </p>
-        </div>
-      ) : (
-        <TallyInboxClient />
-      )}
+      <InboxTabs flagEnabled={flagEnabled} currentUserRole={profile?.role || ""} />
     </div>
   );
 }

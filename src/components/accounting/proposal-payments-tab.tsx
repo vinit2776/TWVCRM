@@ -10,18 +10,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-interface DepositRow {
-  id: string;
-  proposal_number: string;
-  title: string;
-  deposit_payment_amount: number;
-  deposit_payment_reference: string | null;
-  deposit_payment_received_at: string | null;
-  deposit_accounted: boolean;
-  deposit_accounted_at: string | null;
-  lead: { first_name: string; last_name: string; company?: string; gst_number?: string } | null;
-}
-
 interface ProformaRow {
   id: string;
   invoice_number: string;
@@ -57,7 +45,6 @@ interface BillingRow {
 }
 
 interface Summary {
-  deposit_count: number; deposit_total: number;
   proforma_count: number; proforma_total: number;
   billing_count: number; billing_total: number;
   unaccounted_count: number;
@@ -65,7 +52,6 @@ interface Summary {
 
 interface PaymentsData {
   month: string;
-  deposits: DepositRow[];
   proformas: ProformaRow[];
   billings: BillingRow[];
   summary: Summary;
@@ -249,20 +235,14 @@ export function ProposalPaymentsTab({ month }: Props) {
 
   if (!data) return null;
 
-  const { deposits, proformas, billings, summary } = data;
-  const hasAny = deposits.length + proformas.length + billings.length > 0;
+  const { proformas, billings, summary } = data;
+  const hasAny = proformas.length + billings.length > 0;
 
   return (
     <div className="space-y-6">
       {/* Summary bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-3">
-          <div className="rounded-md border bg-card px-3 py-2 text-sm">
-            <p className="text-xs text-muted-foreground">Security Deposits</p>
-            <p className="font-bold">{inr(summary.deposit_total)}
-              <span className="text-xs font-normal text-muted-foreground ml-1">({summary.deposit_count})</span>
-            </p>
-          </div>
           <div className="rounded-md border bg-card px-3 py-2 text-sm">
             <p className="text-xs text-muted-foreground">Adhoc Invoices</p>
             <p className="font-bold">{inr(summary.proforma_total)}
@@ -299,73 +279,14 @@ export function ProposalPaymentsTab({ month }: Props) {
         </div>
       </div>
 
+      <p className="text-xs text-muted-foreground">
+        Security deposit accounting has moved to Tally Inbox → Deposits.
+      </p>
+
       {!hasAny && (
         <div className="text-center py-12 text-muted-foreground text-sm">
           No payments received in {month}.
         </div>
-      )}
-
-      {/* ── Security Deposits ─────────────────────────────────────────────── */}
-      {deposits.length > 0 && (
-        <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Security Deposits ({deposits.length})
-          </h3>
-          <div className="rounded-md border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Proposal</th>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Customer</th>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Received</th>
-                  <th className="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Amount</th>
-                  <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Reference</th>
-                  <th className="px-3 py-2 text-center text-xs font-medium text-muted-foreground">Accounted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deposits.map((d, i) => (
-                  <tr key={d.id} className={`border-b last:border-0 ${d.deposit_accounted ? "bg-green-50/40" : ""}`}>
-                    <td className="px-3 py-2.5">
-                      <p className="font-mono text-xs font-semibold text-primary">{d.proposal_number}</p>
-                      <p className="text-xs text-muted-foreground truncate max-w-[140px]">{d.title}</p>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <p className="text-xs font-medium">{buyerName(d.lead)}</p>
-                      {d.lead?.gst_number && <p className="text-[10px] font-mono text-muted-foreground">{d.lead.gst_number}</p>}
-                    </td>
-                    <td className="px-3 py-2.5 text-xs">{fmt(d.deposit_payment_received_at)}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold">{inr(d.deposit_payment_amount)}</td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{d.deposit_payment_reference || "—"}</td>
-                    <td className="px-3 py-2.5 text-center">
-                      <div className="flex flex-col items-center gap-0.5">
-                        <Button
-                          size="sm"
-                          variant={d.deposit_accounted ? "default" : "outline"}
-                          className={`h-7 text-xs gap-1.5 ${d.deposit_accounted ? "bg-green-600 hover:bg-green-700" : ""}`}
-                          disabled={markingId === `deposit-${d.id}`}
-                          onClick={() => markAccounted("deposit", d.id, d.deposit_accounted)}
-                        >
-                          {markingId === `deposit-${d.id}` ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : d.deposit_accounted ? (
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                          ) : (
-                            <Circle className="h-3.5 w-3.5" />
-                          )}
-                          {d.deposit_accounted ? "Accounted" : "Mark"}
-                        </Button>
-                        {d.deposit_accounted && d.deposit_accounted_at && (
-                          <p className="text-[10px] text-green-700">{fmt(d.deposit_accounted_at)}</p>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
       )}
 
       {/* ── Proforma / Adhoc Invoices ─────────────────────────────────────── */}

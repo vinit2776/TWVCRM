@@ -667,10 +667,36 @@ export interface DepositTopup {
   reversed_by?: string | null;
   reversed_at?: string | null;
   reversal_reason?: string | null;
+  accounted: boolean;
+  accounted_at?: string | null;
+  accounted_by?: string | null;
+  accounted_proof_path?: string | null;
   updated_at: string;
   // Joined display fields (populated by API routes, not stored)
   created_by_name?: string;
   reversed_by_name?: string;
+  accounted_by_name?: string;
+}
+
+/** A row in the Tally Inbox "Deposits" accounting tab — unifies original
+ * proposal-stage security deposits and later top-ups into one worklist. */
+export interface DepositInboxRow {
+  id: string;
+  kind: "deposit" | "topup";
+  party_name: string;
+  contract_number?: string | null;
+  proposal_number?: string | null;
+  category?: DepositTopupCategory | null;
+  /** Null for legacy proposals where the payment amount was never recorded — show as "not on file", never as ₹0. */
+  amount: number | null;
+  payment_reference?: string | null;
+  payment_medium?: string | null;
+  /** Null for legacy proposals where the received date was never recorded. */
+  paid_at: string | null;
+  accounted: boolean;
+  accounted_at?: string | null;
+  accounted_by_name?: string | null;
+  proof_path?: string | null;
 }
 
 export const DEPOSIT_TOPUP_CATEGORY_LABELS: Record<DepositTopupCategory, string> = {
@@ -856,7 +882,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_accounted" | "deposit_accounting_reopened";
 export type AuditEntityType =
   | "lead"
   | "activity"
