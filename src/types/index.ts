@@ -642,6 +642,45 @@ export interface DepositBalance {
   available: number;
 }
 
+export type DepositTopupStatus = "pending" | "paid" | "reversed";
+export type DepositTopupCategory = "seat_expansion" | "risk_buffer" | "customer_requested" | "renewal_escalation" | "other";
+export type DepositTopupCollectionMethod = "razorpay_link" | "manual";
+
+export interface DepositTopup {
+  id: string;
+  contract_id: string;
+  source_proposal_id: string;
+  amount: number;
+  category: DepositTopupCategory;
+  category_note?: string | null;
+  status: DepositTopupStatus;
+  collection_method: DepositTopupCollectionMethod;
+  razorpay_payment_link_id?: string | null;
+  razorpay_payment_link_url?: string | null;
+  payment_mode?: string | null;
+  payment_reference?: string | null;
+  proof_path?: string | null;
+  applies_to_shortfall: boolean;
+  created_by: string;
+  created_at: string;
+  paid_at?: string | null;
+  reversed_by?: string | null;
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
+  updated_at: string;
+  // Joined display fields (populated by API routes, not stored)
+  created_by_name?: string;
+  reversed_by_name?: string;
+}
+
+export const DEPOSIT_TOPUP_CATEGORY_LABELS: Record<DepositTopupCategory, string> = {
+  seat_expansion: "Seat / space expansion",
+  risk_buffer: "Risk buffer",
+  customer_requested: "Customer requested",
+  renewal_escalation: "Renewal escalation shortfall",
+  other: "Other",
+};
+
 // ==========================================
 // Voucher Types
 // ==========================================
@@ -817,7 +856,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -904,7 +943,8 @@ export type AuditEntityType =
   | "transfer_billing_policy"
   | "unifi_device_label"
   | "unifi_ap_alert"
-  | "deposit_adjustment";
+  | "deposit_adjustment"
+  | "deposit_topup";
 
 export interface AuditLog {
   id: string;
