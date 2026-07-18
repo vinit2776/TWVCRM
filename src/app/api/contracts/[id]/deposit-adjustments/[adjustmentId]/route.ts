@@ -9,9 +9,17 @@ import {
 
 /**
  * PATCH /api/contracts/[id]/deposit-adjustments/[adjustmentId] — approve or
- * reject a pending deposit adjustment. admin/manager only; the RPC itself
- * also blocks self-approval/self-rejection as a second layer, since a
- * direct RPC call (bypassing this route) would otherwise skip the check.
+ * reject a pending deposit adjustment.
+ *
+ * Approve: admin/manager only, and never the original requester — the RPC
+ * enforces this as a second layer since a direct RPC call would otherwise
+ * skip the check. This one moves money and stays absolute.
+ *
+ * Reject: admin/manager can reject anyone's request; the original requester
+ * can also reject (cancel) their OWN request regardless of role. Self-cancel
+ * doesn't move money or self-grant authorization, so it isn't a maker-checker
+ * violation — without it, a request from the only admin/manager on staff
+ * would have no one able to act on it at all.
  */
 export async function PATCH(
   request: NextRequest,
@@ -24,12 +32,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role, full_name").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json(
-      { error: "Only admin or manager can approve or reject a deposit adjustment" },
-      { status: 403 }
-    );
-  }
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const body = await request.json();
   const action = body.action; // "approve" | "reject"
@@ -52,6 +55,21 @@ export async function PATCH(
     .single();
 
   if (!adjustment) return NextResponse.json({ error: "Adjustment not found" }, { status: 404 });
+
+  const isOwnRequest = adjustment.requested_by === dbUser.id;
+
+  if (action === "approve" && !["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin or manager can approve a deposit adjustment" },
+      { status: 403 }
+    );
+  }
+  if (action === "reject" && !isOwnRequest && !["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin, manager, or the original requester can reject a deposit adjustment" },
+      { status: 403 }
+    );
+  }
 
   if (action === "approve") {
     const { data: rpcResult, error: rpcError } = await admin.rpc("approve_deposit_adjustment", {

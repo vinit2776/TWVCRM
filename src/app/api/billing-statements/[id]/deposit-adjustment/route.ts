@@ -4,9 +4,11 @@ import { logAudit } from "@/lib/audit";
 
 /**
  * POST /api/billing-statements/[id]/deposit-adjustment — request a deposit
- * adjustment against this statement (accounts only). Does not touch
+ * adjustment against this statement (accounts or admin). Does not touch
  * billing_payments or the deposit balance yet — that only happens once an
  * admin/manager approves via PATCH /api/contracts/[id]/deposit-adjustments/[adjustmentId].
+ * Self-approval is blocked at the RPC layer regardless of who initiates, so
+ * an admin-initiated request still needs a different admin/manager to clear it.
  *
  * For a split payment (deposit covers part, another mode covers the rest),
  * the client records the non-deposit leg first via the existing
@@ -26,9 +28,9 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || dbUser.role !== "accounts") {
+  if (!dbUser || !["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json(
-      { error: "Only the accounts role can request a deposit adjustment" },
+      { error: "Only accounts or admin can request a deposit adjustment" },
       { status: 403 }
     );
   }

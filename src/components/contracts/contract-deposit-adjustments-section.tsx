@@ -85,7 +85,10 @@ export function ContractDepositAdjustmentsSection({ contractId, currentUserId, c
         toast.error(data.error ?? "Failed to update adjustment");
         return;
       }
-      toast.success(`Deposit adjustment ${action === "approve" ? "approved" : "rejected"}`);
+      const isSelfCancel = action === "reject" && currentUserId != null && item.requested_by === currentUserId;
+      toast.success(
+        action === "approve" ? "Deposit adjustment approved" : isSelfCancel ? "Request cancelled" : "Deposit adjustment rejected"
+      );
       setApproveOpen(null);
       setRejectOpen(null);
       setReason("");
@@ -179,8 +182,10 @@ export function ContractDepositAdjustmentsSection({ contractId, currentUserId, c
                       </Button>
                     </>
                   )}
-                  {item.status === "pending_approval" && canAuthorize && isOwnRequest && (
-                    <span className="text-xs text-muted-foreground italic">Awaiting a different approver</span>
+                  {item.status === "pending_approval" && isOwnRequest && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setRejectOpen(item)}>
+                      Cancel Request
+                    </Button>
                   )}
                   {item.status === "approved" && canReverse && (
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setReverseOpen(item)}>
@@ -214,25 +219,39 @@ export function ContractDepositAdjustmentsSection({ contractId, currentUserId, c
         </DialogContent>
       </Dialog>
 
-      {/* Reject dialog */}
-      <Dialog open={!!rejectOpen} onOpenChange={() => { setRejectOpen(null); setReason(""); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Reject Deposit Adjustment</DialogTitle>
-            <DialogDescription>The deposit balance is unaffected; accounts will need to record payment another way.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5 py-2">
-            <Label>Reason for rejection</Label>
-            <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Let the requester know why…" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectOpen(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => rejectOpen && handleAction(rejectOpen, "reject")} disabled={submitting || !reason.trim()}>
-              {submitting ? "Rejecting…" : "Reject"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Reject / self-cancel dialog */}
+      {(() => {
+        const isSelfCancel = !!rejectOpen && currentUserId != null && rejectOpen.requested_by === currentUserId;
+        return (
+          <Dialog open={!!rejectOpen} onOpenChange={() => { setRejectOpen(null); setReason(""); }}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{isSelfCancel ? "Cancel Deposit Adjustment Request" : "Reject Deposit Adjustment"}</DialogTitle>
+                <DialogDescription>
+                  {isSelfCancel
+                    ? "Withdraws your request — the deposit balance is unaffected and no approval is needed to cancel your own request."
+                    : "The deposit balance is unaffected; accounts will need to record payment another way."}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-1.5 py-2">
+                <Label>{isSelfCancel ? "Reason for cancelling" : "Reason for rejection"}</Label>
+                <Textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  rows={2}
+                  placeholder={isSelfCancel ? "Why is this being withdrawn…" : "Let the requester know why…"}
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRejectOpen(null)}>Back</Button>
+                <Button variant="destructive" onClick={() => rejectOpen && handleAction(rejectOpen, "reject")} disabled={submitting || !reason.trim()}>
+                  {submitting ? "Submitting…" : (isSelfCancel ? "Cancel Request" : "Reject")}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
 
       {/* Reverse dialog */}
       <Dialog open={!!reverseOpen} onOpenChange={() => { setReverseOpen(null); setReason(""); }}>
