@@ -42,14 +42,18 @@ Both `/leads` and `/leads/[id]` are `"use client"` pages. There are no Server Co
 - `src/components/leads/lead-feedbacks-tab.tsx` — booking feedback ratings
 - `src/components/leads/lead-credits-card.tsx` — partial-checkout credit carry-forward
 - `src/components/leads/import-leads-dialog.tsx` — CSV import dialog (lazy-loaded)
-- `src/components/activities/lead-timeline.tsx` — activity feed on Activities tab
-- `src/components/activities/activity-form.tsx` — log call/meeting/note/tour modal
+- `src/components/leads/overdue-followup-banner.tsx` — persistent "N overdue follow-ups" banner on the leads list; fetches `/api/leads/followup-summary` and links to a "Review now" action that clears all filters
+- `src/components/activities/lead-timeline.tsx` — activity feed on Activities tab; its reschedule control uses `FollowUpDateTimeInput`
+- `src/components/activities/activity-form.tsx` — log call/meeting/note/tour modal; follow-up picker uses `FollowUpDateTimeInput` and shows a "What happens when you log this" preview
+- `src/components/shared/followup-datetime-input.tsx` — `FollowUpDateTimeInput` — shared date + 30-min time-slot picker (9:00 AM–8:00 PM) used by the Log Activity dialog, the dashboard Follow-ups widget, and the lead timeline reschedule control; replaces the native `datetime-local` input everywhere follow-up dates are set
+- `src/components/dashboard/followups-widget.tsx` — dashboard "Follow-ups" widget; reschedule control also uses `FollowUpDateTimeInput`
 
 ### API Routes
-- `GET|POST /api/leads` — list (paginated, filtered) + create
+- `GET|POST /api/leads` — list (paginated, filtered) + create. `GET` runs a separate priority query across the *entire* filtered set to find overdue/due-today follow-ups and merges them to the front of the page (see "Sort order in the list" below) — not just a re-sort of the fetched page.
 - `GET|PATCH|DELETE /api/leads/[id]` — read, update, hard-delete (admin only)
 - `POST /api/leads/[id]/archive` — soft-disable / re-enable
-- `GET|POST /api/leads/[id]/activities` — activity timeline
+- `GET|POST /api/leads/[id]/activities` — activity timeline; logging an activity with a `follow_up_date` calls `createReminderEvent()` (Google Calendar sync) instead of sending an immediate email
+- `GET /api/leads/followup-summary` — unfiltered `{ overdue, due_today }` counts across all non-archived leads, powering `OverdueFollowupBanner`
 - `GET|POST|PATCH|DELETE /api/leads/[id]/contacts` — extra contact points
 - `GET|POST /api/leads/[id]/proposals` — proposals for this lead
 - `POST /api/leads/[id]/id-proof` — upload ID proof document
@@ -59,13 +63,17 @@ Both `/leads` and `/leads/[id]` are `"use client"` pages. There are no Server Co
 - `GET|POST /api/lead-cautions` — list and create cautions
 - `PATCH /api/lead-cautions/[id]` — dismiss/edit a caution
 - `POST /api/public/enquiry` — unauthenticated public form submission (creates lead or re-enquiry activity)
+- `PATCH /api/activities/[id]` — reschedule/complete a follow-up; on reschedule, resets `followup_wa_reminder_sent_at` to `null` and calls `rescheduleReminderEvent()` (or atomically claims-and-creates a calendar event if one doesn't exist yet)
+- `GET /api/cron/lead-reminder-digest` — daily cron (9:00 AM IST / `30 3 * * *` UTC), `CRON_SECRET`-protected; emails each activity owner a single grouped list of their follow-ups due today or overdue
+- `GET /api/cron/lead-reminder-whatsapp` — every 5 minutes, `CRON_SECRET`-protected; sends a WhatsApp nudge via MSG91 template `lead_followup_reminder` ~10 minutes before a follow-up is due
 
 ### Lib Files
 - `src/lib/auto-status.ts` — `autoUpdateLeadStatus()` — automatic status advancement triggered by activities, proposals, and contract activation
 - `src/lib/validations.ts` — `createLeadSchema`, `updateLeadSchema`, `importLeadSchema`
 - `src/lib/zoho-field-mapping.ts` — CSV row transformer (Zoho CRM export format → internal schema)
 - `src/lib/constants.ts` — all lead status/source/rating/score constants, `SYSTEM_LEAD_STATUSES`, `MANUAL_LEAD_STATUSES`, `LOST_REASONS`, `ENTITY_TYPES`, `DOCUMENT_CHECKLISTS`
-- `src/lib/whatsapp.ts` — `messaging.internalNewLead()` — fired on every manual lead create
+- `src/lib/whatsapp.ts` — `messaging.internalNewLead()` — fired on every manual lead create; also home of `sendWhatsApp()` used by the follow-up WhatsApp nudge cron
+- `src/lib/google-calendar.ts` — `createReminderEvent()`, `rescheduleReminderEvent()`, `isWorkspaceEmail()` — Google Calendar domain-wide-delegation sync for lead follow-up reminders on the activity owner's own calendar. Scoped to `theworkvilla.com` / `chordia.co` / `chordia.asia` Workspace accounts (via `GOOGLE_CALENDAR_SA_EMAIL` / `GOOGLE_CALENDAR_SA_PRIVATE_KEY`); non-Workspace owners are skipped and rely on the daily digest email instead. Events are created popup-only (no `email` reminder override) to avoid duplicating the digest.
 
 ### Hooks
 - `src/hooks/use-leads.ts` — `useLeads(options)`, `useLead(id)`, `useUsers()`
@@ -182,6 +190,8 @@ This cascade is intentionally destructive — see "Soft-Disable vs Hard Delete" 
 | `is_follow_up_done` | BOOLEAN | DEFAULT false |
 | `follow_up_actioned_by` | UUID | FK → `users(id)`; added migration 00031 |
 | `follow_up_actioned_at` | TIMESTAMPTZ | added migration 00031 |
+| `calendar_event_id` | TEXT | nullable; Google Calendar event ID for the synced follow-up reminder, so reschedule updates the same event instead of creating a duplicate; added migration 00355 |
+| `followup_wa_reminder_sent_at` | TIMESTAMPTZ | nullable; guard column for the WhatsApp nudge cron — set atomically (`UPDATE ... WHERE followup_wa_reminder_sent_at IS NULL`) before sending so overlapping cron runs can't double-send; reset to `null` on reschedule; added migration 00356 |
 | `created_by` | UUID | FK → `users(id)` ON DELETE SET NULL |
 | `created_at` / `updated_at` | TIMESTAMPTZ | auto-managed |
 
@@ -293,9 +303,13 @@ The function `autoUpdateLeadStatus(supabase, leadId, trigger, options)` is calle
 
 8. **Email + push notification fires on every public enquiry** (new and re-enquiry) to all admin/manager emails + `space@theworkvilla.com`.
 
-9. **`lead_number` is never reused.** The sequence `leads_number_seq` increments even if a lead is deleted. The sequence starts at 1001.
+9. **Follow-up reminders do NOT email immediately on log/reschedule.** That per-activity email was removed — reminders now go out only via the 9:00 AM IST daily digest cron (`/api/cron/lead-reminder-digest`) and the 5-minute WhatsApp nudge cron (`/api/cron/lead-reminder-whatsapp`), plus an optional Google Calendar sync for Workspace-domain owners. Do not reintroduce a synchronous send-on-log email.
 
-10. **Cautions are never hard-deleted.** `PATCH /api/lead-cautions/[id]` only sets `is_active=false` (soft-dismiss). There is no DELETE API for cautions.
+10. **The WhatsApp nudge cron only ever matches strictly-future follow-ups** (`follow_up_date` in `(now, now+10min]`). It never backfills the existing overdue backlog — that's the daily digest's job. Do not widen this window without re-reading the anti-spam comment in `src/app/api/cron/lead-reminder-whatsapp/route.ts`; the very first run after a bad change would WhatsApp-blast every already-overdue reminder at once.
+
+11. **`lead_number` is never reused.** The sequence `leads_number_seq` increments even if a lead is deleted. The sequence starts at 1001.
+
+12. **Cautions are never hard-deleted.** `PATCH /api/lead-cautions/[id]` only sets `is_active=false` (soft-dismiss). There is no DELETE API for cautions.
 
 ---
 
@@ -405,7 +419,7 @@ Server-side validation (no Zod):
 
 4. **Search by ID with `#` prefix.** `GET /api/leads?search=#uuid` does an exact `id` match instead of full-text. This is undocumented in the UI but used programmatically.
 
-5. **Sort order in the list.** The API returns leads sorted by follow-up urgency first (overdue → due_today → upcoming → rest). The client page then re-sorts again client-side to put new form leads (status=`new` + `FORM_TAGS`) first, then re-enquiries. The two sort passes are independent.
+5. **Sort order in the list.** `GET /api/leads` runs a separate `activities` query across the *entire* filtered set (not just the current page) to find every lead with an overdue or due-today follow-up, then merges that priority list to the front of the paginated results — so an overdue follow-up always surfaces on page 1 even if it belongs to a lead created months ago. Leads outside that priority set are fetched as a second, normal paginated query (excluding the priority IDs) and are sorted with `upcoming`-followup leads floated ahead of no-followup leads within that remainder. The client page then re-sorts again client-side to put new form leads (status=`new` + `FORM_TAGS`) first, then re-enquiries. The three sort passes (server priority merge, server remainder sort, client re-sort) are independent.
 
 6. **`archived_at` is excluded by default.** `GET /api/leads` adds `.is("archived_at", null)` unless `include_archived=true`. This means archived leads are invisible in all normal queries including follow-up computations. Pass `include_archived=true` explicitly if you need to see them.
 
@@ -429,6 +443,10 @@ Server-side validation (no Zod):
 
 14. **Activity `meeting_attendees` and `meeting_minutes` tables exist** (from initial schema) but their management UI is not surfaced in the current lead detail page's activity form — they are referenced in `src/types/index.ts` but the detail UI does not render them.
 
+15. **All three follow-up date/time pickers block submit on "incomplete".** `FollowUpDateTimeInput` (`src/components/shared/followup-datetime-input.tsx`) reports `"empty" | "incomplete" | "valid"` via `onStatusChange`; the Log Activity dialog, dashboard Follow-ups widget, and lead timeline reschedule all disable their submit/confirm button while status is `"incomplete"` (date picked but no time, or vice versa) rather than silently defaulting the time to midnight the way the old native `datetime-local` input did.
+
+16. **Google Calendar sync is best-effort and silently skipped, never blocking.** `createReminderEvent()`/`rescheduleReminderEvent()` return `null` (never throw) if the owner's email isn't on `theworkvilla.com`/`chordia.co`/`chordia.asia`, if `GOOGLE_CALENDAR_SA_EMAIL`/`GOOGLE_CALENDAR_SA_PRIVATE_KEY` aren't configured, or if the Calendar API call fails — the activity is still logged either way. Non-Workspace owners rely solely on the daily digest email and WhatsApp nudge.
+
 ---
 
 ## Environment / Config Dependencies
@@ -437,10 +455,12 @@ No feature flags or `app_settings` table keys are specific to the Leads module. 
 
 | Dependency | What it enables |
 |---|---|
-| `MSG91_AUTH_KEY`, `MSG91_WHATSAPP_SENDER` | WhatsApp staff notification on manual lead create |
-| `RESEND_API_KEY` | Email notification on public enquiry form submission |
-| `NEXT_PUBLIC_APP_URL` / `APP_URL` | CRM deep-link in email/push alerts |
+| `MSG91_AUTH_KEY`, `MSG91_WHATSAPP_SENDER` | WhatsApp staff notification on manual lead create; also the transport for the follow-up WhatsApp nudge cron (MSG91 template `lead_followup_reminder`) |
+| `RESEND_API_KEY` | Email notification on public enquiry form submission; also the transport for the daily follow-up reminder digest (`/api/cron/lead-reminder-digest`) |
+| `NEXT_PUBLIC_APP_URL` / `APP_URL` | CRM deep-link in email/push alerts, the reminder digest email, the WhatsApp nudge message, and synced Google Calendar event descriptions |
 | `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`, `B2_ENDPOINT` | ID proof file upload to Backblaze B2 |
+| `GOOGLE_CALENDAR_SA_EMAIL`, `GOOGLE_CALENDAR_SA_PRIVATE_KEY` | Domain-wide-delegation service account for syncing lead follow-up reminders to the activity owner's own Google Calendar (`src/lib/google-calendar.ts`); only applies to `theworkvilla.com`/`chordia.co`/`chordia.asia` Workspace accounts, skipped otherwise |
+| `CRON_SECRET` | Authorizes `/api/cron/lead-reminder-digest` (daily, 9:00 AM IST) and `/api/cron/lead-reminder-whatsapp` (every 5 minutes) |
 | Supabase Realtime | `EnquiryNotificationsProvider` subscribes to `leads` and `activities` tables for live enquiry banners |
 
 ---
@@ -497,6 +517,14 @@ No feature flags or `app_settings` table keys are specific to the Leads module. 
 3. Active cautions surface on the lead profile banner and in the new-booking flow when the phone matches
 4. `danger` severity requires explicit staff acknowledgement before proceeding with a new booking
 5. Dismiss: `PATCH /api/lead-cautions/{id}` with `{ is_active: false }` — sets `dismissed_by`, `dismissed_at`
+
+### 8. Setting or Rescheduling a Follow-Up Reminder
+1. Date + time are picked via `FollowUpDateTimeInput` — a plain date input plus a dropdown of fixed 30-min slots from 9:00 AM to 8:00 PM (no native OS picker, no silent midnight default); submit/confirm is disabled while only one side is picked
+2. The Log Activity dialog additionally shows a live "What happens when you log this" preview summarizing the activity, call outcome, follow-up time, and the actual reminder channels
+3. On log (`POST /api/leads/[id]/activities`) or reschedule (`PATCH /api/activities/[id]`) with a `follow_up_date`, the API calls `createReminderEvent()` / `rescheduleReminderEvent()` (`src/lib/google-calendar.ts`) — creates or updates a popup-only event on the owner's own Google Calendar if their email is on a Workspace domain; silently skipped otherwise
+4. Reschedule also resets `followup_wa_reminder_sent_at` to `null` so the WhatsApp cron sends exactly one fresh nudge at the new time
+5. **No immediate email is sent.** Reminders surface later via two crons: `/api/cron/lead-reminder-digest` (daily 9:00 AM IST, one grouped email per owner listing everything due today or overdue) and `/api/cron/lead-reminder-whatsapp` (every 5 minutes, WhatsApp nudge via MSG91 template `lead_followup_reminder` ~10 minutes before a strictly-future follow-up is due, claimed atomically to prevent double-sends)
+6. The Leads list additionally surfaces overdue items directly: `OverdueFollowupBanner` shows an "N overdue follow-ups" banner (from `GET /api/leads/followup-summary`) with a "Review now" link that clears all list filters, and `GET /api/leads` itself merges every overdue/due-today lead across the whole filtered set to the front of page 1
 
 ---
 

@@ -1,6 +1,6 @@
 # Facility Management
 
-**Last Updated: 2026-06-28**
+**Last Updated: 2026-07-18**
 
 ## Purpose and Business Context
 
@@ -16,6 +16,7 @@ Primary use-cases:
 - Auto-satisfaction surveys are sent to the reporter after resolution
 - FMS/IT teams register assets, log maintenance events, and track lifecycle from procurement to decommission
 - Asset event logs link to facility issues for traceability
+- Tickets fall into two kinds, both stored in `facility_issues` and sharing the same lifecycle: reporter-submitted **Work Orders** (`task_type = 'reported_problem'`) and manager-assigned **Tasks** (`task_type = 'delegated_task'`, created via `DelegateTaskDialog`). They're visually distinguished on the issue list — Task cards get a teal tint, every card carries a "Work Order" or "Task" type pill
 
 All seven scopes are fully enabled — the wizard presents scope buttons (IT, HVAC, Electrical, Plumbing, Housekeeping, Security, Other) and non-IT categories have been seeded (migration 00276).
 
@@ -26,7 +27,7 @@ All seven scopes are fully enabled — the wizard presents scope buttons (IT, HV
 | Route | Page file | Who sees it | Purpose |
 |---|---|---|---|
 | `/facility` | `src/app/(dashboard)/facility/page.tsx` | All authenticated | Analytics dashboard: KPI cards, hot spots, SLA compliance, trend chart, recurring issues |
-| `/facility/issues` | `src/app/(dashboard)/facility/issues/page.tsx` | All authenticated | List all issues with filter/search; Report Issue button |
+| `/facility/issues` | `src/app/(dashboard)/facility/issues/page.tsx` | All authenticated | "Tasks / Work Orders" list — grouped by assignee (card grid, "Unclaimed" pinned first), filter/search, Report Issue button |
 | `/facility/issues/[id]` | `src/app/(dashboard)/facility/issues/[id]/page.tsx` | All authenticated | Issue detail: description, photos, timeline, sidebar, status transitions |
 | `/facility/assets` | `src/app/(dashboard)/facility/assets/page.tsx` | All authenticated | Equipment inventory grouped by location |
 | `/facility/assets/[id]` | `src/app/(dashboard)/facility/assets/[id]/page.tsx` | All authenticated | Asset detail with full issue history |
@@ -53,7 +54,8 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `src/app/(dashboard)/facility/team-kpi/page.tsx` — KPI table
 
 ### Components
-- `src/components/facility/report-wizard.tsx` — `FacilityReportWizard` — 3-step issue creation dialog (rewritten v2 — see Wizard section below)
+- `src/components/facility/report-wizard.tsx` — `FacilityReportWizard` — 3-step issue creation dialog (rewritten v2 — see Wizard section below); Step 2 also offers a manual TAT override (Hours or absolute Date & time), warning if left blank
+- `src/components/facility/delegate-task-dialog.tsx` — `DelegateTaskDialog` — creates a manager-assigned Task (`task_type: "delegated_task"`); due date is mandatory (mirrors the Work Order TAT override toggle), "Create Task" stays disabled with an inline warning until one is set
 - `src/components/facility/asset-form-dialog.tsx` — `FacilityAssetFormDialog` — add/edit asset dialog; updated to support photo uploads via `facility_asset_photos`
 - `src/components/facility/asset-event-dialog.tsx` — `AssetEventDialog` — log maintenance/inspection events on an asset, optionally link to and resolve an open issue
 - `src/components/facility/photo-upload.tsx` — `FacilityPhotoUpload` — upload to `facility-issue-photos` bucket
@@ -361,6 +363,27 @@ Junction table for secondary assignees.
 
 **RLS (migrations 00146 + 00176):** SELECT, INSERT, DELETE open to `authenticated`. UPDATE policy added in 00176 (needed for upsert ON CONFLICT).
 
+**Auto-collaboration (2026-07):** On creation of a `reported_problem` ticket, the department's roster members (`facility_department_members`, looked up by `scope`) are auto-added as collaborators here, excluding whoever ends up as the final assignee. See "Department Roster, Auto-Collaboration & KPI Credit Sharing" below.
+
+### `facility_issue_kpi_credits`
+
+Per-user KPI credit per ticket (migration 00358). Lets department-roster collaborators share in a resolved ticket's score without changing `facility_issues.kpi_points`, which stays the ticket-level total. Fully deleted and re-inserted every time `kpi_points` is recomputed (resolve, satisfaction top-up, reopen, TAT-extension pass-card override) — see `writeKpiCredits()` in `src/lib/facility-kpi.ts`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `issue_id` | UUID FK `facility_issues(id) ON DELETE CASCADE` | |
+| `user_id` | UUID FK `users(id) ON DELETE CASCADE` | |
+| `role` | TEXT CHECK (`primary` / `member`) | `primary` = the assignee (100% of `kpi_points`); `member` = a collaborator who is also a current department-roster member (`MEMBER_KPI_WEIGHT` = 25% of the same total, penalties included) |
+| `points` | NUMERIC(6,2) NOT NULL | |
+| `computed_at` | TIMESTAMPTZ DEFAULT NOW() | |
+
+**Unique constraint:** `(issue_id, user_id)`.
+
+**RLS:** SELECT, INSERT, DELETE — any `authenticated` (the API layer, not RLS, gates who can trigger a recompute — same pattern as `facility_issue_collaborators`).
+
+**API:** `GET /api/facility/my-kpi` aggregates from this table (not `facility_issues.assigned_to`), so a user's personal KPI card reflects both primary-assignee credit and member credit.
+
 ### Storage Bucket
 
 Bucket name: `facility-issue-photos` — **private** (not public).
@@ -428,9 +451,11 @@ Computed in `timestampsForStatus()` in `src/lib/facility.ts`:
 
 Timestamps are **never cleared backward** except on `reopened` (which nulls `resolved_at` and `closed_at`).
 
-### SLA Computation
+### SLA / TAT Computation (Deadline)
 
-1. At issue creation: `sla_target_at = reported_at + category.default_sla_{priority}_hrs hours`. If no `category_id` is set, `computeSlaTarget()` uses fallback defaults: critical=2h, high=8h, medium=24h, low=72h
+**Terminology note:** "TAT" (Turn-Around-Time) is the user-facing rebrand of the same underlying SLA engine — internal field/variable names (`sla_target_at`, `sla_breached`, `computeSlaTarget()`, `metSla()`, `claim_sla_target_at`) are untouched, only display text changed. The rename is **not applied everywhere**: the issue list page (filter chip, breach badge, inline label), the ticket detail action row/banner/extension dialog, the report wizard, and the Delegate Task dialog all say "TAT"; the `/facility` dashboard KPI cards ("SLA compliance", "SLA-breached open issues"), the `/facility/team-kpi` table ("SLA Compliance"), and the ticket detail Resolution summary line ("Met SLA" / "SLA breached") still say "SLA". Don't assume a term is consistent app-wide — check the specific page/component.
+
+1. At issue creation: `sla_target_at = reported_at + category.default_sla_{priority}_hrs hours`. If no `category_id` is set, `computeSlaTarget()` uses fallback defaults: critical=2h, high=8h, medium=24h, low=72h. The report wizard also allows a manual override at creation — an Hours-from-now value or an absolute Date & time. If set, `tat_manual_override = true` is stamped on the row so a later priority change won't silently recompute over the human's choice. Leaving both override inputs blank shows a non-blocking amber warning ("No deadline set — this ticket will use the category/priority default TAT instead.") and falls back to the auto-computed default. Delegated Tasks have no auto-compute path — the due date is mandatory at creation; `DelegateTaskDialog` shows "A due date is required — this task can't be created without one" and keeps "Create Task" disabled until one is set.
 2. If priority is changed via PUT: `sla_target_at` is recomputed from `reported_at` (the original report time, not the time of change). `sla_breached` is reset to `false`.
 3. At resolution: `sla_breached = resolved_at > sla_target_at`. This is set once and not changed on later updates.
 4. If resolution happens with no `sla_target_at`, `sla_breached` is left as-is (no update).
@@ -449,6 +474,32 @@ Scope prefixes:
 
 ---
 
+## Ticket List & Detail UI
+
+### Issue List (`/facility/issues`) — Assignee Grouping
+
+The list groups tickets by **assignee**, not by status (a July 2026 UX change — status-based grouping made "what does each person have on their plate" hard to answer):
+- "Unclaimed" is pinned first as its own group so unowned tickets stay visible instead of disappearing until someone claims them; remaining groups are one per assignee, alphabetical.
+- Each assignee group splits into **Open / Closed tabs** (Closed = `resolved` + `closed` — anything off their plate, whether or not an admin has run the final Close step). Tabs render only when a group has items in both buckets; a person with only open work sees their list directly.
+- Every ticket renders as a standalone bordered card in a responsive grid (1 column mobile, 2 columns desktop) instead of divide-y list rows.
+- Existing quick-filter chips (Unclaimed / Open only / Mine / Overdue) narrow the underlying set *before* grouping — "Mine" collapses the page to a single assignee group, "Overdue" still answers "what's late across the whole team" in one tap. The "Overdue" chip label reads "(TAT)".
+- **Task vs Work Order:** Task cards (`task_type = "delegated_task"`) get a `bg-teal-100` fill, a 2px teal border, and a white pill badge with bold teal "Task" text — loud enough to catch the eye in a grid. Work Order cards (everything else) are plain white/`bg-card` and carry a slate "Work Order" pill, so the type is legible on every card, not just Tasks.
+- **TAT time-elapsed progress bar:** a thin 3px edge bar at the top of each open card shows elapsed time toward `sla_target_at`, colored `on_track` (emerald) / `at_risk` (amber, within 1h of deadline) / `overdue` (red — the whole card also tints light red). Duration/delay are computed once from `created_at`/`sla_target_at` and handed to a single shared CSS `@keyframes tat-bar-fill` animation (`src/app/globals.css`) via inline `animationDuration`/`animationDelay` — the browser compositor interpolates continuously with zero JS ticking or re-renders; `animation-fill-mode: forwards` holds an already-overdue card at 100% width.
+
+### Ticket Detail (`/facility/issues/[id]`)
+
+- **TAT status banner:** a bold, full-width banner directly under the header (replacing an earlier small header pill) — colored `on_track` / `at_risk` / `overdue` via `getTatStatus(sla_target_at, now)` in `src/lib/facility-ui.ts`, live-ticking on a client-side 30s `setInterval` while the ticket is open. This is deliberately **not** driven by the stale post-resolution `sla_breached` DB field — an open ticket already past its deadline shows red immediately instead of waiting for resolution to flip the flag. A second line shows the absolute deadline (`formatDateTime()`, IST) and who set it: "Set by {creator}" for delegated Tasks (always) or reported-problem tickets with `tat_manual_override = true`; otherwise "Auto-set from priority default".
+- **Department scope chip:** a small pill next to the issue number shows `SCOPE_LABEL[issue.scope]` (IT / HVAC / Electrical / etc.) so the owning department is visible at a glance without inferring it from the category.
+- **Role-aware primary action:** the single primary button in the action row now depends on who's viewing, not just ticket ownership:
+  - Unowned ticket, viewed by an `override`-tier role (`admin`, `manager`, `office_admin`) → primary = **"Assign to…"**
+  - Owned by someone else, viewed by an `override`-tier role → primary = **"Reassign"**
+  - In both cases the self-claim action (Claim this ticket / Take over) doesn't disappear — it drops to a visible secondary button.
+  - Regular staff see unchanged behavior: Claim/Take over stays primary; they never had an Assign option.
+  - The overflow-menu "Assign to…/Reassign" entry only renders when it is **not** already shown as the primary button (e.g. override tier already owns the ticket, or it's resolved/closed) — avoids a duplicate entry.
+- **TAT extension ("Push back deadline"):** the existing `canExtend`-gated extension action (2-per-ticket cap, tracked via `tat_extension_count`) was renamed from "Extend (N left)" to "Push back deadline (N left)" for self-explanatory labeling. A one-time dismissible hint (`localStorage` key `facility_extend_hint_dismissed`, keyed per-user not per-ticket) explains what the button does and the 2-use cap, shown the first time any Extend-eligible ticket renders for that user. No time-based gating (e.g. only near the deadline) — the button stays available the whole time a ticket is open, per explicit product decision.
+
+---
+
 ## Auto-Satisfaction Survey
 
 When a ticket is resolved (`status → resolved`):
@@ -461,6 +512,8 @@ When a ticket is resolved (`status → resolved`):
 - `resolved_at` and `closed_at` → NULL
 - `reopen_count` incremented
 - A `reopened` event is logged with `actor_label: "System"` and `reason: "low_rating"`
+- `facility_issue_kpi_credits` rows for the issue are deleted (re-written on the next resolve)
+- `notifyIssueAssignee()` fires a synthetic `status_changed` event (`resolved` → `reopened`) so the assignee is notified on the same full-broadcast tier (push + email + WhatsApp + in-app) as a manual reopen — previously this was a silent DB-only transition the assignee would only discover by checking the ticket (fixed 2026-07-18)
 
 ---
 
@@ -515,6 +568,13 @@ Defined in `src/lib/facility.ts`:
 FACILITY_ROLES = {
   manage: ["admin", "it_manager", "it_team"],
   workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager"],
+  // Bypasses ownership rules (assign to others, act on tickets they don't own) —
+  // drives the role-aware primary action on the ticket detail page (see
+  // "Ticket List & Detail UI" above): Assign/Reassign instead of Claim.
+  override: ["admin", "manager", "office_admin"],
+  // Narrower than override — flipping a TAT extension's KPI-exempt flag ("pass card")
+  // is restricted to admin/manager only.
+  passCard: ["admin", "manager"],
   // Anyone authenticated can report (no role check on POST /api/facility/issues)
 }
 ```
@@ -537,6 +597,18 @@ FACILITY_ROLES = {
 
 ---
 
+## Department Roster, Auto-Collaboration & KPI Credit Sharing
+
+Two supporting tables back this (migration `00345_facility_departments_and_tat.sql`, not otherwise documented in this file):
+- `facility_departments` — one row per `facility_scope` value (`it`, `hvac`, `electrical`, `plumbing`, `housekeeping`, `security`, `other`, `facility`), with an optional `head_user_id` used as an auto-assignee fallback when a category has no more-specific `default_assignee_id`.
+- `facility_department_members` — a plain roster junction (`department_id`, `user_id`) — informational only, does **not** restrict who can claim or be assigned a ticket.
+
+**Auto-collaboration:** When a `reported_problem` ticket is created, `POST /api/facility/issues` looks up the ticket's department (by `scope`) and auto-adds its roster members as `facility_issue_collaborators`, excluding whoever ends up as the final assignee. This required no new notification logic — collaborators already flow through every event type in `notifyIssueAssignee()` (see Notification System below).
+
+**KPI credit sharing:** Resolved tickets already credit the primary assignee with the ticket's full `kpi_points`. As of migration 00358, each department-roster collaborator on the ticket now also earns `MEMBER_KPI_WEIGHT` (25%) of that same total, penalties included, via a `facility_issue_kpi_credits` row (see Database Tables above). Manually-added collaborators who are **not** on the department roster are excluded from KPI credit — being looped in doesn't earn points, only roster membership does. Credits are recomputed (old rows deleted, new ones written) on every `kpi_points` recompute: resolve, satisfaction top-up, reopen, and TAT-extension pass-card override.
+
+---
+
 ## Notification System
 
 Notifications fire on: `created`, `status_changed`, `assigned`, `comment`.
@@ -553,12 +625,19 @@ If the final recipient list is empty (unassigned, no backup, no collaborators), 
 
 ### Channels
 
-Three channels fire in parallel via `Promise.allSettled` (failures are silently absorbed):
-1. **Push notification** — `sendPushToUsers` from `src/lib/push`
-2. **Email** — via Resend (`resend.emails.send`), HTML template inline in `facility-notifications.ts`
-3. **In-app notification** — persisted via `createNotificationsForUsers` from `src/lib/in-app-notifications`
+Up to four channels fire per event, all joined into one `Promise.allSettled` call — a rejection on any one is logged via `console.error` but never blocks the others:
+1. **Push notification** — `sendPushToUsers` from `src/lib/push` — every event
+2. **In-app notification** — persisted via `createNotificationsForUsers` from `src/lib/in-app-notifications` — every event
+3. **Email** — via Resend (`resend.emails.send`), HTML template inline in `facility-notifications.ts`. Skipped for events outside `FULL_BROADCAST_EVENTS` (`created`, `priority_escalated`, `reopened`) — push + in-app only for routine status changes, comments, or reassignment, to avoid paging people by email for everything.
+4. **WhatsApp** — `sendWhatsApp`, gated the same way as email (full-broadcast events only) and requires `MSG91_WA_TEMPLATE_FACILITY_ASSIGNED` to be configured.
 
-The notification function uses `createAdminClient()` (synchronous, no `await`) internally because it runs in a server-side route handler without a user cookie.
+The notification function uses `createAdminClient()` internally because it runs in a server-side route handler without a user cookie.
+
+### Reporter Email (Resolved / Closed)
+
+Independent of the full-broadcast gating above: whenever a ticket transitions to `resolved` or `closed`, `notifyIssueAssignee()` **always** emails `reporter_email` (if set), regardless of the event's broadcast tier. For `resolved`, the email body appends a "Rate your experience" CTA linking to the public `/facility/satisfaction/{token}` page (`satisfaction_token` is stamped on every issue at creation, so it's always available once resolved).
+
+**Fixed 2026-07-18 — this email had never actually delivered.** It was previously fired as a detached `resend.emails.send(...).catch(...)` promise, never joined into the function's own `Promise.allSettled` batch. On Vercel's serverless runtime the request can return — and the function instance can be frozen or torn down — before an unawaited SMTP send finishes, so the email silently never left the building. The fix builds it as `reporterEmailPromise` and includes it in the same `Promise.allSettled` array as push/email/in-app, so the function actually waits for it.
 
 ### Stale Assignee Alert
 
@@ -818,10 +897,10 @@ The wizard was rewritten to be scope-first (not category-first). Reporters pick 
 
 ### Flow 3: Satisfaction Survey
 
-1. After resolution, a satisfaction link can be sent to the reporter (the mechanism to trigger sending is not in the module — `satisfaction_requested_at` is set but the actual email send is external to this module's code as reviewed; the public endpoint exists for when such a link is followed)
+1. After resolution, `notifyIssueAssignee()` emails the reporter (if `reporter_email` is set) as part of the "Ticket Resolved" notification — the email appends a "Rate your experience" CTA linking to `/facility/satisfaction/{token}` (see "Reporter Email (Resolved / Closed)" above)
 2. Reporter visits `/facility/satisfaction/{token}` (public page, separate from the dashboard)
 3. Submits rating 1–5 and optional comment → `POST /api/facility/satisfaction/[token]`
-4. If rating ≤ 2 and issue is still `resolved`: auto-reopened, `reopen_count++`
+4. If rating ≤ 2 and issue is still `resolved`: auto-reopened, `reopen_count++`, `facility_issue_kpi_credits` cleared, and the assignee notified on the full-broadcast tier (see Auto-Satisfaction Survey above)
 
 ### Flow 4: Manager Reviews SLA
 
@@ -1106,6 +1185,10 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 | `00300_facility_assets_rls_floor_manager.sql` | Extend `facility_assets` RLS write policy to include `floor_manager` and `office_admin` roles |
 | `00301_facility_asset_photos.sql` | Add `facility_asset_photos` table — multiple photos per asset stored in `facility-asset-photos` bucket (id, asset_id, photo_url, caption, uploaded_by, created_at) |
 | `00305_facility_issues_claim_model.sql` | Add claim model to `facility_issues`: `claimed_by uuid REFERENCES users(id)`, `claimed_at timestamptz`; introduces `claimed` intermediate status for floor manager pre-assignment |
+| `00321_internal_tasks_v1.sql` | Adds `facility_task_type` enum (`reported_problem` / `delegated_task`) and `task_type` column — generalizes `facility_issues` into a Work Order + Task system |
+| `00345_facility_departments_and_tat.sql` | New `facility_departments` (1:1 with `facility_scope`) and `facility_department_members` (roster) tables; adds `tat_hours`/`tat_manual_override` to `facility_issues` — TAT is the existing SLA engine, rebranded and exposed for manual override |
+| `00347_facility_tat_extensions_and_kpi.sql` | Adds `tat_extension_count`/`kpi_points` to `facility_issues`; new `facility_issue_tat_extensions` table (2-per-ticket cap, `reason_category`, `kpi_exempt`, pass-card override fields) |
+| `00358_facility_kpi_member_credits.sql` | New `facility_issue_kpi_credits` table — per-user KPI credit rows (`primary` 100%, department-roster `member` 25%) written on every KPI recompute |
 
 ---
 

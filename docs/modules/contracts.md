@@ -54,13 +54,13 @@ Both `/contracts` and `/contracts/[id]` are `"use client"` components.
 - `contract-access-logs-section.tsx` — door access log viewer
 - `contract-bookings-section.tsx` — meeting room bookings associated with this contract
 - `contract-service-usage-section.tsx` — print/service usage history
-- `contract-contacts-panel.tsx` — per-contract contact persons
+- `contract-contacts-panel.tsx` — per-contract contact persons. Contacts mirrored from a member (`source_member_id` set) show a "From Members" badge; their name/email/phone fields are read-only here and can only be deleted by removing the member in Members & Access Control.
 - `cosec-access-wizard.tsx` — step wizard to provision a member on COSEC
 - `voucher-replace-dialog.tsx` — replace an individual seat's voucher
 
 ### API Routes
 All under `src/app/api/contracts/`:
-- `route.ts` — `GET` (list/search), `POST` (create)
+- `route.ts` — `GET` (list/search; `status` accepts a comma-separated list, e.g. `active,renewal_in_progress` — see `isContractOperational()` below), `POST` (create)
 - `[id]/route.ts` — `GET` (detail), `PATCH` (status/field updates), `DELETE` (draft only)
 - `[id]/renew/route.ts` — `POST` (create renewal draft), `PATCH` (admin escalation waiver)
 - `[id]/decline-renewal/route.ts` — `POST` (mark renewal declined)
@@ -69,7 +69,7 @@ All under `src/app/api/contracts/`:
 - `[id]/vouchers/[issuanceId]/route.ts` — `DELETE` (revoke single issuance)
 - `[id]/vouchers/[issuanceId]/replace/route.ts` — `POST` (replace one seat's voucher)
 - `[id]/vouchers/email/route.ts` — `POST` (email voucher codes to occupant)
-- `[id]/members/route.ts` — `GET`, `POST` (add member + COSEC provision), `DELETE` (deactivate + block)
+- `[id]/members/route.ts` — `GET`, `POST` (add member + COSEC provision; also mirrors the member into `contract_contacts` as an `occupant` contact with `source_member_id` set), `DELETE` (deactivate + block; also deactivates the mirrored contact)
 - `[id]/quotas/route.ts` — `GET`, `POST` (upsert), `DELETE`
 - `[id]/facilities/route.ts` — `GET`, `POST`, `DELETE`
 - `[id]/addons/route.ts` — `GET`, `POST`, `PATCH`, `DELETE`
@@ -77,7 +77,7 @@ All under `src/app/api/contracts/`:
 - `[id]/documents/init/route.ts` — `POST` (initialise KYC checklist from entity type)
 - `[id]/documents/[docId]/review/route.ts` — `POST` (approve/reject KYC doc)
 - `[id]/documents/[docId]/defer/route.ts` — `POST` (defer), `PATCH` (update deadline), `DELETE` (clear)
-- `[id]/contacts/route.ts` — `GET`, `POST`, `DELETE`
+- `[id]/contacts/route.ts` — `GET`, `POST`, `PATCH`, `DELETE`. `PATCH`/`DELETE` reject edits to name/email/phone (and reject delete outright) on contacts with `source_member_id` set — those fields and the removal path are owned by `[id]/members/route.ts`.
 - `[id]/space-allocations/route.ts` — `GET`, `POST`, `DELETE`
 - `[id]/seat-occupants/route.ts` — `GET`, `POST`
 - `[id]/seat-occupants/[occupantId]/route.ts` — `PATCH`, `DELETE`
@@ -203,7 +203,7 @@ created_at / updated_at TIMESTAMPTZ
 | `contract_space_allocations` | Maps physical space units to contracts. Columns: `space_unit_id`, `start_date`, `end_date`, `status` (`active`/`ended`). |
 | `contract_electricity_config` | Per-contract electricity billing overrides (utility_ratio, generator_ratio, customer rates). Unique on `contract_id`. |
 | `cosec_access_users` | COSEC device-level enrollment per member. `user_type = 'member'`, `entity_id` → `contract_members.id`. |
-| `contract_contacts` | Per-contract contact persons (finance, occupant, signatory, etc.). |
+| `contract_contacts` | Per-contract contact persons (finance, occupant, signatory, etc.). `source_member_id` (FK → `contract_members(id)`, nullable) marks contacts mirrored from Members & Access Control — those rows have name/email/phone locked to the member record and can only be deactivated (not deleted) by removing the member. Contacts added directly (Add / Import from Lead) have `source_member_id = NULL` and are unaffected. |
 
 ---
 
@@ -288,9 +288,13 @@ If the allocated seats in `contract_space_allocations` total fewer than `contrac
 - `termination_reason` is required (server validates; client also enforces via textarea UI).
 - Only `draft` contracts can be deleted via DELETE. All others are terminal-state-only.
 
+### Contract "Operational" Gate (`isContractOperational()`)
+
+A contract flips to `renewal_in_progress` as soon as a renewal draft is created — well before the renewal actually activates. It is still the customer's live contract until its own `end_date` passes, so customer-facing operations must not hard-gate on `status === 'active'`. `isContractOperational(contract)` in `src/lib/constants.ts` returns `true` if `status === 'active'`, or if `status === 'renewal_in_progress'` and `end_date >= today`; `false` otherwise. It gates: booking creation (`POST /api/bookings`), booking customer search, the new-booking contract picker, voucher issuance (`POST /api/contracts/[id]/vouchers`), usage charge creation (`POST /api/usage-charges`), manual print usage entry (`POST /api/accounting/print-usage`), service-usage CSV import, and member/COSEC provisioning on add. `GET /api/contracts` and the `search_contracts` RPC both accept a comma-separated `status` list (e.g. `active,renewal_in_progress`) for list/picker views, and still apply the `end_date` guard server-side for any `renewal_in_progress` rows returned.
+
 ### Voucher Issuance Rules
 
-- Contract must be `active`.
+- Contract must be `active`, or `renewal_in_progress` with `end_date` still in the future (`isContractOperational()`).
 - `signed_document_id` must be set (uploaded signed contract). This is a hard gate on the voucher POST endpoint.
 - Voucher validity matching: target = `tenure_months × 30 days`; tolerance = ±20%. A group must have enough vouchers for all unfilled seats, or an informative error is returned naming the shortfall.
 - Per seat: max one active issuance per `seat_number`.
@@ -354,7 +358,7 @@ On `terminated` or `expired` (from `active`): all `cosec_access_users` with `use
 | Only admin can override payment gate | Server PATCH (role check) |
 | Only admin/manager can terminate | Server PATCH (role check) |
 | Only admin/manager/sales_rep can renew or decline | Renew/decline-renewal routes (role check) |
-| Voucher issuance requires active status | Server POST vouchers |
+| Voucher issuance requires active or in-window renewal_in_progress status | Server POST vouchers (`isContractOperational()`) |
 | Voucher issuance requires signed_document_id | Server POST vouchers |
 | GST number format | Zod regex on Lead: `/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/` |
 | E-signing requires member email | Server sign/initiate (returns 400 with message) |
@@ -401,6 +405,8 @@ The `billing_mode` column controls how the monthly billing cycle works:
 | `gst_direct` | GST invoice issued immediately; due date = issue date + 7 days |
 
 Changed via PATCH with `billing_mode` field. Toggled in the `ContractInvoicesSection` component on the detail page.
+
+**Switching to `gst_direct`:** the toggle only affects future billing cycles — it does not touch statements already `finalized` and unpaid (with no GST invoice yet) under `proforma_first`. Before applying the switch, `ContractInvoicesSection` checks for such pending proformas and, if any exist, shows a dialog listing them instead of saving immediately. From that dialog the user can either "Switch to GST Direct anyway" (leaving the pending PIs to be resolved later from Accounting → Tally Inbox) or, per statement, "Convert to GST" — `admin`/`manager` only — which calls `POST /api/billing-statements/[id]/convert-to-gst-early` to cancel the PI and queue the statement for a direct GST invoice (existing override endpoint, requires a `reason` ≥ 5 characters).
 
 ---
 
@@ -525,7 +531,11 @@ Per-contract overrides in `contract_electricity_config` table. The `ContractElec
 
 14. **Signed contract is required before vouchers can be issued** (hard gate in the voucher POST endpoint), but is NOT required for contract activation. This means a contract can be `active` without a signed document — only voucher issuance is blocked until then. The UI shows an amber warning on the signed contract card if the contract is active without a document.
 
-15. **`search_contracts` RPC (PostgreSQL function) handles all searches.** Direct Supabase `.or()` cannot reach joined relation columns. If you add a new searchable field from a joined table, you must update the `search_contracts` function in a migration.
+15. **`search_contracts` RPC (PostgreSQL function) handles all searches.** Direct Supabase `.or()` cannot reach joined relation columns. If you add a new searchable field from a joined table, you must update the `search_contracts` function in a migration. It also accepts `p_status` as a comma-separated list (`string_to_array`), used by callers requesting `active,renewal_in_progress`.
+
+16. **Do not hardcode `status === 'active'` on any new customer-facing gate.** Use `isContractOperational()` (`src/lib/constants.ts`) instead, or the check will incorrectly lock out contracts that are `renewal_in_progress` but still within their own `end_date`. This bit bookings, vouchers, usage charges, print-usage entry, and service-usage import before `isContractOperational()` was introduced (#245).
+
+17. **A member-linked `contract_contacts` row cannot be deleted or have its name/email/phone edited directly.** `PATCH`/`DELETE` on `[id]/contacts/route.ts` reject those on any row with `source_member_id` set — remove or edit the person from Members & Access Control instead, which cascades (deactivate only, never delete) to the mirrored contact.
 
 ---
 

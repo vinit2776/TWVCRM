@@ -31,7 +31,7 @@ Both routes are `"use client"` pages. There are no server-component wrappers.
 
 ### Components
 - `src/components/proposals/proposal-form.tsx` — Proposal creation dialog (opened from lead detail page)
-- `src/components/proposals/proposal-lifecycle.tsx` — Sidebar timeline component showing all stages
+- `src/components/proposals/proposal-lifecycle.tsx` — Horizontal stepper timeline (icon + label per stage, connected by a line that turns green as each stage completes); rendered full-width directly below the page header, scrolls horizontally on narrow viewports
 - `src/components/proposals/booking-confirmation-dialog.tsx` — Confirm-accept dialog that triggers `/accept` API
 - `src/components/proposals/deposit-waiver-gate.tsx` — OTP flow card for zero-deposit proposals
 - `src/components/proposals/preset-picker.tsx` — Line-item preset selector in the form
@@ -47,7 +47,9 @@ Both routes are `"use client"` pages. There are no server-component wrappers.
 | POST | `/api/proposals/[id]/accept` | Accept proposal: mark accepted, create deposit link, send booking confirmation email + WhatsApp |
 | POST | `/api/proposals/[id]/send-invoice` | Generate prorated GST invoice, send email + WhatsApp (supports `preview: true` mode) |
 | POST | `/api/proposals/[id]/deposit-link` | Create/reuse deposit Razorpay link, send email + WhatsApp (supports `preview: true`) |
+| POST | `/api/proposals/[id]/deposit-payment-link` | Get-or-create the deposit Razorpay link (balance net of any credit applied) without emailing/WhatsApping the customer — auto-fired on page load, mirrors `/payment-link` |
 | POST | `/api/proposals/[id]/deposit-payment` | Record manual bank transfer deposit payment (admin/manager/accounts only) |
+| POST | `/api/proposals/[id]/deposit-credit` | Apply/edit a deposit credit held from a prior contract, netted off the required deposit (admin/manager only) |
 | POST | `/api/proposals/[id]/payment-link` | Auto-create Razorpay link for monthly charge (idempotent — reuses existing link) |
 | POST | `/api/proposals/[id]/monthly-link` | Create monthly charge Razorpay link and email it (manual trigger) |
 | POST | `/api/proposals/[id]/email` | Send proposal PDF to customer via email + optional WhatsApp document |
@@ -118,6 +120,12 @@ All columns added across migrations. The canonical full column list:
 | `deposit_payment_status` | TEXT | `'not_required'` | `'not_required'` / `'pending'` / `'paid'` |
 | `deposit_razorpay_link_id` | TEXT | NULL | Deposit Razorpay payment link ID |
 | `deposit_razorpay_link_url` | TEXT | NULL | Deposit Razorpay payment link short URL |
+| `deposit_email_sent_at` | TIMESTAMPTZ | NULL | Set whenever the deposit email is (re)sent via `/deposit-link`; drives the "Send" vs "Resend" button label and the "Last sent" timestamp on the Security Deposit card (`00354`) |
+| `deposit_credit_amount` | NUMERIC(12,2) | NULL | Deposit already held from a prior (e.g. terminated) contract, netted off the required deposit; does **not** change `security_deposit_amount` (`00352`) |
+| `deposit_credit_reason` | TEXT | NULL | Free-text audit reason for the credit (`00352`) |
+| `deposit_credit_proof_url` | TEXT | NULL | URL to accounts' confirmation of the held deposit, in `crm-documents` storage (`00352`) |
+| `deposit_credit_applied_by` | UUID → `users(id)` | NULL | Admin/manager who applied the credit (`00352`) |
+| `deposit_credit_applied_at` | TIMESTAMPTZ | NULL | When the credit was applied (`00352`) |
 | `deposit_payment_received_at` | TIMESTAMPTZ | NULL | |
 | `deposit_payment_amount` | DECIMAL(12,2) | NULL | Actual amount received (may differ by ≤10%) |
 | `deposit_payment_reference` | TEXT | NULL | UTR or Razorpay payment ID |
@@ -228,17 +236,19 @@ viewed       ← set by /track route when customer clicks email link (idempotent
 
 3. **Fresh Razorpay link on invoice send:** The `/send-invoice` route always creates a new Razorpay payment link for the prorated amount. It never reuses the existing `razorpay_payment_link_url`. This is critical because the prorated amount differs from the full monthly amount.
 
-4. **Deposit link reuse on `/deposit-link`:** The `/deposit-link` route reuses the existing `deposit_razorpay_link_url` if one already exists (to avoid duplicate links). Only creates a new one if `deposit_razorpay_link_url` is null.
+4. **Deposit link reuse on `/deposit-link`:** The `/deposit-link` route reuses the existing `deposit_razorpay_link_url` if one already exists (to avoid duplicate links). Only creates a new one if `deposit_razorpay_link_url` is null. `/deposit-payment-link` (the auto-fired get-or-create route) has the same reuse behavior.
 
 5. **Manual deposit payment roles:** Only `admin`, `manager`, `accounts` roles can call `/deposit-payment`. HTTP 403 for others.
 
-6. **Deposit shortfall tolerance:** If manual deposit amount is less than expected:
+6. **Deposit shortfall tolerance:** If manual deposit amount is less than expected (required deposit minus any credit applied):
    - More than 10% short: hard block (HTTP 400).
    - ≤ 10% short: requires `shortfall_approved = true` AND actor must be `admin` or `manager`. `accounts` role cannot approve shortfalls.
 
 7. **Proposal number uniqueness:** `proposal_number` has a UNIQUE DB constraint.
 
 8. **Lead required:** `lead_id` is NOT NULL with FK to `leads(id)` ON DELETE CASCADE. All proposals must be linked to a lead.
+
+9. **Deposit credit netting (`/deposit-credit`):** Only `admin` or `manager` can call this route (HTTP 403 for others). `amount` must be > 0 and cannot exceed `security_deposit_amount` (HTTP 400 otherwise). `reason` and a proof file (image/PDF, uploaded to `crm-documents`) are both required. Cannot be applied once `deposit_payment_status = 'paid'` (HTTP 400). The route only writes `deposit_credit_*` fields — `security_deposit_amount` itself is never modified, so the original required deposit is preserved for history. Every downstream consumer (`/deposit-link`, `/deposit-payment-link`, `/deposit-payment` shortfall check, the Security Deposit card, and the Lifecycle stepper) computes the actual balance due as `security_deposit_amount - deposit_credit_amount`.
 
 ### Webhook Auto-accept
 
@@ -321,6 +331,7 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 | Send GST invoice | All authenticated |
 | Record manual deposit payment | `admin`, `manager`, `accounts` only (HTTP 403 for others) |
 | Approve deposit shortfall | `admin`, `manager` only |
+| Apply/edit a deposit credit | `admin`, `manager` only (HTTP 403 for others) |
 | Request/verify deposit waiver OTP | Any authenticated user can request; OTP goes to all `admin` users |
 | Mark deposit as accounted | All authenticated (via `/api/accounting/proposal-payments`) |
 
@@ -372,6 +383,7 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 - `proposals/{id}/proposal-latest.pdf` — latest emailed proposal PDF (overwritten on resend)
 - `proposals/{id}/booking-confirmation-{timestamp}.pdf` — acceptance email PDF
 - `proposals/{id}/deposit-proof-{timestamp}.{ext}` — deposit payment proof uploaded manually
+- `proposals/{id}/deposit-credit-proof-{timestamp}.{ext}` — accounts' confirmation of a deposit credit held from a prior contract
 - `invoices/{invoiceNumber-replaced-slashes}.pdf` — GST invoice PDF
 
 ### Accounting Module
@@ -396,7 +408,7 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 4. Server calculates totals, sets `status: 'draft'`, `deposit_payment_status` based on deposit months.
 5. Lead auto-status advances to `proposal_sent` if applicable.
 6. If `security_deposit_months = 0`: proposal is locked. User must complete deposit waiver OTP flow.
-7. Detail page auto-triggers `POST /api/proposals/[id]/payment-link` if `razorpay_payment_link_url` is null and status is not rejected.
+7. Detail page auto-triggers `POST /api/proposals/[id]/payment-link` if `razorpay_payment_link_url` is null and status is not rejected. If a deposit is required, it also auto-triggers `POST /api/proposals/[id]/deposit-payment-link` (get-or-create, no email/WhatsApp) once `deposit_payment_status = 'pending'` and status is `sent`/`viewed`/`accepted`, so the deposit link is already visible on the Security Deposit card before any explicit send.
 8. User clicks "Email" → "Send Proposal" → `EmailDocumentDialog` opens.
 9. Client generates PDF via `generateProposalPDF()` (dynamic import).
 10. Submits PDF to `POST /api/proposals/[id]/email`.
@@ -427,20 +439,37 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
    e. Sends booking confirmation email with PDF attached + deposit payment button.
    f. Sends WhatsApp text with deposit link.
    g. Sends WhatsApp document (PDF).
-6. Deposit link shown on detail page sidebar with 30-day countdown.
+6. Deposit link shown on detail page sidebar with 30-day countdown. The link itself may already exist at this point — see Flow 1 step 7 — in which case `/accept` just reuses it.
 
 ### Flow 4: Collect Security Deposit (Manual Bank Transfer)
 
 1. Customer pays via NEFT/RTGS/UPI. Operations staff receives payment.
 2. On proposal detail, "Record Bank Transfer" button (visible when deposit pending and proposal sent/viewed/accepted).
 3. Dialog opens. Staff enters amount, payment mode, UTR/reference, optional notes + proof file.
-4. If amount < expected by ≤10%: admin/manager sees checkbox to approve shortfall.
+4. If amount < expected (required deposit minus any credit applied) by ≤10%: admin/manager sees checkbox to approve shortfall.
 5. If amount < expected by > 10%: hard block, cannot submit.
 6. Submit → `POST .../deposit-payment` (multipart/form-data).
 7. Server validates role, amount, shortfall rules.
 8. Uploads proof file to storage.
 9. Updates `deposit_payment_status: 'paid'`, `deposit_payment_amount`, `deposit_payment_reference`, `deposit_payment_medium`, `deposit_payment_received_at`, `deposit_payment_screenshot_url`.
 10. Sends confirmation email to customer.
+
+### Flow 4b: Apply a Deposit Credit (admin/manager)
+
+1. Used when a customer already has a refundable deposit held from a prior (e.g. terminated) contract that should offset the deposit on a new proposal.
+2. On the Security Deposit card, while `deposit_payment_status = 'pending'`, an admin/manager sees "Apply a held deposit credit" (or "Edit deposit credit" if one already exists).
+3. Dialog collects: credit amount (≤ required deposit), a reason (kept for audit), and a required proof file (accounts' confirmation).
+4. Submit → `POST .../deposit-credit` (multipart/form-data).
+5. Server checks role, validates amount/reason/proof, blocks if deposit is already paid, uploads proof to `crm-documents`.
+6. Updates `deposit_credit_amount`, `deposit_credit_reason`, `deposit_credit_proof_url`, `deposit_credit_applied_by`, `deposit_credit_applied_at`. `security_deposit_amount` is untouched.
+7. Security Deposit card now shows Required Deposit, Credit Applied, and Balance to Collect; the Lifecycle stepper gains a "Deposit Credit Applied" stage; the deposit email/link and shortfall check all switch to using the balance.
+
+### Flow 4c: Send/Resend Security Deposit Email
+
+1. On the Security Deposit card, button reads "Preview & Send Deposit Email" until `deposit_email_sent_at` is set, then "Preview & Resend Deposit Email" (previously this flipped as soon as a Razorpay link existed, which could be before any email was actually sent).
+2. `POST .../deposit-link` creates the Razorpay link if one doesn't exist yet (or reuses it — see Hard Rule 4), net of any credit applied, and emails/WhatsApps the customer.
+3. Server stamps `deposit_email_sent_at` with the current time on every send/resend.
+4. Security Deposit card shows "Last sent: <date, time>" (via `formatDateTime()`) once `deposit_email_sent_at` is set.
 
 ### Flow 5: Send Proforma Invoice (Pro-rata First Month)
 
@@ -487,6 +516,9 @@ The UI calculates deposit link expiry as `sent_at + 30 days`. The actual Razorpa
 ### `security_deposit_amount` is pre-GST
 The deposit amount stored and displayed is pre-GST (just months × subtotal). No GST is charged on the security deposit in the Razorpay link or email. Do not add GST to the deposit amount.
 
+### `security_deposit_amount` is never the amount actually collected once a credit is applied
+`security_deposit_amount` always stays the true required deposit — `/deposit-credit` never modifies it, by design, so it remains correct for history/audit. Any code that needs the amount actually being collected (Razorpay link amount, shortfall check, "Balance to Collect" display) must compute `security_deposit_amount - deposit_credit_amount` itself; do not read `security_deposit_amount` alone and assume it's the outstanding balance.
+
 ### Proposal PDF has no deposit button at negotiation phase
 The proposal PDF and email sent via `/email` route never includes the Razorpay deposit link. The deposit button only appears in the booking confirmation email sent by `/accept`. This is intentional — the deposit link is only sent after mutual acceptance.
 
@@ -510,6 +542,11 @@ The OTP is stored as plain TEXT in the `deposit_waiver_otp` column. It is cleare
 
 ### Auto-created monthly payment link on detail page load
 The proposal detail page auto-fires `POST /api/proposals/[id]/payment-link` on every load if `razorpay_payment_link_url` is null and status is not `rejected`. This creates a Razorpay link silently. If Razorpay is down or misconfigured, this will throw a console error but not block the page.
+
+The same pattern now also applies to the deposit link: the page auto-fires `POST /api/proposals/[id]/deposit-payment-link` on load if a deposit is required, pending, no link exists yet, and status is `sent`/`viewed`/`accepted`. Unlike `/deposit-link`, this get-or-create route never emails or WhatsApps the customer — it only makes the link visible on the Security Deposit card ahead of an explicit send. `deposit_email_sent_at` (not link existence) is what actually indicates the customer has been notified — see the "Send" vs "Resend" button label.
+
+### Lifecycle stepper is full-width, not in the sidebar
+`ProposalLifecycle` used to render inside the right-hand sidebar as a vertical list. It now renders as a horizontal stepper in its own full-width `Card` directly below the page header (before the two-column grid), and no longer lives in the sidebar column. If you're looking for lifecycle-stage logic, the component itself (`proposal-lifecycle.tsx`) is unchanged in terms of *stage computation* — only its layout and mount point moved.
 
 ---
 
