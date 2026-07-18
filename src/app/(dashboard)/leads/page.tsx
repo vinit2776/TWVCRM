@@ -33,6 +33,7 @@ const ImportLeadsDialog = dynamic(
 );
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
+import { OverdueFollowupBanner } from "@/components/leads/overdue-followup-banner";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -91,6 +92,20 @@ export default function LeadsPage() {
     setPage(1);
   };
 
+  // Overdue follow-ups sort to the top of page 1 by default, but only within whatever
+  // filters are currently applied — clear them so nothing hides the leads that need action.
+  const handleReviewOverdue = () => {
+    setStatusFilter("");
+    setSourceFilter("");
+    setLocationFilter(null);
+    setAssignedToFilter("");
+    setSearch("");
+    setSearchInput("");
+    setShowDisabled(false);
+    setPage(1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -112,6 +127,9 @@ export default function LeadsPage() {
           </Button>
         </div>
       </div>
+
+      {/* ── Overdue follow-ups need action — visible regardless of default page/filters ── */}
+      <OverdueFollowupBanner onReview={handleReviewOverdue} />
 
       {/* ── Pinned: Public-form enquiries needing attention (real-time) ── */}
       {hasPinned && (
