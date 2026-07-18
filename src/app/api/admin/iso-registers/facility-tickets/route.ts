@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
       resolution_notes, resolved_at, scope,
       location:locations(name),
       asset:facility_assets(name),
-      category:facility_asset_categories(name),
+      category:facility_asset_categories!facility_issues_category_id_fkey(name),
       assignee:users!facility_issues_assigned_to_fkey(full_name)
     `)
     .neq("scope", "it")
