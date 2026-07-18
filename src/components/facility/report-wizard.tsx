@@ -17,12 +17,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
   ChevronLeft, ChevronRight, Loader2, MapPin, AlertTriangle, Check,
   Search, X, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle, ScanLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
+import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type {
@@ -89,7 +93,11 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [tatMode, setTatMode] = useState<"hours" | "datetime">("datetime");
   const [tatHours, setTatHours] = useState("");
-  const [tatDateTime, setTatDateTime] = useState("");
+  const [tatDate, setTatDate] = useState("");
+  const [tatTime, setTatTime] = useState("");
+  // Combined "YYYY-MM-DDTHH:mm" — same wire format the old datetime-local
+  // input produced, so the resolve/validation logic below is unchanged.
+  const tatDateTime = tatDate && tatTime ? `${tatDate}T${tatTime}` : "";
 
   // asset search
   const [assetQuery, setAssetQuery] = useState("");
@@ -107,7 +115,8 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setPhotos([]);
     setTatMode("datetime");
     setTatHours("");
-    setTatDateTime("");
+    setTatDate("");
+    setTatTime("");
     setTitle("");
     setDescription("");
     setReporterName("");
@@ -531,13 +540,22 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
         ) : (
           <div className="flex items-center gap-2">
             <Input
-              id="tat-datetime"
-              type="datetime-local"
-              value={tatDateTime}
-              onChange={(e) => setTatDateTime(e.target.value)}
-              className="max-w-[220px]"
+              id="tat-date"
+              type="date"
+              value={tatDate}
+              onChange={(e) => setTatDate(e.target.value)}
+              className="max-w-[160px]"
             />
-            <span className="text-xs text-muted-foreground">Due by this date &amp; time</span>
+            <Select value={tatTime} onValueChange={setTatTime}>
+              <SelectTrigger id="tat-time" className="w-[120px]">
+                <SelectValue placeholder="Time" />
+              </SelectTrigger>
+              <SelectContent>
+                {BUSINESS_HOURS_TIME_SLOTS.map((slot) => (
+                  <SelectItem key={slot.value} value={slot.value}>{slot.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
         {!tatHours.trim() && !tatDateTime && (

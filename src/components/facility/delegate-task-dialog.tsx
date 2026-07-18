@@ -23,6 +23,7 @@ import {
 import { LocationSelector } from "@/components/shared/location-selector";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
+import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { FacilityIssuePriority, FacilityScope } from "@/types";
@@ -60,7 +61,11 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const [assignedTo, setAssignedTo] = useState("");
   const [dueMode, setDueMode] = useState<"hours" | "datetime">("datetime");
   const [dueHours, setDueHours] = useState("");
-  const [dueDateTime, setDueDateTime] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [dueTime, setDueTime] = useState("");
+  // Combined "YYYY-MM-DDTHH:mm" — same wire format the old datetime-local
+  // input produced, so the resolve/validation logic below is unchanged.
+  const dueDateTime = dueDate && dueTime ? `${dueDate}T${dueTime}` : "";
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -85,7 +90,8 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setAssignedTo("");
     setDueMode("datetime");
     setDueHours("");
-    setDueDateTime("");
+    setDueDate("");
+    setDueTime("");
     setPhotos([]);
   };
 
@@ -263,13 +269,25 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
                 <span className="text-xs text-muted-foreground">from now</span>
               </div>
             ) : (
-              <Input
-                type="datetime-local"
-                value={dueDateTime}
-                onChange={(e) => setDueDateTime(e.target.value)}
-                className="max-w-[220px]"
-                required
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  className="max-w-[160px]"
+                  required
+                />
+                <Select value={dueTime} onValueChange={setDueTime}>
+                  <SelectTrigger className="w-[120px]">
+                    <SelectValue placeholder="Time" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BUSINESS_HOURS_TIME_SLOTS.map((slot) => (
+                      <SelectItem key={slot.value} value={slot.value}>{slot.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             )}
             {!hasValidDueInput && (
               <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
