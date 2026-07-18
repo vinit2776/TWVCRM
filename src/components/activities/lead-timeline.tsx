@@ -45,6 +45,10 @@ import type {
 } from "@/types";
 import { ActivityForm } from "@/components/activities/activity-form";
 import { CommunicationLogRow } from "@/components/communications/communication-log-row";
+import {
+  FollowUpDateTimeInput,
+  type FollowUpDateTimeStatus,
+} from "@/components/shared/followup-datetime-input";
 
 // ─── Billing communication event (from /api/leads/[id]/billing-communications) ─
 interface BillingCommEvent {
@@ -132,6 +136,7 @@ function ActivityItem({
   const [acting, setActing] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
+  const [newDateStatus, setNewDateStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [highlighted, setHighlighted] = useState(false);
   const [logActivityOpen, setLogActivityOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -266,8 +271,10 @@ function ActivityItem({
                           if (isRescheduling) {
                             setIsRescheduling(false);
                             setNewDate("");
+                            setNewDateStatus("empty");
                           } else {
                             setNewDate(toDatetimeLocalValue(activity.follow_up_date));
+                            setNewDateStatus("valid");
                             setIsRescheduling(true);
                           }
                         }}
@@ -283,30 +290,38 @@ function ActivityItem({
                 </div>
 
                 {isRescheduling && (
-                  <div className="flex items-center gap-2 pl-4 pt-0.5">
-                    <input
-                      type="datetime-local"
-                      value={newDate}
-                      onChange={(e) => setNewDate(e.target.value)}
-                      className="text-xs border rounded px-2 py-0.5 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                      min={toDatetimeLocalValue()}
-                    />
-                    <button
-                      onClick={handleReschedule}
-                      disabled={!newDate || acting}
-                      className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
-                    >
-                      Confirm
-                    </button>
-                    <button
-                      onClick={() => {
-                        setIsRescheduling(false);
-                        setNewDate("");
-                      }}
-                      className="text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      Cancel
-                    </button>
+                  <div className="flex flex-col gap-1 pl-4 pt-0.5">
+                    <div className="flex items-center gap-2">
+                      <FollowUpDateTimeInput
+                        value={newDate}
+                        onChange={setNewDate}
+                        onStatusChange={setNewDateStatus}
+                        minDate={toDatetimeLocalValue().slice(0, 10)}
+                        className="[&_input]:h-6 [&_input]:text-xs [&_input]:px-2 [&_input]:py-0.5"
+                      />
+                      <button
+                        onClick={handleReschedule}
+                        disabled={!newDate || newDateStatus === "incomplete" || acting}
+                        className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => {
+                          setIsRescheduling(false);
+                          setNewDate("");
+                          setNewDateStatus("empty");
+                        }}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {newDateStatus === "incomplete" && (
+                      <p className="text-[10px] text-destructive pl-0.5">
+                        Pick both a date and a time between 9:00 AM and 8:00 PM.
+                      </p>
+                    )}
                   </div>
                 )}
 
