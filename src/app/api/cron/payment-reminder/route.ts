@@ -9,7 +9,7 @@ import {
 import {
   pickStageForKind, shouldFire, sendReceivableReminder,
 } from "@/lib/receivable-reminder";
-import { depositIsChaseable } from "@/lib/receivables";
+import { fetchDunnableReceivables } from "@/lib/receivable-fetch";
 
 export const maxDuration = 60;
 
@@ -238,106 +238,4 @@ async function runOtherReceivablesPass(
   }
 
   return { considered: rows.length, sent, skipped, errors, summary };
-}
-
-interface DunnableRow {
-  kind: "deposit" | "topup" | "adhoc_invoice";
-  id: string;
-  reference: string;
-  party_name: string;
-  email: string | null;
-  phone: string | null;
-  amount: number;
-  due_date: string | null;
-  payment_link_url: string | null;
-  followup_enabled: boolean;
-  reminder_count: number;
-  last_reminder_sent_at: string | null;
-}
-
-async function fetchDunnableReceivables(admin: SupabaseClient): Promise<DunnableRow[]> {
-  const out: DunnableRow[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const party = (lead: any) =>
-    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
-
-  const { data: deposits } = await admin
-    .from("proposals")
-    .select(`
-      id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
-      deposit_due_date, deposit_razorpay_link_url,
-      deposit_reminder_count, deposit_last_reminder_sent_at,
-      lead:leads!proposals_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
-    `)
-    .eq("deposit_payment_status", "pending")
-    .gt("security_deposit_amount", 0);
-
-  for (const d of deposits || []) {
-    // Never chase a deposit on a proposal the customer hasn't accepted.
-    if (!depositIsChaseable(d.status as string)) continue;
-    const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
-    if (owed <= 0) continue;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const lead = d.lead as any;
-    out.push({
-      kind: "deposit", id: d.id, reference: d.proposal_number, party_name: party(lead),
-      email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
-      amount: owed, due_date: d.deposit_due_date,
-      payment_link_url: d.deposit_razorpay_link_url,
-      followup_enabled: true,
-      reminder_count: d.deposit_reminder_count || 0,
-      last_reminder_sent_at: d.deposit_last_reminder_sent_at,
-    });
-  }
-
-  const { data: topups } = await admin
-    .from("deposit_topups")
-    .select(`
-      id, amount, due_date, razorpay_payment_link_url, reminder_count, last_reminder_sent_at,
-      contract:contracts!deposit_topups_contract_id_fkey(
-        contract_number,
-        lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
-      )
-    `)
-    .eq("status", "pending");
-
-  for (const t of topups || []) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const contract = t.contract as any;
-    out.push({
-      kind: "topup", id: t.id, reference: contract?.contract_number || "—",
-      party_name: party(contract?.lead), email: contract?.lead?.email ?? null,
-      phone: contract?.lead?.mobile || contract?.lead?.phone || null,
-      amount: Number(t.amount || 0), due_date: t.due_date,
-      payment_link_url: t.razorpay_payment_link_url,
-      followup_enabled: true,
-      reminder_count: t.reminder_count || 0,
-      last_reminder_sent_at: t.last_reminder_sent_at,
-    });
-  }
-
-  const { data: invoices } = await admin
-    .from("proforma_invoices")
-    .select(`
-      id, invoice_number, total_amount, due_date, razorpay_link_url,
-      followup_enabled, reminder_count, last_reminder_sent_at,
-      lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
-    `)
-    .not("status", "in", "(paid,cancelled)");
-
-  for (const inv of invoices || []) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const lead = inv.lead as any;
-    out.push({
-      kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number, party_name: party(lead),
-      email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
-      amount: Number(inv.total_amount || 0), due_date: inv.due_date,
-      payment_link_url: inv.razorpay_link_url,
-      followup_enabled: inv.followup_enabled !== false,
-      reminder_count: inv.reminder_count || 0,
-      last_reminder_sent_at: inv.last_reminder_sent_at,
-    });
-  }
-
-  return out;
 }

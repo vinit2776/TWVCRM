@@ -918,6 +918,26 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded }: {
   onRecorded: () => void;
 }) {
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
+  const [historyRow, setHistoryRow] = useState<OtherReceivableRow | null>(null);
+
+  async function sendReminderNow(r: OtherReceivableRow) {
+    setRemindingId(r.id);
+    try {
+      const res = await fetch(`/api/accounting/receivables/${r.kind}/${r.id}/reminder`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not send the reminder");
+      const ch = [data.data?.email_sent && "email", data.data?.whatsapp_sent && "WhatsApp"]
+        .filter(Boolean).join(" + ");
+      toast.success(`${data.data?.tone || "Reminder"} sent via ${ch}`);
+      onRecorded();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the reminder");
+    } finally {
+      setRemindingId(null);
+    }
+  }
+
   if (!summary || rows.length === 0) return null;
 
   return (
@@ -1010,6 +1030,25 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded }: {
                             <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
                           </Button>
                         )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => sendReminderNow(r)}
+                          disabled={remindingId === r.id}
+                          title="Send the next reminder now (bypasses the 48h throttle)"
+                        >
+                          {remindingId === r.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Bell className="h-3.5 w-3.5" />}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setHistoryRow(r)}
+                          title="View reminder history"
+                        >
+                          <History className="h-3.5 w-3.5" />
+                        </Button>
                         {r.payment_link_url && (
                           <a
                             href={r.payment_link_url}
@@ -1038,7 +1077,104 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded }: {
           onDone={() => { setPayRow(null); onRecorded(); }}
         />
       )}
+      {historyRow && (
+        <OtherReminderHistoryDialog row={historyRow} onClose={() => setHistoryRow(null)} />
+      )}
     </Card>
+  );
+}
+
+interface ReminderSend {
+  id: string;
+  stage_index: number;
+  stage_label: string;
+  channel: string;
+  recipient: string | null;
+  status: string;
+  error: string | null;
+  triggered_by: string;
+  created_at: string;
+  triggered_by_name: string | null;
+}
+
+/** What has actually gone out to this customer, across cron and manual sends. */
+function OtherReminderHistoryDialog({ row, onClose }: {
+  row: OtherReceivableRow;
+  onClose: () => void;
+}) {
+  const [items, setItems] = useState<ReminderSend[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/accounting/receivables/${row.kind}/${row.id}/reminder`);
+        const data = await res.json();
+        if (!cancelled && res.ok) setItems(data.items || []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [row.kind, row.id]);
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Reminder history — {row.reference}</DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <div className="p-6 text-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            Nothing sent yet for this receivable.
+            {!row.followup_enabled && (
+              <p className="mt-2 text-xs">
+                Automated follow-up is off for this row — it predates the ladder. Use the
+                bell to send one manually.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="max-h-[400px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left">Sent</th>
+                  <th className="px-3 py-2 text-left">Stage</th>
+                  <th className="px-3 py-2 text-left">Channel</th>
+                  <th className="px-3 py-2 text-left">Recipient</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((s) => (
+                  <tr key={s.id} className="border-b last:border-0">
+                    <td className="px-3 py-2 whitespace-nowrap">{formatDate(s.created_at)}</td>
+                    <td className="px-3 py-2">{s.stage_label}</td>
+                    <td className="px-3 py-2">{s.channel}</td>
+                    <td className="px-3 py-2 text-xs break-all">{s.recipient || "—"}</td>
+                    <td className="px-3 py-2">
+                      {s.status === "sent"
+                        ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300">sent</Badge>
+                        : <Badge className="bg-red-100 text-red-800 border-red-300" title={s.error || ""}>failed</Badge>}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {s.triggered_by === "cron" ? "Automated" : (s.triggered_by_name || "Manual")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
