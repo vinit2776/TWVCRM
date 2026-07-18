@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { summarizeAuditEvent } from "@/lib/audit-labels";
 
 export const maxDuration = 60;
 
@@ -38,22 +39,22 @@ export async function GET(request: Request) {
 
   const supabase = await createAdminClient();
 
-  // Fetch recipients
-  const { data: setting } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "digest_recipients")
-    .single();
+  // Recipients — every active admin, resolved fresh on each send so the list
+  // never drifts from who actually holds the role (previously a manually
+  // maintained app_settings list, which had gone stale). Other crons still
+  // read the static `digest_recipients` setting independently — unaffected.
+  const { data: admins } = await supabase
+    .from("users")
+    .select("email")
+    .eq("role", "admin")
+    .eq("is_active", true);
 
-  let recipients: string[] = [];
-  try {
-    recipients = JSON.parse(setting?.value || "[]");
-  } catch {
-    recipients = [];
-  }
+  const recipients = (admins || [])
+    .map((u: { email: string }) => u.email)
+    .filter(Boolean);
 
   if (recipients.length === 0) {
-    return NextResponse.json({ error: "No digest recipients configured" }, { status: 400 });
+    return NextResponse.json({ error: "No active admin recipients found" }, { status: 400 });
   }
 
   // Aggregate data for 3 date windows + week-to-date
@@ -69,7 +70,7 @@ export async function GET(request: Request) {
   const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
@@ -77,6 +78,7 @@ export async function GET(request: Request) {
     fetchReceivablesAging(supabase, todayIST),
     fetchMetrics(supabase, yesterdayIST),
     fetchLocationBreakdown(supabase, yesterdayIST),
+    fetchStoryboardHighlights(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -88,7 +90,13 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard);
+
+  // ?preview=1 renders the HTML without sending — used for local/staging QA so
+  // testing against real (prod) data never fans out real emails to recipients.
+  if (searchParams.get("preview") === "1") {
+    return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
 
   let sent = 0;
   for (const email of recipients) {
@@ -141,6 +149,8 @@ interface Metrics {
   newBookings: number;
   newContracts: number;
   supportTickets: number;
+  workOrdersOpened: number;
+  workOrdersClosed: number;
 }
 
 /** Single-day shorthand — delegates to the range version */
@@ -173,6 +183,8 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     bookings,
     contracts,
     tickets,
+    workOrdersOpened,
+    workOrdersClosed,
   ] = await Promise.all([
     // Keyed on created_at (when the payment was recorded), not payment_date
     // (the receipt date the recorder enters, which can be backdated) — so a
@@ -253,6 +265,17 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
       .select("id", { count: "exact", head: true })
       .gte("created_at", rangeStart)
       .lte("created_at", rangeEnd),
+    // Facility "Work Orders" — reported_at is the creation timestamp (no created_at column).
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .gte("reported_at", rangeStart)
+      .lte("reported_at", rangeEnd),
+    supabase
+      .from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .gte("closed_at", rangeStart)
+      .lte("closed_at", rangeEnd),
   ]);
 
   const sum = (rows: { amount?: number; total_amount?: number; total_ordered_amount?: number }[] | null, field: string) =>
@@ -274,6 +297,8 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     newBookings: bookings.count || 0,
     newContracts: contracts.count || 0,
     supportTickets: tickets.count || 0,
+    workOrdersOpened: workOrdersOpened.count || 0,
+    workOrdersClosed: workOrdersClosed.count || 0,
   };
 }
 
@@ -384,13 +409,35 @@ interface UnpaidBill {
   payment_status: string;
 }
 
+interface WorkOrderBreakdownRow {
+  location: string;
+  department: string;
+  open: number;
+  slaBreached: number;
+  critical: number;
+}
+
 interface AttentionItems {
   overdueTasks: number;
+  overdueTasksUrgent: number;
+  overdueTasksByAssignee: { name: string; overdue: number }[];
   unpaidBills: UnpaidBill[];
   unpaidBillsTotal: number;
   expiringContracts: number;
   pendingFollowups: number;
+  workOrdersSlaAtRisk: number;
+  workOrdersOpenCritical: number;
+  workOrderBreakdown: WorkOrderBreakdownRow[];
 }
+
+const OPEN_WORK_ORDER_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+
+// facility_issues has no department_id — "department" is the `scope` enum,
+// matched 1:1 onto the facility_departments table by value, not a stored FK.
+const WORK_ORDER_DEPARTMENT_LABEL: Record<string, string> = {
+  it: "IT", hvac: "HVAC", plumbing: "Plumbing", electrical: "Electrical",
+  housekeeping: "Housekeeping", security: "Security", other: "Other", facility: "Facility",
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchAttentionItems(supabase: any, date: string): Promise<AttentionItems> {
@@ -398,10 +445,10 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
     .toISOString()
     .slice(0, 10);
 
-  const [overdue, bills, expiring, followups] = await Promise.all([
+  const [overdue, bills, expiring, followups, workOrders] = await Promise.all([
     supabase
       .from("tasks")
-      .select("id", { count: "exact", head: true })
+      .select("id, priority, assignee:users!tasks_assigned_to_fkey(full_name)")
       .lt("due_date", date)
       .neq("status", "done"),
     supabase
@@ -420,7 +467,52 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .select("id", { count: "exact", head: true })
       .eq("is_follow_up_done", false)
       .not("follow_up_date", "is", null),
+    // All open work orders, fetched once and grouped client-side below for
+    // both the headline counts and the location × department breakdown.
+    // `sla_breached` on the row is only computed at resolve time, so an
+    // open-but-overdue issue needs a live comparison against sla_target_at.
+    supabase
+      .from("facility_issues")
+      .select("scope, priority, sla_target_at, location:locations(name)")
+      .in("status", OPEN_WORK_ORDER_STATUSES),
   ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overdueRows = (overdue.data || []) as any[];
+  const overdueTasksUrgent = overdueRows.filter((t) => t.priority === "urgent" || t.priority === "high").length;
+
+  const assigneeCounts = new Map<string, number>();
+  for (const t of overdueRows) {
+    const name = t.assignee?.full_name || "Unassigned";
+    assigneeCounts.set(name, (assigneeCounts.get(name) || 0) + 1);
+  }
+  const overdueTasksByAssignee = Array.from(assigneeCounts.entries())
+    .map(([name, overdue]) => ({ name, overdue }))
+    .sort((a, b) => b.overdue - a.overdue);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const workOrderRows = (workOrders.data || []) as any[];
+  const slaCutoff = new Date(`${date}T23:59:59Z`).getTime();
+  const woGroups = new Map<string, WorkOrderBreakdownRow>();
+  let workOrdersSlaAtRisk = 0;
+  let workOrdersOpenCritical = 0;
+  for (const w of workOrderRows) {
+    const location = w.location?.name || "Unknown";
+    const department = WORK_ORDER_DEPARTMENT_LABEL[w.scope] || w.scope || "Other";
+    const breached = !!w.sla_target_at && new Date(w.sla_target_at).getTime() < slaCutoff;
+    const critical = w.priority === "critical";
+    if (breached) workOrdersSlaAtRisk++;
+    if (critical) workOrdersOpenCritical++;
+
+    const key = `${location}|${department}`;
+    const row = woGroups.get(key) || { location, department, open: 0, slaBreached: 0, critical: 0 };
+    row.open++;
+    if (breached) row.slaBreached++;
+    if (critical) row.critical++;
+    woGroups.set(key, row);
+  }
+  const workOrderBreakdown = Array.from(woGroups.values())
+    .sort((a, b) => b.slaBreached - a.slaBreached || b.open - a.open);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const billRows: UnpaidBill[] = (bills.data || []).map((b: any) => ({
@@ -433,11 +525,16 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
   }));
 
   return {
-    overdueTasks: overdue.count || 0,
+    overdueTasks: overdueRows.length,
+    overdueTasksUrgent,
+    overdueTasksByAssignee,
     unpaidBills: billRows,
     unpaidBillsTotal: billRows.reduce((s, r) => s + (r.total_amount - r.amount_paid), 0),
     expiringContracts: expiring.count || 0,
     pendingFollowups: followups.count || 0,
+    workOrdersSlaAtRisk,
+    workOrdersOpenCritical,
+    workOrderBreakdown,
   };
 }
 
@@ -782,6 +879,189 @@ async function fetchExtended(supabase: any, date: string): Promise<ExtendedData>
 }
 
 // ---------------------------------------------------------------------------
+// Storyboard — today's storyline, synthesised from the audit trail
+// ---------------------------------------------------------------------------
+
+interface StoryboardEvent {
+  icon: string;
+  time: string;
+  label: string;
+  detail?: string;
+}
+
+interface AuditRow {
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  created_at: string;
+}
+
+const ENTITY_ICON: Record<string, string> = {
+  lead: "📥",
+  proposal: "📄",
+  contract: "✅",
+  contract_payment: "₹",
+  billing_payment: "₹",
+  booking_payment: "₹",
+  billing_statement: "🧮",
+  proforma_invoice: "🧾",
+  vendor_bill: "🧾",
+  purchase_order: "📦",
+  purchase_request: "📦",
+  support_ticket: "🎫",
+  facility_issue: "🔧",
+  task: "✔️",
+  petty_cash_entry: "💵",
+  booking: "🛋️",
+};
+
+// Entity types whose daily movement matters most to management — weighted
+// higher so a contract or payment event beats a routine record edit.
+const ENTITY_WEIGHT: Record<string, number> = {
+  contract: 3, billing_statement: 3, contract_payment: 3, billing_payment: 3,
+  booking_payment: 3, vendor_bill: 3, proposal: 3, proforma_invoice: 3, purchase_order: 3,
+  facility_issue: 3,
+  lead: 2, task: 2, support_ticket: 2, purchase_request: 2, petty_cash_entry: 2,
+};
+
+function entityDisplayName(entityType: string): string {
+  return entityType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Largest numeric value under an amount-like key in the changes diff — used both to rank and to display ₹ figures. */
+function largestAmountInChanges(changes: AuditRow["changes"]): number {
+  if (!changes) return 0;
+  let max = 0;
+  for (const [key, val] of Object.entries(changes)) {
+    if (!/amount|fee|total/i.test(key)) continue;
+    const n = Number((val as { new: unknown })?.new);
+    if (!isNaN(n) && n > max) max = n;
+  }
+  return max;
+}
+
+/**
+ * Picks the day's 5 most narratable audit_trail events — weighted toward new
+ * records, status transitions, and large ₹ amounts — collapsing an entity
+ * touched more than once today to its latest event so the timeline doesn't
+ * repeat the same record.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchStoryboardHighlights(supabase: any, date: string): Promise<StoryboardEvent[]> {
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+
+  const { data: rows } = await supabase
+    .from("audit_trail")
+    .select("entity_type, entity_id, action, changes, created_at")
+    .gte("created_at", dayStart)
+    .lte("created_at", dayEnd)
+    .order("created_at", { ascending: true })
+    .limit(500);
+
+  if (!rows || rows.length === 0) return [];
+
+  const latestByEntity = new Map<string, AuditRow>();
+  for (const row of rows as AuditRow[]) {
+    latestByEntity.set(`${row.entity_type}:${row.entity_id}`, row);
+  }
+
+  const scored = Array.from(latestByEntity.values()).map((row) => {
+    const amount = largestAmountInChanges(row.changes);
+    const score =
+      (ENTITY_WEIGHT[row.entity_type] || 1) +
+      (row.action === "create" ? 3 : 0) +
+      (amount > 0 ? Math.min(5, Math.floor(amount / 50000)) + 2 : 0);
+    return { row, score, amount };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  return scored
+    .slice(0, 5)
+    .sort((a, b) => new Date(a.row.created_at).getTime() - new Date(b.row.created_at).getTime())
+    .map(({ row, amount }) => {
+      const summary = summarizeAuditEvent(row);
+      const time = new Date(row.created_at).toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit",
+      });
+      return {
+        icon: ENTITY_ICON[row.entity_type] || "📌",
+        time,
+        label: `${entityDisplayName(row.entity_type)} ${summary.label.toLowerCase()}`,
+        detail: amount > 0 ? rupees(amount) : summary.detail,
+      };
+    });
+}
+
+/**
+ * One-sentence executive synthesis — the 2-3 highest-magnitude facts of the
+ * day (money, contracts won) plus, inline, the single most urgent open item.
+ * Deterministic template, no external calls. Full detail for every flag
+ * still lives in "Needs Attention" further down — this just leads with it.
+ */
+function buildStoryHeadline(
+  todayIST: string,
+  today: Metrics,
+  extended: ExtendedData,
+  attention: AttentionItems,
+  revenueToday: number
+): string {
+  const parts: string[] = [
+    revenueToday > 0 ? `${rupees(revenueToday)} collected` : "a quiet day on collections",
+  ];
+
+  if (today.newContracts > 0) {
+    parts.push(`${today.newContracts} contract${today.newContracts > 1 ? "s" : ""} activated`);
+  } else if (today.leadsWon > 0) {
+    parts.push(`${today.leadsWon} lead${today.leadsWon > 1 ? "s" : ""} won`);
+  }
+
+  const headline = parts.join(", ");
+
+  const overdueBills = attention.unpaidBills.filter((b) => b.due_date && b.due_date <= todayIST);
+  const overdueInvoices = extended.pendingClientInvoices.filter((i) => i.isOverdue);
+
+  let urgent: string | null = null;
+  if (overdueBills.length > 0) {
+    urgent = `${overdueBills.length} vendor bill${overdueBills.length > 1 ? "s" : ""} (${rupees(overdueBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))}) overdue`;
+  } else if (overdueInvoices.length > 0) {
+    urgent = `${overdueInvoices.length} client invoice${overdueInvoices.length > 1 ? "s" : ""} overdue`;
+  } else if (attention.expiringContracts > 0) {
+    urgent = `${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring within 30 days`;
+  } else if (extended.stuckProposals.length > 0) {
+    urgent = `${extended.stuckProposals.length} proposal${extended.stuckProposals.length > 1 ? "s" : ""} stuck with no response`;
+  }
+
+  return `${headline}${urgent ? ` — but ${urgent}` : ""}.`;
+}
+
+function storyboardNode(ev: StoryboardEvent): string {
+  return `
+    <td style="text-align:center;padding:0 4px;">
+      <div style="width:30px;height:30px;line-height:30px;border-radius:50%;background:#eef4f3;color:#015E65;font-size:13px;margin:0 auto 6px;">${ev.icon}</div>
+      <p style="margin:0;font-size:9.5px;font-weight:600;color:#999;">${ev.time}</p>
+      <p style="margin:2px 0 0;font-size:11px;font-weight:600;color:#333;line-height:1.3;">${ev.label}</p>
+      ${ev.detail ? `<p style="margin:2px 0 0;font-size:10px;color:#015E65;font-weight:600;">${ev.detail}</p>` : ""}
+    </td>`;
+}
+
+function buildStoryboardHtml(highlights: StoryboardEvent[], headline: string): string {
+  const timelineHtml = highlights.length > 0 ? `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <tr>${highlights.map(storyboardNode).join("")}</tr>
+    </table>` : "";
+
+  return `
+    <div style="background:#f7fbfa;border:1px solid #d1fae5;border-radius:8px;padding:18px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 12px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.5px;">Today's Storyline</p>
+      ${timelineHtml}
+      <p style="margin:0;font-size:15px;line-height:1.5;color:#222;font-weight:500;">${headline}</p>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
 // HTML helpers
 // ---------------------------------------------------------------------------
 
@@ -982,10 +1262,15 @@ function buildDigestHtml(
   attention: AttentionItems,
   portfolio: Portfolio,
   extended: ExtendedData,
-  receivables: ReceivablesAging
+  receivables: ReceivablesAging,
+  storyboard: StoryboardEvent[]
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
   const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
+
+  // ── Today's Storyline ───────────────────────────────────────────────────
+  const storyHeadline = buildStoryHeadline(todayIST, today, extended, attention, revenueToday);
+  const storyboardHtml = buildStoryboardHtml(storyboard, storyHeadline);
 
   // ── Yesterday's Collections ───────────────────────────────────────────────
   const yesterdayLabel = new Date(yesterdayIST + "T00:00:00").toLocaleDateString("en-IN", {
@@ -1104,7 +1389,7 @@ function buildDigestHtml(
 
   // Act Today
   if (attention.overdueTasks > 0)
-    overdueItems.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}`);
+    overdueItems.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}${attention.overdueTasksUrgent > 0 ? ` (${attention.overdueTasksUrgent} urgent/high)` : ""}`);
 
   const overdueInvoices = extended.pendingClientInvoices.filter(i => i.isOverdue);
   if (overdueInvoices.length > 0)
@@ -1114,11 +1399,16 @@ function buildDigestHtml(
   if (overdueBills.length > 0)
     overdueItems.push(`${overdueBills.length} vendor bill${overdueBills.length > 1 ? "s" : ""} overdue (${rupees(overdueBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))})`);
 
+  if (attention.workOrdersSlaAtRisk > 0)
+    overdueItems.push(`${attention.workOrdersSlaAtRisk} work order${attention.workOrdersSlaAtRisk > 1 ? "s" : ""} past SLA target, still open`);
+
   // This Week
   if (attention.expiringContracts > 0)
     thisWeekItems.push(`${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring in 30 days`);
   if (attention.pendingFollowups > 0)
     thisWeekItems.push(`${attention.pendingFollowups} follow-up${attention.pendingFollowups > 1 ? "s" : ""} pending`);
+  if (attention.workOrdersOpenCritical > 0)
+    thisWeekItems.push(`${attention.workOrdersOpenCritical} critical work order${attention.workOrdersOpenCritical > 1 ? "s" : ""} open`);
 
   const upcomingBills = attention.unpaidBills.filter(b => b.due_date && b.due_date > todayIST);
   if (upcomingBills.length > 0)
@@ -1149,6 +1439,38 @@ function buildDigestHtml(
       </p>
     </div>` : "";
 
+  // ── Overdue Tasks by Assignee ────────────────────────────────────────────
+  const overdueTasksByAssigneeHtml = attention.overdueTasksByAssignee.length > 0 ? `
+    <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+      <p style="margin:0 0 8px;font-weight:600;color:#c53030;font-size:12px;text-transform:uppercase;letter-spacing:0.4px;">Overdue Tasks by Assignee</p>
+      <p style="margin:0;color:#333;font-size:13px;">
+        ${attention.overdueTasksByAssignee.map((a, i) =>
+          `<span style="color:#c53030;font-weight:600;">${a.name}</span> <span style="color:#888;">${a.overdue} overdue</span>${i < attention.overdueTasksByAssignee.length - 1 ? ' <span style="color:#fed7d7;margin:0 6px;">·</span>' : ""}`
+        ).join("")}
+      </p>
+    </div>` : "";
+
+  // ── Work Orders by Location ───────────────────────────────────────────────
+  const WO_BREAKDOWN_LIMIT = 8;
+  const woBreakdownRows = attention.workOrderBreakdown.slice(0, WO_BREAKDOWN_LIMIT);
+  const workOrderBreakdownHtml = woBreakdownRows.length > 0 ? `
+    ${sectionHeader(`Work Orders by Location${attention.workOrderBreakdown.length > WO_BREAKDOWN_LIMIT ? ` (top ${WO_BREAKDOWN_LIMIT} of ${attention.workOrderBreakdown.length})` : ""}`)}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <tr style="background:#f7f8fa;">
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Location</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Department</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Open</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">SLA Breached</td>
+      </tr>
+      ${woBreakdownRows.map(row => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${row.location}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${row.department}${row.critical > 0 ? ` <span style="color:#e53e3e;font-size:10px;font-weight:700;">(${row.critical} critical)</span>` : ""}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${row.open}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:${row.slaBreached > 0 ? "#e53e3e" : "#333"};font-size:12px;text-align:right;">${row.slaBreached > 0 ? row.slaBreached : "—"}</td>
+      </tr>`).join("")}
+    </table>` : "";
+
   // ── Financial Summary ───────────────────────────────────────────────────
   const financialRows = [
     metricRow("Collections", rupees(today.collections), rupees(wtd.collections), rupees(lw.collections), rupees(ly.collections), today.collections, lw.collections),
@@ -1167,10 +1489,23 @@ function buildDigestHtml(
     metricRow("Bookings", `${today.newBookings}`, `${wtd.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
     metricRow("New Contracts", `${today.newContracts}`, `${wtd.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
     metricRow("Support Tickets", `${today.supportTickets}`, `${wtd.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
+    metricRow(
+      "Work Orders (opened/closed)",
+      `${today.workOrdersOpened}/${today.workOrdersClosed}`,
+      `${wtd.workOrdersOpened}/${wtd.workOrdersClosed}`,
+      `${lw.workOrdersOpened}/${lw.workOrdersClosed}`,
+      `${ly.workOrdersOpened}/${ly.workOrdersClosed}`,
+      today.workOrdersOpened, lw.workOrdersOpened
+    ),
   ].join("");
 
   // ── Center-wise ─────────────────────────────────────────────────────────
-  const locationRows = locations.map(l => `
+  // Same "only show centers with something to report" filter already used
+  // for Yesterday's Collections (activeYesterdayLocations above) — most
+  // locations sit at zero on any given day, and a table that's mostly
+  // zero rows reads as a data problem rather than a quiet day.
+  const activeLocationsToday = locations.filter(l => l.collections > 0 || l.leads > 0 || l.bookings > 0);
+  const locationRows = activeLocationsToday.map(l => `
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;">${l.name}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#015E65;font-size:13px;text-align:right;">${rupees(l.collections)}</td>
@@ -1246,6 +1581,9 @@ function buildDigestHtml(
 
   <div style="padding:28px 32px;">
 
+    <!-- Today's Storyline -->
+    ${storyboardHtml}
+
     <!-- Yesterday's Collections -->
     ${yesterdayHtml}
 
@@ -1270,8 +1608,14 @@ function buildDigestHtml(
     <!-- Needs Attention -->
     ${attentionHtml}
 
+    <!-- Work Orders by Location -->
+    ${workOrderBreakdownHtml}
+
     <!-- Team Activity -->
     ${teamHtml}
+
+    <!-- Overdue Tasks by Assignee -->
+    ${overdueTasksByAssigneeHtml}
 
     <!-- Financial Summary -->
     ${sectionHeader("Financial Summary")}
@@ -1288,6 +1632,7 @@ function buildDigestHtml(
     </table>
 
     <!-- Center-wise -->
+    ${activeLocationsToday.length > 0 ? `
     ${sectionHeader("Center-wise (Today)")}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
@@ -1297,7 +1642,7 @@ function buildDigestHtml(
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Bookings</td>
       </tr>
       ${locationRows}
-    </table>
+    </table>` : ""}
 
     <!-- Outstanding Client Invoices -->
     ${clientInvHtml}
