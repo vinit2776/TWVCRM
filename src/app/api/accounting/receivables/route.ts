@@ -210,6 +210,7 @@ async function fetchOtherReceivables(
       reminder_count: t.reminder_count || 0,
       last_reminder_sent_at: t.last_reminder_sent_at,
       href: contract?.id ? `/contracts/${contract.id}` : null,
+      parent_id: contract?.id ?? null,
     }));
   }
 

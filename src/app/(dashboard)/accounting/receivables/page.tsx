@@ -703,7 +703,12 @@ export default function AccountsReceivablePage() {
         </CardContent>
       </Card>
 
-      <OtherReceivablesCard rows={otherRows} summary={otherSummary} />
+      <OtherReceivablesCard
+        rows={otherRows}
+        summary={otherSummary}
+        canRecordPayment={canRecordPayment}
+        onRecorded={load}
+      />
 
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
         <DialogContent className="max-w-2xl">
@@ -884,6 +889,7 @@ interface OtherReceivableRow {
   followup_enabled: boolean;
   reminder_count: number;
   href: string | null;
+  parent_id?: string | null;
 }
 
 interface OtherSummary {
@@ -905,10 +911,13 @@ const OTHER_KIND_STYLE: Record<OtherReceivableRow["kind"], { label: string; cls:
  * no proforma lifecycle and no partial payments, so most statement columns
  * would be empty for them.
  */
-function OtherReceivablesCard({ rows, summary }: {
+function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded }: {
   rows: OtherReceivableRow[];
   summary: OtherSummary | null;
+  canRecordPayment: boolean;
+  onRecorded: () => void;
 }) {
+  const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   if (!summary || rows.length === 0) return null;
 
   return (
@@ -990,17 +999,29 @@ function OtherReceivablesCard({ rows, summary }: {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {r.payment_link_url && (
-                        <a
-                          href={r.payment_link_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1 text-muted-foreground hover:text-teal-700 inline-block"
-                          title="Open payment link"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
+                      <div className="flex items-center gap-1 justify-end">
+                        {canRecordPayment && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setPayRow(r)}
+                            title="Record a payment received offline"
+                          >
+                            <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
+                          </Button>
+                        )}
+                        {r.payment_link_url && (
+                          <a
+                            href={r.payment_link_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1 text-muted-foreground hover:text-teal-700 inline-block"
+                            title="Open payment link"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1009,6 +1030,181 @@ function OtherReceivablesCard({ rows, summary }: {
           </table>
         </div>
       </CardContent>
+
+      {payRow && (
+        <RecordOtherPaymentDialog
+          row={payRow}
+          onClose={() => setPayRow(null)}
+          onDone={() => { setPayRow(null); onRecorded(); }}
+        />
+      )}
     </Card>
+  );
+}
+
+const PAYMENT_MODES = ["bank_transfer", "upi", "cheque", "cash", "card", "other"];
+
+/**
+ * Records an offline payment against a deposit, top-up or ad-hoc invoice.
+ * Each kind already has its own settle endpoint with its own side effects
+ * (deposit gates contract activation; a shortfall-linked top-up decrements
+ * contracts.deposit_shortfall; a paid PI spawns a billing statement), so
+ * this dispatches to those rather than writing any status directly.
+ */
+function RecordOtherPaymentDialog({ row, onClose, onDone }: {
+  row: OtherReceivableRow;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.balance_due));
+  const [mode, setMode] = useState("bank_transfer");
+  const [reference, setReference] = useState("");
+  const [notes, setNotes] = useState("");
+  const [proof, setProof] = useState<File | null>(null);
+  const [shortfallApproved, setShortfallApproved] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const kindLabel = OTHER_KIND_STYLE[row.kind].label;
+  // A deposit recorded below the required amount needs explicit sign-off
+  // (and the server rejects anything more than 10% short outright).
+  const shortfall = row.balance_due - (parseFloat(amount) || 0);
+  const needsShortfallApproval = row.kind === "deposit" && shortfall > 0;
+  // The top-up settle endpoint closes out a fixed pending amount, so the
+  // figure isn't the operator's to change there.
+  const amountEditable = row.kind !== "topup";
+
+  async function submit() {
+    const amt = parseFloat(amount);
+    if (amountEditable && (!amt || amt <= 0)) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      let res: Response;
+      if (row.kind === "deposit") {
+        const fd = new FormData();
+        fd.append("amount", String(amt));
+        fd.append("payment_medium", mode);
+        if (reference) fd.append("reference", reference);
+        if (notes) fd.append("notes", notes);
+        if (proof) fd.append("payment_proof", proof);
+        if (shortfallApproved) fd.append("shortfall_approved", "true");
+        res = await fetch(`/api/proposals/${row.id}/deposit-payment`, { method: "POST", body: fd });
+      } else if (row.kind === "topup") {
+        if (!row.parent_id) throw new Error("Top-up is missing its contract reference");
+        const fd = new FormData();
+        fd.append("payment_mode", mode);
+        if (reference) fd.append("payment_reference", reference);
+        if (proof) fd.append("proof", proof);
+        res = await fetch(
+          `/api/contracts/${row.parent_id}/deposit-topup/${row.id}/record-payment`,
+          { method: "POST", body: fd },
+        );
+      } else {
+        res = await fetch(`/api/invoices/${row.id}/payment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: amt, reference, notes }),
+        });
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not record the payment");
+      toast.success("Payment recorded");
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not record the payment");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Record payment — {row.reference}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {kindLabel} · {row.party_name} · outstanding {formatCurrency(row.balance_due)}
+          </p>
+
+          <div>
+            <Label>Amount received</Label>
+            <Input
+              type="number"
+              value={amount}
+              disabled={!amountEditable}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+            {!amountEditable && (
+              <p className="text-xs text-muted-foreground mt-1">
+                A top-up settles for its full pending amount.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label>Payment mode</Label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              className="w-full border rounded-md h-9 px-2 text-sm"
+            >
+              {PAYMENT_MODES.map((m) => (
+                <option key={m} value={m}>{m.replace(/_/g, " ")}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label>Reference / UTR</Label>
+            <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="optional" />
+          </div>
+
+          {row.kind !== "topup" && (
+            <div>
+              <Label>Notes</Label>
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" />
+            </div>
+          )}
+
+          {needsShortfallApproval && (
+            <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
+              <input
+                type="checkbox"
+                checked={shortfallApproved}
+                onChange={(e) => setShortfallApproved(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Approve a shortfall of {formatCurrency(shortfall)} against the required deposit.
+                Admin or manager only; anything more than 10% short is rejected.
+              </span>
+            </label>
+          )}
+
+          {row.kind !== "adhoc_invoice" && (
+            <div>
+              <Label>Payment proof (optional)</Label>
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={(e) => setProof(e.target.files?.[0] || null)}
+                className="block w-full text-sm border rounded-md p-2"
+              />
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button onClick={submit} disabled={submitting}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Record Payment"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

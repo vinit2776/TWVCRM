@@ -68,6 +68,9 @@ export interface ReceivableRow {
   last_reminder_sent_at: string | null;
   /** Deep link to the record this receivable came from. */
   href: string | null;
+  /** Owning record's id where the receivable is a child — the contract for
+   *  a top-up. Needed to address the settle endpoint. */
+  parent_id?: string | null;
 }
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
