@@ -73,7 +73,13 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [spaceUnitId, setSpaceUnitId] = useState("");
   const [assetId, setAssetId] = useState("");
   const [selectedAsset, setSelectedAsset] = useState<FacilityAsset | null>(null);
-  const [scope, setScope] = useState<FacilityScope>("it");
+  // No default — the reporter must tap a department explicitly. A pre-highlighted
+  // tile let people tap through without ever choosing, which is why most work
+  // orders defaulted to IT regardless of content (see docs/plans/facility-smart-
+  // routing-phase0-findings.md). Asset selection still pre-fills this from the
+  // asset's own category, but the picker stays visible so it can be corrected.
+  const [scope, setScope] = useState<FacilityScope | null>(null);
+  const [assetScopeOverridden, setAssetScopeOverridden] = useState(false);
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -112,7 +118,8 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setFloorId(defaults?.floor_id || "");
     setSpaceUnitId(defaults?.space_unit_id || "");
     setAssetId(defaults?.asset_id || "");
-    setScope(defaults?.scope || "it");
+    setScope(defaults?.scope || null);
+    setAssetScopeOverridden(false);
     setSelectedAsset(null);
     setAssetQuery("");
     setAssetResults([]);
@@ -158,7 +165,11 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setLocationId(asset.location_id);
     setFloorId(asset.floor_id || "");
     setSpaceUnitId(asset.space_unit_id || "");
+    // Pre-fill from the asset's registered category, but this is a starting point,
+    // not a lock — the picker stays visible below so the reporter can correct it
+    // if the asset itself is mis-categorized.
     if (asset.category?.scope) setScope(asset.category.scope as FacilityScope);
+    setAssetScopeOverridden(false);
     setAssetQuery("");
     setAssetResults([]);
   }, []);
@@ -169,12 +180,13 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setLocationId("");
     setFloorId("");
     setSpaceUnitId("");
+    setAssetScopeOverridden(false);
   }, []);
 
   // validation
   const canNext1 = !!locationId;
   const canNext2 = !!scope && title.trim().length >= 3;
-  const canSubmit = canNext1 && canNext2;
+  const canSubmit = canNext1 && canNext2 && !!scope;
 
   // TAT override, resolved from whichever mode is active — hours directly,
   // or a target date/time converted to hours-from-now (fractional is fine).
@@ -188,7 +200,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
 
   // submit
   const submit = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !scope) return;
     const tatHoursValue = resolveTatHours();
     if (tatMode === "datetime" && tatDateTime && (tatHoursValue == null || tatHoursValue <= 0)) {
       toast.error("TAT date & time must be in the future");
@@ -410,35 +422,43 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
         </div>
       )}
 
-      {/* Scope picker — skip if asset already set the scope */}
-      {!selectedAsset && (
-        <div>
-          <Label className="text-sm font-medium">What kind of issue?</Label>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            {SCOPE_ORDER.map((s) => {
-              const sel = scope === s;
-              const Icon = SCOPE_ICONS[s];
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setScope(s)}
-                  className={cn(
-                    "flex items-center gap-2.5 p-3 rounded-lg border text-left transition",
-                    sel ? "border-[#015E65] bg-[#015E65]/5" : "border-border hover:bg-muted/40",
-                  )}
-                >
-                  <div className={cn("h-8 w-8 rounded-lg flex items-center justify-center shrink-0",
-                    sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                  <span className={cn("text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
-                </button>
-              );
-            })}
-          </div>
+      {/* Scope picker — always shown, even with an asset selected, so a
+          mis-categorized asset can be corrected instead of silently
+          misrouting the ticket. */}
+      <div>
+        <Label className="text-sm font-medium">What kind of issue?</Label>
+        {selectedAsset && !assetScopeOverridden && (
+          <p className="text-xs text-muted-foreground mt-0.5">
+            This asset is registered under <span className="font-medium">{scope ? SCOPE_LABEL[scope] : "—"}</span>. Tap another if that&apos;s wrong.
+          </p>
+        )}
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          {SCOPE_ORDER.map((s) => {
+            const sel = scope === s;
+            const Icon = SCOPE_ICONS[s];
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => {
+                  setScope(s);
+                  if (selectedAsset && s !== selectedAsset.category?.scope) setAssetScopeOverridden(true);
+                }}
+                className={cn(
+                  "flex items-center gap-2.5 p-3 rounded-lg border text-left transition",
+                  sel ? "border-[#015E65] bg-[#015E65]/5" : "border-border hover:bg-muted/40",
+                )}
+              >
+                <div className={cn("h-8 w-8 rounded-lg flex items-center justify-center shrink-0",
+                  sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
+                  <Icon className="h-4 w-4" />
+                </div>
+                <span className={cn("text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
+              </button>
+            );
+          })}
         </div>
-      )}
+      </div>
 
       <div>
         <Label className="text-sm font-medium">Priority</Label>
@@ -595,7 +615,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
         <div className="text-xs text-muted-foreground uppercase tracking-wide">Summary</div>
         <div><span className="text-muted-foreground">Location:</span> {prefilledLocation?.name ?? "—"}</div>
         {selectedAsset && <div><span className="text-muted-foreground">Asset:</span> {selectedAsset.asset_code} · {selectedAsset.name}</div>}
-        <div><span className="text-muted-foreground">Scope:</span> {SCOPE_LABEL[scope]}</div>
+        <div><span className="text-muted-foreground">Scope:</span> {scope ? SCOPE_LABEL[scope] : "—"}</div>
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">Priority:</span>
           <span className={cn("h-2 w-2 rounded-full", PRIORITY_STYLES[priority].dot)} />

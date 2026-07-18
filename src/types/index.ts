@@ -817,7 +817,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "asset_scope_mismatch";
 export type AuditEntityType =
   | "lead"
   | "activity"

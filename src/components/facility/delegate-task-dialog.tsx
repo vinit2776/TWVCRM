@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,10 +22,17 @@ import {
 } from "@/components/ui/dialog";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
-import { PRIORITY_STYLES } from "@/lib/facility-ui";
+import { PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { FacilityIssuePriority } from "@/types";
+import type { FacilityIssuePriority, FacilityScope } from "@/types";
+
+const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
+
+const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
+  it: Wifi, hvac: ThermometerSun, plumbing: Droplets,
+  electrical: Zap, housekeeping: Sparkles, security: ShieldAlert, other: HelpCircle, facility: HelpCircle,
+};
 
 interface AssigneeOption {
   id: string;
@@ -47,6 +54,9 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
+  // No default — previously this was never sent at all and the server silently
+  // defaulted every delegated task to IT regardless of what the task was about.
+  const [scope, setScope] = useState<FacilityScope | null>(null);
   const [assignedTo, setAssignedTo] = useState("");
   const [dueMode, setDueMode] = useState<"hours" | "datetime">("datetime");
   const [dueHours, setDueHours] = useState("");
@@ -71,6 +81,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setTitle("");
     setDescription("");
     setPriority("medium");
+    setScope(null);
     setAssignedTo("");
     setDueMode("datetime");
     setDueHours("");
@@ -95,11 +106,11 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const hasValidDueInput = dueMode === "hours"
     ? !!dueHours.trim() && isFinite(Number(dueHours)) && Number(dueHours) > 0
     : !!dueDateTime && !isNaN(new Date(dueDateTime).getTime());
-  const canSubmit = !!locationId && !!title.trim() && !!assignedTo && hasValidDueInput;
+  const canSubmit = !!locationId && !!title.trim() && !!assignedTo && !!scope && hasValidDueInput;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || !scope) return;
     const resolvedDueDate = resolveDueDate();
     if (!resolvedDueDate || resolvedDueDate.getTime() <= Date.now()) {
       toast.error("Due date must be in the future");
@@ -113,6 +124,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
       body: JSON.stringify({
         task_type: "delegated_task",
         location_id: locationId,
+        scope,
         title: title.trim(),
         description: description || undefined,
         priority,
@@ -151,6 +163,33 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
           <div className="space-y-2">
             <Label>Location *</Label>
             <LocationSelector value={locationId} onValueChange={setLocationId} />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Department *</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {SCOPE_ORDER.map((s) => {
+                const sel = scope === s;
+                const Icon = SCOPE_ICONS[s];
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setScope(s)}
+                    className={cn(
+                      "flex items-center gap-2 p-2 rounded-lg border text-left transition text-sm",
+                      sel ? "border-[#015E65] bg-[#015E65]/5 font-medium" : "border-border hover:bg-muted/40",
+                    )}
+                  >
+                    <div className={cn("h-6 w-6 rounded flex items-center justify-center shrink-0",
+                      sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
+                      <Icon className="h-3.5 w-3.5" />
+                    </div>
+                    {SCOPE_LABEL[s]}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="space-y-2">
