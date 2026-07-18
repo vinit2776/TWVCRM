@@ -7,6 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { toDatetimeLocalValue } from "@/lib/utils";
+import {
+  FollowUpDateTimeInput,
+  type FollowUpDateTimeStatus,
+} from "@/components/shared/followup-datetime-input";
 
 interface FollowUpItem {
   id: string;
@@ -54,6 +58,7 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
   const [loading, setLoading] = useState(true);
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [newDate, setNewDate] = useState<string>("");
+  const [newDateStatus, setNewDateStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [acting, setActing] = useState<string | null>(null);
 
   const fetchFollowUps = useCallback(async () => {
@@ -213,8 +218,10 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                           if (isRescheduling) {
                             setReschedulingId(null);
                             setNewDate("");
+                            setNewDateStatus("empty");
                           } else {
                             setNewDate(toDatetimeLocalValue(item.follow_up_date));
+                            setNewDateStatus("valid");
                             setReschedulingId(item.id);
                           }
                         }}
@@ -229,27 +236,34 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
 
                   {/* Reschedule inline date picker */}
                   {isRescheduling && (
-                    <div className="mt-2 flex items-center gap-2 pl-7">
-                      <input
-                        type="datetime-local"
-                        value={newDate}
-                        onChange={(e) => setNewDate(e.target.value)}
-                        className="text-xs border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                        min={toDatetimeLocalValue()}
-                      />
-                      <button
-                        onClick={() => handleReschedule(item.id)}
-                        disabled={!newDate || acting === item.id}
-                        className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => { setReschedulingId(null); setNewDate(""); }}
-                        className="text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        Cancel
-                      </button>
+                    <div className="mt-2 flex flex-col gap-1.5 pl-7">
+                      <div className="flex items-center gap-2">
+                        <FollowUpDateTimeInput
+                          value={newDate}
+                          onChange={setNewDate}
+                          onStatusChange={setNewDateStatus}
+                          minDate={toDatetimeLocalValue().slice(0, 10)}
+                          className="[&_input]:h-7 [&_input]:text-xs [&_input]:px-2 [&_input]:py-1"
+                        />
+                        <button
+                          onClick={() => handleReschedule(item.id)}
+                          disabled={!newDate || newDateStatus === "incomplete" || acting === item.id}
+                          className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => { setReschedulingId(null); setNewDate(""); setNewDateStatus("empty"); }}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      {newDateStatus === "incomplete" && (
+                        <p className="text-[10px] text-destructive">
+                          Pick both a date and a time between 9:00 AM and 8:00 PM.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
