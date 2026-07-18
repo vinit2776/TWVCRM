@@ -22,16 +22,32 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Users, Save } from "lucide-react";
+import { Loader2, Users, Save, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
-import { SCOPE_LABEL } from "@/lib/facility-ui";
+import { SCOPE_LABEL, PRIORITY_STYLES } from "@/lib/facility-ui";
 import { FACILITY_ROLES, hasRole } from "@/lib/facility";
-import type { FacilityAssetCategory, FacilityDepartment } from "@/types";
+import type { FacilityAssetCategory, FacilityDepartment, FacilityIssuePriority } from "@/types";
 
 interface Assignee { id: string; full_name: string; email: string; role: string }
 interface CurrentUser { id: string; role: string }
+interface TatSuggestion {
+  category_id: string;
+  category_name: string;
+  scope: string;
+  priority: FacilityIssuePriority;
+  sample_size: number;
+  median_hours: number;
+  current_default_hours: number;
+  delta_pct: number;
+}
 
 const NONE = "__none__";
+const PRIORITY_FIELD: Record<FacilityIssuePriority, "default_sla_critical_hrs" | "default_sla_high_hrs" | "default_sla_medium_hrs" | "default_sla_low_hrs"> = {
+  critical: "default_sla_critical_hrs",
+  high: "default_sla_high_hrs",
+  medium: "default_sla_medium_hrs",
+  low: "default_sla_low_hrs",
+};
 
 export default function FacilitySettingsPage() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -50,20 +66,25 @@ export default function FacilitySettingsPage() {
     default_sla_low_hrs: string;
   }>>({});
   const [savingCatId, setSavingCatId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<TatSuggestion[]>([]);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [applyingSuggestion, setApplyingSuggestion] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [deptRes, catRes, assigneeRes] = await Promise.all([
+      const [deptRes, catRes, assigneeRes, suggestRes] = await Promise.all([
         fetch("/api/facility/departments").then((r) => r.json()),
         fetch("/api/facility/categories?include_all=true&include_inactive=true").then((r) => r.json()),
         fetch("/api/facility/assignees").then((r) => r.json()),
+        fetch("/api/facility/tat-suggestions").then((r) => r.json()),
       ]);
       const depts: FacilityDepartment[] = deptRes.data ?? [];
       const cats: FacilityAssetCategory[] = catRes.data ?? [];
       setDepartments(depts);
       setCategories(cats);
       setAssignees(assigneeRes.data ?? []);
+      setSuggestions(suggestRes.data ?? []);
       setCatDrafts(Object.fromEntries(cats.map((c) => [c.id, {
         default_assignee_id: c.default_assignee_id ?? "",
         default_sla_critical_hrs: String(c.default_sla_critical_hrs ?? ""),
@@ -169,6 +190,39 @@ export default function FacilitySettingsPage() {
     }
   };
 
+  const applySuggestion = async (s: TatSuggestion) => {
+    const cat = categories.find((c) => c.id === s.category_id);
+    if (!cat) return;
+    const key = `${s.category_id}::${s.priority}`;
+    setApplyingSuggestion(key);
+    try {
+      const res = await fetch(`/api/facility/categories/${s.category_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          default_sla_critical_hrs: cat.default_sla_critical_hrs,
+          default_sla_high_hrs: cat.default_sla_high_hrs,
+          default_sla_medium_hrs: cat.default_sla_medium_hrs,
+          default_sla_low_hrs: cat.default_sla_low_hrs,
+          [PRIORITY_FIELD[s.priority]]: s.median_hours,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      toast.success(`${s.category_name} ${s.priority} TAT updated to ${s.median_hours}h`);
+      await load();
+    } catch {
+      toast.error("Failed to apply suggestion");
+    } finally {
+      setApplyingSuggestion(null);
+    }
+  };
+
+  const dismissSuggestion = (s: TatSuggestion) => {
+    setDismissedSuggestions((prev) => new Set(prev).add(`${s.category_id}::${s.priority}`));
+  };
+
+  const visibleSuggestions = suggestions.filter((s) => !dismissedSuggestions.has(`${s.category_id}::${s.priority}`));
+
   if (loading) {
     return <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
   }
@@ -224,6 +278,47 @@ export default function FacilitySettingsPage() {
           ))}
         </div>
       </section>
+
+      {/* ───── Suggested TAT (trend-based, suggest-only) ───────────────────── */}
+      {visibleSuggestions.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold flex items-center gap-1.5">
+            <TrendingUp className="h-4 w-4" /> Suggested TAT
+          </h2>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Based on the median resolution time of actually-resolved Work Orders in the last 90 days (5+ tickets minimum). Nothing changes until you click Apply.
+          </p>
+          <div className="rounded-lg border divide-y">
+            {visibleSuggestions.map((s) => {
+              const key = `${s.category_id}::${s.priority}`;
+              return (
+                <div key={key} className="flex items-center gap-3 p-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium flex items-center gap-1.5">
+                      {s.category_name}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ring-1 ${PRIORITY_STYLES[s.priority].chip}`}>
+                        {PRIORITY_STYLES[s.priority].label}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Current: {s.current_default_hours}h &rarr; Suggested: {s.median_hours}h
+                      {" "}({s.sample_size} tickets, last 90 days)
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={applyingSuggestion === key} onClick={() => applySuggestion(s)}>
+                    {applyingSuggestion === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => dismissSuggestion(s)}
+                    className="text-xs text-muted-foreground hover:underline"
+                  >Dismiss</button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ───── Categories & TAT defaults ────────────────────────────────── */}
       <section className="space-y-3">
