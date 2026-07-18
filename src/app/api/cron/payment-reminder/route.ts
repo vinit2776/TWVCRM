@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { pingCronHealth } from "@/lib/cron-ping";
 import {
   STAGES, pickStageIndex, daysOverdueFromDueDate,
   sendOneReminder, fetchCcPools,
 } from "@/lib/payment-reminder";
+import {
+  pickStageForKind, shouldFire, sendReceivableReminder,
+} from "@/lib/receivable-reminder";
+import { depositIsChaseable } from "@/lib/receivables";
 
 export const maxDuration = 60;
 
@@ -155,7 +160,184 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Second pass: deposits, top-ups and ad-hoc PIs ──────────────────────
+  // These live outside billing_statements and were historically undunned.
+  // Handled by their own dispatcher so this cron's statement path — which
+  // drives live monthly invoicing — stays untouched.
+  const other = await runOtherReceivablesPass(admin, { dry, force, ccPools });
+  sent += other.sent; skipped += other.skipped; errors += other.errors;
+
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await pingCronHealth("payment-reminder", errors > 0 ? "error" : "ok", { sent, skipped, errors });
-  return NextResponse.json({ date: todayIst, dry, considered: (statements || []).length, sent, skipped, errors, summary });
+  return NextResponse.json({
+    date: todayIst, dry,
+    considered: (statements || []).length + other.considered,
+    sent, skipped, errors,
+    summary, other_summary: other.summary,
+  });
+}
+
+interface OtherPassOpts {
+  dry: boolean;
+  force: boolean;
+  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+}
+
+async function runOtherReceivablesPass(
+  admin: SupabaseClient,
+  { dry, force, ccPools }: OtherPassOpts,
+) {
+  const rows = await fetchDunnableReceivables(admin);
+  let sent = 0, skipped = 0, errors = 0;
+  const summary: { kind: string; ref: string; stage: number; status: string; reason?: string }[] = [];
+
+  for (const r of rows) {
+    if (!r.followup_enabled) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: -1, status: "skip", reason: "follow-up disabled" });
+      continue;
+    }
+    if (!r.email && !r.phone) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: -1, status: "skip", reason: "no contact" });
+      continue;
+    }
+    if (!r.due_date) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: -1, status: "skip", reason: "no due date" });
+      continue;
+    }
+
+    const days = daysOverdueFromDueDate(r.due_date);
+    const stageIdx = pickStageForKind(r.kind, days);
+    const gate = shouldFire(r.kind, stageIdx, r.reminder_count, r.last_reminder_sent_at, force);
+    if (!gate.fire) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "skip", reason: gate.reason });
+      continue;
+    }
+
+    if (dry) {
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "would-send" });
+      continue;
+    }
+
+    const res = await sendReceivableReminder(admin, {
+      kind: r.kind, id: r.id, reference: r.reference, partyName: r.party_name,
+      email: r.email, phone: r.phone, amount: r.amount, dueDate: r.due_date,
+      daysOverdue: days, stageIdx, payLinkUrl: r.payment_link_url,
+      triggeredBy: "cron", triggeredByUserId: null, ccPools,
+    });
+    if (!res.emailSent && !res.whatsAppSent) {
+      errors++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "error", reason: res.errors[0] });
+    } else {
+      sent++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "sent" });
+    }
+  }
+
+  return { considered: rows.length, sent, skipped, errors, summary };
+}
+
+interface DunnableRow {
+  kind: "deposit" | "topup" | "adhoc_invoice";
+  id: string;
+  reference: string;
+  party_name: string;
+  email: string | null;
+  phone: string | null;
+  amount: number;
+  due_date: string | null;
+  payment_link_url: string | null;
+  followup_enabled: boolean;
+  reminder_count: number;
+  last_reminder_sent_at: string | null;
+}
+
+async function fetchDunnableReceivables(admin: SupabaseClient): Promise<DunnableRow[]> {
+  const out: DunnableRow[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const party = (lead: any) =>
+    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
+
+  const { data: deposits } = await admin
+    .from("proposals")
+    .select(`
+      id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
+      deposit_due_date, deposit_razorpay_link_url,
+      deposit_reminder_count, deposit_last_reminder_sent_at,
+      lead:leads!proposals_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
+    `)
+    .eq("deposit_payment_status", "pending")
+    .gt("security_deposit_amount", 0);
+
+  for (const d of deposits || []) {
+    // Never chase a deposit on a proposal the customer hasn't accepted.
+    if (!depositIsChaseable(d.status as string)) continue;
+    const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+    if (owed <= 0) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = d.lead as any;
+    out.push({
+      kind: "deposit", id: d.id, reference: d.proposal_number, party_name: party(lead),
+      email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
+      amount: owed, due_date: d.deposit_due_date,
+      payment_link_url: d.deposit_razorpay_link_url,
+      followup_enabled: true,
+      reminder_count: d.deposit_reminder_count || 0,
+      last_reminder_sent_at: d.deposit_last_reminder_sent_at,
+    });
+  }
+
+  const { data: topups } = await admin
+    .from("deposit_topups")
+    .select(`
+      id, amount, due_date, razorpay_payment_link_url, reminder_count, last_reminder_sent_at,
+      contract:contracts!deposit_topups_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
+      )
+    `)
+    .eq("status", "pending");
+
+  for (const t of topups || []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contract = t.contract as any;
+    out.push({
+      kind: "topup", id: t.id, reference: contract?.contract_number || "—",
+      party_name: party(contract?.lead), email: contract?.lead?.email ?? null,
+      phone: contract?.lead?.mobile || contract?.lead?.phone || null,
+      amount: Number(t.amount || 0), due_date: t.due_date,
+      payment_link_url: t.razorpay_payment_link_url,
+      followup_enabled: true,
+      reminder_count: t.reminder_count || 0,
+      last_reminder_sent_at: t.last_reminder_sent_at,
+    });
+  }
+
+  const { data: invoices } = await admin
+    .from("proforma_invoices")
+    .select(`
+      id, invoice_number, total_amount, due_date, razorpay_link_url,
+      followup_enabled, reminder_count, last_reminder_sent_at,
+      lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
+    `)
+    .not("status", "in", "(paid,cancelled)");
+
+  for (const inv of invoices || []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = inv.lead as any;
+    out.push({
+      kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number, party_name: party(lead),
+      email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
+      amount: Number(inv.total_amount || 0), due_date: inv.due_date,
+      payment_link_url: inv.razorpay_link_url,
+      followup_enabled: inv.followup_enabled !== false,
+      reminder_count: inv.reminder_count || 0,
+      last_reminder_sent_at: inv.last_reminder_sent_at,
+    });
+  }
+
+  return out;
 }

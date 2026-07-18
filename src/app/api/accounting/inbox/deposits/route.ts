@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
       deposit_payment_amount, deposit_payment_reference,
       deposit_payment_medium, deposit_payment_received_at,
       deposit_payment_screenshot_url, deposit_razorpay_link_id, deposit_razorpay_link_url,
+      deposit_settled_at, deposit_settlement_id,
       deposit_accounted, deposit_accounted_at, deposit_accounted_by, deposit_accounted_proof_path,
       lead:leads!proposals_lead_id_fkey(first_name, last_name, company),
       contract:contracts!contracts_proposal_id_fkey(contract_number)
@@ -61,7 +62,7 @@ export async function GET(request: NextRequest) {
     .from("deposit_topups")
     .select(`
       id, amount, category, payment_mode, payment_reference, paid_at,
-      collection_method, proof_path,
+      collection_method, proof_path, settled_at, settlement_id,
       razorpay_payment_link_id, razorpay_payment_link_url,
       accounted, accounted_at, accounted_by, accounted_proof_path,
       contract:contracts!deposit_topups_contract_id_fkey(
@@ -112,6 +113,8 @@ export async function GET(request: NextRequest) {
         payment_proof_url: d.deposit_payment_screenshot_url,
         razorpay_link_id: d.deposit_razorpay_link_id,
         razorpay_link_url: d.deposit_razorpay_link_url,
+        settled_at: d.deposit_settled_at,
+        settlement_id: d.deposit_settlement_id,
         accounted: !!d.deposit_accounted,
         accounted_at: d.deposit_accounted_at,
         accounted_by_name: d.deposit_accounted_by ? namesById.get(d.deposit_accounted_by) || null : null,
@@ -135,6 +138,8 @@ export async function GET(request: NextRequest) {
         payment_proof_url: t.proof_path,
         razorpay_link_id: t.razorpay_payment_link_id,
         razorpay_link_url: t.razorpay_payment_link_url,
+        settled_at: t.settled_at,
+        settlement_id: t.settlement_id,
         accounted: !!t.accounted,
         accounted_at: t.accounted_at,
         accounted_by_name: t.accounted_by ? namesById.get(t.accounted_by) || null : null,

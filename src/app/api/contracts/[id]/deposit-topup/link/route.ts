@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 
 const ALLOWED_ROLES = ["admin", "manager", "accounts"];
 const VALID_CATEGORIES = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
@@ -129,6 +130,16 @@ export async function POST(
   if (!result?.success) {
     return NextResponse.json({ error: result?.error || "Could not create top-up record" }, { status: 422 });
   }
+
+  // Give the link a due date so AR can age it and the reminder ladder has
+  // something to gate on. Set here rather than inside the RPC to avoid
+  // changing a function signature already live in production.
+  await admin
+    .from("deposit_topups")
+    .update({
+      due_date: new Date(Date.now() + DEPOSIT_DUE_DAYS * 86400000).toISOString().slice(0, 10),
+    })
+    .eq("id", result.topup_id);
 
   const subject = `Additional Security Deposit — ${contract.contract_number} — The WorkVilla`;
   const html = `

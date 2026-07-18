@@ -254,6 +254,13 @@ function VerificationPanel({ row }: { row: DepositInboxRow }) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Payment ID" value={row.payment_reference || notOnFile} />
             <Field label="Link ID" value={row.razorpay_link_id || notOnFile} />
+            <Field
+              label="Bank settlement"
+              value={row.settled_at
+                ? <span className="text-green-700 font-medium">{formatDate(row.settled_at)}</span>
+                : <span className="text-muted-foreground italic">awaiting settlement</span>}
+            />
+            {row.settlement_id && <Field label="Settlement ref" value={row.settlement_id} />}
           </div>
           {row.razorpay_link_url && (
             <Button size="sm" variant="outline" className="h-7 gap-1 mt-2 bg-white" asChild>
@@ -262,10 +269,12 @@ function VerificationPanel({ row }: { row: DepositInboxRow }) {
               </a>
             </Button>
           )}
-          <p className="text-[11px] text-blue-800/70 mt-2">
-            Bank settlement date is not captured by the CRM — check the Razorpay dashboard
-            for the settlement against this payment ID.
-          </p>
+          {!row.settled_at && (
+            <p className="text-[11px] text-blue-800/70 mt-2">
+              Razorpay settles to bank on a T+2/T+3 cycle. The settlement date appears here
+              once the daily recon picks it up.
+            </p>
+          )}
         </div>
       )}
 

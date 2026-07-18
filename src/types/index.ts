@@ -706,6 +706,9 @@ export interface DepositInboxRow {
   payment_proof_url?: string | null;
   razorpay_link_id?: string | null;
   razorpay_link_url?: string | null;
+  /** When the money actually reached the bank, per Razorpay's settlement recon. */
+  settled_at?: string | null;
+  settlement_id?: string | null;
 }
 
 export const DEPOSIT_TOPUP_CATEGORY_LABELS: Record<DepositTopupCategory, string> = {

@@ -181,6 +181,10 @@ function daysOverdueBadge(days: number | null) {
 export default function AccountsReceivablePage() {
   const [rows, setRows] = useState<ReceivableRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  // Deposits, top-ups and ad-hoc PIs — tracked separately from statements
+  // because they carry a different shape (no GST, no proforma lifecycle).
+  const [otherRows, setOtherRows] = useState<OtherReceivableRow[]>([]);
+  const [otherSummary, setOtherSummary] = useState<OtherSummary | null>(null);
   const [avgDays, setAvgDays] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -226,6 +230,8 @@ export default function AccountsReceivablePage() {
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setRows(json.rows || []);
       setSummary(json.summary || null);
+      setOtherRows(json.other_rows || []);
+      setOtherSummary(json.other_summary || null);
       setAvgDays(json.avgDays || {});
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load receivables");
@@ -697,6 +703,8 @@ export default function AccountsReceivablePage() {
         </CardContent>
       </Card>
 
+      <OtherReceivablesCard rows={otherRows} summary={otherSummary} />
+
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -855,5 +863,152 @@ export default function AccountsReceivablePage() {
         onSuccess={load}
       />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Other receivables — deposits, top-ups, ad-hoc PIs
+// ─────────────────────────────────────────────────────────────────────────
+
+interface OtherReceivableRow {
+  id: string;
+  kind: "deposit" | "topup" | "adhoc_invoice";
+  reference: string;
+  party_name: string;
+  total_amount: number;
+  balance_due: number;
+  due_date: string | null;
+  days_overdue: number | null;
+  payment_link_url: string | null;
+  is_stale: boolean;
+  followup_enabled: boolean;
+  reminder_count: number;
+  href: string | null;
+}
+
+interface OtherSummary {
+  total_outstanding: number;
+  count: number;
+  overdue: number;
+  stale: number;
+}
+
+const OTHER_KIND_STYLE: Record<OtherReceivableRow["kind"], { label: string; cls: string }> = {
+  deposit: { label: "Security deposit", cls: "border-violet-300 bg-violet-50 text-violet-700" },
+  topup: { label: "Deposit top-up", cls: "border-purple-300 bg-purple-50 text-purple-700" },
+  adhoc_invoice: { label: "Ad-hoc invoice", cls: "border-sky-300 bg-sky-50 text-sky-700" },
+};
+
+/**
+ * Receivables that live outside billing_statements. Kept in their own card
+ * rather than merged into the statement table — they have no GST invoice,
+ * no proforma lifecycle and no partial payments, so most statement columns
+ * would be empty for them.
+ */
+function OtherReceivablesCard({ rows, summary }: {
+  rows: OtherReceivableRow[];
+  summary: OtherSummary | null;
+}) {
+  if (!summary || rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Deposits & ad-hoc invoices</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Security deposits, top-ups and ad-hoc invoices awaiting payment.
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-sm">
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Outstanding</p>
+              <p className="font-bold text-teal-700">{formatCurrency(summary.total_outstanding)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Overdue</p>
+              <p className="font-bold text-orange-700">{summary.overdue}</p>
+            </div>
+            {summary.stale > 0 && (
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">Stale</p>
+                <p className="font-bold text-red-700">{summary.stale}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
+              <tr>
+                <th className="px-4 py-2 text-left">Reference</th>
+                <th className="px-4 py-2 text-left">Customer</th>
+                <th className="px-4 py-2 text-left">Due</th>
+                <th className="px-4 py-2 text-right">Amount</th>
+                <th className="px-4 py-2 text-left">Follow-up</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const style = OTHER_KIND_STYLE[r.kind];
+                return (
+                  <tr key={`${r.kind}-${r.id}`} className="border-b last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        {r.href
+                          ? <Link href={r.href} className="font-medium text-teal-700 hover:underline">{r.reference}</Link>
+                          : <span className="font-medium">{r.reference}</span>}
+                        {r.is_stale && (
+                          <Badge className="bg-red-100 text-red-800 border-red-300" title="Overdue more than 90 days — review or cancel">
+                            Stale
+                          </Badge>
+                        )}
+                      </div>
+                      <Badge variant="outline" className={`text-[10px] mt-1 ${style.cls}`}>{style.label}</Badge>
+                    </td>
+                    <td className="px-4 py-3">{r.party_name}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
+                      <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">
+                      {formatCurrency(r.balance_due)}
+                    </td>
+                    <td className="px-4 py-3 text-xs whitespace-nowrap">
+                      {!r.followup_enabled ? (
+                        <span className="text-muted-foreground" title="Predates automated follow-up — chase manually">
+                          Manual only
+                        </span>
+                      ) : r.reminder_count > 0 ? (
+                        <span className="text-amber-700">{r.reminder_count} sent</span>
+                      ) : (
+                        <span className="text-muted-foreground">Not started</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {r.payment_link_url && (
+                        <a
+                          href={r.payment_link_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-1 text-muted-foreground hover:text-teal-700 inline-block"
+                          title="Open payment link"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
