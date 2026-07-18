@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
-import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
-import { computeSettlement } from "@/lib/settlement";
+import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
+import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -107,44 +107,16 @@ export async function POST(
     });
   }
 
-  // Check if fully paid. TDS counts toward settlement: cash + TDS = invoice.
-  const { data: allPayments } = await supabase
-    .from("billing_payments")
-    .select("amount, tds_amount")
-    .eq("billing_statement_id", id);
-
-  const settlement = computeSettlement(statement.total_amount, allPayments);
+  // Check if fully paid, persist payment_status, and fire the paid-transition
+  // chain (GST auto-gen / v2 handoff). Shared with the deposit-adjustment
+  // approval path so both payment sources settle identically.
+  const settlement = await finalizeBillingPayment(supabase, {
+    statementId: id,
+    statementTotalAmount: statement.total_amount,
+    previousPaymentStatus: statement.payment_status,
+    reason: "manual_payment_entry",
+  });
   const newPaymentStatus = settlement.paymentStatus;
-
-  if (newPaymentStatus !== statement.payment_status) {
-    await supabase
-      .from("billing_statements")
-      .update({ payment_status: newPaymentStatus })
-      .eq("id", id);
-  }
-
-  // When an offline payment brings the statement to fully paid:
-  // - Legacy: auto-fire the GST tax invoice generation (CRM-side).
-  // - v2: route to the accounts inbox via handoff_state; no CRM-side gen.
-  if (newPaymentStatus === "paid" && statement.payment_status !== "paid") {
-    if (v2Enabled) {
-      await handleStatementPaid(supabase, id, "manual_payment_entry");
-    } else {
-      try {
-        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-        fetch(`${appUrl}/api/billing-statements/${id}/generate-gst-invoice`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-internal-secret": process.env.CRON_SECRET || "",
-          },
-          body: JSON.stringify({ skipAuth: true }),
-        }).catch((err) => console.error("[payment] GST invoice auto-gen failed:", err));
-      } catch (err) {
-        console.error("[payment] Could not trigger GST invoice generation:", err);
-      }
-    }
-  }
 
   logAudit(supabase, {
     entityType: "billing_statement",

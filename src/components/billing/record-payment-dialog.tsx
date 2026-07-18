@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -61,6 +62,14 @@ export function RecordPaymentDialog({
   const [tdsSection, setTdsSection] = useState("194I");
   const [tdsAmount, setTdsAmount]   = useState("");
 
+  // Adjustment against deposit — available balance gates whether the mode
+  // is offered at all; a request over that balance splits the remainder
+  // into a normal payment on the secondary leg below.
+  const [depositAvailable, setDepositAvailable] = useState<number | null>(null);
+  const [notifyCustomer, setNotifyCustomer] = useState(false);
+  const [remainderMode, setRemainderMode] = useState("neft");
+  const [remainderReference, setRemainderReference] = useState("");
+
   // Fresh form every time the dialog opens; prefill amount with the balance.
   useEffect(() => {
     if (open) {
@@ -72,14 +81,100 @@ export function RecordPaymentDialog({
       setTdsEnabled(false);
       setTdsSection("194I");
       setTdsAmount("");
+      setNotifyCustomer(false);
+      setRemainderMode("neft");
+      setRemainderReference("");
+      setDepositAvailable(null);
     }
   }, [open, balanceDue]);
+
+  useEffect(() => {
+    if (!open || !statementId) return;
+    fetch(`/api/billing-statements/${statementId}/deposit-balance`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setDepositAvailable(json?.data?.available ?? 0))
+      .catch(() => setDepositAvailable(0));
+  }, [open, statementId]);
+
+  const isDepositMode = mode === "deposit_adjustment";
+  const requestedAmount = parseFloat(amount || "0");
+  const depositLeg = isDepositMode ? Math.min(requestedAmount, depositAvailable ?? 0) : 0;
+  const remainderLeg = isDepositMode ? Math.max(0, requestedAmount - (depositAvailable ?? 0)) : 0;
+
+  const handleDepositSubmit = async () => {
+    if (!statementId || depositLeg <= 0) {
+      toast.error("Amount must be positive");
+      return;
+    }
+    if (remainderLeg > 0 && !remainderMode) {
+      toast.error("Select a payment mode for the remainder");
+      return;
+    }
+    setSubmitting(true);
+    // Deposit leg first — it's the conditional one (subject to approval and
+    // balance validation). If it fails, nothing else happens. If it
+    // succeeds but the remainder leg fails, the request is still safely
+    // recorded and the remainder can be added separately — better than the
+    // reverse order, where a real cash payment could land with no
+    // corresponding approval request to notice was missing.
+    const depositRes = await fetch(`/api/billing-statements/${statementId}/deposit-adjustment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: depositLeg, notify_customer: notifyCustomer }),
+    });
+    if (!depositRes.ok) {
+      setSubmitting(false);
+      const err = await depositRes.json().catch(() => null);
+      toast.error(err?.error || "Failed to submit deposit adjustment request");
+      return;
+    }
+
+    if (remainderLeg > 0) {
+      const remainderRes = await fetch(`/api/billing-statements/${statementId}/payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: remainderLeg,
+          payment_date: date,
+          payment_mode: remainderMode,
+          payment_reference: remainderReference.trim() || undefined,
+          notes: notes.trim() || undefined,
+        }),
+      });
+      setSubmitting(false);
+      if (!remainderRes.ok) {
+        const err = await remainderRes.json().catch(() => null);
+        toast.error(
+          `Deposit adjustment of ${formatCurrency(depositLeg)} submitted for approval, but recording the ` +
+          `${formatCurrency(remainderLeg)} remainder failed: ${err?.error || "unknown error"}. Record it separately.`
+        );
+        onOpenChange(false);
+        onSuccess();
+        return;
+      }
+      toast.success(
+        `${formatCurrency(depositLeg)} submitted for approval as a deposit adjustment. ` +
+        `${formatCurrency(remainderLeg)} recorded via ${remainderMode}.`
+      );
+    } else {
+      setSubmitting(false);
+      toast.success(`${formatCurrency(depositLeg)} submitted for admin/manager approval as a deposit adjustment.`);
+    }
+    onOpenChange(false);
+    onSuccess();
+  };
 
   const handleSubmit = async () => {
     if (!statementId || !amount || Number(amount) <= 0) {
       toast.error("Amount must be positive");
       return;
     }
+
+    if (isDepositMode) {
+      await handleDepositSubmit();
+      return;
+    }
+
     const tdsAmt = tdsEnabled ? Math.max(0, Number(tdsAmount) || 0) : 0;
     if (tdsEnabled && tdsAmt <= 0) {
       toast.error("Enter the TDS amount deducted by the client");
@@ -123,6 +218,10 @@ export function RecordPaymentDialog({
   const tdsNum  = parseFloat(tdsAmount || "0");
   const settles = balanceDue !== null && Math.abs((cashNum + tdsNum) - balanceDue) < 1;
 
+  const availableModes = (depositAvailable ?? 0) > 0
+    ? [...PAYMENT_MODES, { value: "deposit_adjustment", label: "Adjustment against deposit" }]
+    : PAYMENT_MODES;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -140,7 +239,7 @@ export function RecordPaymentDialog({
         <div className="space-y-4 mt-2">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Amount received (₹)</Label>
+              <Label>{isDepositMode ? "Amount to settle (₹)" : "Amount received (₹)"}</Label>
               <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 15000" />
             </div>
             <div className="space-y-2">
@@ -154,23 +253,72 @@ export function RecordPaymentDialog({
               <Select value={mode} onValueChange={setMode}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {PAYMENT_MODES.map((m) => (
+                  {availableModes.map((m) => (
                     <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Reference / UTR No.</Label>
-              <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR or cheque number" />
-            </div>
+            {!isDepositMode && (
+              <div className="space-y-2">
+                <Label>Reference / UTR No.</Label>
+                <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR or cheque number" />
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <Label>Notes (optional)</Label>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
           </div>
 
+          {/* ── Adjustment against deposit block ────────────────────── */}
+          {isDepositMode && (
+            <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3 space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Available deposit balance: <span className="font-semibold text-foreground">{formatCurrency(depositAvailable ?? 0)}</span>
+              </p>
+              <div className="rounded px-2.5 py-1.5 text-xs font-medium bg-white border border-teal-200">
+                {formatCurrency(depositLeg)} from deposit
+                {remainderLeg > 0 && <> + {formatCurrency(remainderLeg)} via another mode</>}
+                {" = "}{formatCurrency(depositLeg + remainderLeg)}
+              </div>
+              {remainderLeg > 0 && (
+                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-teal-200">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Remainder payment mode</Label>
+                    <Select value={remainderMode} onValueChange={setRemainderMode}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {PAYMENT_MODES.map((m) => (
+                          <SelectItem key={m.value} value={m.value} className="text-xs">{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Remainder reference</Label>
+                    <Input
+                      value={remainderReference}
+                      onChange={(e) => setRemainderReference(e.target.value)}
+                      placeholder="UTR or cheque number"
+                      className="h-9 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <Checkbox checked={notifyCustomer} onCheckedChange={(v) => setNotifyCustomer(v === true)} />
+                Email the customer a confirmation of this adjustment
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                This requires admin or manager approval before it settles — the deposit portion won&apos;t reduce the
+                balance due until approved.
+              </p>
+            </div>
+          )}
+
           {/* ── TDS deduction block ──────────────────────────────────── */}
+          {!isDepositMode && (
           <div className="rounded-lg border border-border">
             <button
               type="button"
@@ -234,9 +382,12 @@ export function RecordPaymentDialog({
               </div>
             )}
           </div>
+          )}
 
           <Button onClick={handleSubmit} disabled={submitting} className="w-full">
-            {submitting ? "Recording…" : "Record Payment"}
+            {submitting
+              ? (isDepositMode ? "Submitting…" : "Recording…")
+              : (isDepositMode ? "Submit for Approval" : "Record Payment")}
           </Button>
         </div>
       </DialogContent>
