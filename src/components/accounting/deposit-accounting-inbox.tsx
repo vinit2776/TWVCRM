@@ -2,13 +2,17 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { Upload, Loader2, ExternalLink, RotateCcw, CheckCircle2, ShieldAlert } from "lucide-react";
+import {
+  Upload, Loader2, ExternalLink, RotateCcw, CheckCircle2, ShieldAlert,
+  Search, ChevronDown, ChevronRight, Link2, Banknote, FileWarning,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { DEPOSIT_TOPUP_CATEGORY_LABELS, type DepositInboxRow } from "@/types";
@@ -30,11 +34,19 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
   const [loading, setLoading] = useState(false);
   const [uploadTarget, setUploadTarget] = useState<DepositInboxRow | null>(null);
   const [reopenTarget, setReopenTarget] = useState<DepositInboxRow | null>(null);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  const load = useCallback(async (tab: "open" | "closed") => {
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  const load = useCallback(async (tab: "open" | "closed", q: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/accounting/inbox/deposits?tab=${tab}`);
+      const res = await fetch(`/api/accounting/inbox/deposits?tab=${tab}&q=${encodeURIComponent(q)}`);
       if (!res.ok) throw new Error("Failed to load");
       const data = await res.json();
       setRows(data.rows);
@@ -46,13 +58,13 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
     }
   }, [onOpenCountChange]);
 
-  useEffect(() => { load(subTab); }, [subTab, load]);
+  useEffect(() => { load(subTab, debouncedSearch); }, [subTab, debouncedSearch, load]);
 
   const isAdmin = currentUserRole === "admin";
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
         <Button
           size="sm"
           variant={subTab === "open" ? "default" : "outline"}
@@ -67,6 +79,15 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
         >
           Accounted
         </Button>
+        <div className="relative ml-auto min-w-[240px] flex-1 max-w-sm">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search customer, contract #, proposal #, reference…"
+            className="pl-8 h-9"
+          />
+        </div>
       </div>
 
       {loading && rows === null ? (
@@ -80,73 +101,99 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
         </div>
       ) : (
         <div className="space-y-2">
-          {rows.map((row) => (
-            <div
-              key={`${row.kind}-${row.id}`}
-              className="flex items-center justify-between gap-4 rounded-lg border p-3"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-sm truncate">{row.party_name}</span>
-                  <Badge
-                    variant="outline"
-                    className={row.kind === "deposit"
-                      ? "text-xs border-violet-300 bg-violet-50 text-violet-700"
-                      : "text-xs border-purple-300 bg-purple-50 text-purple-700"}
+          {rows.map((row) => {
+            const key = `${row.kind}-${row.id}`;
+            const isOpen = expanded === key;
+            return (
+              <div key={key} className="rounded-lg border">
+                <div className="flex items-center justify-between gap-4 p-3">
+                  <button
+                    className="min-w-0 flex items-start gap-2 text-left"
+                    onClick={() => setExpanded(isOpen ? null : key)}
+                    aria-expanded={isOpen}
                   >
-                    {row.kind === "deposit" ? "Security deposit" : "Top-up"}
-                  </Badge>
-                  {row.category && (
-                    <Badge variant="outline" className="text-xs">
-                      {DEPOSIT_TOPUP_CATEGORY_LABELS[row.category]}
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {row.contract_number || row.proposal_number || "—"}
-                  {row.payment_reference ? ` · Ref: ${row.payment_reference}` : ""}
-                  {row.payment_medium ? ` · ${row.payment_medium}` : ""}
-                  {" · "}{row.paid_at ? formatDate(row.paid_at) : (
-                    <span className="text-amber-600">date not on file</span>
-                  )}
-                </p>
-                {subTab === "closed" && row.accounted_at && (
-                  <p className="text-[11px] text-green-700 mt-0.5">
-                    Accounted by {row.accounted_by_name || "—"} on {formatDate(row.accounted_at)}
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <span className={row.amount == null ? "text-xs text-amber-600 italic" : "font-semibold text-sm"}>
-                  {amountLabel(row.amount)}
-                </span>
-                {subTab === "open" ? (
-                  <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setUploadTarget(row)}>
-                    <Upload className="h-3.5 w-3.5" /> Upload Receipt
-                  </Button>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    {row.proof_path && (
-                      <Button size="sm" variant="ghost" className="h-8 gap-1" asChild>
-                        <a href={row.proof_path} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="h-3.5 w-3.5" /> View
-                        </a>
+                    {isOpen
+                      ? <ChevronDown className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                      : <ChevronRight className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />}
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm truncate">{row.party_name}</span>
+                        <Badge
+                          variant="outline"
+                          className={row.kind === "deposit"
+                            ? "text-xs border-violet-300 bg-violet-50 text-violet-700"
+                            : "text-xs border-purple-300 bg-purple-50 text-purple-700"}
+                        >
+                          {row.kind === "deposit" ? "Security deposit" : "Top-up"}
+                        </Badge>
+                        {row.category && (
+                          <Badge variant="outline" className="text-xs">
+                            {DEPOSIT_TOPUP_CATEGORY_LABELS[row.category]}
+                          </Badge>
+                        )}
+                        {row.collection_method && (
+                          <Badge variant="outline" className="text-xs gap-1">
+                            {row.collection_method === "razorpay"
+                              ? <><Link2 className="h-3 w-3" /> Razorpay</>
+                              : <><Banknote className="h-3 w-3" /> Manual</>}
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="block text-xs text-muted-foreground mt-0.5">
+                        {row.contract_number || row.proposal_number || "—"}
+                        {row.payment_reference ? ` · Ref: ${row.payment_reference}` : ""}
+                        {" · "}{row.paid_at ? formatDate(row.paid_at) : (
+                          <span className="text-amber-600">date not on file</span>
+                        )}
+                      </span>
+                      {subTab === "closed" && row.accounted_at && (
+                        <span className="block text-[11px] text-green-700 mt-0.5">
+                          Accounted by {row.accounted_by_name || "—"} on {formatDate(row.accounted_at)}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-right">
+                      <span className={row.amount == null ? "block text-xs text-amber-600 italic" : "block font-semibold text-sm"}>
+                        {amountLabel(row.amount)}
+                      </span>
+                      {row.amount == null && row.expected_amount != null && (
+                        <span className="block text-[11px] text-muted-foreground">
+                          expected {formatCurrency(row.expected_amount)}
+                        </span>
+                      )}
+                    </span>
+                    {subTab === "open" ? (
+                      <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setUploadTarget(row)}>
+                        <Upload className="h-3.5 w-3.5" /> Upload Receipt
                       </Button>
-                    )}
-                    {isAdmin && (
-                      <Button
-                        size="sm" variant="ghost"
-                        className="h-8 gap-1 text-amber-700 hover:text-amber-800"
-                        onClick={() => setReopenTarget(row)}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" /> Reopen
-                      </Button>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        {row.proof_path && (
+                          <Button size="sm" variant="ghost" className="h-8 gap-1" asChild>
+                            <a href={row.proof_path} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-3.5 w-3.5" /> Receipt
+                            </a>
+                          </Button>
+                        )}
+                        {isAdmin && (
+                          <Button
+                            size="sm" variant="ghost"
+                            className="h-8 gap-1 text-amber-700 hover:text-amber-800"
+                            onClick={() => setReopenTarget(row)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" /> Reopen
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
+                </div>
+                {isOpen && <VerificationPanel row={row} />}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -154,15 +201,91 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
         <UploadReceiptDialog
           row={uploadTarget}
           onClose={() => setUploadTarget(null)}
-          onDone={() => { setUploadTarget(null); load(subTab); }}
+          onDone={() => { setUploadTarget(null); load(subTab, debouncedSearch); }}
         />
       )}
       {reopenTarget && (
         <ReopenDialog
           row={reopenTarget}
           onClose={() => setReopenTarget(null)}
-          onDone={() => { setReopenTarget(null); load(subTab); }}
+          onDone={() => { setReopenTarget(null); load(subTab, debouncedSearch); }}
         />
+      )}
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-xs mt-0.5 break-all">{value}</p>
+    </div>
+  );
+}
+
+/**
+ * Everything accounts needs to verify the money actually arrived before
+ * booking it — the customer's own payment proof for manual collections, or
+ * the Razorpay identifiers for link collections.
+ */
+function VerificationPanel({ row }: { row: DepositInboxRow }) {
+  const notOnFile = <span className="text-amber-600 italic">not on file</span>;
+
+  return (
+    <div className="border-t bg-muted/30 px-3 py-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Field label="Amount received" value={row.amount == null ? notOnFile : formatCurrency(row.amount)} />
+        {row.expected_amount != null && (
+          <Field label="Deposit required" value={formatCurrency(row.expected_amount)} />
+        )}
+        <Field label="Payment date" value={row.paid_at ? formatDate(row.paid_at) : notOnFile} />
+        <Field label="Mode" value={row.payment_medium || notOnFile} />
+        <Field label="Reference / UTR" value={row.payment_reference || notOnFile} />
+        {row.contract_number && <Field label="Contract" value={row.contract_number} />}
+        {row.proposal_number && <Field label="Proposal" value={row.proposal_number} />}
+      </div>
+
+      {row.collection_method === "razorpay" && (
+        <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-2.5">
+          <p className="text-[11px] font-semibold text-blue-900 mb-1.5 flex items-center gap-1">
+            <Link2 className="h-3 w-3" /> Razorpay payment link
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Payment ID" value={row.payment_reference || notOnFile} />
+            <Field label="Link ID" value={row.razorpay_link_id || notOnFile} />
+          </div>
+          {row.razorpay_link_url && (
+            <Button size="sm" variant="outline" className="h-7 gap-1 mt-2 bg-white" asChild>
+              <a href={row.razorpay_link_url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-3 w-3" /> Open in Razorpay
+              </a>
+            </Button>
+          )}
+          <p className="text-[11px] text-blue-800/70 mt-2">
+            Bank settlement date is not captured by the CRM — check the Razorpay dashboard
+            for the settlement against this payment ID.
+          </p>
+        </div>
+      )}
+
+      {row.collection_method !== "razorpay" && (
+        <div className="mt-3">
+          {row.payment_proof_url ? (
+            <Button size="sm" variant="outline" className="h-8 gap-1.5" asChild>
+              <a href={row.payment_proof_url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-3.5 w-3.5" /> View payment proof
+              </a>
+            </Button>
+          ) : (
+            <p className="text-xs text-amber-700 flex items-center gap-1.5">
+              <FileWarning className="h-3.5 w-3.5 shrink-0" />
+              {row.collection_method === "manual"
+                ? "No payment proof was attached when this deposit was recorded."
+                : "How this deposit was collected was never recorded — verify against the bank statement before booking."}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

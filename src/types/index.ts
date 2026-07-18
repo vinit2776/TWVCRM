@@ -689,6 +689,8 @@ export interface DepositInboxRow {
   category?: DepositTopupCategory | null;
   /** Null for legacy proposals where the payment amount was never recorded — show as "not on file", never as ₹0. */
   amount: number | null;
+  /** The deposit the contract called for. Used as a labelled fallback when `amount` was never recorded. */
+  expected_amount?: number | null;
   payment_reference?: string | null;
   payment_medium?: string | null;
   /** Null for legacy proposals where the received date was never recorded. */
@@ -696,7 +698,14 @@ export interface DepositInboxRow {
   accounted: boolean;
   accounted_at?: string | null;
   accounted_by_name?: string | null;
+  /** The Tally receipt attached when this was accounted. */
   proof_path?: string | null;
+  /** How the money came in — drives which verification details the inbox shows. */
+  collection_method?: "razorpay" | "manual" | null;
+  /** Customer-supplied payment proof captured at collection time (manual mode). */
+  payment_proof_url?: string | null;
+  razorpay_link_id?: string | null;
+  razorpay_link_url?: string | null;
 }
 
 export const DEPOSIT_TOPUP_CATEGORY_LABELS: Record<DepositTopupCategory, string> = {
