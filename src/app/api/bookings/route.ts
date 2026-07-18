@@ -4,6 +4,7 @@ import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
+import { isContractOperational } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 30;
@@ -450,14 +451,14 @@ export async function POST(request: NextRequest) {
     // Fetch contract
     const { data: contract, error: contractErr } = await supabase
       .from("contracts")
-      .select("id, lead_id, status")
+      .select("id, lead_id, status, end_date")
       .eq("id", input.contract_id!)
       .single();
 
     if (contractErr || !contract) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
     }
-    if (contract.status !== "active") {
+    if (!isContractOperational(contract)) {
       return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
     }
 

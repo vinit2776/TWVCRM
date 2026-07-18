@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { provisionUser, memberCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
+import { isContractOperational } from "@/lib/constants";
 
 const addSchema = z.object({
   name:  z.string().min(1).max(80),
@@ -116,7 +117,7 @@ export async function POST(
   });
 
   // Provision on all COSEC devices at this location (fire-and-forget)
-  if (contract.status === "active" && contract.location_id) {
+  if (isContractOperational(contract) && contract.location_id) {
     (async () => {
       try {
         const { data: devices } = await admin

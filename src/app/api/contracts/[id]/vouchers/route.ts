@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { isContractOperational } from "@/lib/constants";
 import {
   createUnifiVoucher,
   siteConfigFromLocation,
@@ -68,7 +69,7 @@ export async function POST(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
-  if (contract.status !== "active") {
+  if (!isContractOperational(contract)) {
     return NextResponse.json(
       { error: "Vouchers can only be issued for active contracts" },
       { status: 400 }

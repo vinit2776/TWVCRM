@@ -131,7 +131,7 @@ export function ManualPrintEntryDialog({
     threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
     const sinceDate = threeMonthsAgo.toISOString().slice(0, 10);
     Promise.all([
-      fetch(`/api/contracts?status=active&limit=200${leadParam}`).then(r => r.json()),
+      fetch(`/api/contracts?status=active,renewal_in_progress&limit=200${leadParam}`).then(r => r.json()),
       fetch(`/api/contracts?status=terminated&limit=200${leadParam}&terminated_after=${sinceDate}`).then(r => r.json()),
     ])
       .then(([activeJson, terminatedJson]) => {
