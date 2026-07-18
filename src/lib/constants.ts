@@ -332,6 +332,26 @@ export const CONTRACT_QUOTA_LOCKED_STATUSES: readonly ContractStatus[] = [
   "expired",
 ];
 
+// A contract mid-renewal (`renewal_in_progress`) is still the customer's live
+// contract — the parent isn't superseded until the renewal draft is actually
+// activated (status → `renewed`). Any check that gates a customer-facing
+// operation on "is this contract active" should use this helper instead of
+// `status === "active"`, so bookings, vouchers, usage charges, etc. keep
+// working through a renewal until the contract's own end_date passes.
+export function isContractOperational(contract: { status: string; end_date: string }): boolean {
+  if (contract.status === "active") return true;
+  if (contract.status === "renewal_in_progress") {
+    const today = new Date().toISOString().split("T")[0];
+    return contract.end_date >= today;
+  }
+  return false;
+}
+
+// Status filter value for list endpoints (search_contracts RPC / GET /api/contracts)
+// that want "usable" contracts rather than strictly `active` ones. The server
+// still applies the end_date guard for renewal_in_progress rows.
+export const CONTRACT_OPERATIONAL_STATUS_PARAM = "active,renewal_in_progress";
+
 // Roles that may ever edit contract quotas/facilities.
 // On locked contracts (active+): service quotas restrict to admin (delete) or
 // admin+manager (add/edit); facilities have no such restriction — all four

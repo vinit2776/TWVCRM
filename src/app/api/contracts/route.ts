@@ -61,7 +61,16 @@ export async function GET(request: NextRequest) {
       facility_quotas:contract_facilities(count)
     `, { count: "exact" });
 
-  if (status) query = query.eq("status", status);
+  if (status) {
+    const statuses = status.split(",").map((s) => s.trim()).filter(Boolean);
+    query = query.in("status", statuses);
+    if (statuses.includes("renewal_in_progress")) {
+      // A renewal_in_progress contract is only "usable" while still within
+      // its own end_date — mirrors the search_contracts RPC guard.
+      const todayStr = new Date().toISOString().split("T")[0];
+      query = query.or(`status.neq.renewal_in_progress,end_date.gte.${todayStr}`);
+    }
+  }
   if (terminatedAfter) query = query.gte("terminated_at", terminatedAfter);
   if (leadId) query = query.eq("lead_id", leadId);
   if (parentContractId) query = query.eq("parent_contract_id", parentContractId);

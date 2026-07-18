@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createUsageChargeSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { isContractOperational } from "@/lib/constants";
 
 // POST (create): admin, manager, accounts, floor_manager, sales_rep.
 // No DELETE handler exists — once created, charges can only be voided/removed
@@ -112,14 +113,14 @@ export async function POST(request: NextRequest) {
     // Contract-based charge — must exist and be active
     const { data: contract, error: contractError } = await supabase
       .from("contracts")
-      .select("id, lead_id, status, tax_percentage")
+      .select("id, lead_id, status, end_date, tax_percentage")
       .eq("id", result.data.contract_id)
       .single();
 
     if (contractError || !contract) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
     }
-    if (contract.status !== "active") {
+    if (!isContractOperational(contract)) {
       return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
     }
 

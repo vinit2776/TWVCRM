@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import Papa from "papaparse";
 import type { ServiceImportPreviewRow } from "@/types";
+import { isContractOperational } from "@/lib/constants";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,10 +154,10 @@ export async function POST(request: NextRequest) {
   const { data: contractRows } = await supabase
     .from("contracts")
     .select(
-      "id, contract_number, department_id, lead_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)"
+      "id, contract_number, department_id, lead_id, status, end_date, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)"
     )
     .eq("location_id", locationId)
-    .eq("status", "active")
+    .in("status", ["active", "renewal_in_progress"])
     .not("department_id", "is", null);
 
   // Build dept_id → contract map (lowercase for case-insensitive match)
@@ -170,7 +171,7 @@ export async function POST(request: NextRequest) {
       lead: any;
     }
   >();
-  for (const c of contractRows || []) {
+  for (const c of (contractRows || []).filter(isContractOperational)) {
     if (c.department_id) {
       contractByDept.set(String(c.department_id).toLowerCase().trim(), c);
     }

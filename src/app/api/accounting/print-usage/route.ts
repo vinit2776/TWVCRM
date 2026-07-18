@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { isContractOperational } from "@/lib/constants";
 import { z } from "zod";
 
 const ALLOWED_ROLES = ["admin", "accounts", "manager"];
@@ -109,14 +110,14 @@ export async function POST(request: NextRequest) {
   // ── 1. Validate contract ──────────────────────────────────────────────────
   const { data: contract, error: contractErr } = await supabase
     .from("contracts")
-    .select("id, location_id, status, lead_id")
+    .select("id, location_id, status, end_date, lead_id")
     .eq("id", contract_id)
     .single();
 
   if (contractErr || !contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
-  if (contract.status !== "active") {
+  if (!isContractOperational(contract)) {
     return NextResponse.json({ error: "Print usage can only be entered for active contracts" }, { status: 400 });
   }
   if (!contract.location_id) {

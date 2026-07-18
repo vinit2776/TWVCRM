@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isContractOperational } from "@/lib/constants";
 
 /**
  * GET /api/bookings/search-customer?q=<phone_or_name>
@@ -57,11 +58,11 @@ export async function GET(request: NextRequest) {
   if (leadIdList.length > 0) {
     const { data: contracts } = await supabase
       .from("contracts")
-      .select("id, contract_number, status, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
-      .eq("status", "active")
+      .select("id, contract_number, status, end_date, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
+      .in("status", ["active", "renewal_in_progress"])
       .in("lead_id", leadIdList)
       .limit(20);
-    matchingContracts = contracts || [];
+    matchingContracts = (contracts || []).filter(isContractOperational);
   }
 
   // Build unified results

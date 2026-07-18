@@ -454,7 +454,7 @@ function NewBookingForm() {
   // Contracts
   useEffect(() => {
     if (debouncedCustomerType === "contract_holder" || debouncedCustomerType === "guest") {
-      const params = new URLSearchParams({ status: "active", limit: "100" });
+      const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
       if (debouncedLocationId) params.set("location_id", debouncedLocationId);
       fetch(`/api/contracts?${params}`)
         .then(r => r.json())
