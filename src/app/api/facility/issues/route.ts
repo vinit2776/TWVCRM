@@ -15,6 +15,7 @@ import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia, Facilit
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
 const VALID_VIA: FacilityReportedVia[] = ["walk_in", "phone", "whatsapp", "email", "self_service", "proactive", "feedback"];
 const VALID_TASK_TYPE: FacilityTaskType[] = ["reported_problem", "delegated_task"];
+const VALID_SCOPE: FacilityScope[] = ["it", "hvac", "plumbing", "electrical", "housekeeping", "security", "other", "facility"];
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -101,7 +102,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const {
     task_type = "reported_problem",
-    scope = "it",
+    scope,
     category_id,
     location_id, floor_id, space_unit_id, asset_id,
     title, description,
@@ -119,6 +120,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Title is required" }, { status: 400 });
   }
   if (!location_id) return NextResponse.json({ error: "location_id is required" }, { status: 400 });
+  if (!scope || !VALID_SCOPE.includes(scope)) {
+    return NextResponse.json({ error: `scope is required. Use one of: ${VALID_SCOPE.join(", ")}` }, { status: 400 });
+  }
   if (!VALID_PRIORITY.includes(priority)) {
     return NextResponse.json({ error: `Invalid priority. Use one of: ${VALID_PRIORITY.join(", ")}` }, { status: 400 });
   }
@@ -170,6 +174,20 @@ export async function POST(request: NextRequest) {
     }
     slaSource = category;
     categoryDefaultAssigneeId = category.default_assignee_id ?? null;
+  }
+
+  // If an asset was linked, note when the reporter's chosen scope disagrees with
+  // the asset's own registered category scope — a recurring mismatch on the same
+  // asset means the *asset* is mis-categorized, not just this one ticket.
+  let assetRegisteredScope: FacilityScope | null = null;
+  if (asset_id) {
+    const { data: assetRow } = await supabase
+      .from("facility_assets")
+      .select("category:facility_asset_categories(scope)")
+      .eq("id", asset_id)
+      .single();
+    const assetCategory = assetRow?.category as unknown as { scope: FacilityScope } | null;
+    assetRegisteredScope = assetCategory?.scope ?? null;
   }
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
@@ -336,6 +354,14 @@ export async function POST(request: NextRequest) {
     entityType: "facility_issue", entityId: issue.id, action: "create",
     performedBy: dbUser.id, changes: { record: { old: null, new: issue } },
   });
+
+  if (assetRegisteredScope && assetRegisteredScope !== scope) {
+    logAudit(supabase, {
+      entityType: "facility_issue", entityId: issue.id, action: "asset_scope_mismatch",
+      performedBy: dbUser.id,
+      changes: { scope: { old: assetRegisteredScope, new: scope } },
+    });
+  }
 
   await notifyIssueAssignee(issue, {
     type: "created",

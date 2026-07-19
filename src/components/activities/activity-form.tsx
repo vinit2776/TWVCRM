@@ -6,6 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  FollowUpDateTimeInput,
+  type FollowUpDateTimeStatus,
+} from "@/components/shared/followup-datetime-input";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -26,6 +30,7 @@ import {
 } from "@/lib/constants";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { format } from "date-fns";
 import type { ActivityType } from "@/types";
 
 interface ActivityFormProps {
@@ -52,6 +57,7 @@ export function ActivityForm({
   const [meetingStart, setMeetingStart] = useState("");
   const [meetingEnd, setMeetingEnd] = useState("");
   const [followUpDate, setFollowUpDate] = useState("");
+  const [followUpStatus, setFollowUpStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [followUpNotes, setFollowUpNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -74,11 +80,35 @@ export function ActivityForm({
     setMeetingStart("");
     setMeetingEnd("");
     setFollowUpDate("");
+    setFollowUpStatus("empty");
     setFollowUpNotes("");
   };
 
+  // Preview of what logging this activity will actually do — shown just above the
+  // submit button so the user isn't guessing whether the follow-up "took".
+  const followUpPreview =
+    followUpStatus === "valid" && followUpDate
+      ? format(new Date(followUpDate), "EEE, MMM d 'at' h:mm a")
+      : null;
+
+  const summaryLines: string[] = [
+    `Logged: ${ACTIVITY_TYPE_LABELS[type]}${subject ? ` — "${subject}"` : ""}`,
+  ];
+  if (type === "call" && callOutcome) {
+    summaryLines.push(`Outcome: ${CALL_OUTCOME_LABELS[callOutcome]}`);
+  }
+  if (followUpPreview) {
+    summaryLines.push(
+      `Follow-up: ${followUpPreview}${followUpNotes ? ` — "${followUpNotes}"` : ""}`,
+      "Reminders: WhatsApp ~10 min before · daily 9 AM email until closed"
+    );
+  } else {
+    summaryLines.push("No follow-up scheduled");
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (followUpStatus === "incomplete") return;
     setSubmitting(true);
 
     const durationSeconds = callDurationMinutes
@@ -227,24 +257,41 @@ export function ActivityForm({
           {/* Follow-up */}
           <div className="border-t pt-4 space-y-4">
             <h4 className="text-sm font-medium">Follow-up (optional)</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Follow-up Date &amp; Time</Label>
-                <Input
-                  type="datetime-local"
-                  value={followUpDate}
-                  onChange={(e) => setFollowUpDate(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Follow-up Notes</Label>
-                <Input
-                  value={followUpNotes}
-                  onChange={(e) => setFollowUpNotes(e.target.value)}
-                  placeholder="Reminder..."
-                />
-              </div>
+            <div className="space-y-2">
+              <Label>Follow-up Date &amp; Time</Label>
+              <FollowUpDateTimeInput
+                value={followUpDate}
+                onChange={setFollowUpDate}
+                onStatusChange={setFollowUpStatus}
+              />
+              {followUpStatus === "incomplete" && (
+                <p className="text-xs text-destructive">
+                  Pick both a date and a time between 9:00 AM and 8:00 PM.
+                </p>
+              )}
             </div>
+            <div className="space-y-2">
+              <Label>Follow-up Notes</Label>
+              <Input
+                value={followUpNotes}
+                onChange={(e) => setFollowUpNotes(e.target.value)}
+                placeholder="Reminder..."
+              />
+            </div>
+          </div>
+
+          <div className="rounded-md border bg-muted/40 px-3 py-2.5">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              What happens when you log this
+            </p>
+            <ul className="space-y-0.5 text-sm text-foreground">
+              {summaryLines.map((line, i) => (
+                <li key={i} className="flex gap-1.5">
+                  <span className="text-muted-foreground">•</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -255,7 +302,7 @@ export function ActivityForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={submitting || followUpStatus === "incomplete"}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Log Activity
             </Button>
