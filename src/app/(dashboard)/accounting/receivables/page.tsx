@@ -181,6 +181,10 @@ function daysOverdueBadge(days: number | null) {
 export default function AccountsReceivablePage() {
   const [rows, setRows] = useState<ReceivableRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  // Deposits, top-ups and ad-hoc PIs — tracked separately from statements
+  // because they carry a different shape (no GST, no proforma lifecycle).
+  const [otherRows, setOtherRows] = useState<OtherReceivableRow[]>([]);
+  const [otherSummary, setOtherSummary] = useState<OtherSummary | null>(null);
   const [avgDays, setAvgDays] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -226,6 +230,8 @@ export default function AccountsReceivablePage() {
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setRows(json.rows || []);
       setSummary(json.summary || null);
+      setOtherRows(json.other_rows || []);
+      setOtherSummary(json.other_summary || null);
       setAvgDays(json.avgDays || {});
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load receivables");
@@ -697,6 +703,13 @@ export default function AccountsReceivablePage() {
         </CardContent>
       </Card>
 
+      <OtherReceivablesCard
+        rows={otherRows}
+        summary={otherSummary}
+        canRecordPayment={canRecordPayment}
+        onRecorded={load}
+      />
+
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -855,5 +868,479 @@ export default function AccountsReceivablePage() {
         onSuccess={load}
       />
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Other receivables — deposits, top-ups, ad-hoc PIs
+// ─────────────────────────────────────────────────────────────────────────
+
+interface OtherReceivableRow {
+  id: string;
+  kind: "deposit" | "topup" | "adhoc_invoice";
+  reference: string;
+  party_name: string;
+  total_amount: number;
+  balance_due: number;
+  due_date: string | null;
+  days_overdue: number | null;
+  payment_link_url: string | null;
+  is_stale: boolean;
+  followup_enabled: boolean;
+  reminder_count: number;
+  href: string | null;
+  parent_id?: string | null;
+}
+
+interface OtherSummary {
+  total_outstanding: number;
+  count: number;
+  overdue: number;
+  stale: number;
+}
+
+const OTHER_KIND_STYLE: Record<OtherReceivableRow["kind"], { label: string; cls: string }> = {
+  deposit: { label: "Security deposit", cls: "border-violet-300 bg-violet-50 text-violet-700" },
+  topup: { label: "Deposit top-up", cls: "border-purple-300 bg-purple-50 text-purple-700" },
+  adhoc_invoice: { label: "Ad-hoc invoice", cls: "border-sky-300 bg-sky-50 text-sky-700" },
+};
+
+/**
+ * Receivables that live outside billing_statements. Kept in their own card
+ * rather than merged into the statement table — they have no GST invoice,
+ * no proforma lifecycle and no partial payments, so most statement columns
+ * would be empty for them.
+ */
+function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded }: {
+  rows: OtherReceivableRow[];
+  summary: OtherSummary | null;
+  canRecordPayment: boolean;
+  onRecorded: () => void;
+}) {
+  const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
+  const [historyRow, setHistoryRow] = useState<OtherReceivableRow | null>(null);
+
+  async function sendReminderNow(r: OtherReceivableRow) {
+    setRemindingId(r.id);
+    try {
+      const res = await fetch(`/api/accounting/receivables/${r.kind}/${r.id}/reminder`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not send the reminder");
+      const ch = [data.data?.email_sent && "email", data.data?.whatsapp_sent && "WhatsApp"]
+        .filter(Boolean).join(" + ");
+      toast.success(`${data.data?.tone || "Reminder"} sent via ${ch}`);
+      onRecorded();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the reminder");
+    } finally {
+      setRemindingId(null);
+    }
+  }
+
+  if (!summary || rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Deposits & ad-hoc invoices</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Security deposits, top-ups and ad-hoc invoices awaiting payment.
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-sm">
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Outstanding</p>
+              <p className="font-bold text-teal-700">{formatCurrency(summary.total_outstanding)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Overdue</p>
+              <p className="font-bold text-orange-700">{summary.overdue}</p>
+            </div>
+            {summary.stale > 0 && (
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">Stale</p>
+                <p className="font-bold text-red-700">{summary.stale}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
+              <tr>
+                <th className="px-4 py-2 text-left">Reference</th>
+                <th className="px-4 py-2 text-left">Customer</th>
+                <th className="px-4 py-2 text-left">Due</th>
+                <th className="px-4 py-2 text-right">Amount</th>
+                <th className="px-4 py-2 text-left">Follow-up</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const style = OTHER_KIND_STYLE[r.kind];
+                return (
+                  <tr key={`${r.kind}-${r.id}`} className="border-b last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        {r.href
+                          ? <Link href={r.href} className="font-medium text-teal-700 hover:underline">{r.reference}</Link>
+                          : <span className="font-medium">{r.reference}</span>}
+                        {r.is_stale && (
+                          <Badge className="bg-red-100 text-red-800 border-red-300" title="Overdue more than 90 days — review or cancel">
+                            Stale
+                          </Badge>
+                        )}
+                      </div>
+                      <Badge variant="outline" className={`text-[10px] mt-1 ${style.cls}`}>{style.label}</Badge>
+                    </td>
+                    <td className="px-4 py-3">{r.party_name}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
+                      <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">
+                      {formatCurrency(r.balance_due)}
+                    </td>
+                    <td className="px-4 py-3 text-xs whitespace-nowrap">
+                      {!r.followup_enabled ? (
+                        <span className="text-muted-foreground" title="Predates automated follow-up — chase manually">
+                          Manual only
+                        </span>
+                      ) : r.reminder_count > 0 ? (
+                        <span className="text-amber-700">{r.reminder_count} sent</span>
+                      ) : (
+                        <span className="text-muted-foreground">Not started</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <div className="flex items-center gap-1 justify-end">
+                        {canRecordPayment && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setPayRow(r)}
+                            title="Record a payment received offline"
+                          >
+                            <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => sendReminderNow(r)}
+                          disabled={remindingId === r.id}
+                          title="Send the next reminder now (bypasses the 48h throttle)"
+                        >
+                          {remindingId === r.id
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Bell className="h-3.5 w-3.5" />}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setHistoryRow(r)}
+                          title="View reminder history"
+                        >
+                          <History className="h-3.5 w-3.5" />
+                        </Button>
+                        {r.payment_link_url && (
+                          <a
+                            href={r.payment_link_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1 text-muted-foreground hover:text-teal-700 inline-block"
+                            title="Open payment link"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+
+      {payRow && (
+        <RecordOtherPaymentDialog
+          row={payRow}
+          onClose={() => setPayRow(null)}
+          onDone={() => { setPayRow(null); onRecorded(); }}
+        />
+      )}
+      {historyRow && (
+        <OtherReminderHistoryDialog row={historyRow} onClose={() => setHistoryRow(null)} />
+      )}
+    </Card>
+  );
+}
+
+interface ReminderSend {
+  id: string;
+  stage_index: number;
+  stage_label: string;
+  channel: string;
+  recipient: string | null;
+  status: string;
+  error: string | null;
+  triggered_by: string;
+  created_at: string;
+  triggered_by_name: string | null;
+}
+
+/** What has actually gone out to this customer, across cron and manual sends. */
+function OtherReminderHistoryDialog({ row, onClose }: {
+  row: OtherReceivableRow;
+  onClose: () => void;
+}) {
+  const [items, setItems] = useState<ReminderSend[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/accounting/receivables/${row.kind}/${row.id}/reminder`);
+        const data = await res.json();
+        if (!cancelled && res.ok) setItems(data.items || []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [row.kind, row.id]);
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Reminder history — {row.reference}</DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <div className="p-6 text-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground text-sm">
+            Nothing sent yet for this receivable.
+            {!row.followup_enabled && (
+              <p className="mt-2 text-xs">
+                Automated follow-up is off for this row — it predates the ladder. Use the
+                bell to send one manually.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="max-h-[400px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left">Sent</th>
+                  <th className="px-3 py-2 text-left">Stage</th>
+                  <th className="px-3 py-2 text-left">Channel</th>
+                  <th className="px-3 py-2 text-left">Recipient</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((s) => (
+                  <tr key={s.id} className="border-b last:border-0">
+                    <td className="px-3 py-2 whitespace-nowrap">{formatDate(s.created_at)}</td>
+                    <td className="px-3 py-2">{s.stage_label}</td>
+                    <td className="px-3 py-2">{s.channel}</td>
+                    <td className="px-3 py-2 text-xs break-all">{s.recipient || "—"}</td>
+                    <td className="px-3 py-2">
+                      {s.status === "sent"
+                        ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300">sent</Badge>
+                        : <Badge className="bg-red-100 text-red-800 border-red-300" title={s.error || ""}>failed</Badge>}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {s.triggered_by === "cron" ? "Automated" : (s.triggered_by_name || "Manual")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const PAYMENT_MODES = ["bank_transfer", "upi", "cheque", "cash", "card", "other"];
+
+/**
+ * Records an offline payment against a deposit, top-up or ad-hoc invoice.
+ * Each kind already has its own settle endpoint with its own side effects
+ * (deposit gates contract activation; a shortfall-linked top-up decrements
+ * contracts.deposit_shortfall; a paid PI spawns a billing statement), so
+ * this dispatches to those rather than writing any status directly.
+ */
+function RecordOtherPaymentDialog({ row, onClose, onDone }: {
+  row: OtherReceivableRow;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [amount, setAmount] = useState(String(row.balance_due));
+  const [mode, setMode] = useState("bank_transfer");
+  const [reference, setReference] = useState("");
+  const [notes, setNotes] = useState("");
+  const [proof, setProof] = useState<File | null>(null);
+  const [shortfallApproved, setShortfallApproved] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const kindLabel = OTHER_KIND_STYLE[row.kind].label;
+  // A deposit recorded below the required amount needs explicit sign-off
+  // (and the server rejects anything more than 10% short outright).
+  const shortfall = row.balance_due - (parseFloat(amount) || 0);
+  const needsShortfallApproval = row.kind === "deposit" && shortfall > 0;
+  // The top-up settle endpoint closes out a fixed pending amount, so the
+  // figure isn't the operator's to change there.
+  const amountEditable = row.kind !== "topup";
+
+  async function submit() {
+    const amt = parseFloat(amount);
+    if (amountEditable && (!amt || amt <= 0)) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      let res: Response;
+      if (row.kind === "deposit") {
+        const fd = new FormData();
+        fd.append("amount", String(amt));
+        fd.append("payment_medium", mode);
+        if (reference) fd.append("reference", reference);
+        if (notes) fd.append("notes", notes);
+        if (proof) fd.append("payment_proof", proof);
+        if (shortfallApproved) fd.append("shortfall_approved", "true");
+        res = await fetch(`/api/proposals/${row.id}/deposit-payment`, { method: "POST", body: fd });
+      } else if (row.kind === "topup") {
+        if (!row.parent_id) throw new Error("Top-up is missing its contract reference");
+        const fd = new FormData();
+        fd.append("payment_mode", mode);
+        if (reference) fd.append("payment_reference", reference);
+        if (proof) fd.append("proof", proof);
+        res = await fetch(
+          `/api/contracts/${row.parent_id}/deposit-topup/${row.id}/record-payment`,
+          { method: "POST", body: fd },
+        );
+      } else {
+        res = await fetch(`/api/invoices/${row.id}/payment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: amt, reference, notes }),
+        });
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not record the payment");
+      toast.success("Payment recorded");
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not record the payment");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Record payment — {row.reference}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {kindLabel} · {row.party_name} · outstanding {formatCurrency(row.balance_due)}
+          </p>
+
+          <div>
+            <Label>Amount received</Label>
+            <Input
+              type="number"
+              value={amount}
+              disabled={!amountEditable}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+            {!amountEditable && (
+              <p className="text-xs text-muted-foreground mt-1">
+                A top-up settles for its full pending amount.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label>Payment mode</Label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              className="w-full border rounded-md h-9 px-2 text-sm"
+            >
+              {PAYMENT_MODES.map((m) => (
+                <option key={m} value={m}>{m.replace(/_/g, " ")}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label>Reference / UTR</Label>
+            <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="optional" />
+          </div>
+
+          {row.kind !== "topup" && (
+            <div>
+              <Label>Notes</Label>
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" />
+            </div>
+          )}
+
+          {needsShortfallApproval && (
+            <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
+              <input
+                type="checkbox"
+                checked={shortfallApproved}
+                onChange={(e) => setShortfallApproved(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Approve a shortfall of {formatCurrency(shortfall)} against the required deposit.
+                Admin or manager only; anything more than 10% short is rejected.
+              </span>
+            </label>
+          )}
+
+          {row.kind !== "adhoc_invoice" && (
+            <div>
+              <Label>Payment proof (optional)</Label>
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={(e) => setProof(e.target.files?.[0] || null)}
+                className="block w-full text-sm border rounded-md p-2"
+              />
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button onClick={submit} disabled={submitting}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Record Payment"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

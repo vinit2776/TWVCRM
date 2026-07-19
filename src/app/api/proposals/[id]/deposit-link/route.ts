@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logWhatsAppActivity } from "@/lib/audit";
+import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 
 /**
  * POST /api/proposals/[id]/deposit-link
@@ -210,9 +211,22 @@ export async function POST(
     html,
   }).catch(console.error);
 
+  // Stamp the follow-up due date alongside the send timestamp so AR can age
+  // the deposit and the reminder ladder has something to gate on. Reset the
+  // reminder counters too — re-sending the link restarts the sequence rather
+  // than resuming wherever a previous link left off.
+  const depositDueDate = new Date(Date.parse(emailSentAt) + DEPOSIT_DUE_DAYS * 86400000)
+    .toISOString()
+    .slice(0, 10);
+
   await supabase
     .from("proposals")
-    .update({ deposit_email_sent_at: emailSentAt })
+    .update({
+      deposit_email_sent_at: emailSentAt,
+      deposit_due_date: depositDueDate,
+      deposit_reminder_count: 0,
+      deposit_last_reminder_sent_at: null,
+    })
     .eq("id", id);
 
   // WhatsApp — fire to phone if available (fire-and-forget)

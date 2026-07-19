@@ -21,6 +21,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/settlement-recon",
+      "schedule": "0 6 * * *"
+    },
+    {
       "path": "/api/cron/pending-payment-report",
       "schedule": "30 3 * * *"
     },

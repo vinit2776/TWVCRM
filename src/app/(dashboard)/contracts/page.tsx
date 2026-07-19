@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, ScrollText, Search, X, CalendarX, RefreshCw, Settings2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ScrollText, Search, X, CalendarX, RefreshCw, Settings2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -51,15 +51,20 @@ export default function ContractsPage() {
   const [search, setSearch] = useState("");
   const [expiringSoon, setExpiringSoon] = useState("");
   const [noQuotasFilter, setNoQuotasFilter] = useState(false);
+  const [shortfallFilter, setShortfallFilter] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [selectedContract, setSelectedContract] = useState<ContractWithQuotaCount | null>(null);
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page) });
-    // "Needs Quotas" forces active + high limit so we can client-filter
-    const effectiveStatus = noQuotasFilter ? "active" : statusFilter;
-    const effectiveLimit = noQuotasFilter ? "200" : "25";
+    // "Needs Quotas" forces active + high limit so we can client-filter.
+    // "Deposit Shortfall" deliberately does NOT set status — search_contracts
+    // (used whenever status/search/expiringSoon is set) lists its own fields
+    // and doesn't include deposit_shortfall, so this stays on the direct
+    // select("*") query path instead, then filters status + shortfall client-side.
+    const effectiveStatus = noQuotasFilter ? "active" : shortfallFilter ? "" : statusFilter;
+    const effectiveLimit = (noQuotasFilter || shortfallFilter) ? "200" : "25";
     if (effectiveStatus) params.set("status", effectiveStatus);
     if (effectiveLimit !== "25") params.set("limit", effectiveLimit);
     if (search.trim()) params.set("search", search.trim());
@@ -69,11 +74,19 @@ export default function ContractsPage() {
     if (res.ok) {
       const json = await res.json();
       const rows: ContractWithQuotaCount[] = json.data || [];
-      setContracts(noQuotasFilter ? rows.filter(c => quotaCount(c) === 0) : rows);
+      if (noQuotasFilter) {
+        setContracts(rows.filter(c => quotaCount(c) === 0));
+      } else if (shortfallFilter) {
+        setContracts(rows.filter(c =>
+          (c.deposit_shortfall ?? 0) > 0 && ["active", "renewal_in_progress"].includes(c.status)
+        ));
+      } else {
+        setContracts(rows);
+      }
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, search, expiringSoon, noQuotasFilter, locationFilter]);
+  }, [page, statusFilter, search, expiringSoon, noQuotasFilter, shortfallFilter, locationFilter]);
 
   useEffect(() => { fetchContracts(); }, [fetchContracts]);
 
@@ -82,18 +95,28 @@ export default function ContractsPage() {
     setStatusFilter("");
     setExpiringSoon("");
     setNoQuotasFilter(false);
+    setShortfallFilter(false);
     setLocationFilter(null);
     setPage(1);
   };
 
   const toggleNoQuotas = () => {
     setNoQuotasFilter(v => !v);
+    setShortfallFilter(false);
     setExpiringSoon("");
     setStatusFilter("");
     setPage(1);
   };
 
-  const hasFilters = search || statusFilter || expiringSoon || noQuotasFilter || locationFilter;
+  const toggleShortfall = () => {
+    setShortfallFilter(v => !v);
+    setNoQuotasFilter(false);
+    setExpiringSoon("");
+    setStatusFilter("");
+    setPage(1);
+  };
+
+  const hasFilters = search || statusFilter || expiringSoon || noQuotasFilter || shortfallFilter || locationFilter;
   const canEditQuotas = userRole && (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole);
 
   const openQuotaSheet = (e: React.MouseEvent, c: ContractWithQuotaCount) => {
@@ -127,6 +150,8 @@ export default function ContractsPage() {
               ? "Loading…"
               : noQuotasFilter
               ? `${contracts.length} active contracts without quotas`
+              : shortfallFilter
+              ? `${contracts.length} contracts with an outstanding deposit shortfall`
               : `${pagination.total} total contracts`}
           </p>
         </div>
@@ -181,6 +206,14 @@ export default function ContractsPage() {
               Needs Quotas
             </Button>
           )}
+          <Button
+            variant={shortfallFilter ? "default" : "outline"}
+            size="sm"
+            onClick={toggleShortfall}
+          >
+            <AlertTriangle className="mr-1 h-4 w-4" />
+            Deposit Shortfall
+          </Button>
           {hasFilters && (
             <Button variant="ghost" size="sm" onClick={clearFilters}>
               <X className="mr-1 h-4 w-4" />
@@ -192,9 +225,9 @@ export default function ContractsPage() {
 
       {loading ? <TableSkeleton rows={6} /> : contracts.length === 0 ? (
         <EmptyState
-          icon={ScrollText}
-          title={noQuotasFilter ? "All active contracts have quotas set" : "No contracts found"}
-          description={noQuotasFilter ? "Nothing to configure." : "Create contracts from lead detail pages."}
+          icon={shortfallFilter ? AlertTriangle : ScrollText}
+          title={noQuotasFilter ? "All active contracts have quotas set" : shortfallFilter ? "No outstanding deposit shortfalls" : "No contracts found"}
+          description={noQuotasFilter ? "Nothing to configure." : shortfallFilter ? "Every renewal-escalation shortfall has been collected." : "Create contracts from lead detail pages."}
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">
@@ -208,7 +241,11 @@ export default function ContractsPage() {
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">End Date</th>
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Location</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
-              <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Quotas</th>
+              {shortfallFilter ? (
+                <th className="px-4 py-3 text-right font-medium">Shortfall</th>
+              ) : (
+                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Quotas</th>
+              )}
             </tr></thead>
             <tbody>{contracts.map((c) => {
               const qCount = quotaCount(c);
@@ -251,28 +288,34 @@ export default function ContractsPage() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 hidden md:table-cell">
-                    {canEditQuotas ? (
-                      <button
-                        onClick={(e) => openQuotaSheet(e, c)}
-                        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors hover:opacity-80 ${
-                          qCount > 0
-                            ? "border-green-300 bg-green-50 text-green-700"
-                            : isActive
-                            ? "border-amber-300 bg-amber-50 text-amber-700"
-                            : "border-border text-muted-foreground"
-                        }`}
-                        title="Manage service quotas"
-                      >
-                        <Settings2 className="h-3 w-3" />
-                        {qCount > 0 ? `${qCount} set` : "None"}
-                      </button>
-                    ) : (
-                      <span className={`text-xs ${qCount > 0 ? "text-green-700" : "text-muted-foreground"}`}>
-                        {qCount > 0 ? `${qCount} set` : "—"}
-                      </span>
-                    )}
-                  </td>
+                  {shortfallFilter ? (
+                    <td className="px-4 py-3 text-right font-medium text-amber-700">
+                      {formatCurrency(c.deposit_shortfall ?? 0)}
+                    </td>
+                  ) : (
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      {canEditQuotas ? (
+                        <button
+                          onClick={(e) => openQuotaSheet(e, c)}
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors hover:opacity-80 ${
+                            qCount > 0
+                              ? "border-green-300 bg-green-50 text-green-700"
+                              : isActive
+                              ? "border-amber-300 bg-amber-50 text-amber-700"
+                              : "border-border text-muted-foreground"
+                          }`}
+                          title="Manage service quotas"
+                        >
+                          <Settings2 className="h-3 w-3" />
+                          {qCount > 0 ? `${qCount} set` : "None"}
+                        </button>
+                      ) : (
+                        <span className={`text-xs ${qCount > 0 ? "text-green-700" : "text-muted-foreground"}`}>
+                          {qCount > 0 ? `${qCount} set` : "—"}
+                        </span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}</tbody>
@@ -280,7 +323,7 @@ export default function ContractsPage() {
         </div>
       )}
 
-      {!noQuotasFilter && pagination.totalPages > 1 && (
+      {!noQuotasFilter && !shortfallFilter && pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">Page {pagination.page} of {pagination.totalPages}</p>
           <div className="flex gap-2">

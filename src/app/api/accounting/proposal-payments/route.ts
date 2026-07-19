@@ -4,12 +4,14 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 /**
  * GET  /api/accounting/proposal-payments?month=YYYY-MM
  *   Returns all proposal-level payments for a given month:
- *     - security deposits received (proposals.deposit_payment_status = 'paid')
  *     - proforma/adhoc invoices paid  (proforma_invoices.status = 'paid')
  *     - billing statement payments    (billing_statements.payment_status = 'paid')
+ *   Security deposit accounting lives in Tally Inbox → Deposits instead
+ *   (see /api/accounting/inbox/deposits) — it requires a Tally receipt
+ *   upload, not just a toggle.
  *
  * PATCH /api/accounting/proposal-payments
- *   Body: { type: "deposit"|"proforma"|"billing", id: string, accounted: boolean }
+ *   Body: { type: "proforma"|"billing", id: string, accounted: boolean }
  *   Marks a payment row as accounted (or unmarks it).
  */
 
@@ -37,23 +39,7 @@ export async function GET(request: NextRequest) {
     dateTo = `${y}-${String(m).padStart(2, "0")}-${lastDay}`;
   }
 
-  // ── 1. Security deposits received this month ─────────────────────────────
-  const { data: deposits } = await supabase
-    .from("proposals")
-    .select(`
-      id, proposal_number, title, total_amount,
-      security_deposit_amount, security_deposit_months,
-      deposit_payment_amount, deposit_payment_reference,
-      deposit_payment_received_at, deposit_accounted,
-      deposit_accounted_at, deposit_accounted_by,
-      lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, gst_number, state)
-    `)
-    .eq("deposit_payment_status", "paid")
-    .gte("deposit_payment_received_at", dateFrom)
-    .lte("deposit_payment_received_at", dateTo + "T23:59:59Z")
-    .order("deposit_payment_received_at", { ascending: true });
-
-  // ── 2. Proforma / adhoc invoices paid this month ─────────────────────────
+  // ── 1. Proforma / adhoc invoices paid this month ─────────────────────────
   const { data: proformas } = await supabase
     .from("proforma_invoices")
     .select(`
@@ -68,7 +54,7 @@ export async function GET(request: NextRequest) {
     .lte("paid_at", dateTo + "T23:59:59Z")
     .order("paid_at", { ascending: true });
 
-  // ── 3. Billing statements paid this month ────────────────────────────────
+  // ── 2. Billing statements paid this month ────────────────────────────────
   const { data: billings } = await supabase
     .from("billing_statements")
     .select(`
@@ -90,18 +76,14 @@ export async function GET(request: NextRequest) {
     month: month || new Date().toISOString().slice(0, 7),
     date_from: dateFrom,
     date_to: dateTo,
-    deposits: deposits || [],
     proformas: proformas || [],
     billings: billings || [],
     summary: {
-      deposit_count: (deposits || []).length,
-      deposit_total: (deposits || []).reduce((s, d) => s + Number(d.deposit_payment_amount || 0), 0),
       proforma_count: (proformas || []).length,
       proforma_total: (proformas || []).reduce((s, p) => s + Number(p.total_amount || 0), 0),
       billing_count: (billings || []).length,
       billing_total: (billings || []).reduce((s, b) => s + Number(b.total_amount || 0), 0),
       unaccounted_count:
-        (deposits || []).filter((d) => !d.deposit_accounted).length +
         (proformas || []).filter((p) => !p.accounted).length +
         (billings || []).filter((b) => !b.accounted).length,
     },
@@ -121,17 +103,7 @@ export async function PATCH(request: NextRequest) {
 
   const now = new Date().toISOString();
 
-  if (type === "deposit") {
-    const { error } = await supabase
-      .from("proposals")
-      .update({
-        deposit_accounted: accounted,
-        deposit_accounted_at: accounted ? now : null,
-        deposit_accounted_by: accounted ? user.id : null,
-      })
-      .eq("id", id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  } else if (type === "proforma") {
+  if (type === "proforma") {
     const { error } = await supabase
       .from("proforma_invoices")
       .update({

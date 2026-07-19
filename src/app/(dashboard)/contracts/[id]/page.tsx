@@ -44,6 +44,7 @@ import { ContractBillingSection } from "@/components/accounting/contract-billing
 import { ContractMoratoriumSection } from "@/components/contracts/contract-moratorium-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
+import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
@@ -801,6 +802,14 @@ export default function ContractDetailPage({
               depositCarriedFrom={contract.deposit_carried_from}
             />
           )}
+
+          {/* Deposit Top-ups — collect additional deposit, incl. renewal-escalation shortfall */}
+          <ContractDepositTopupsSection
+            contractId={id}
+            currentUserRole={userRole ?? ""}
+            depositShortfall={contract.deposit_shortfall}
+            onShortfallCollected={() => fetchContract(false)}
+          />
 
           {/* Deposit Adjustments — pending approvals + history */}
           <ContractDepositAdjustmentsSection

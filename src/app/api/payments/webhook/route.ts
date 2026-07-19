@@ -233,6 +233,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
     }
 
+    // Check if this payment link belongs to a contract deposit top-up.
+    // mark_deposit_topup_paid is idempotent (only acts on status='pending'),
+    // and also handles the atomic deposit_shortfall decrement if this
+    // top-up was collecting a renewal-escalation shortfall.
+    const { data: topupResult } = await supabase.rpc("mark_deposit_topup_paid", {
+      p_razorpay_payment_link_id: paymentLinkId,
+      p_razorpay_payment_id: razorpayPaymentId,
+    });
+    const topupOutcome = topupResult?.[0];
+    if (topupOutcome?.success) {
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "deposit_topup", outcome: "processed" });
+      return NextResponse.json({ status: "ok", entity: "deposit_topup" });
+    }
+    if (topupOutcome?.topup_id) {
+      // Matched a top-up row but it wasn't 'pending' — a duplicate webhook
+      // delivery for an already-processed top-up. Acknowledge, don't fall
+      // through to the other entity checks below (none of them will match).
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "deposit_topup", outcome: "ignored", outcome_detail: topupOutcome.error });
+      return NextResponse.json({ status: "ok", entity: "deposit_topup", reason: topupOutcome.error });
+    }
+
     // Check if this payment link belongs to a billing statement (invoice)
     const { data: billingStatement } = await supabase
       .from("billing_statements")

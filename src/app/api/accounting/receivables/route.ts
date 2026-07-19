@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import {
+  daysOverdue, isStale, depositIsChaseable, type ReceivableRow,
+} from "@/lib/receivables";
 
 /**
  * GET /api/accounting/receivables
@@ -103,5 +106,145 @@ export async function GET(_req: NextRequest) {
     oldest_days: rows.reduce((m, r) => Math.max(m, r.days_overdue ?? -Infinity), -Infinity),
   };
 
-  return NextResponse.json({ rows, summary });
+  const otherRows = await fetchOtherReceivables(supabase);
+  const otherSummary = {
+    total_outstanding: otherRows.reduce((s, r) => s + r.balance_due, 0),
+    count: otherRows.length,
+    overdue: otherRows.filter((r) => r.days_overdue !== null && r.days_overdue >= 0).length,
+    stale: otherRows.filter((r) => r.is_stale).length,
+  };
+
+  return NextResponse.json({ rows, summary, other_rows: otherRows, other_summary: otherSummary });
+}
+
+/**
+ * Deposits, top-ups and ad-hoc PIs — receivables that live outside
+ * billing_statements and so were historically invisible to AR. Returned as
+ * a separate array rather than merged into `rows`: the statement table is
+ * bound tightly to the billing_statements shape, and these carry different
+ * fields (no GST, no proforma lifecycle, no partial payments).
+ */
+async function fetchOtherReceivables(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<ReceivableRow[]> {
+  const out: ReceivableRow[] = [];
+
+  const partyOf = (lead: { first_name?: string; last_name?: string; company?: string } | null) =>
+    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "(unnamed)";
+
+  const finish = (
+    base: Omit<ReceivableRow, "days_overdue" | "is_stale" | "balance_due">,
+  ): ReceivableRow => ({
+    ...base,
+    balance_due: Math.round(base.total_amount - base.amount_paid),
+    days_overdue: daysOverdue(base.due_date),
+    is_stale: isStale(base.due_date),
+  });
+
+  // ── Proposal security deposits ─────────────────────────────────────────
+  // Only accepted proposals: chasing a deposit on a rejected or still-open
+  // proposal means pestering a prospect over money they never agreed to pay.
+  const { data: deposits } = await supabase
+    .from("proposals")
+    .select(`
+      id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
+      deposit_due_date, deposit_razorpay_link_url,
+      deposit_reminder_count, deposit_last_reminder_sent_at,
+      lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email)
+    `)
+    .eq("deposit_payment_status", "pending")
+    .gt("security_deposit_amount", 0);
+
+  for (const d of deposits || []) {
+    if (!depositIsChaseable(d.status as string)) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = d.lead as any;
+    const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+    if (owed <= 0) continue; // fully covered by a carried-forward deposit
+    out.push(finish({
+      id: d.id,
+      kind: "deposit",
+      reference: d.proposal_number,
+      party_name: partyOf(lead),
+      lead_id: lead?.id ?? null,
+      lead_email: lead?.email ?? null,
+      total_amount: owed,
+      amount_paid: 0,
+      due_date: d.deposit_due_date,
+      payment_link_url: d.deposit_razorpay_link_url,
+      followup_enabled: true,
+      reminder_count: d.deposit_reminder_count || 0,
+      last_reminder_sent_at: d.deposit_last_reminder_sent_at,
+      href: `/proposals/${d.id}`,
+    }));
+  }
+
+  // ── Deposit top-ups awaiting payment ───────────────────────────────────
+  const { data: topups } = await supabase
+    .from("deposit_topups")
+    .select(`
+      id, amount, due_date, razorpay_payment_link_url,
+      reminder_count, last_reminder_sent_at,
+      contract:contracts!deposit_topups_contract_id_fkey(
+        id, contract_number,
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email)
+      )
+    `)
+    .eq("status", "pending");
+
+  for (const t of topups || []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contract = t.contract as any;
+    out.push(finish({
+      id: t.id,
+      kind: "topup",
+      reference: contract?.contract_number || "—",
+      party_name: partyOf(contract?.lead ?? null),
+      lead_id: contract?.lead?.id ?? null,
+      lead_email: contract?.lead?.email ?? null,
+      total_amount: Number(t.amount || 0),
+      amount_paid: 0,
+      due_date: t.due_date,
+      payment_link_url: t.razorpay_payment_link_url,
+      followup_enabled: true,
+      reminder_count: t.reminder_count || 0,
+      last_reminder_sent_at: t.last_reminder_sent_at,
+      href: contract?.id ? `/contracts/${contract.id}` : null,
+      parent_id: contract?.id ?? null,
+    }));
+  }
+
+  // ── Ad-hoc / proforma invoices ─────────────────────────────────────────
+  const { data: invoices } = await supabase
+    .from("proforma_invoices")
+    .select(`
+      id, invoice_number, title, total_amount, due_date, status,
+      razorpay_link_url, followup_enabled, reminder_count, last_reminder_sent_at,
+      lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email)
+    `)
+    .not("status", "in", "(paid,cancelled)");
+
+  for (const inv of invoices || []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = inv.lead as any;
+    out.push(finish({
+      id: inv.id,
+      kind: "adhoc_invoice",
+      reference: inv.invoice_number,
+      party_name: partyOf(lead),
+      lead_id: lead?.id ?? null,
+      lead_email: lead?.email ?? null,
+      total_amount: Number(inv.total_amount || 0),
+      amount_paid: 0,
+      due_date: inv.due_date,
+      payment_link_url: inv.razorpay_link_url,
+      followup_enabled: inv.followup_enabled !== false,
+      reminder_count: inv.reminder_count || 0,
+      last_reminder_sent_at: inv.last_reminder_sent_at,
+      href: `/invoices/${inv.id}`,
+    }));
+  }
+
+  // Most overdue first; undated rows sink to the bottom.
+  return out.sort((a, b) => (b.days_overdue ?? -Infinity) - (a.days_overdue ?? -Infinity));
 }
