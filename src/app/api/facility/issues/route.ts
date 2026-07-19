@@ -10,6 +10,7 @@ import {
 } from "@/lib/facility";
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import { createAdminClient } from "@/lib/supabase/server";
+import { classify } from "@/lib/facility-classifier";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia, FacilityTaskType } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
       floor:location_floors(id, name),
       space_unit:space_units(id, name, code),
       asset:facility_assets(id, name, asset_code),
-      category:facility_asset_categories(id, name, slug, scope, icon),
+      category:facility_asset_categories!facility_issues_category_id_fkey(id, name, slug, scope, icon),
       reporter:users!facility_issues_reported_by_fkey(id, full_name),
       assignee:users!facility_issues_assigned_to_fkey(id, full_name)
     `)
@@ -157,28 +158,10 @@ export async function POST(request: NextRequest) {
     delegatedAssignee = assignee;
   }
 
-  // Look up category for SLA computation (optional — reporters may only pick scope)
-  let slaSource: Parameters<typeof computeSlaTarget>[0] = {
-    default_sla_critical_hrs: 0, default_sla_high_hrs: 0,
-    default_sla_medium_hrs: 0, default_sla_low_hrs: 0,
-  };
-  let categoryDefaultAssigneeId: string | null = null;
-  if (category_id) {
-    const { data: category, error: catErr } = await supabase
-      .from("facility_asset_categories")
-      .select("id, scope, default_assignee_id, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
-      .eq("id", category_id)
-      .single();
-    if (catErr || !category) {
-      return NextResponse.json({ error: "Category not found" }, { status: 404 });
-    }
-    slaSource = category;
-    categoryDefaultAssigneeId = category.default_assignee_id ?? null;
-  }
-
   // If an asset was linked, note when the reporter's chosen scope disagrees with
   // the asset's own registered category scope — a recurring mismatch on the same
-  // asset means the *asset* is mis-categorized, not just this one ticket.
+  // asset means the *asset* is mis-categorized, not just this one ticket. Also
+  // feeds the classifier below as a soft prior.
   let assetRegisteredScope: FacilityScope | null = null;
   if (asset_id) {
     const { data: assetRow } = await supabase
@@ -188,6 +171,62 @@ export async function POST(request: NextRequest) {
       .single();
     const assetCategory = assetRow?.category as unknown as { scope: FacilityScope } | null;
     assetRegisteredScope = assetCategory?.scope ?? null;
+  }
+
+  // Classifier runs unconditionally (server-authoritative re-check, dark by
+  // default per docs/plans/facility-smart-routing.md Phase 3/4) for reported
+  // problems only — delegated tasks already have an explicit assignee, not a
+  // department-routing question. Recorded as telemetry regardless of the
+  // facility_classifier_ui_enabled flag, which only gates the *client* UI.
+  let classifierResult: ReturnType<typeof classify> | null = null;
+  let suggestedCategoryId: string | null = null;
+  if (task_type === "reported_problem") {
+    classifierResult = classify(title, description, assetRegisteredScope ?? undefined);
+    if (classifierResult.categorySlug) {
+      const { data: suggestedCat } = await supabase
+        .from("facility_asset_categories")
+        .select("id")
+        .eq("slug", classifierResult.categorySlug)
+        .single();
+      suggestedCategoryId = suggestedCat?.id ?? null;
+    }
+  }
+
+  // Category autofill is a separate, explicit opt-in from the suggestion UI —
+  // it changes who gets auto-assigned (see facility_category_autofill_enabled
+  // in supabase/migrations/00367_facility_classifier_flags.sql). Only applies
+  // when the reporter didn't already pick a category AND the classifier's
+  // suggested scope agrees with what they actually chose — auto-filling a
+  // category for a scope the reporter didn't pick would be incoherent.
+  let effectiveCategoryId: string | null = category_id || null;
+  if (!effectiveCategoryId && suggestedCategoryId && classifierResult?.scope === scope) {
+    const { data: flagRow } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "facility_category_autofill_enabled")
+      .maybeSingle();
+    if (flagRow?.value === "true") {
+      effectiveCategoryId = suggestedCategoryId;
+    }
+  }
+
+  // Look up category for SLA computation (optional — reporters may only pick scope)
+  let slaSource: Parameters<typeof computeSlaTarget>[0] = {
+    default_sla_critical_hrs: 0, default_sla_high_hrs: 0,
+    default_sla_medium_hrs: 0, default_sla_low_hrs: 0,
+  };
+  let categoryDefaultAssigneeId: string | null = null;
+  if (effectiveCategoryId) {
+    const { data: category, error: catErr } = await supabase
+      .from("facility_asset_categories")
+      .select("id, scope, default_assignee_id, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
+      .eq("id", effectiveCategoryId)
+      .single();
+    if (catErr || !category) {
+      return NextResponse.json({ error: "Category not found" }, { status: 404 });
+    }
+    slaSource = category;
+    categoryDefaultAssigneeId = category.default_assignee_id ?? null;
   }
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
@@ -233,7 +272,7 @@ export async function POST(request: NextRequest) {
       autoAssignee = assignee ?? null;
       if (!autoAssignee) {
         // UUID set but user is inactive — alert admins so they fix the routing in /facility/settings
-        notifyAdminsStaleAssignee({ categoryId: category_id!, issueNumber, issueTitle: title.trim() });
+        notifyAdminsStaleAssignee({ categoryId: effectiveCategoryId!, issueNumber, issueTitle: title.trim() });
       }
     }
     // Looked up regardless of whether a category default already supplied autoAssignee —
@@ -258,7 +297,7 @@ export async function POST(request: NextRequest) {
       issue_number: issueNumber,
       task_type,
       scope,
-      category_id: category_id || null,
+      category_id: effectiveCategoryId,
       location_id,
       floor_id: floor_id || null,
       space_unit_id: space_unit_id || null,
@@ -277,6 +316,16 @@ export async function POST(request: NextRequest) {
       claim_sla_target_at: claimSlaTargetAt,
       tat_hours: computedTatHours,
       tat_manual_override: hasManualTat,
+      // Classifier telemetry — recorded regardless of facility_classifier_ui_enabled,
+      // which only gates whether the reporter *saw* a suggestion. Never overrides
+      // the reporter's actual scope/category above.
+      suggested_scope: classifierResult?.scope ?? null,
+      suggested_category_id: suggestedCategoryId,
+      classifier_confidence: classifierResult && classifierResult.scope ? classifierResult.confidence : null,
+      classifier_source: classifierResult?.scope ? "rule" : null,
+      classifier_matched: classifierResult?.matchedTerms.length ? classifierResult.matchedTerms : null,
+      user_accepted_suggestion: classifierResult?.scope ? classifierResult.scope === scope : null,
+      detected_language: classifierResult?.detectedLanguage ?? null,
       ...(finalAssignee ? {
         assigned_to: finalAssignee.id,
         assigned_at: now,
@@ -287,7 +336,7 @@ export async function POST(request: NextRequest) {
     .select(`
       *,
       location:locations(id, name, code),
-      category:facility_asset_categories(id, name, slug, scope, icon)
+      category:facility_asset_categories!facility_issues_category_id_fkey(id, name, slug, scope, icon)
     `)
     .single();
 

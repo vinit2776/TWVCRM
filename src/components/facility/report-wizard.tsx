@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
 import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
+import { classify } from "@/lib/facility-classifier";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type {
@@ -60,6 +61,8 @@ const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
   electrical: Zap, housekeeping: Sparkles, security: ShieldAlert, other: HelpCircle, facility: HelpCircle,
 };
 
+const PRIORITY_RANK: Record<FacilityIssuePriority, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
 export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }: Props) {
   const router = useRouter();
 
@@ -84,6 +87,14 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   // asset's own category, but the picker stays visible so it can be corrected.
   const [scope, setScope] = useState<FacilityScope | null>(null);
   const [assetScopeOverridden, setAssetScopeOverridden] = useState(false);
+  // Tracks whether the reporter has deliberately tapped a department tile —
+  // once true, the classifier suggestion below stops auto-selecting so it
+  // never fights a choice the reporter already made.
+  const [userTouchedScope, setUserTouchedScope] = useState(false);
+  // Dark by default (docs/plans/facility-smart-routing.md Phase 3/4) — the
+  // server always classifies and records telemetry regardless of this flag;
+  // this only gates whether the reporter *sees* a suggestion.
+  const [classifierUiEnabled, setClassifierUiEnabled] = useState(false);
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -108,6 +119,28 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   // prefilled = caller already knows location + scope (e.g. asset page)
   const prefilled = !!(defaults?.location_id && defaults?.scope);
 
+  useEffect(() => {
+    fetch("/api/settings/public").then((r) => r.json()).then((j) => {
+      setClassifierUiEnabled(j.data?.facility_classifier_ui_enabled === "true");
+    }).catch(() => undefined);
+  }, []);
+
+  // Pure + synchronous — safe to recompute on every keystroke. Only the
+  // auto-select side effect below is debounced, so the highlighted tile
+  // doesn't flicker mid-type.
+  const classification = useMemo(
+    () => classify(title, description),
+    [title, description],
+  );
+
+  useEffect(() => {
+    if (!classifierUiEnabled || selectedAsset || userTouchedScope) return;
+    const t = setTimeout(() => {
+      if (classification.scope) setScope(classification.scope);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [classification, classifierUiEnabled, selectedAsset, userTouchedScope]);
+
   // initial load
   useEffect(() => {
     if (!open) return;
@@ -129,6 +162,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setAssetId(defaults?.asset_id || "");
     setScope(defaults?.scope || null);
     setAssetScopeOverridden(false);
+    setUserTouchedScope(false);
     setSelectedAsset(null);
     setAssetQuery("");
     setAssetResults([]);
@@ -451,6 +485,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
                 type="button"
                 onClick={() => {
                   setScope(s);
+                  setUserTouchedScope(true);
                   if (selectedAsset && s !== selectedAsset.category?.scope) setAssetScopeOverridden(true);
                 }}
                 className={cn(
@@ -467,6 +502,22 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
             );
           })}
         </div>
+        {classifierUiEnabled && !selectedAsset && !userTouchedScope && classification.scope && (
+          <p className="text-xs text-[#015E65] mt-1.5 flex items-start gap-1">
+            <Sparkles className="h-3 w-3 shrink-0 mt-0.5" />
+            <span>
+              Routed to <span className="font-medium">{SCOPE_LABEL[classification.scope]}</span>
+              {classification.matchedTerms.length > 0 && (
+                <> — matched &quot;{classification.matchedTerms.slice(0, 2).join('", "')}&quot;</>
+              )}. Tap another if that&apos;s wrong.
+            </span>
+          </p>
+        )}
+        {classifierUiEnabled && title.trim().length > 0 && classification.titleQuality === "vague" && (
+          <p className="text-xs text-amber-700 mt-1.5">
+            Add what&apos;s wrong and where — e.g. &quot;AC not cooling in Meeting Room 2&quot; routes better than a short title like this.
+          </p>
+        )}
       </div>
 
       <div>
@@ -499,6 +550,16 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
             );
           })}
         </div>
+        {classifierUiEnabled && classification.priorityFloor && PRIORITY_RANK[classification.priorityFloor] > PRIORITY_RANK[priority] && (
+          <button
+            type="button"
+            onClick={() => setPriority(classification.priorityFloor!)}
+            className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-2.5 py-1.5 flex items-center gap-1.5 hover:bg-red-100"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            This reads urgent — raise to {PRIORITY_STYLES[classification.priorityFloor].label}?
+          </button>
+        )}
       </div>
 
       <div>

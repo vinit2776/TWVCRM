@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
     supabase.from("facility_issues").select(`
       id, issue_number, title, status, priority, sla_breached, created_at,
       location:locations(id, name, code),
-      category:facility_asset_categories(id, name, slug, scope, icon),
+      category:facility_asset_categories!facility_issues_category_id_fkey(id, name, slug, scope, icon),
       assignee:users!facility_issues_assigned_to_fkey(id, full_name)
     `)
       .in("status", OPEN_STATUSES)

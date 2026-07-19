@@ -64,6 +64,8 @@ export async function PATCH(request: NextRequest) {
     "upi_qr_code_path",
     "crm_gst_enabled",
     "tally_sync_enabled",
+    "facility_classifier_ui_enabled",
+    "facility_category_autofill_enabled",
   ];
 
   const updates: { key: string; value: string }[] = [];

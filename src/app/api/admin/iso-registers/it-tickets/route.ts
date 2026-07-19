@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     .select(`
       issue_number, reported_at, reporter_name, reporter_phone, description, priority, status,
       resolution_notes, resolved_at,
-      category:facility_asset_categories(name)
+      category:facility_asset_categories!facility_issues_category_id_fkey(name)
     `)
     .eq("scope", "it")
     .gte("reported_at", dateFrom)

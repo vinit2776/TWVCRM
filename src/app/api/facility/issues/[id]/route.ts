@@ -25,7 +25,7 @@ export async function GET(
       floor:location_floors(id, name),
       space_unit:space_units(id, name, code),
       asset:facility_assets(id, name, asset_code),
-      category:facility_asset_categories(*),
+      category:facility_asset_categories!facility_issues_category_id_fkey(*),
       reporter:users!facility_issues_reported_by_fkey(id, full_name, email),
       assignee:users!facility_issues_assigned_to_fkey(id, full_name, email),
       attachments:facility_issue_attachments(
@@ -72,7 +72,7 @@ export async function PUT(
   // Load existing for diff
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("*, category:facility_asset_categories(default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs)")
+    .select("*, category:facility_asset_categories!facility_issues_category_id_fkey(default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs)")
     .eq("id", id)
     .single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
