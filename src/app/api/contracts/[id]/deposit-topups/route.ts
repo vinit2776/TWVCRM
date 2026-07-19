@@ -19,18 +19,24 @@ export async function GET(
     .select(
       `*,
       creator:users!deposit_topups_created_by_fkey(id, full_name),
-      reverser:users!deposit_topups_reversed_by_fkey(id, full_name)`
+      reverser:users!deposit_topups_reversed_by_fkey(id, full_name),
+      canceller:users!deposit_topups_cancelled_by_fkey(id, full_name)`
     )
     .eq("contract_id", contractId)
     .order("created_at", { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  type Joined = { creator?: { full_name: string } | null; reverser?: { full_name: string } | null };
+  type Joined = {
+    creator?: { full_name: string } | null;
+    reverser?: { full_name: string } | null;
+    canceller?: { full_name: string } | null;
+  };
   const flattened = (data as Joined[] | null)?.map((row) => ({
     ...row,
     created_by_name: row.creator?.full_name ?? null,
     reversed_by_name: row.reverser?.full_name ?? null,
+    cancelled_by_name: row.canceller?.full_name ?? null,
   }));
 
   return NextResponse.json({ data: flattened });

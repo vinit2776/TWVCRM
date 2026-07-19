@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { PlusCircle, Link2, Banknote, Clock, CheckCircle2, RotateCcw, AlertTriangle } from "lucide-react";
+import { PlusCircle, Link2, Banknote, Clock, CheckCircle2, RotateCcw, AlertTriangle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -40,18 +40,21 @@ const STATUS_ICON: Record<DepositTopupStatus, React.ReactNode> = {
   pending: <Clock className="h-3.5 w-3.5" />,
   paid: <CheckCircle2 className="h-3.5 w-3.5" />,
   reversed: <RotateCcw className="h-3.5 w-3.5" />,
+  cancelled: <XCircle className="h-3.5 w-3.5" />,
 };
 
 const STATUS_VARIANT: Record<DepositTopupStatus, "default" | "secondary" | "destructive" | "outline"> = {
   pending: "secondary",
   paid: "default",
   reversed: "outline",
+  cancelled: "outline",
 };
 
 const STATUS_LABEL: Record<DepositTopupStatus, string> = {
   pending: "Awaiting payment",
   paid: "Paid",
   reversed: "Reversed",
+  cancelled: "Cancelled",
 };
 
 const CATEGORY_OPTIONS: DepositTopupCategory[] = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
@@ -61,6 +64,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
   const [loading, setLoading] = useState(true);
   const [collectOpen, setCollectOpen] = useState(false);
   const [reverseOpen, setReverseOpen] = useState<DepositTopup | null>(null);
+  const [cancelOpen, setCancelOpen] = useState<DepositTopup | null>(null);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -169,6 +173,26 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
     }
   }
 
+  async function handleCancel(item: DepositTopup) {
+    if (!reason.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/deposit-topups/${item.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error ?? "Failed to cancel top-up"); return; }
+      toast.success("Top-up cancelled");
+      setCancelOpen(null);
+      setReason("");
+      await load();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (!canCollect && !hasShortfall && !loading && items.length === 0) return null;
 
   return (
@@ -224,14 +248,31 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
                   {item.status === "reversed" && item.reversed_by_name && (
                     <> · Reversed by {item.reversed_by_name} on {formatDate(item.reversed_at!)}</>
                   )}
+                  {item.status === "cancelled" && item.cancelled_by_name && (
+                    <> · Cancelled by {item.cancelled_by_name} on {formatDate(item.cancelled_at!)}</>
+                  )}
                 </p>
                 {item.reversal_reason && (
                   <p className="text-xs italic text-muted-foreground">Reversal reason: {item.reversal_reason}</p>
+                )}
+                {item.cancellation_reason && (
+                  <p className="text-xs italic text-muted-foreground">Cancellation reason: {item.cancellation_reason}</p>
                 )}
               </div>
               {item.status === "paid" && canReverse && (
                 <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => setReverseOpen(item)}>
                   Reverse
+                </Button>
+              )}
+              {item.status === "pending" && canReverse && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs shrink-0 text-amber-700 hover:text-amber-800"
+                  onClick={() => setCancelOpen(item)}
+                  title="Withdraw this request and cancel its payment link"
+                >
+                  Cancel
                 </Button>
               )}
             </div>
@@ -364,6 +405,31 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
             <Button variant="outline" onClick={() => setReverseOpen(null)}>Cancel</Button>
             <Button variant="destructive" onClick={() => reverseOpen && handleReverse(reverseOpen)} disabled={submitting || !reason.trim()}>
               {submitting ? "Reversing…" : "Reverse"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel dialog — pending only */}
+      <Dialog open={!!cancelOpen} onOpenChange={() => { setCancelOpen(null); setReason(""); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Deposit Top-up</DialogTitle>
+            <DialogDescription>
+              Withdraws the request for <strong>{cancelOpen ? formatCurrency(cancelOpen.amount) : ""}</strong> and
+              cancels its payment link so the customer can no longer pay it. It stops appearing in
+              Accounts Receivable and stops being chased. No money has changed hands, so nothing is
+              refunded or restored.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label>Reason for cancellation</Label>
+            <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Why is this being cancelled…" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelOpen(null)}>Keep it</Button>
+            <Button variant="destructive" onClick={() => cancelOpen && handleCancel(cancelOpen)} disabled={submitting || !reason.trim()}>
+              {submitting ? "Cancelling…" : "Cancel Top-up"}
             </Button>
           </DialogFooter>
         </DialogContent>
