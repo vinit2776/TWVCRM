@@ -22,7 +22,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Users, Save } from "lucide-react";
+import { Loader2, Users, Save, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { SCOPE_LABEL } from "@/lib/facility-ui";
 import { FACILITY_ROLES, hasRole } from "@/lib/facility";
@@ -199,7 +199,15 @@ export default function FacilitySettingsPage() {
         <div className="rounded-lg border divide-y">
           {departments.map((dept) => (
             <div key={dept.id} className="flex items-center gap-3 p-3">
-              <div className="w-32 shrink-0 text-sm font-medium">{SCOPE_LABEL[dept.scope]}</div>
+              <div className="w-32 shrink-0 text-sm font-medium flex items-center gap-1.5">
+                {SCOPE_LABEL[dept.scope]}
+                {!dept.head_user_id && (
+                  <AlertTriangle
+                    className="h-3.5 w-3.5 text-amber-500 shrink-0"
+                    aria-label="No department head — tickets here go unclaimed until someone manually picks them up"
+                  />
+                )}
+              </div>
               <div className="flex-1">
                 <Select
                   value={dept.head_user_id ?? NONE}
@@ -215,6 +223,11 @@ export default function FacilitySettingsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {!dept.head_user_id && (
+                  <p className="text-[11px] text-amber-600 mt-1">
+                    No head assigned — Work Orders routed here won&apos;t auto-assign and will sit unclaimed.
+                  </p>
+                )}
               </div>
               <Button variant="outline" size="sm" onClick={() => openRoster(dept)}>
                 <Users className="h-3.5 w-3.5 mr-1.5" />
