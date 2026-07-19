@@ -642,7 +642,7 @@ export interface DepositBalance {
   available: number;
 }
 
-export type DepositTopupStatus = "pending" | "paid" | "reversed";
+export type DepositTopupStatus = "pending" | "paid" | "reversed" | "cancelled";
 export type DepositTopupCategory = "seat_expansion" | "risk_buffer" | "customer_requested" | "renewal_escalation" | "other";
 export type DepositTopupCollectionMethod = "razorpay_link" | "manual";
 
@@ -667,6 +667,9 @@ export interface DepositTopup {
   reversed_by?: string | null;
   reversed_at?: string | null;
   reversal_reason?: string | null;
+  cancelled_by?: string | null;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
   accounted: boolean;
   accounted_at?: string | null;
   accounted_by?: string | null;
@@ -675,6 +678,7 @@ export interface DepositTopup {
   // Joined display fields (populated by API routes, not stored)
   created_by_name?: string;
   reversed_by_name?: string;
+  cancelled_by_name?: string;
   accounted_by_name?: string;
 }
 
@@ -894,7 +898,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch";
 export type AuditEntityType =
   | "lead"
   | "activity"
