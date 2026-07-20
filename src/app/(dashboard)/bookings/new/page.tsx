@@ -63,8 +63,8 @@ function NewBookingForm() {
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
-  const [customerType, setCustomerType] = useState<"contract_holder" | "walk_in" | "guest">(
-    (preselectedCustomerType as "contract_holder" | "walk_in" | "guest") || "walk_in"
+  const [customerType, setCustomerType] = useState<"contract_holder" | "walk_in">(
+    preselectedCustomerType === "contract_holder" ? "contract_holder" : "walk_in"
   );
   const [contractId, setContractId] = useState(preselectedContractId);
   const [leadId, setLeadId] = useState(preselectedLeadId);
@@ -181,13 +181,24 @@ function NewBookingForm() {
   const gstAmount = parseFloat((totalAmount * GST_RATE / 100).toFixed(2));
   const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
 
-  const minBookingMin = selectedSpace?.min_booking_minutes || 60;
+  // Conference/meeting rooms get a customer-type-aware minimum and a 30-min slot grid;
+  // every other space keeps the single min_booking_minutes value on the existing 15-min grid.
+  const isConferenceOrMeetingRoom = selectedSpace?.workspace_type === "conference_room" || selectedSpace?.workspace_type === "meeting_room";
+  const minBookingMin = isConferenceOrMeetingRoom && customerType === "contract_holder"
+    ? (selectedSpace?.min_booking_minutes_contract || 30)
+    : (selectedSpace?.min_booking_minutes || 60);
+  const slotStepMin = isConferenceOrMeetingRoom ? 30 : 15;
 
   const timeOptions = useMemo(() => {
     const times = new Set<string>();
     availableSlots.forEach(slot => { times.add(slot.start_time); times.add(slot.end_time); });
-    return Array.from(times).sort();
-  }, [availableSlots]);
+    const sorted = Array.from(times).sort();
+    if (slotStepMin <= 15) return sorted;
+    return sorted.filter(t => {
+      const [, m] = t.split(":").map(Number);
+      return m % slotStepMin === 0;
+    });
+  }, [availableSlots, slotStepMin]);
 
   const endTimeOptions = useMemo(() => {
     if (!startTime) return [];
@@ -297,7 +308,7 @@ function NewBookingForm() {
   // ID proof check
   useEffect(() => {
     const phone = bookerPhone.replace(/\s/g, "");
-    if (phone.length < 10 || (customerType !== "walk_in" && customerType !== "guest")) {
+    if (phone.length < 10 || customerType !== "walk_in") {
       setLeadHasIdProof(false);
       return;
     }
@@ -319,6 +330,17 @@ function NewBookingForm() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookerPhone, leadId, customerType]);
+
+  // If the customer type changes after a time slot was picked and the slot no longer
+  // meets the (possibly stricter) minimum for the new type, clear it and explain why.
+  useEffect(() => {
+    if (!startTime || !endTime) return;
+    if (durationHours < minBookingMin / 60) {
+      setEndTime("");
+      toast.error(`Minimum booking is ${minBookingMin} minutes for ${customerType === "contract_holder" ? "contract holders" : "walk-in customers"} on this room — please reselect the end time.`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minBookingMin]);
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -453,7 +475,7 @@ function NewBookingForm() {
 
   // Contracts
   useEffect(() => {
-    if (debouncedCustomerType === "contract_holder" || debouncedCustomerType === "guest") {
+    if (debouncedCustomerType === "contract_holder") {
       const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
       if (debouncedLocationId) params.set("location_id", debouncedLocationId);
       fetch(`/api/contracts?${params}`)
@@ -496,8 +518,8 @@ function NewBookingForm() {
     if (!bookerPhone.trim()) { toast.error("Mobile number is mandatory"); return; }
     if (!spaceId || !bookingDate) { toast.error("Please select room and date"); return; }
     if (!isDayPass && (!startTime || !endTime)) { toast.error("Please select start and end times"); return; }
-    if (!isDayPass && durationHours < (selectedSpace?.min_booking_minutes || 60) / 60) {
-      toast.error(`Minimum booking is ${selectedSpace?.min_booking_minutes || 60} minutes`); return;
+    if (!isDayPass && durationHours < minBookingMin / 60) {
+      toast.error(`Minimum booking is ${minBookingMin} minutes`); return;
     }
     if (totalAmountWithGst <= 0) {
       if (!complimentaryReason) { toast.error("Pick a reason for this complimentary booking"); return; }
@@ -505,8 +527,7 @@ function NewBookingForm() {
     }
     if (customerType === "contract_holder" && !contractId) { toast.error("Please select a contract"); return; }
     if (customerType === "walk_in" && !leadId && !guestName.trim()) { toast.error("Please select a lead or enter guest details"); return; }
-    if (customerType === "guest" && !contractId) { toast.error("Please select the host contract"); return; }
-    if ((customerType === "walk_in" || customerType === "guest") && !leadHasIdProof && !idProofFile) {
+    if (customerType === "walk_in" && !leadHasIdProof && !idProofFile) {
       toast.error("Government ID proof is mandatory. Please upload the customer's ID document."); return;
     }
 
@@ -578,8 +599,8 @@ function NewBookingForm() {
     } catch { toast.error("Failed to create booking"); }
     finally { setSaving(false); }
   }, [
-    bookerPhone, spaceId, bookingDate, startTime, endTime, isDayPass, durationHours,
-    selectedSpace, totalAmountWithGst, complimentaryReason, complimentaryDetails,
+    bookerPhone, spaceId, bookingDate, startTime, endTime, isDayPass, durationHours, minBookingMin,
+    totalAmountWithGst, complimentaryReason, complimentaryDetails,
     customerType, contractId, leadId, guestName, guestEmail, guestPhone, guestCompany,
     bookerGstNumber, aggregatorBookingId, purpose, loiNumber, accessProvidedBy, numAttendees, numSeats, selectedFacilities,
     paymentMode, paymentReference, notes, effectiveRate, collectAdvancePayment,
@@ -624,7 +645,7 @@ function NewBookingForm() {
     allDangerCautionsAcked, setAllDangerCautionsAcked,
     waitlistDialogOpen, setWaitlistDialogOpen,
     durationHours, effectiveRate, roomCost, facilityCost, totalAmount, gstAmount, totalAmountWithGst,
-    availabilityWindows, timeOptions, endTimeOptions, minBookingMin,
+    availabilityWindows, timeOptions, endTimeOptions, minBookingMin, slotStepMin,
     handleSubmit, handleSearchInput, selectCustomerSuggestion, clearCustomerSelection,
     formatTime12, formatDuration,
   }), [
@@ -647,7 +668,7 @@ function NewBookingForm() {
     appliedCredit, complimentaryReason, complimentaryDetails,
     allDangerCautionsAcked, waitlistDialogOpen,
     durationHours, effectiveRate, roomCost, facilityCost, totalAmount, gstAmount, totalAmountWithGst,
-    availabilityWindows, timeOptions, endTimeOptions, minBookingMin,
+    availabilityWindows, timeOptions, endTimeOptions, minBookingMin, slotStepMin,
     handleSubmit, handleSearchInput, selectCustomerSuggestion, clearCustomerSelection,
     formatTime12, formatDuration,
   ]);
@@ -667,11 +688,11 @@ function NewBookingForm() {
         </div>
 
         <RoomSelectionSection />
-        <TimeSelectionSection />
         <CustomerDetailsSection />
+        <TimeSelectionSection />
 
         {/* Contract quota status — shown when booking for a contract holder */}
-        {(customerType === "contract_holder" || customerType === "guest") && contractId && (
+        {customerType === "contract_holder" && contractId && (
           <ContractQuotaBanner
             contractId={contractId}
             durationHours={durationHours}

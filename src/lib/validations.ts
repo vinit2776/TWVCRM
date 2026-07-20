@@ -352,6 +352,8 @@ export const createSpaceSchema = z.object({
   max_advance_booking_days: z.number().int().positive().default(30),
   // 0 is valid for day-pass (daily) spaces — they have no minimum duration.
   min_booking_minutes: z.number().int().min(0).default(60),
+  // Contract-holder minimum for conference_room/meeting_room spaces only.
+  min_booking_minutes_contract: z.number().int().min(0).default(30),
   cancellation_policy: z.string().optional(),
   facilities: z.array(z.object({
     name: z.string().min(1, "Facility name is required"),

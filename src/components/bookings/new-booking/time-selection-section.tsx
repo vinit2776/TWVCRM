@@ -21,7 +21,7 @@ export const TimeSelectionSection = memo(function TimeSelectionSection() {
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          2. {isDayPass ? "Day Pass Coverage" : "Select Time"}
+          3. {isDayPass ? "Day Pass Coverage" : "Select Time"}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">

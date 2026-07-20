@@ -63,6 +63,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
   const [operatingHours, setOperatingHours] = useState<SpaceOperatingHours>(DEFAULT_OPERATING_HOURS);
   const [maxAdvanceDays, setMaxAdvanceDays] = useState(30);
   const [minBookingMinutes, setMinBookingMinutes] = useState(60);
+  const [minBookingMinutesContract, setMinBookingMinutesContract] = useState(30);
   const [cancellationPolicy, setCancellationPolicy] = useState("");
   const [facilities, setFacilities] = useState<FacilityRow[]>([]);
   const [newFacility, setNewFacility] = useState("");
@@ -102,6 +103,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       setOperatingHours(space.operating_hours || DEFAULT_OPERATING_HOURS);
       setMaxAdvanceDays(space.max_advance_booking_days);
       setMinBookingMinutes(space.min_booking_minutes);
+      setMinBookingMinutesContract(space.min_booking_minutes_contract ?? 30);
       setCancellationPolicy(space.cancellation_policy || "");
       setFacilities(
         (space.facilities || []).map(f => ({
@@ -124,6 +126,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       setOperatingHours(DEFAULT_OPERATING_HOURS);
       setMaxAdvanceDays(30);
       setMinBookingMinutes(60);
+      setMinBookingMinutesContract(30);
       setCancellationPolicy("");
       setFacilities(DEFAULT_FACILITIES.map(f => ({ name: f, is_complimentary: true, charge_per_use: 0 })));
       setCosecDeviceId("__none");
@@ -189,6 +192,8 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
         // Day-pass spaces have no minimum booking duration — they cover the full
         // operating day by definition. Store 0 so the booking API skips the check.
         min_booking_minutes: pricingModel === "daily" ? 0 : minBookingMinutes,
+        // Contract-holder minimum — only meaningful for conference/meeting rooms; harmless elsewhere.
+        min_booking_minutes_contract: pricingModel === "daily" ? 0 : minBookingMinutesContract,
         cancellation_policy: cancellationPolicy.trim() || undefined,
         facilities,
         cosec_device_id: (cosecDeviceId && cosecDeviceId !== "__none") ? cosecDeviceId : null,
@@ -416,7 +421,9 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
               </div>
               {pricingModel !== "daily" && (
                 <div className="space-y-2">
-                  <Label htmlFor="min-booking">Min Booking (minutes)</Label>
+                  <Label htmlFor="min-booking">
+                    {showCosecSelector ? "Min Booking — Walk-in (minutes)" : "Min Booking (minutes)"}
+                  </Label>
                   <Input
                     id="min-booking"
                     type="number"
@@ -424,6 +431,19 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                     step={30}
                     value={minBookingMinutes}
                     onChange={(e) => setMinBookingMinutes(Number(e.target.value))}
+                  />
+                </div>
+              )}
+              {pricingModel !== "daily" && showCosecSelector && (
+                <div className="space-y-2">
+                  <Label htmlFor="min-booking-contract">Min Booking — Contract Holder (minutes)</Label>
+                  <Input
+                    id="min-booking-contract"
+                    type="number"
+                    min={30}
+                    step={30}
+                    value={minBookingMinutesContract}
+                    onChange={(e) => setMinBookingMinutesContract(Number(e.target.value))}
                   />
                 </div>
               )}

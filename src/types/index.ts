@@ -1056,6 +1056,7 @@ export interface Space {
   operating_hours: SpaceOperatingHours;
   max_advance_booking_days: number;
   min_booking_minutes: number;
+  min_booking_minutes_contract?: number; // conference_room/meeting_room only — contract-holder minimum
   cancellation_policy?: string;
   no_show_grace_minutes: number;
   is_active: boolean;
