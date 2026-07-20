@@ -154,6 +154,7 @@ export async function GET(
       ? (statement.period_start as string)
       : new Date().toISOString().slice(0, 10),
     isProforma: true,
+    compactLineItems: (statement.statement_type as string) === "reimbursement",
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerAddress: [lead?.street, lead?.city, lead?.state, lead?.zip_code].filter(Boolean).join(", ") || undefined,
     buyerGstin: lead?.gst_number || undefined,
