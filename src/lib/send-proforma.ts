@@ -284,6 +284,9 @@ export async function dispatchProforma(
       ? (statement.period_start as string)
       : new Date().toISOString().slice(0, 10),
     isProforma: true,
+    // Reimbursement PIs collapse to Description | Amount — no per-line
+    // qty/rate/HSN/tax breakdown, just the consolidated totals block below.
+    compactLineItems: (statement.statement_type as string) === "reimbursement",
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
     buyerState: lead?.state || undefined,

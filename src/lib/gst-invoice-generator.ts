@@ -172,6 +172,13 @@ export interface GstInvoiceData {
   dueDate?: string;
   // Line items
   lineItems: { description: string; hsnSac: string; qty: number; rate: number; amount: number }[];
+  /**
+   * Renders the line-item table as just Description | Amount — no HSN, qty,
+   * rate, or per-line tax columns. Only the bottom totals block carries the
+   * GST math. Only ever set on documents that are explicitly NOT a tax
+   * invoice (proforma) — a real GST tax invoice keeps the full breakdown.
+   */
+  compactLineItems?: boolean;
   // Totals
   subtotal: number;
   cgst: number;
@@ -312,16 +319,21 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   // tax document, so the compliance requirement to show them only applies to the real
   // GST Tax Invoice.
   const showQtyRate = !isProforma;
+  const compact = data.compactLineItems === true;
 
-  const tableColumns = [
-    "#", "Description", "HSN/SAC",
-    ...(showQtyRate ? ["Qty", "Rate"] : []),
-    "Amount",
-    ...(data.isInterstate ? [`IGST @${taxRate}%`] : [`CGST @${halfRate}%`, `SGST @${halfRate}%`]),
-    "Total",
-  ];
+  const tableColumns = compact
+    ? ["Description", "Amount"]
+    : [
+        "#", "Description", "HSN/SAC",
+        ...(showQtyRate ? ["Qty", "Rate"] : []),
+        "Amount",
+        ...(data.isInterstate ? [`IGST @${taxRate}%`] : [`CGST @${halfRate}%`, `SGST @${halfRate}%`]),
+        "Total",
+      ];
 
   const tableRows = data.lineItems.map((item, i) => {
+    if (compact) return [item.description, fmt(item.amount)];
+
     const itemCgst = Math.round(item.amount * (halfRate / 100));
     const itemSgst = itemCgst;
     const itemIgst = Math.round(item.amount * (taxRate / 100));
@@ -343,12 +355,14 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     theme: "grid",
     headStyles: { fillColor: [1, 94, 101], textColor: [255, 255, 255], fontSize: 7.5, fontStyle: "bold" },
     bodyStyles: { fontSize: 7.5, textColor: [60, 60, 60] },
-    columnStyles: {
-      0: { cellWidth: 8, halign: "center" },
-      1: { cellWidth: "auto" },
-      2: { cellWidth: 16, halign: "center" },
-      ...(showQtyRate ? { 3: { cellWidth: 12, halign: "center" } } : {}),
-    },
+    columnStyles: compact
+      ? { 0: { cellWidth: "auto" }, 1: { cellWidth: 30, halign: "right" } }
+      : {
+          0: { cellWidth: 8, halign: "center" },
+          1: { cellWidth: "auto" },
+          2: { cellWidth: 16, halign: "center" },
+          ...(showQtyRate ? { 3: { cellWidth: 12, halign: "center" } } : {}),
+        },
     margin: { left: 14, right: 14 },
   });
 
