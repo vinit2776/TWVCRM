@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_EXAMPLES,
+  PROCUREMENT_DEPARTMENT_COLORS,
   ITEM_UNITS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
@@ -38,6 +39,10 @@ interface LineItem {
   notes: string;
   isCustom: boolean;       // true = free-text item, not from catalog
   suggestCatalog: boolean; // true = POST to catalog as draft after PR submission
+  // Reimbursement only: which real department the suggested catalog item
+  // belongs to — "reimbursement" itself is a billing treatment, not a
+  // catalog category, so this can't default to the MR's own department.
+  suggestDepartment: ProcurementDepartment | "";
 }
 
 function generateLocalId() {
@@ -55,6 +60,7 @@ const emptyItem = (): LineItem => ({
   notes: "",
   isCustom: false,
   suggestCatalog: false,
+  suggestDepartment: "",
 });
 
 export default function NewPurchaseRequestPage() {
@@ -426,6 +432,8 @@ function NewPurchaseRequestForm() {
         return "All items must have a valid quantity";
       if (isPriceOverCeiling(li))
         return `Price for "${li.item_name}" cannot exceed the catalog price of ${formatCurrency(li.catalog_standard_price!)}`;
+      if (department === "reimbursement" && li.suggestCatalog && !li.suggestDepartment)
+        return `Select which department "${li.item_name}" actually belongs to before suggesting it for the catalog`;
     }
     return null;
   };
@@ -441,7 +449,7 @@ function NewPurchaseRequestForm() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: li.item_name.trim(),
-            department,
+            department: department === "reimbursement" ? li.suggestDepartment : department,
             unit: li.unit,
             standard_price: li.estimated_price ? parseFloat(li.estimated_price) : undefined,
             is_active: false,
@@ -1112,16 +1120,36 @@ function NewPurchaseRequestForm() {
 
                 {/* Suggest to catalog checkbox — custom items only */}
                 {li.isCustom && (
-                  <div className="flex items-center gap-2.5 sm:col-span-2 rounded-md border bg-orange-50/50 border-orange-200 px-3 py-2.5">
-                    <Checkbox
-                      id={`suggest-${li.id}`}
-                      checked={li.suggestCatalog}
-                      onCheckedChange={(v) => updateItem(li.id, "suggestCatalog", !!v)}
-                    />
-                    <label htmlFor={`suggest-${li.id}`} className="text-xs text-muted-foreground cursor-pointer select-none leading-relaxed">
-                      Suggest adding this item to the catalog
-                      <span className="block text-orange-700/80">Admin will review the suggestion before publishing it</span>
-                    </label>
+                  <div className="flex flex-col gap-2.5 sm:col-span-2 rounded-md border bg-orange-50/50 border-orange-200 px-3 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <Checkbox
+                        id={`suggest-${li.id}`}
+                        checked={li.suggestCatalog}
+                        onCheckedChange={(v) => updateItem(li.id, "suggestCatalog", !!v)}
+                      />
+                      <label htmlFor={`suggest-${li.id}`} className="text-xs text-muted-foreground cursor-pointer select-none leading-relaxed">
+                        Suggest adding this item to the catalog
+                        <span className="block text-orange-700/80">Admin will review the suggestion before publishing it</span>
+                      </label>
+                    </div>
+                    {li.suggestCatalog && department === "reimbursement" && (
+                      <div className="pl-6 space-y-1">
+                        <Label className="text-xs">Which department does this item actually belong to?</Label>
+                        <Select
+                          value={li.suggestDepartment}
+                          onValueChange={(v) => updateItem(li.id, "suggestDepartment", v)}
+                        >
+                          <SelectTrigger className="h-8 text-xs bg-background">
+                            <SelectValue placeholder="Select a department" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(["pantry", "maintenance", "administration", "asset"] as const).map((d) => (
+                              <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1333,7 +1361,9 @@ function NewPurchaseRequestForm() {
       >
         <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Select from Catalog — {PROCUREMENT_DEPARTMENT_LABELS[department]}</DialogTitle>
+            <DialogTitle>
+              Select from Catalog — {department === "reimbursement" ? "All Departments" : PROCUREMENT_DEPARTMENT_LABELS[department]}
+            </DialogTitle>
           </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1348,7 +1378,11 @@ function NewPurchaseRequestForm() {
             {catalogLoading ? (
               <p className="text-sm text-muted-foreground text-center py-8">Loading...</p>
             ) : catalogItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No items found in catalog for {PROCUREMENT_DEPARTMENT_LABELS[department]}</p>
+              <p className="text-sm text-muted-foreground text-center py-8">
+                {department === "reimbursement"
+                  ? "No matching items found across the catalog"
+                  : `No items found in catalog for ${PROCUREMENT_DEPARTMENT_LABELS[department]}`}
+              </p>
             ) : (
               catalogItems.map((item) => (
                 <button
@@ -1356,9 +1390,16 @@ function NewPurchaseRequestForm() {
                   className="w-full text-left px-3 py-2.5 rounded-md hover:bg-muted/60 transition-colors border border-transparent hover:border-border"
                   onClick={() => selectCatalogItem(item)}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-sm">{item.name}</span>
-                    <span className="text-xs text-muted-foreground">{item.unit}</span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      {department === "reimbursement" && (
+                        <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${PROCUREMENT_DEPARTMENT_COLORS[item.department]}`}>
+                          {PROCUREMENT_DEPARTMENT_LABELS[item.department]}
+                        </Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">{item.unit}</span>
+                    </span>
                   </div>
                   {item.standard_price && (
                     <p className="text-xs text-muted-foreground mt-0.5">

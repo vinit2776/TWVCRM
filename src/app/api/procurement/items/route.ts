@@ -44,7 +44,15 @@ export async function GET(request: NextRequest) {
     // Normal catalog view: only active, non-suggested items
     query = query.eq("is_active", true).eq("is_suggested", false);
   }
-  if (department) query = query.eq("department", department);
+  if (department === "reimbursement") {
+    // Reimbursement isn't an item category — it's a billing treatment — so no
+    // catalog item is ever tagged that way. Search across every real
+    // department instead. AMC is excluded: those are annual service
+    // contracts, not one-off purchasable goods.
+    query = query.in("department", ["pantry", "maintenance", "administration", "asset"]);
+  } else if (department) {
+    query = query.eq("department", department);
+  }
   if (itemType) query = query.eq("item_type", itemType);
   if (search?.trim()) query = query.ilike("name", `%${search.trim()}%`);
 
