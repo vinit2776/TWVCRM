@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
+import { istLocalToUtcIso } from "@/lib/utils";
 
 export async function PATCH(
   request: NextRequest,
@@ -18,7 +19,7 @@ export async function PATCH(
   }
 
   const body = await request.json();
-  const { action, follow_up_date } = body as {
+  const { action, follow_up_date: rawFollowUpDate } = body as {
     action: "close" | "reschedule";
     follow_up_date?: string;
   };
@@ -27,12 +28,17 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 
-  if (action === "reschedule" && !follow_up_date) {
+  if (action === "reschedule" && !rawFollowUpDate) {
     return NextResponse.json(
       { error: "follow_up_date is required for reschedule" },
       { status: 400 }
     );
   }
+
+  // toDatetimeLocalValue()/<input type="datetime-local"> send a naive
+  // "yyyy-MM-ddTHH:mm" IST wall-clock string — same conversion needed here
+  // as the create path, so a rescheduled time doesn't silently drift +5:30.
+  const follow_up_date = rawFollowUpDate ? istLocalToUtcIso(rawFollowUpDate) : rawFollowUpDate;
 
   // Resolve auth user → internal users row for audit
   const { data: dbUser } = await supabase
