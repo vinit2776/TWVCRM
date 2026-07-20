@@ -68,11 +68,18 @@ export async function POST(
     );
   }
 
-  // FollowUpDateTimeInput sends a naive "yyyy-MM-ddTHH:mm" IST wall-clock
-  // string — convert to a real UTC instant before it hits the DB or the
-  // Google Calendar event, both of which would otherwise treat it as UTC.
+  // FollowUpDateTimeInput and <input type="datetime-local"> both send a naive
+  // "yyyy-MM-ddTHH:mm" IST wall-clock string — convert to a real UTC instant
+  // before it hits the DB (or the Google Calendar event for follow_up_date),
+  // both of which would otherwise treat it as UTC.
   if (result.data.follow_up_date) {
     result.data.follow_up_date = istLocalToUtcIso(result.data.follow_up_date);
+  }
+  if (result.data.meeting_start_at) {
+    result.data.meeting_start_at = istLocalToUtcIso(result.data.meeting_start_at);
+  }
+  if (result.data.meeting_end_at) {
+    result.data.meeting_end_at = istLocalToUtcIso(result.data.meeting_end_at);
   }
 
   const { data: dbUser } = await supabase

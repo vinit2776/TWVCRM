@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/** "HH:mm" in IST for a stored UTC timestamp — this route runs on a UTC
+ * server, so plain Date getHours()/getMinutes() would return the UTC hour,
+ * not the IST wall-clock hour actually meant. */
+function toIstHHmm(iso: string): string {
+  const shifted = new Date(new Date(iso).getTime() + IST_OFFSET_MS);
+  return `${String(shifted.getUTCHours()).padStart(2, "0")}:${String(shifted.getUTCMinutes()).padStart(2, "0")}`;
+}
+
 /**
  * GET /api/dashboard/schedule?location_id=<uuid>
  * Returns a unified ordered timeline for today: bookings (with start time),
@@ -26,9 +36,14 @@ export async function GET(request: NextRequest) {
 
   const locationId = request.nextUrl.searchParams.get("location_id");
 
-  const todayStr = new Date().toISOString().split("T")[0];
-  const startOfDay = `${todayStr}T00:00:00.000Z`;
-  const endOfDay = `${todayStr}T23:59:59.999Z`;
+  // "Today" means the IST calendar day, not the UTC one — this route runs on
+  // a UTC server, so a plain new Date().toISOString() would roll over to
+  // tomorrow's date 5:30 early (at 6:30pm IST) and, worse, still show
+  // yesterday's date for the first 5.5 hours of the actual IST day.
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  const todayStr = istNow.toISOString().split("T")[0];
+  const startOfDay = new Date(`${todayStr}T00:00:00.000+05:30`).toISOString();
+  const endOfDay = new Date(`${todayStr}T23:59:59.999+05:30`).toISOString();
 
   // Bookings today
   let bookingsQ = adminSupabase
@@ -104,10 +119,9 @@ export async function GET(request: NextRequest) {
 
   for (const a of filtBy(filtAct(activities as unknown as Act[])) as Act[]) {
     const lead = a.lead ? `${a.lead.first_name} ${a.lead.last_name}` : "—";
-    const t = new Date(a.meeting_start_at);
     items.push({
       iso: a.meeting_start_at,
-      time: `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`,
+      time: toIstHHmm(a.meeting_start_at),
       title: lead,
       subtitle: `${a.type === "tour" ? "Tour" : "Meeting"}${a.subject ? " · " + a.subject : ""}`,
       kind: a.type,
@@ -117,10 +131,9 @@ export async function GET(request: NextRequest) {
 
   for (const f of filtBy(filtFu(followups as unknown as Fu[])) as Fu[]) {
     const lead = f.lead ? `${f.lead.first_name} ${f.lead.last_name}` : "—";
-    const t = new Date(f.follow_up_date);
     items.push({
       iso: f.follow_up_date,
-      time: `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`,
+      time: toIstHHmm(f.follow_up_date),
       title: lead,
       subtitle: `Follow-up${f.follow_up_notes ? " · " + f.follow_up_notes.slice(0, 60) : ""}`,
       kind: "follow_up",
