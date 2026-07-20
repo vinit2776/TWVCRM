@@ -29,6 +29,21 @@ export function formatDateTime(date: string | Date): string {
 }
 
 /**
+ * Converts a naive "yyyy-MM-ddTHH:mm" string — what FollowUpDateTimeInput and
+ * <input type="datetime-local"> produce, always meant as IST wall-clock time
+ * for this business — into a correct UTC ISO timestamp for a TIMESTAMPTZ
+ * column. Without this, Postgres's timestamptz parser (session timezone
+ * UTC) stores the naive H:mm as if it were already UTC, and formatDateTime()
+ * then re-adds the IST offset on display — every follow-up silently lands
+ * 5:30 later than the time actually picked. Returns "" unchanged so callers
+ * can pass through an empty/optional value.
+ */
+export function istLocalToUtcIso(naiveLocal: string): string {
+  if (!naiveLocal) return naiveLocal;
+  return new Date(`${naiveLocal}:00+05:30`).toISOString();
+}
+
+/**
  * Formats a date for use as the `value` of an `<input type="datetime-local">`
  * (expects "yyyy-MM-ddTHH:mm" in the browser's local timezone). Falls back to
  * the current time if the input is missing/invalid, so reschedule dialogs

@@ -4,6 +4,7 @@ import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { createReminderEvent } from "@/lib/google-calendar";
+import { istLocalToUtcIso } from "@/lib/utils";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -65,6 +66,13 @@ export async function POST(
       { error: "Validation failed", details: result.error.issues },
       { status: 400 }
     );
+  }
+
+  // FollowUpDateTimeInput sends a naive "yyyy-MM-ddTHH:mm" IST wall-clock
+  // string — convert to a real UTC instant before it hits the DB or the
+  // Google Calendar event, both of which would otherwise treat it as UTC.
+  if (result.data.follow_up_date) {
+    result.data.follow_up_date = istLocalToUtcIso(result.data.follow_up_date);
   }
 
   const { data: dbUser } = await supabase
