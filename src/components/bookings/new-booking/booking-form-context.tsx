@@ -19,7 +19,7 @@ export interface CustomerSuggestion {
 export interface ContractOption {
   id: string;
   contract_number: string;
-  lead?: { id: string; first_name: string; last_name: string; company?: string; email?: string; phone?: string };
+  lead?: { id: string; first_name: string; last_name: string; company?: string; email?: string; phone?: string; mobile?: string };
 }
 
 export interface AvailableSlot {
@@ -99,8 +99,8 @@ export interface BookingFormState {
   setShowSuggestions: (v: boolean) => void;
   searchTimeoutRef: React.MutableRefObject<NodeJS.Timeout | null>;
   suggestionsRef: React.RefObject<HTMLDivElement | null>;
-  customerType: "contract_holder" | "walk_in" | "guest";
-  setCustomerType: (v: "contract_holder" | "walk_in" | "guest") => void;
+  customerType: "contract_holder" | "walk_in";
+  setCustomerType: (v: "contract_holder" | "walk_in") => void;
   contractId: string;
   setContractId: (v: string) => void;
   leadId: string;
@@ -203,6 +203,7 @@ export interface BookingFormState {
   timeOptions: string[];
   endTimeOptions: string[];
   minBookingMin: number;
+  slotStepMin: number;
 
   // Functions
   handleSubmit: () => Promise<void>;

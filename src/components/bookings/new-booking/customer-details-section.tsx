@@ -7,9 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { useBookingForm } from "./booking-form-context";
 
@@ -25,10 +23,42 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
     contracts, handleSearchInput, selectCustomerSuggestion, clearCustomerSelection,
   } = useBookingForm();
 
+  const contractOptions = contracts.map(c => ({
+    value: c.id,
+    label: `${c.contract_number} — ${c.lead?.company || `${c.lead?.first_name} ${c.lead?.last_name}`}`,
+  }));
+
+  const handleContractSelect = (value: string) => {
+    setContractId(value);
+    const contract = contracts.find(c => c.id === value);
+    const phone = contract?.lead?.mobile || contract?.lead?.phone;
+    if (phone) setBookerPhone(phone);
+  };
+
   return (
     <Card>
-      <CardHeader><CardTitle className="text-base">3. Customer Details</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">2. Customer Details</CardTitle></CardHeader>
       <CardContent className="space-y-4">
+        {/* Customer type selector */}
+        <div className="flex gap-2">
+          {(["contract_holder", "walk_in"] as const).map(type => (
+            <Button
+              key={type}
+              type="button"
+              variant={customerType === type ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setCustomerType(type);
+                if (!selectedCustomer) {
+                  setContractId(""); setLeadId(""); setGuestName(""); setGuestEmail(""); setGuestPhone(""); setGuestCompany("");
+                }
+              }}
+            >
+              {BOOKING_CUSTOMER_TYPE_LABELS[type]}
+            </Button>
+          ))}
+        </div>
+
         {/* Phone search bar */}
         <div className="space-y-2">
           <Label className="flex items-center gap-1.5">
@@ -109,53 +139,19 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
           </div>
         )}
 
-        {/* Booker phone */}
-        <div className="space-y-2">
-          <Label>Booker Mobile Number *</Label>
-          <Input
-            value={bookerPhone}
-            onChange={(e) => setBookerPhone(e.target.value)}
-            placeholder="+91 98765 43210"
-            required
-          />
-          <p className="text-xs text-muted-foreground">Mandatory. This is the primary contact for the booking.</p>
-        </div>
-
-        {/* Customer type selector */}
-        <div className="flex gap-2">
-          {(["contract_holder", "walk_in", "guest"] as const).map(type => (
-            <Button
-              key={type}
-              type="button"
-              variant={customerType === type ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                setCustomerType(type);
-                if (!selectedCustomer) {
-                  setContractId(""); setLeadId(""); setGuestName(""); setGuestEmail(""); setGuestPhone(""); setGuestCompany("");
-                }
-              }}
-            >
-              {BOOKING_CUSTOMER_TYPE_LABELS[type]}
-            </Button>
-          ))}
-        </div>
-
         {/* Contract Holder */}
         {customerType === "contract_holder" && (
           <div className="space-y-2">
             <Label>Active Contract *</Label>
-            <Select value={contractId} onValueChange={setContractId}>
-              <SelectTrigger><SelectValue placeholder="Select contract" /></SelectTrigger>
-              <SelectContent>
-                {contracts.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.contract_number} — {c.lead?.company || `${c.lead?.first_name} ${c.lead?.last_name}`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">Booking amount will be posted to their billing.</p>
+            <SearchableSelect
+              options={contractOptions}
+              value={contractId}
+              onValueChange={handleContractSelect}
+              placeholder="Select contract"
+              searchPlaceholder="Search by contract # or name..."
+              emptyMessage="No matching contracts."
+            />
+            <p className="text-xs text-muted-foreground">Booking amount will be posted to their billing. Mobile number auto-fills from the contract.</p>
           </div>
         )}
 
@@ -184,35 +180,17 @@ export const CustomerDetailsSection = memo(function CustomerDetailsSection() {
           </div>
         )}
 
-        {/* Guest of contract holder */}
-        {customerType === "guest" && (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Host Contract *</Label>
-              <Select value={contractId} onValueChange={setContractId}>
-                <SelectTrigger><SelectValue placeholder="Select host contract" /></SelectTrigger>
-                <SelectContent>
-                  {contracts.map(c => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.contract_number} — {c.lead?.company || `${c.lead?.first_name} ${c.lead?.last_name}`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Booking amount will be posted to the host&apos;s billing.</p>
-            </div>
-            <WalkInFields
-              guestName={guestName} setGuestName={setGuestName}
-              guestEmail={guestEmail} setGuestEmail={setGuestEmail}
-              guestPhone={guestPhone} setGuestPhone={setGuestPhone}
-              guestCompany={guestCompany} setGuestCompany={setGuestCompany}
-              bookerGstNumber={bookerGstNumber} setBookerGstNumber={setBookerGstNumber}
-              gstError={gstError} setGstError={setGstError}
-              idProofFile={idProofFile} setIdProofFile={setIdProofFile}
-              leadHasIdProof={leadHasIdProof} idProofLookingUp={idProofLookingUp}
-            />
-          </div>
-        )}
+        {/* Booker phone */}
+        <div className="space-y-2">
+          <Label>Booker Mobile Number *</Label>
+          <Input
+            value={bookerPhone}
+            onChange={(e) => setBookerPhone(e.target.value)}
+            placeholder="+91 98765 43210"
+            required
+          />
+          <p className="text-xs text-muted-foreground">Mandatory. This is the primary contact for the booking.</p>
+        </div>
       </CardContent>
     </Card>
   );

@@ -242,14 +242,22 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Conference/meeting rooms get a customer-type-aware minimum and a 30-min slot
+    // grid; every other space keeps the single min_booking_minutes on the 15-min grid.
+    const isConferenceOrMeetingRoom = space.workspace_type === "conference_room" || space.workspace_type === "meeting_room";
+    const minBookingMinutes = isConferenceOrMeetingRoom && input.customer_type === "contract_holder"
+      ? (space.min_booking_minutes_contract || 30)
+      : space.min_booking_minutes;
+    const slotStep = isConferenceOrMeetingRoom ? 30 : 15;
+
     const durationMinutes = endMin - startMin;
-    if (durationMinutes < space.min_booking_minutes) {
+    if (durationMinutes < minBookingMinutes) {
       return NextResponse.json({
-        error: `Minimum booking duration is ${space.min_booking_minutes} minutes`,
+        error: `Minimum booking duration is ${minBookingMinutes} minutes`,
       }, { status: 400 });
     }
-    if (durationMinutes % 15 !== 0) {
-      return NextResponse.json({ error: "Duration must be in multiples of 15 minutes" }, { status: 400 });
+    if (durationMinutes % slotStep !== 0) {
+      return NextResponse.json({ error: `Duration must be in multiples of ${slotStep} minutes` }, { status: 400 });
     }
   }
 

@@ -20,7 +20,7 @@ export const RoomSelectionSection = memo(function RoomSelectionSection() {
     bookingDate, setBookingDate, selectedSpace, numAttendees, setNumAttendees,
     numSeats, setNumSeats, availableSlots, availLoading, isDayPass,
     dayPassUsed, effectiveRate, availabilityWindows, startTime, setStartTime,
-    endTime, setEndTime, minBookingMin, formatTime12, formatDuration,
+    endTime, setEndTime, minBookingMin, slotStepMin, formatTime12, formatDuration,
   } = useBookingForm();
   const { locations } = useLocations();
 
@@ -167,7 +167,7 @@ export const RoomSelectionSection = memo(function RoomSelectionSection() {
                   })}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Min booking: {minBookingMin} min, then 15-min increments. Click a window to auto-fill times.
+                  Min booking: {minBookingMin} min, then {slotStepMin}-min increments. Click a window to auto-fill times.
                 </p>
               </div>
             )}
