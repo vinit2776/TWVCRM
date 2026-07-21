@@ -523,13 +523,13 @@ const LIFECYCLE_STAGES: { key: string; label: string; dot: string }[] = [
   { key: "resolved", label: "Resolved", dot: "bg-emerald-500" },
 ];
 
-function LifecycleStepper({ status }: { status: string }) {
+function LifecycleStepper({ status, className }: { status: string; className?: string }) {
   const isReopened = status === "reopened";
   const currentIndex = LIFECYCLE_STAGES.findIndex((s) => s.key === (isReopened ? "acknowledged" : status));
   if (currentIndex === -1) return null;
 
   return (
-    <div className="flex items-center gap-2 ml-8 mt-1.5">
+    <div className={cn("flex items-center gap-2 mt-1.5", className)}>
       <div className="flex items-center">
         {LIFECYCLE_STAGES.map((stage, i) => (
           <div key={stage.key} className="flex items-center">
@@ -615,7 +615,7 @@ function ActivityFeed() {
                     )}
                     <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
                   </div>
-                  {e.issue && <LifecycleStepper status={e.issue.status} />}
+                  {e.issue && <LifecycleStepper status={e.issue.status} className="ml-8" />}
                 </Link>
               );
             })
@@ -765,6 +765,7 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
               </>
             )}
           </div>
+          <LifecycleStepper status={issue.status} />
         </div>
         <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 self-center" />
       </div>
