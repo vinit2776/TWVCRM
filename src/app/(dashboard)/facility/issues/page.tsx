@@ -505,7 +505,7 @@ interface ActivityEvent {
   actor_label: string | null;
   message: string | null;
   created_at: string;
-  issue: { issue_number: string; title: string } | null;
+  issue: { issue_number: string; title: string; task_type: string } | null;
 }
 
 // Global "who did what, when" strip — claims, assignments, take-overs,
@@ -541,24 +541,41 @@ function ActivityFeed() {
           {loading ? (
             <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>
           ) : (
-            events.map((e) => (
-              <Link
-                key={e.id}
-                href={`/facility/issues/${e.issue_id}`}
-                className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/20 transition-colors"
-              >
-                <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
-                  {getInitials(e.actor_label ?? "?")}
-                </span>
-                <span className="text-xs flex-1 min-w-0 truncate">
-                  <span className="font-medium">{e.actor_label ?? "Someone"}</span>
-                  {" — "}
-                  <span className="text-muted-foreground">{e.message}</span>
-                  {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
-                </span>
-                <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
-              </Link>
-            ))
+            events.map((e) => {
+              const isTask = e.issue?.task_type === "delegated_task";
+              return (
+                <Link
+                  key={e.id}
+                  href={`/facility/issues/${e.issue_id}`}
+                  className={cn(
+                    "flex items-center gap-2.5 px-3 py-2 hover:bg-muted/20 transition-colors",
+                    isTask && "bg-teal-50/60",
+                  )}
+                >
+                  <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
+                    {getInitials(e.actor_label ?? "?")}
+                  </span>
+                  <span className="text-xs flex-1 min-w-0 truncate">
+                    <span className="font-medium">{e.actor_label ?? "Someone"}</span>
+                    {" — "}
+                    <span className="text-muted-foreground">{e.message}</span>
+                    {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
+                  </span>
+                  {e.issue && (
+                    isTask ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
+                        <UserPlus className="h-2.5 w-2.5" /> Task
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5 shrink-0">
+                        <Wrench className="h-2.5 w-2.5" /> Work Order
+                      </span>
+                    )
+                  )}
+                  <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                </Link>
+              );
+            })
           )}
         </div>
       )}
