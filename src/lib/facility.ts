@@ -123,13 +123,17 @@ export function computeClaimSlaTarget(
  * What status transitions are allowed? Used by the PATCH /status route to
  * reject bogus transitions early with a clear error.
  */
+// "closed" is retired as a reachable state — resolved is the terminal status
+// going forward. It stays in the FacilityIssueStatus union and as a valid
+// source (below) purely so pre-existing closed tickets remain valid data and
+// can still be reopened; nothing can transition INTO closed anymore.
 export const ALLOWED_TRANSITIONS: Record<FacilityIssueStatus, FacilityIssueStatus[]> = {
-  new: ["acknowledged", "in_progress", "resolved", "closed"],
-  acknowledged: ["in_progress", "resolved", "closed"],
-  in_progress: ["resolved", "acknowledged", "closed"],
-  resolved: ["closed", "reopened"],
+  new: ["acknowledged", "in_progress", "resolved"],
+  acknowledged: ["in_progress", "resolved"],
+  in_progress: ["resolved", "acknowledged"],
+  resolved: ["reopened"],
   closed: ["reopened"],
-  reopened: ["acknowledged", "in_progress", "resolved", "closed"],
+  reopened: ["acknowledged", "in_progress", "resolved"],
 };
 
 export function canTransition(from: FacilityIssueStatus, to: FacilityIssueStatus): boolean {
@@ -189,10 +193,6 @@ export function timestampsForStatus(
       if (!current.acknowledged_at) out.acknowledged_at = now;
       if (!current.started_at) out.started_at = now;
       out.resolved_at = now;
-      break;
-    case "closed":
-      out.closed_at = now;
-      if (!current.resolved_at) out.resolved_at = now;
       break;
     case "reopened":
       out.resolved_at = null;

@@ -69,7 +69,6 @@ export default function MyFacilityIssuesPage() {
       const since = new Date();
       since.setHours(0, 0, 0, 0);
       params.append("status", "resolved");
-      params.append("status", "closed");
       params.set("date_from", since.toISOString());
     }
     try {
@@ -91,7 +90,7 @@ export default function MyFacilityIssuesPage() {
       const [o, p, t] = await Promise.all([
         fetch(`/api/facility/issues?${modeParam}=me&only_open=true`).then((r) => r.json()),
         fetch(`/api/facility/issues?${modeParam}=me&status=in_progress`).then((r) => r.json()),
-        fetch(`/api/facility/issues?${modeParam}=me&status=resolved&status=closed&date_from=${since.toISOString()}`).then((r) => r.json()),
+        fetch(`/api/facility/issues?${modeParam}=me&status=resolved&date_from=${since.toISOString()}`).then((r) => r.json()),
       ]);
       setCounts({
         open: (o.data ?? []).length,

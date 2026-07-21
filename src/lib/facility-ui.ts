@@ -127,15 +127,20 @@ export function formatDuration(minutes: number | null | undefined): string {
 }
 
 /** Preferred order for picking the single "primary" action button out of several valid next statuses. */
-export const STATUS_ACTION_PRIORITY: FacilityIssueStatus[] = ["in_progress", "resolved", "closed", "reopened"];
+export const STATUS_ACTION_PRIORITY: FacilityIssueStatus[] = ["in_progress", "resolved", "reopened"];
 
-/** Status-flow guard — what the user is allowed to transition TO from a given state. */
+/**
+ * Status-flow guard — what the user is allowed to transition TO from a given
+ * state. Resolved is terminal (only reopen goes further) — "closed" is no
+ * longer offered anywhere; it stays reachable only via reopen for whatever
+ * legacy tickets already carry that status.
+ */
 export function nextStatusOptions(current: FacilityIssueStatus): FacilityIssueStatus[] {
   switch (current) {
     case "new":          return ["acknowledged", "in_progress", "resolved"];
     case "acknowledged": return ["in_progress", "resolved"];
     case "in_progress":  return ["resolved"];
-    case "resolved":     return ["closed", "reopened"];
+    case "resolved":     return ["reopened"];
     case "closed":       return ["reopened"];
     case "reopened":     return ["acknowledged", "in_progress", "resolved"];
   }

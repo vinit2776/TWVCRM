@@ -84,7 +84,7 @@ export async function POST(
     // Revoke the provisional score — it needs to be resolved properly again.
     updates.kpi_points = null;
     updates.kpi_breakdown = null;
-  } else if (issue.status === "resolved" || issue.status === "closed") {
+  } else if (issue.status === "resolved") {
     // Top up the KPI score with the satisfaction bonus now that it's known.
     const { data: exts } = await supabase
       .from("facility_issue_tat_extensions")

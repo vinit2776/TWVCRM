@@ -169,22 +169,23 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailSubject = `[${issue.issue_number}] Status: ${event.from} → ${event.to}`;
         emailHeadline = broadcastKey === "reopened" ? "Ticket Reopened" : "Ticket Status Updated";
         emailDetail = `<strong>Status:</strong> ${event.from} → ${event.to}<br/><strong>Updated by:</strong> ${event.actorName}`;
-        // Also email the reporter when resolved or closed. Resolved tickets append a
-        // satisfaction-survey CTA — satisfaction_token is stamped on every issue at
-        // creation (DB default), so it's always available once resolved.
-        if ((event.to === "resolved" || event.to === "closed") && event.reporterEmail) {
-          const surveyUrl = event.to === "resolved" && event.satisfactionToken
+        // Also email the reporter when resolved — resolved is the terminal status
+        // (closed is retired), so this is the only completion state that fires.
+        // Appends a satisfaction-survey CTA — satisfaction_token is stamped on
+        // every issue at creation (DB default), so it's always available.
+        if (event.to === "resolved" && event.reporterEmail) {
+          const surveyUrl = event.satisfactionToken
             ? `${(process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com")}/facility/satisfaction/${event.satisfactionToken}`
             : null;
           reporterEmailPromise = resend.emails.send({
             from: EMAIL_FROM,
             to: event.reporterEmail,
-            subject: `[${issue.issue_number}] Your ticket has been ${event.to}`,
+            subject: `[${issue.issue_number}] Your ticket has been resolved`,
             html: emailHtml({
-              headline: `Ticket ${event.to === "resolved" ? "Resolved" : "Closed"}`,
+              headline: "Ticket Resolved",
               issueNumber: issue.issue_number,
               title: issue.title,
-              detail: `Your facility ticket has been marked <strong>${event.to}</strong> by ${event.actorName}. Thank you for reporting!`
+              detail: `Your facility ticket has been marked <strong>resolved</strong> by ${event.actorName}. Thank you for reporting!`
                 + (surveyUrl ? `<br/><br/>How did we do? <a href="${surveyUrl}" style="color:#2563eb">Rate your experience</a> — it takes 10 seconds.` : ""),
               url,
             }),

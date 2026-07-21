@@ -89,13 +89,11 @@ const OVERRIDE_ROLES = ["admin", "manager", "office_admin"];
 const STATUS_ACTION_LABEL: Record<string, string> = {
   in_progress: "Start Work",
   resolved: "Resolve",
-  closed: "Close",
   reopened: "Reopen",
 };
 const STATUS_ACTION_ICON: Record<string, typeof Wrench> = {
   in_progress: Wrench,
   resolved: CheckCircle2,
-  closed: CheckCircle2,
   reopened: RefreshCw,
 };
 
