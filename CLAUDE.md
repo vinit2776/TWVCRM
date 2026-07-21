@@ -74,11 +74,12 @@ The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
 npm run dev          # Start dev server (Next.js 16, Turbopack)
 npm run build        # Production build — CI runs this on every push to main
 npm run lint         # ESLint — must pass clean (0 errors) before merging
+npm test             # Vitest — CI runs this on every push to main
 
 npx supabase db push # Apply pending migrations to the live Supabase project
 ```
 
-There are no test suites. Verify changes by running the dev server and testing in the browser.
+Test coverage is limited to pure-function/business-logic units (see `src/lib/__tests__/`) — there is no integration or UI test suite. Verify end-to-end behavior by running the dev server and testing in the browser.
 
 When the Next.js dev server serves stale code after edits, clear the cache: `rm -rf .next` then restart.
 

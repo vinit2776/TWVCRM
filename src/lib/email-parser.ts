@@ -1,5 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import type { VoPurpose, EntityType } from "@/types";
+
+// Overridable via app_settings-style env var so the extraction model can be
+// bumped without a code change/redeploy for this one call site.
+const DEFAULT_EXTRACTION_MODEL = "claude-sonnet-4-20250514";
+const EXTRACTION_MODEL =
+  process.env.ANTHROPIC_EMAIL_PARSER_MODEL || DEFAULT_EXTRACTION_MODEL;
+
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export interface ParsedCaseData {
   /** Extracted client/company name */
@@ -89,69 +98,89 @@ Guidelines:
 - Default tenure_months to 12 if not mentioned but purpose is gst_registration or mca_registration
 - If you cannot determine a field, omit it from the response rather than guessing`;
 
+// Loose shape check on the LLM's JSON — types are coerced defensively below
+// since a model can return e.g. rate as a string ("50000") or a number.
+// .passthrough() keeps any extra fields so raw_extraction still reflects
+// exactly what the model returned.
+const ParsedResponseSchema = z
+  .object({
+    client_name: z.union([z.string(), z.number()]).optional(),
+    client_entity_type: z.union([z.string(), z.number()]).optional(),
+    client_company_name: z.union([z.string(), z.number()]).optional(),
+    client_gst_number: z.union([z.string(), z.number()]).optional(),
+    client_pan_number: z.union([z.string(), z.number()]).optional(),
+    client_cin_number: z.union([z.string(), z.number()]).optional(),
+    client_email: z.union([z.string(), z.number()]).optional(),
+    client_phone: z.union([z.string(), z.number()]).optional(),
+    client_address: z.union([z.string(), z.number()]).optional(),
+    client_city: z.union([z.string(), z.number()]).optional(),
+    client_state: z.union([z.string(), z.number()]).optional(),
+    client_pincode: z.union([z.string(), z.number()]).optional(),
+    purpose: z.union([z.string(), z.number()]).optional(),
+    rate: z.union([z.number(), z.string()]).optional(),
+    tenure_months: z.union([z.number(), z.string()]).optional(),
+    start_date: z.union([z.string(), z.number()]).optional(),
+    preferred_location: z.union([z.string(), z.number()]).optional(),
+    notes: z.union([z.string(), z.number()]).optional(),
+    confidence: z.union([z.number(), z.string()]).optional(),
+    missing_fields: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+
 /**
- * Parse an aggregator email using Anthropic Claude to extract structured case data.
- * Returns parsed data with confidence score. Below 0.7 confidence = flag for manual review.
+ * Extract a JSON object from the model's raw text response, handling the
+ * common cases: a bare JSON object, one wrapped in a markdown code fence, or
+ * JSON surrounded by extra prose the model added despite instructions.
+ * Throws if no parseable object can be found.
  */
-export async function parseAggregatorEmail(
-  emailContent: string,
-  emailSubject?: string
-): Promise<ParsedCaseData> {
-  const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
-
-  const fullContent = [
-    emailSubject ? `Subject: ${emailSubject}` : "",
-    "",
-    emailContent,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const message = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 2048,
-    messages: [
-      {
-        role: "user",
-        content: `${EXTRACTION_PROMPT}\n\n--- EMAIL START ---\n${fullContent}\n--- EMAIL END ---`,
-      },
-    ],
-  });
-
-  // Extract text from the response
-  const responseText = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => {
-      if (block.type === "text") return block.text;
-      return "";
-    })
-    .join("");
-
-  // Parse JSON from response (handle potential markdown code blocks)
-  let parsed: Record<string, unknown>;
+export function extractJsonFromResponse(responseText: string): unknown {
   try {
-    // Try direct JSON parse first
-    parsed = JSON.parse(responseText);
+    return JSON.parse(responseText);
   } catch {
-    // Try extracting JSON from markdown code block
+    // Try extracting JSON from a markdown code block
     const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {
-      parsed = JSON.parse(jsonMatch[1].trim());
-    } else {
-      // Last resort: find first { to last }
-      const start = responseText.indexOf("{");
-      const end = responseText.lastIndexOf("}");
-      if (start !== -1 && end !== -1) {
-        parsed = JSON.parse(responseText.substring(start, end + 1));
-      } else {
-        throw new Error("Could not parse AI response as JSON");
-      }
+      return JSON.parse(jsonMatch[1].trim());
     }
+    // Last resort: find first { to last }
+    const start = responseText.indexOf("{");
+    const end = responseText.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(responseText.substring(start, end + 1));
+    }
+    throw new Error("Could not parse AI response as JSON");
   }
+}
 
-  // Validate and normalize the response
+/**
+ * Validate that the extracted JSON matches the expected extraction shape.
+ * Returns the validated (passthrough) object, or throws with the Zod issue
+ * details if the model returned something structurally unusable (e.g. an
+ * array, a scalar, or fields of a type we can't coerce).
+ */
+export function validateParsedResponse(raw: unknown): Record<string, unknown> {
+  const result = ParsedResponseSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(
+      `AI response failed validation: ${result.error.message}`
+    );
+  }
+  return result.data as Record<string, unknown>;
+}
+
+/**
+ * Normalize a validated extraction object into the final ParsedCaseData
+ * shape, coercing optional fields and defaulting unrecognized enum values.
+ */
+export function normalizeParsedCaseData(
+  parsed: Record<string, unknown>
+): ParsedCaseData {
+  // Number(parsed.confidence) || 0.5 previously mapped a legitimate 0
+  // confidence to 0.5, defeating the isHighConfidence low end — use an
+  // explicit finite check instead so 0 is preserved.
+  const confidenceNum = Number(parsed.confidence);
+  const confidence = Number.isFinite(confidenceNum) ? confidenceNum : 0.5;
+
   const result: ParsedCaseData = {
     client_name: String(parsed.client_name || "Unknown"),
     client_entity_type: validateEntityType(
@@ -160,7 +189,7 @@ export async function parseAggregatorEmail(
     purpose: validatePurpose(
       String(parsed.purpose || "business_address")
     ),
-    confidence: Number(parsed.confidence) || 0.5,
+    confidence,
     missing_fields: Array.isArray(parsed.missing_fields)
       ? parsed.missing_fields.map(String)
       : [],
@@ -196,6 +225,56 @@ export async function parseAggregatorEmail(
   if (parsed.notes) result.notes = String(parsed.notes);
 
   return result;
+}
+
+/**
+ * Parse an aggregator email using Anthropic Claude to extract structured case data.
+ * Returns parsed data with confidence score. Below 0.7 confidence = flag for manual review.
+ */
+export async function parseAggregatorEmail(
+  emailContent: string,
+  emailSubject?: string
+): Promise<ParsedCaseData> {
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  });
+
+  const fullContent = [
+    emailSubject ? `Subject: ${emailSubject}` : "",
+    "",
+    emailContent,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const message = await anthropic.messages.create(
+    {
+      model: EXTRACTION_MODEL,
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "user",
+          content: `${EXTRACTION_PROMPT}\n\n--- EMAIL START ---\n${fullContent}\n--- EMAIL END ---`,
+        },
+      ],
+    },
+    // maxRetries: 1 → one retry (two attempts total) on transient/retryable
+    // errors, on top of the request timeout below.
+    { timeout: REQUEST_TIMEOUT_MS, maxRetries: 1 }
+  );
+
+  // Extract text from the response
+  const responseText = message.content
+    .filter((block) => block.type === "text")
+    .map((block) => {
+      if (block.type === "text") return block.text;
+      return "";
+    })
+    .join("");
+
+  const raw = extractJsonFromResponse(responseText);
+  const validated = validateParsedResponse(raw);
+  return normalizeParsedCaseData(validated);
 }
 
 function validatePurpose(value: string): VoPurpose {
