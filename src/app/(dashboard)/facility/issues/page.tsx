@@ -264,7 +264,7 @@ function FacilityIssuesPageInner() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, number, location…"
+            placeholder="Search title, number, location, comments…"
             className="pl-9"
           />
         </div>
@@ -523,17 +523,21 @@ const LIFECYCLE_STAGES: { key: string; label: string; dot: string }[] = [
   { key: "resolved", label: "Resolved", dot: "bg-emerald-500" },
 ];
 
-function LifecycleStepper({ status, className }: { status: string; className?: string }) {
+// `inline` renders a compact dots-only track (no text label, tighter
+// connectors) meant to sit in the same line as other row content instead of
+// on its own row — used in the activity feed and on ticket cards to save
+// vertical space. The label is still available via the non-inline mode.
+function LifecycleStepper({ status, className, inline }: { status: string; className?: string; inline?: boolean }) {
   const isReopened = status === "reopened";
   const currentIndex = LIFECYCLE_STAGES.findIndex((s) => s.key === (isReopened ? "acknowledged" : status));
   if (currentIndex === -1) return null;
 
   return (
-    <div className={cn("flex items-center gap-2 mt-1.5", className)}>
+    <div className={cn("flex items-center shrink-0", !inline && "gap-2 mt-1.5", className)}>
       <div className="flex items-center">
         {LIFECYCLE_STAGES.map((stage, i) => (
           <div key={stage.key} className="flex items-center">
-            {i > 0 && <div className={cn("w-4 h-[1.5px]", i <= currentIndex ? LIFECYCLE_STAGES[currentIndex].dot : "bg-border")} />}
+            {i > 0 && <div className={cn(inline ? "w-2.5" : "w-4", "h-[1.5px]", i <= currentIndex ? LIFECYCLE_STAGES[currentIndex].dot : "bg-border")} />}
             <div className={cn(
               "h-1.5 w-1.5 rounded-full",
               i > currentIndex ? "bg-border" : i === currentIndex && isReopened ? "bg-rose-500" : stage.dot,
@@ -541,9 +545,11 @@ function LifecycleStepper({ status, className }: { status: string; className?: s
           </div>
         ))}
       </div>
-      <span className="text-[9px] text-muted-foreground">
-        {isReopened ? "Reopened" : LIFECYCLE_STAGES[currentIndex].label}
-      </span>
+      {!inline && (
+        <span className="text-[9px] text-muted-foreground">
+          {isReopened ? "Reopened" : LIFECYCLE_STAGES[currentIndex].label}
+        </span>
+      )}
     </div>
   );
 }
@@ -602,6 +608,7 @@ function ActivityFeed() {
                       <span className="text-muted-foreground">{e.message}</span>
                       {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
                     </span>
+                    {e.issue && <LifecycleStepper status={e.issue.status} inline />}
                     {e.issue && (
                       isTask ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
@@ -615,7 +622,6 @@ function ActivityFeed() {
                     )}
                     <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
                   </div>
-                  {e.issue && <LifecycleStepper status={e.issue.status} className="ml-8" />}
                 </Link>
               );
             })
@@ -744,7 +750,10 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
               </span>
             )}
           </div>
-          <div className={cn("text-sm font-medium mt-0.5 truncate", isTask && "text-teal-950")}>{issue.title}</div>
+          <div className="flex items-center gap-2 mt-0.5">
+            <div className={cn("text-sm font-medium truncate min-w-0", isTask && "text-teal-950")}>{issue.title}</div>
+            <LifecycleStepper status={issue.status} inline />
+          </div>
           <div className={cn("text-xs mt-1 flex flex-wrap gap-2", isTask ? "text-teal-700" : "text-muted-foreground")}>
             <span>{issue.location?.name ?? "—"}</span>
             {issue.category?.name && <><span>·</span><span>{issue.category.name}</span></>}
@@ -765,7 +774,6 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
               </>
             )}
           </div>
-          <LifecycleStepper status={issue.status} />
         </div>
         <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 self-center" />
       </div>
