@@ -158,14 +158,15 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) resetForm(); onOpenChange(next); }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
+        <form onSubmit={handleSubmit} className="flex flex-col overflow-hidden flex-1">
+        <DialogHeader className="p-4 pb-3 border-b">
           <DialogTitle>New Task</DialogTitle>
           <DialogDescription>
             Assign a one-time task to a teammate with a due date — no problem report needed.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="overflow-y-auto p-4 flex-1 space-y-4">
           <div className="space-y-2">
             <Label>Location *</Label>
             <LocationSelector value={locationId} onValueChange={setLocationId} />
@@ -330,16 +331,17 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
               })}
             </div>
           </div>
+        </div>
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={submitting || !canSubmit}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Task
-            </Button>
-          </div>
+        <div className="border-t p-3 flex justify-end gap-2 bg-background">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={submitting || !canSubmit}>
+            {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Create Task
+          </Button>
+        </div>
         </form>
       </DialogContent>
     </Dialog>
