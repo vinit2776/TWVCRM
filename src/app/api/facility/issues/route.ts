@@ -83,7 +83,20 @@ export async function GET(request: NextRequest) {
   if (dateTo) query = query.lte("created_at", dateTo);
   if (search) {
     const s = `%${search}%`;
-    query = query.or(`title.ilike.${s},issue_number.ilike.${s},description.ilike.${s}`);
+    const orParts = [`title.ilike.${s}`, `issue_number.ilike.${s}`, `description.ilike.${s}`];
+    // Also match comment text — comments live in facility_issue_events, not on
+    // the issue row itself, so a matching comment pulls its parent issue into
+    // the results even when the issue's own title/description don't match.
+    const { data: matchingComments } = await supabase
+      .from("facility_issue_events")
+      .select("issue_id")
+      .eq("event_type", "comment")
+      .ilike("message", s);
+    const commentIssueIds = [...new Set((matchingComments ?? []).map((c) => c.issue_id as string))];
+    if (commentIssueIds.length > 0) {
+      orParts.push(`id.in.(${commentIssueIds.join(",")})`);
+    }
+    query = query.or(orParts.join(","));
   }
 
   const { data, error } = await query;
