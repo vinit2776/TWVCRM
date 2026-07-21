@@ -508,16 +508,19 @@ interface ActivityEvent {
   issue: { issue_number: string; title: string; task_type: string; status: string } | null;
 }
 
-// Fixed pipeline order — mirrors nextStatusOptions()'s forward path. "reopened"
-// has no slot of its own (it loops back into acknowledged per canTransition),
-// so it's rendered as a color override on the acknowledged dot rather than a
-// 6th stage — keeps every ticket on the same 5-node ladder.
+// Fixed pipeline order — mirrors nextStatusOptions()'s forward path. Resolved
+// is the terminal stage (closed is retired, no longer reachable going
+// forward — see facility.ts's ALLOWED_TRANSITIONS). "reopened" has no slot of
+// its own (it loops back into acknowledged per canTransition), so it's
+// rendered as a color override on the acknowledged dot rather than an extra
+// stage. Pre-existing legacy "closed" tickets simply won't match any stage
+// here and the stepper renders nothing for that row — acceptable since
+// closed is a dead end now, not something new tickets reach.
 const LIFECYCLE_STAGES: { key: string; label: string; dot: string }[] = [
   { key: "new", label: "New", dot: "bg-blue-500" },
   { key: "acknowledged", label: "Acknowledged", dot: "bg-indigo-500" },
   { key: "in_progress", label: "In progress", dot: "bg-purple-500" },
   { key: "resolved", label: "Resolved", dot: "bg-emerald-500" },
-  { key: "closed", label: "Closed", dot: "bg-slate-400" },
 ];
 
 function LifecycleStepper({ status }: { status: string }) {
