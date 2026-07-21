@@ -211,6 +211,27 @@ function FacilityIssuesPageInner() {
   const tabFor = (group: AssigneeGroup): "open" | "closed" =>
     groupTab[group.key] ?? (group.openItems.length > 0 ? "open" : "closed");
 
+  // One-line summary shown under the group name without expanding the card —
+  // answers "what's this person on right now" at a glance.
+  const groupStats = (group: AssigneeGroup): string | null => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const resolvedToday = group.closedItems.filter((i) => {
+      const at = i.resolved_at ?? i.closed_at;
+      return at && new Date(at) >= todayStart;
+    }).length;
+    const inProgress = group.openItems.filter((i) => i.status === "in_progress").length;
+    const oldestOpenDays = group.openItems.length > 0
+      ? Math.floor((Date.now() - Math.min(...group.openItems.map((i) => new Date(i.created_at).getTime()))) / 86_400_000)
+      : null;
+
+    const parts: string[] = [];
+    if (resolvedToday > 0) parts.push(`${resolvedToday} resolved today`);
+    if (inProgress > 0) parts.push(`${inProgress} in progress`);
+    if (oldestOpenDays !== null && oldestOpenDays > 0) parts.push(`oldest open ${oldestOpenDays}d`);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
       {/* ───── Header ──────────────────────────────────────────────────────── */}
@@ -233,6 +254,8 @@ function FacilityIssuesPageInner() {
           </Button>
         </div>
       </div>
+
+      <ActivityFeed />
 
       {/* ───── Search + filter toggle ──────────────────────────────────────── */}
       <div className="flex items-center gap-2">
@@ -382,6 +405,7 @@ function FacilityIssuesPageInner() {
             const activeItems = tab === "open" ? group.openItems : group.closedItems;
             const breachedCount = group.openItems.filter((i) => i.sla_breached).length;
             const isUnclaimed = group.key === UNCLAIMED_KEY;
+            const stats = groupStats(group);
 
             return (
               <div key={group.key} className="rounded-lg border overflow-hidden">
@@ -399,16 +423,23 @@ function FacilityIssuesPageInner() {
                   )}>
                     {isUnclaimed ? <User className="h-3.5 w-3.5" /> : getInitials(group.name)}
                   </span>
-                  <span className="text-sm font-medium shrink-0">{group.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {group.openItems.length} open · {group.closedItems.length} closed
-                  </span>
-                  {breachedCount > 0 && (
-                    <span className="text-[10px] text-red-600 font-medium inline-flex items-center gap-0.5 ml-1">
-                      <AlertTriangle className="h-2.5 w-2.5" />
-                      {breachedCount} overdue
-                    </span>
-                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium shrink-0">{group.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {group.openItems.length} open · {group.closedItems.length} closed
+                      </span>
+                      {breachedCount > 0 && (
+                        <span className="text-[10px] text-red-600 font-medium inline-flex items-center gap-0.5">
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                          {breachedCount} overdue
+                        </span>
+                      )}
+                    </div>
+                    {!isUnclaimed && stats && (
+                      <div className="text-[11px] text-muted-foreground mt-0.5">{stats}</div>
+                    )}
+                  </div>
                   <ChevronDown
                     className={cn(
                       "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150 shrink-0",
@@ -463,6 +494,74 @@ function FacilityIssuesPageInner() {
         onOpenChange={setDelegateOpen}
         onCreated={() => fetchData()}
       />
+    </div>
+  );
+}
+
+interface ActivityEvent {
+  id: string;
+  issue_id: string;
+  event_type: string;
+  actor_label: string | null;
+  message: string | null;
+  created_at: string;
+  issue: { issue_number: string; title: string } | null;
+}
+
+// Global "who did what, when" strip — claims, assignments, take-overs,
+// resolutions, reopens, closes, across every technician. Independent of the
+// grouped-by-assignee list below (and its filters); this is a shared feed.
+function ActivityFeed() {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/facility/issues/activity")
+      .then((r) => r.json())
+      .then((j) => setEvents(j.data ?? []))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (!loading && events.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors bg-muted/10"
+      >
+        <span className="text-sm font-medium">Recent activity</span>
+        <span className="text-xs text-muted-foreground">who did what, last {events.length}</span>
+        <ChevronDown className={cn("h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150", collapsed && "-rotate-90")} />
+      </button>
+      {!collapsed && (
+        <div className="divide-y">
+          {loading ? (
+            <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>
+          ) : (
+            events.map((e) => (
+              <Link
+                key={e.id}
+                href={`/facility/issues/${e.issue_id}`}
+                className="flex items-center gap-2.5 px-3 py-2 hover:bg-muted/20 transition-colors"
+              >
+                <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
+                  {getInitials(e.actor_label ?? "?")}
+                </span>
+                <span className="text-xs flex-1 min-w-0 truncate">
+                  <span className="font-medium">{e.actor_label ?? "Someone"}</span>
+                  {" — "}
+                  <span className="text-muted-foreground">{e.message}</span>
+                  {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
+                </span>
+                <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+              </Link>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
