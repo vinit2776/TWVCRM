@@ -45,6 +45,7 @@ import {
   STATUS_ACTION_PRIORITY, getTatStatus, SCOPE_LABEL,
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
+import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
 } from "@/types";
@@ -578,6 +579,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             )}
           </div>
           <h1 className="text-base md:text-lg font-semibold mt-1 break-words">{issue.title}</h1>
+          <LifecycleStepper status={issue.status} />
         </div>
         <Button variant="ghost" size="icon" onClick={fetchIssue} disabled={loading} title="Refresh">
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
