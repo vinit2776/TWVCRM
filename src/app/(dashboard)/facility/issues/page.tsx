@@ -505,7 +505,44 @@ interface ActivityEvent {
   actor_label: string | null;
   message: string | null;
   created_at: string;
-  issue: { issue_number: string; title: string; task_type: string } | null;
+  issue: { issue_number: string; title: string; task_type: string; status: string } | null;
+}
+
+// Fixed pipeline order — mirrors nextStatusOptions()'s forward path. "reopened"
+// has no slot of its own (it loops back into acknowledged per canTransition),
+// so it's rendered as a color override on the acknowledged dot rather than a
+// 6th stage — keeps every ticket on the same 5-node ladder.
+const LIFECYCLE_STAGES: { key: string; label: string; dot: string }[] = [
+  { key: "new", label: "New", dot: "bg-blue-500" },
+  { key: "acknowledged", label: "Acknowledged", dot: "bg-indigo-500" },
+  { key: "in_progress", label: "In progress", dot: "bg-purple-500" },
+  { key: "resolved", label: "Resolved", dot: "bg-emerald-500" },
+  { key: "closed", label: "Closed", dot: "bg-slate-400" },
+];
+
+function LifecycleStepper({ status }: { status: string }) {
+  const isReopened = status === "reopened";
+  const currentIndex = LIFECYCLE_STAGES.findIndex((s) => s.key === (isReopened ? "acknowledged" : status));
+  if (currentIndex === -1) return null;
+
+  return (
+    <div className="flex items-center gap-2 ml-8 mt-1.5">
+      <div className="flex items-center">
+        {LIFECYCLE_STAGES.map((stage, i) => (
+          <div key={stage.key} className="flex items-center">
+            {i > 0 && <div className={cn("w-4 h-[1.5px]", i <= currentIndex ? LIFECYCLE_STAGES[currentIndex].dot : "bg-border")} />}
+            <div className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              i > currentIndex ? "bg-border" : i === currentIndex && isReopened ? "bg-rose-500" : stage.dot,
+            )} />
+          </div>
+        ))}
+      </div>
+      <span className="text-[9px] text-muted-foreground">
+        {isReopened ? "Reopened" : LIFECYCLE_STAGES[currentIndex].label}
+      </span>
+    </div>
+  );
 }
 
 // Global "who did what, when" strip — claims, assignments, take-overs,
@@ -548,31 +585,34 @@ function ActivityFeed() {
                   key={e.id}
                   href={`/facility/issues/${e.issue_id}`}
                   className={cn(
-                    "flex items-center gap-2.5 px-3 py-2 hover:bg-muted/20 transition-colors",
+                    "block px-3 py-2 hover:bg-muted/20 transition-colors",
                     isTask && "bg-teal-50/60",
                   )}
                 >
-                  <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
-                    {getInitials(e.actor_label ?? "?")}
-                  </span>
-                  <span className="text-xs flex-1 min-w-0 truncate">
-                    <span className="font-medium">{e.actor_label ?? "Someone"}</span>
-                    {" — "}
-                    <span className="text-muted-foreground">{e.message}</span>
-                    {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
-                  </span>
-                  {e.issue && (
-                    isTask ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
-                        <UserPlus className="h-2.5 w-2.5" /> Task
-                      </span>
-                    ) : (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5 shrink-0">
-                        <Wrench className="h-2.5 w-2.5" /> Work Order
-                      </span>
-                    )
-                  )}
-                  <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                  <div className="flex items-center gap-2.5">
+                    <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
+                      {getInitials(e.actor_label ?? "?")}
+                    </span>
+                    <span className="text-xs flex-1 min-w-0 truncate">
+                      <span className="font-medium">{e.actor_label ?? "Someone"}</span>
+                      {" — "}
+                      <span className="text-muted-foreground">{e.message}</span>
+                      {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
+                    </span>
+                    {e.issue && (
+                      isTask ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
+                          <UserPlus className="h-2.5 w-2.5" /> Task
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5 shrink-0">
+                          <Wrench className="h-2.5 w-2.5" /> Work Order
+                        </span>
+                      )
+                    )}
+                    <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                  </div>
+                  {e.issue && <LifecycleStepper status={e.issue.status} />}
                 </Link>
               );
             })

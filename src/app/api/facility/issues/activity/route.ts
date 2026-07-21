@@ -19,7 +19,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("facility_issue_events")
-    .select("id, issue_id, event_type, actor_label, message, payload, created_at, issue:facility_issues!facility_issue_events_issue_id_fkey(issue_number, title, task_type)")
+    .select("id, issue_id, event_type, actor_label, message, payload, created_at, issue:facility_issues!facility_issue_events_issue_id_fkey(issue_number, title, task_type, status)")
     .in("event_type", OWNERSHIP_AND_COMPLETION_TYPES)
     .order("created_at", { ascending: false })
     .limit(60);
