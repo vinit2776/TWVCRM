@@ -349,6 +349,8 @@ export interface Proposal {
   deposit_waiver_verified_at?: string;
   deposit_waiver_verified_by?: string;
   deposit_waiver_requested_at?: string;
+  // Contracts created from this proposal (joined on GET /api/proposals/[id]) — used to gate editing.
+  contracts?: { id: string; contract_number: string; status: string }[];
 }
 
 // ==========================================

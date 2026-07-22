@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency } from "@/lib/utils";
-import type { ServiceCatalogItem } from "@/types";
+import type { ServiceCatalogItem, Proposal } from "@/types";
 
 interface ServiceQuotaRow {
   service_id: string;
@@ -35,6 +35,8 @@ interface ProposalFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  /** When provided, the form edits this proposal instead of creating a new one. */
+  proposal?: Proposal;
 }
 
 export function ProposalForm({
@@ -43,7 +45,9 @@ export function ProposalForm({
   open,
   onOpenChange,
   onSuccess,
+  proposal,
 }: ProposalFormProps) {
+  const isEditing = !!proposal;
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
@@ -83,6 +87,56 @@ export function ProposalForm({
       .catch(() => setCatalogLoaded(true));
   }, []);
 
+  // When opening in edit mode, prefill every field from the existing proposal.
+  // Runs once the catalog has loaded so quota rows exist to merge saved values into.
+  useEffect(() => {
+    if (!open || !proposal || !catalogLoaded) return;
+
+    setTitle(proposal.title);
+    setLocationId(proposal.location_id || leadLocationId || null);
+    setDescription(proposal.description || "");
+    setItems(
+      proposal.items.length > 0
+        ? proposal.items.map((item) => ({
+            description: item.description,
+            quantity: item.quantity,
+            unit: item.unit,
+            unit_price: item.unit_price,
+            total: item.total,
+          }))
+        : [{ description: "", quantity: 1, unit_price: 0, total: 0 }]
+    );
+    setTaxPercentage(Number(proposal.tax_percentage));
+    setDiscountPercentage(Number(proposal.discount_percentage));
+    setValidUntil(proposal.valid_until || "");
+    setTermsAndConditions(proposal.terms_and_conditions || DEFAULT_PROPOSAL_TERMS);
+    setNotes(proposal.notes || "");
+    const confRoom = proposal.complimentary_items?.find((i) => i.name === "Conference Room");
+    setConfRoomHours(confRoom?.quantity || 0);
+    setConfRoomOverageRate(confRoom?.price_per_unit || 0);
+    const months = Number(proposal.security_deposit_months) || 0;
+    setDepositMonths(months);
+    setDepositAmount(Number(proposal.security_deposit_amount) || 0);
+    setDepositOverridden(months > 0);
+
+    fetch(`/api/proposals/${proposal.id}/service-quotas?raw=true`)
+      .then((r) => r.json())
+      .then((json) => {
+        const saved = (json.data || []) as { service_id: string; monthly_quota: number; overage_rate: number }[];
+        const byService = new Map(saved.map((s) => [s.service_id, s]));
+        setServiceQuotas((prev) =>
+          prev.map((sq) => {
+            const match = byService.get(sq.service_id);
+            return match
+              ? { ...sq, monthly_quota: match.monthly_quota, overage_rate: match.overage_rate }
+              : sq;
+          })
+        );
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, proposal, catalogLoaded]);
+
   // Compute subtotal for deposit auto-calculation
   const computedSubtotal = items
     .filter((item) => item.description.trim())
@@ -110,6 +164,12 @@ export function ProposalForm({
       overage_rate: sq.default_overage_rate,
     })));
   };
+
+  // Creation mode: start from a clean slate every time the dialog opens.
+  useEffect(() => {
+    if (open && !proposal) resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, proposal]);
 
   const updateQuota = (serviceId: string, field: "monthly_quota" | "overage_rate", value: number) => {
     setServiceQuotas(prev => prev.map(sq =>
@@ -176,21 +236,25 @@ export function ProposalForm({
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
 
-    const res = await fetch("/api/proposals", {
-      method: "POST",
+    const res = await fetch(isEditing ? `/api/proposals/${proposal!.id}/edit` : "/api/proposals", {
+      method: isEditing ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
     setSubmitting(false);
     if (res.ok) {
-      toast.success("Proposal created successfully");
-      resetForm();
+      if (isEditing && proposal!.status !== "draft") {
+        toast.success("Proposal updated — reset to Draft. Re-send it to the customer to continue.");
+      } else {
+        toast.success(isEditing ? "Proposal updated successfully" : "Proposal created successfully");
+      }
+      if (!isEditing) resetForm();
       onOpenChange(false);
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to create proposal");
+      toast.error(err?.error || `Failed to ${isEditing ? "update" : "create"} proposal`);
     }
   };
 
@@ -198,7 +262,7 @@ export function ProposalForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Proposal</DialogTitle>
+          <DialogTitle>{isEditing ? "Edit Proposal" : "Create Proposal"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -457,7 +521,7 @@ export function ProposalForm({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Proposal
+              {isEditing ? "Save Changes" : "Create Proposal"}
             </Button>
           </div>
         </form>

@@ -228,7 +228,11 @@ export const createProposalSchema = z.object({
 
 export const updateProposalSchema = createProposalSchema.partial();
 
+// Full-snapshot edit of an existing proposal (everything except lead_id, which never changes).
+export const editProposalSchema = createProposalSchema.omit({ lead_id: true });
+
 export type CreateProposalInput = z.input<typeof createProposalSchema>;
+export type EditProposalInput = z.input<typeof editProposalSchema>;
 
 // ==========================================
 // Invoice Validations
