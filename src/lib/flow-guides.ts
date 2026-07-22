@@ -5,7 +5,7 @@
  * Add a new entry here to add a hint to any dashboard page.
  */
 
-export type UserRole = "admin" | "manager" | "staff";
+export type UserRole = "admin" | "manager" | "staff" | "office_admin" | "floor_manager" | "fms";
 
 export interface FlowGuide {
   /** Unique key used for sessionStorage dismissal tracking */
@@ -465,9 +465,9 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       step: 1,
       totalSteps: 2,
       hint: "Move inventory between locations. Both the sending and receiving location see the transfer for confirmation.",
-      ctaLabel: "New Transfer",
+      ctaLabel: "New Request",
       ctaHref: "/procurement/transfers/new",
-      roles: ["admin", "manager"],
+      roles: ["admin", "manager", "office_admin", "floor_manager", "fms"],
     },
   },
   {
@@ -479,7 +479,7 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       totalSteps: 2,
       hint: "Select source and destination locations, then pick items and quantities. The receiving site confirms on arrival.",
       idleMs: 15_000,
-      roles: ["admin", "manager"],
+      roles: ["admin", "manager", "office_admin", "floor_manager", "fms"],
     },
   },
   {

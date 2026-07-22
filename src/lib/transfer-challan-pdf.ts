@@ -180,11 +180,14 @@ export function generateTransferChallanPDF(transfer: StockTransfer): jsPDF {
 
   // ── Items Table ──
   const items = transfer.stock_transfer_items ?? [];
+  // Challan is downloaded pre-dispatch (status = approved), before
+  // quantity_sent is set — print the approved quantity, which is what's
+  // about to ship.
   const tableRows = items.map((item, i) => [
     String(i + 1),
     item.item_name,
     item.unit,
-    String(item.quantity_sent),
+    String(item.quantity_approved ?? item.quantity_requested),
   ]);
 
   const tableHead = [["S.No", "Item Name", "Unit", "Quantity"]];

@@ -2,13 +2,275 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
+import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+
+// Non-HQ roles may only view/act on transfers involving a location they're
+// assigned to (matches the scoping already enforced on the list endpoint).
+export async function canAccessTransfer(
+  supabase: SupabaseClient,
+  userId: string,
+  role: string,
+  fromLocationId: string,
+  toLocationId: string
+): Promise<boolean> {
+  if (CROSS_LOCATION_ROLES.includes(role)) return true;
+  const { data: assignedRows } = await supabase
+    .from("user_locations")
+    .select("location_id")
+    .eq("user_id", userId);
+  const assignedIds = new Set((assignedRows ?? []).map((r: { location_id: string }) => r.location_id));
+  return assignedIds.has(fromLocationId) || assignedIds.has(toLocationId);
+}
+
+// Who to notify that a transfer needs dispatching: prefer people specifically
+// assigned to the source location; if nobody's mapped there yet, fall back to
+// every dispatch-capable role company-wide so the notification never goes nowhere.
+async function resolveDispatchNotifyTargets(
+  supabase: SupabaseClient,
+  fromLocationId: string,
+  excludeUserId: string
+): Promise<string[]> {
+  const { data: assignedRows, error: assignedError } = await supabase
+    .from("user_locations")
+    .select("user_id")
+    .eq("location_id", fromLocationId);
+  if (assignedError) console.error("[transfer notify] user_locations lookup failed:", assignedError.message);
+
+  let ids: string[] = [];
+  const assignedUserIds = (assignedRows ?? []).map((r: { user_id: string }) => r.user_id);
+  if (assignedUserIds.length > 0) {
+    const { data: roleFiltered, error: roleError } = await supabase
+      .from("users")
+      .select("id")
+      .in("id", assignedUserIds)
+      .in("role", CROSS_LOCATION_ROLES);
+    if (roleError) console.error("[transfer notify] role filter lookup failed:", roleError.message);
+    ids = (roleFiltered ?? []).map((r: { id: string }) => r.id);
+  }
+
+  if (ids.length === 0) {
+    const { data: roleWide, error: roleWideError } = await supabase
+      .from("users")
+      .select("id")
+      .in("role", CROSS_LOCATION_ROLES);
+    if (roleWideError) console.error("[transfer notify] role-wide lookup failed:", roleWideError.message);
+    ids = (roleWide ?? []).map((r: { id: string }) => r.id);
+  }
+
+  return Array.from(new Set(ids)).filter((uid) => uid !== excludeUserId);
+}
+
+// Who to notify that a transfer has been dispatched: the original requester
+// plus anyone else assigned to the destination location.
+async function resolveReceiptNotifyTargets(
+  supabase: SupabaseClient,
+  toLocationId: string,
+  initiatedBy: string,
+  excludeUserId: string
+): Promise<string[]> {
+  const { data: assigned } = await supabase
+    .from("user_locations")
+    .select("user_id")
+    .eq("location_id", toLocationId);
+
+  const ids = new Set((assigned ?? []).map((r: { user_id: string }) => r.user_id));
+  ids.add(initiatedBy);
+  ids.delete(excludeUserId);
+  return Array.from(ids);
+}
+
+// Minimum distinct headcount-reading days within the trailing 7-day window
+// before we trust it over the 30-day fallback (avoids a noisy 1-2-reading average).
+const MIN_HEADCOUNT_READING_DAYS = 4;
+// Minimum consumption-log entries within 30 days before a location's own
+// history is considered enough to skip the peer-locations benchmark.
+const MIN_LOCAL_CONSUMPTION_LOGS = 3;
+
+function average(nums: number[]): number | null {
+  if (nums.length === 0) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+// Daily average headcount, trailing-window aware: prefers the 7-day window
+// when it has enough distinct reading-days, otherwise falls back to 30-day.
+function resolveHeadcount(
+  readings: Array<{ recorded_at: string; total_count: number }>,
+  sevenDaysAgo: string
+): { avgHeadcount: number | null; window: "7d" | "30d" | null } {
+  const byDay = new Map<string, number[]>();
+  for (const r of readings) {
+    const day = r.recorded_at.slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day)!.push(Number(r.total_count));
+  }
+  const dailyAverages = Array.from(byDay.entries()).map(([day, vals]) => ({ day, avg: average(vals)! }));
+
+  const sevenDayDailies = dailyAverages.filter((d) => d.day >= sevenDaysAgo.slice(0, 10));
+  if (sevenDayDailies.length >= MIN_HEADCOUNT_READING_DAYS) {
+    return { avgHeadcount: average(sevenDayDailies.map((d) => d.avg)), window: "7d" };
+  }
+  if (dailyAverages.length > 0) {
+    return { avgHeadcount: average(dailyAverages.map((d) => d.avg)), window: "30d" };
+  }
+  return { avgHeadcount: null, window: null };
+}
+
+interface ApprovalIntelligenceItem {
+  item_id: string;
+  consumption_7d: number;
+  consumption_30d: number;
+  headcount: number | null;
+  headcount_window: "7d" | "30d" | null;
+  usage_per_head: number | null;
+  peer_usage_per_head: number | null;
+  used_peer_benchmark: boolean;
+}
+
+// Approval-screen decision support: trailing consumption trend, headcount
+// trend, and the derived usage/head ratio — flagged for the approver, never
+// used to block. Falls back to a cross-location peer benchmark when a
+// location's own history for an item is too thin to trust.
+async function computeApprovalIntelligence(
+  supabase: SupabaseClient,
+  itemIds: string[],
+  toLocationId: string
+): Promise<{ items: ApprovalIntelligenceItem[]; openIssuesCount: number }> {
+  if (itemIds.length === 0) return { items: [], openIssuesCount: 0 };
+
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: localLogItems } = await supabase
+    .from("consumption_log_items")
+    .select("item_id, quantity_consumed, consumption_logs!inner(logged_at, location_id, status)")
+    .in("item_id", itemIds)
+    .eq("consumption_logs.location_id", toLocationId)
+    .eq("consumption_logs.status", "active")
+    .gte("consumption_logs.logged_at", thirtyDaysAgo);
+
+  const { data: headcountReadings } = await supabase
+    .from("space_headcounts")
+    .select("recorded_at, total_count")
+    .eq("location_id", toLocationId)
+    .gte("recorded_at", thirtyDaysAgo);
+
+  const { avgHeadcount, window: headcountWindow } = resolveHeadcount(headcountReadings ?? [], sevenDaysAgo);
+
+  type LogItemRow = { item_id: string | null; quantity_consumed: number; consumption_logs: { logged_at: string } };
+  const rows = (localLogItems ?? []) as unknown as LogItemRow[];
+
+  const items: ApprovalIntelligenceItem[] = [];
+  for (const itemId of itemIds) {
+    const itemRows = rows.filter((r) => r.item_id === itemId);
+    const consumption7d = itemRows
+      .filter((r) => r.consumption_logs.logged_at >= sevenDaysAgo)
+      .reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
+    const consumption30d = itemRows.reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
+
+    const trendConsumption = headcountWindow === "30d" ? consumption30d : consumption7d;
+    const usagePerHead = avgHeadcount && avgHeadcount > 0 ? trendConsumption / avgHeadcount : null;
+
+    let peerUsagePerHead: number | null = null;
+    const usedPeerBenchmark = itemRows.length < MIN_LOCAL_CONSUMPTION_LOGS;
+    if (usedPeerBenchmark) {
+      const { data: peerLogItems } = await supabase
+        .from("consumption_log_items")
+        .select("quantity_consumed, consumption_logs!inner(location_id, logged_at, status)")
+        .eq("item_id", itemId)
+        .neq("consumption_logs.location_id", toLocationId)
+        .eq("consumption_logs.status", "active")
+        .gte("consumption_logs.logged_at", thirtyDaysAgo);
+
+      type PeerRow = { quantity_consumed: number; consumption_logs: { location_id: string } };
+      const peerRows = (peerLogItems ?? []) as unknown as PeerRow[];
+      const byLocation = new Map<string, number>();
+      for (const r of peerRows) {
+        byLocation.set(r.consumption_logs.location_id, (byLocation.get(r.consumption_logs.location_id) ?? 0) + Number(r.quantity_consumed));
+      }
+      const peerLocationIds = Array.from(byLocation.keys());
+      if (peerLocationIds.length > 0) {
+        const { data: peerHeadcounts } = await supabase
+          .from("space_headcounts")
+          .select("location_id, total_count")
+          .in("location_id", peerLocationIds)
+          .gte("recorded_at", thirtyDaysAgo);
+        const headcountByLocation = new Map<string, number[]>();
+        for (const h of peerHeadcounts ?? []) {
+          if (!headcountByLocation.has(h.location_id)) headcountByLocation.set(h.location_id, []);
+          headcountByLocation.get(h.location_id)!.push(Number(h.total_count));
+        }
+        const ratios: number[] = [];
+        for (const locId of peerLocationIds) {
+          const avgHc = average(headcountByLocation.get(locId) ?? []);
+          const consumed = byLocation.get(locId) ?? 0;
+          if (avgHc && avgHc > 0) ratios.push(consumed / avgHc);
+        }
+        peerUsagePerHead = average(ratios);
+      }
+    }
+
+    items.push({
+      item_id: itemId,
+      consumption_7d: consumption7d,
+      consumption_30d: consumption30d,
+      headcount: avgHeadcount,
+      headcount_window: headcountWindow,
+      usage_per_head: usagePerHead,
+      peer_usage_per_head: peerUsagePerHead,
+      used_peer_benchmark: usedPeerBenchmark,
+    });
+  }
+
+  // Open (unresolved) issues from past transfers into this location — a
+  // trust signal about the location, surfaced alongside the item data.
+  const { data: pastTransfers } = await supabase
+    .from("stock_transfers")
+    .select("id")
+    .eq("to_location_id", toLocationId);
+  const pastTransferIds = (pastTransfers ?? []).map((t: { id: string }) => t.id);
+
+  let openIssuesCount = 0;
+  if (pastTransferIds.length > 0) {
+    const { count } = await supabase
+      .from("stock_transfer_issues")
+      .select("*", { count: "exact", head: true })
+      .in("transfer_id", pastTransferIds)
+      .neq("status", "resolved");
+    openIssuesCount = count ?? 0;
+  }
+
+  return { items, openIssuesCount };
+}
 
 const patchTransferSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
-  z.object({ action: z.literal("approve") }),
+  z.object({
+    action: z.literal("approve_line"),
+    transfer_item_id: z.string().uuid(),
+    quantity_approved: z.number().min(0),
+  }),
+  z.object({
+    action: z.literal("approve"),
+    notes: z.string().optional(),
+  }),
   z.object({ action: z.literal("reject"), notes: z.string().min(1, "Rejection notes are required") }),
-  z.object({ action: z.literal("dispatch") }),
+  z.object({
+    action: z.literal("dispatch"),
+    notes: z.string().optional(),
+    items: z
+      .array(
+        z.object({
+          transfer_item_id: z.string().uuid(),
+          quantity_sent: z.number().min(0),
+        })
+      )
+      .optional(),
+  }),
   z.object({
     action: z.literal("receive"),
     items: z
@@ -57,12 +319,16 @@ export async function GET(
   const { data: transfer, error } = await supabase
     .from("stock_transfers")
     .select(
-      `*, stock_transfer_items(*, procurement_items(id, name)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
+      `*, stock_transfer_items(*, procurement_items(id, name)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), stock_transfer_attachments(*, uploader:users!stock_transfer_attachments_uploaded_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
     )
     .eq("id", id)
     .single();
 
   if (error || !transfer) return NextResponse.json({ error: "Transfer not found" }, { status: 404 });
+
+  if (!(await canAccessTransfer(supabase, dbUser.id, dbUser.role, transfer.from_location_id, transfer.to_location_id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   // Fetch stock levels for transfer items at both locations
   const itemIds = (transfer.stock_transfer_items as Array<{ item_id: string | null }>)
@@ -79,6 +345,8 @@ export async function GET(
     stockLevels = levels ?? [];
   }
 
+  const approvalIntelligence = await computeApprovalIntelligence(supabase, itemIds, transfer.to_location_id);
+
   // Audit trail — full who/what/when for this transfer. Read with the admin
   // client so it's visible to anyone allowed to view the transfer (the
   // audit_trail table is otherwise admin-only via RLS).
@@ -92,7 +360,13 @@ export async function GET(
     .eq("entity_id", id)
     .order("created_at", { ascending: true });
 
-  return NextResponse.json({ data: transfer, stock_levels: stockLevels, audit_trail: auditTrail ?? [] });
+  return NextResponse.json({
+    data: transfer,
+    stock_levels: stockLevels,
+    audit_trail: auditTrail ?? [],
+    approval_intelligence: approvalIntelligence.items,
+    open_issues_count: approvalIntelligence.openIssuesCount,
+  });
 }
 
 export async function PATCH(
@@ -109,11 +383,17 @@ export async function PATCH(
 
   const { data: transfer, error: fetchError } = await supabase
     .from("stock_transfers")
-    .select("*, stock_transfer_items(*)")
+    .select(
+      "*, stock_transfer_items(*), from_location:locations!stock_transfers_from_location_id_fkey(id, name), to_location:locations!stock_transfers_to_location_id_fkey(id, name)"
+    )
     .eq("id", id)
     .single();
 
   if (fetchError || !transfer) return NextResponse.json({ error: "Transfer not found" }, { status: 404 });
+
+  if (!(await canAccessTransfer(supabase, dbUser.id, dbUser.role, transfer.from_location_id, transfer.to_location_id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await request.json();
   const parsed = patchTransferSchema.safeParse(body);
@@ -126,11 +406,60 @@ export async function PATCH(
     id: string;
     item_id: string | null;
     item_name: string;
+    quantity_requested: number;
+    quantity_approved: number | null;
     quantity_sent: number;
     quantity_received: number;
+    approval_confirmed_at: string | null;
   }>;
 
   switch (action) {
+    // ── APPROVE LINE ─────────────────────────────────────────────────────────
+    // Saves a single item's approval decision immediately, independent of the
+    // transfer-level approve action — lets an approver work through a long
+    // transfer item by item, closing and reopening across sessions.
+    case "approve_line": {
+      if (transfer.status !== "pending_approval") {
+        return NextResponse.json({ error: "Only pending_approval transfers can have lines approved" }, { status: 422 });
+      }
+      if (!["admin", "manager"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only admins and managers can approve transfer lines" }, { status: 403 });
+      }
+
+      const { transfer_item_id, quantity_approved } = parsed.data;
+      const item = transferItems.find((ti) => ti.id === transfer_item_id);
+      if (!item) {
+        return NextResponse.json({ error: "Transfer item not found" }, { status: 404 });
+      }
+      if (quantity_approved > item.quantity_requested) {
+        return NextResponse.json({
+          error: `"${item.item_name}": approved quantity (${quantity_approved}) cannot exceed requested (${item.quantity_requested})`,
+        }, { status: 422 });
+      }
+
+      const { error: itemUpdateError } = await supabase
+        .from("stock_transfer_items")
+        .update({
+          quantity_approved,
+          approval_confirmed_at: new Date().toISOString(),
+          approval_confirmed_by: dbUser.id,
+        })
+        .eq("id", item.id);
+      if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
+
+      await logAudit(supabase, {
+        entityType: "stock_transfer",
+        entityId: id,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: {
+          line_approved: { old: null, new: { item: item.item_name, qty: quantity_approved } },
+        },
+      });
+
+      return NextResponse.json({ data: { id: item.id, quantity_approved } });
+    }
+
     // ── SUBMIT ──────────────────────────────────────────────────────────────
     case "submit": {
       if (transfer.status !== "draft") {
@@ -164,23 +493,22 @@ export async function PATCH(
         return NextResponse.json({ error: "Only admins and managers can approve transfers" }, { status: 403 });
       }
 
-      // Validate stock availability at from_location
-      for (const item of transferItems) {
-        if (!item.item_id) continue;
-        const { data: stock } = await supabase
-          .from("location_stock")
-          .select("quantity_on_hand")
-          .eq("location_id", transfer.from_location_id)
-          .eq("item_id", item.item_id)
-          .single();
-
-        const onHand = stock?.quantity_on_hand ?? 0;
-        if (item.quantity_sent > Number(onHand)) {
-          return NextResponse.json({
-            error: `"${item.item_name}": quantity to send (${item.quantity_sent}) exceeds available stock (${onHand}) at source location`,
-          }, { status: 422 });
-        }
+      // Every line must already carry an explicit approve_line decision —
+      // half-reviewed transfers don't silently default to "approve as
+      // requested" for whatever's left untouched.
+      const unconfirmed = transferItems.filter((item) => !item.approval_confirmed_at);
+      if (unconfirmed.length > 0) {
+        return NextResponse.json({
+          error: `${unconfirmed.length} item${unconfirmed.length === 1 ? "" : "s"} still need a decision before this transfer can be approved: ${unconfirmed.map((i) => i.item_name).join(", ")}`,
+        }, { status: 422 });
       }
+
+      // Shortfall is final, not a block — no stock check here; that happens
+      // at dispatch, where the issuer confirms what's actually physically sent.
+      const resolvedApprovals = transferItems.map((item) => ({
+        item,
+        approvedQty: item.quantity_approved ?? item.quantity_requested,
+      }));
 
       const { count: transferApprovalCount } = await supabase
         .from("stock_transfers")
@@ -195,6 +523,7 @@ export async function PATCH(
           approved_by: dbUser.id,
           approved_at: new Date().toISOString(),
           approval_code: transferApprovalCode,
+          approver_notes: parsed.data.notes?.trim() || null,
         })
         .eq("id", id);
 
@@ -205,8 +534,31 @@ export async function PATCH(
         entityId: id,
         action: "update",
         performedBy: dbUser.id,
-        changes: { status: { old: "pending_approval", new: "approved" } },
+        changes: {
+          status: { old: "pending_approval", new: "approved" },
+          approver_notes: { old: null, new: parsed.data.notes ?? null },
+          quantities_approved: {
+            old: null,
+            new: resolvedApprovals.map((r) => ({ item: r.item.item_name, qty: r.approvedQty })),
+          },
+        },
       });
+
+      // Tell whoever handles dispatch at the source that this is ready.
+      // Never blocks or fails the approval itself.
+      try {
+        const targets = await resolveDispatchNotifyTargets(supabase, transfer.from_location_id, dbUser.id);
+        await createNotificationsForUsers(targets, {
+          type: "transfer_approved",
+          title: `Transfer ${transfer.transfer_number} approved — ready to dispatch`,
+          body: `${transfer.from_location?.name ?? "Source"} → ${transfer.to_location?.name ?? "destination"}. Approved by ${dbUser.role}.`,
+          url: `/procurement/transfers/${id}`,
+          entityType: "stock_transfer",
+          entityId: id,
+        });
+      } catch (err) {
+        console.error("[transfer notify] approve targets failed:", err);
+      }
 
       return NextResponse.json({ data: { id, status: "approved" } });
     }
@@ -219,7 +571,7 @@ export async function PATCH(
 
       const { error: updateError } = await supabase
         .from("stock_transfers")
-        .update({ status: "draft", notes: parsed.data.notes })
+        .update({ status: "draft", approver_notes: parsed.data.notes })
         .eq("id", id);
 
       if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
@@ -247,13 +599,38 @@ export async function PATCH(
         return NextResponse.json({ error: "Insufficient permissions to dispatch" }, { status: 403 });
       }
 
-      // Deduct stock from source location
-      for (const item of transferItems) {
+      // Issuer can send less than approved per line (shortfall is final, not
+      // a block) — whatever's actually on the shelf right now is what ships.
+      const dispatchOverrides = new Map(
+        (parsed.data.items ?? []).map((i) => [i.transfer_item_id, i.quantity_sent])
+      );
+      const resolvedDispatch = transferItems.map((item) => {
+        const approvedQty = item.quantity_approved ?? item.quantity_requested;
+        const sentQty = dispatchOverrides.has(item.id) ? dispatchOverrides.get(item.id)! : approvedQty;
+        return { item, approvedQty, sentQty };
+      });
+
+      for (const { item, approvedQty, sentQty } of resolvedDispatch) {
+        if (sentQty > approvedQty) {
+          return NextResponse.json({
+            error: `"${item.item_name}": quantity sent (${sentQty}) cannot exceed approved (${approvedQty})`,
+          }, { status: 422 });
+        }
+      }
+
+      // Deduct stock from source location and record the actual sent quantity
+      for (const { item, sentQty } of resolvedDispatch) {
+        const { error: itemUpdateError } = await supabase
+          .from("stock_transfer_items")
+          .update({ quantity_sent: sentQty })
+          .eq("id", item.id);
+        if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
+
         if (!item.item_id) continue;
         const { error: rpcError } = await supabase.rpc("upsert_location_stock", {
           p_location_id: transfer.from_location_id,
           p_item_id: item.item_id,
-          p_quantity_delta: -item.quantity_sent,
+          p_quantity_delta: -sentQty,
         });
         if (rpcError) {
           return NextResponse.json({ error: `Failed to deduct stock for "${item.item_name}": ${rpcError.message}` }, { status: 500 });
@@ -272,8 +649,31 @@ export async function PATCH(
         entityId: id,
         action: "update",
         performedBy: dbUser.id,
-        changes: { status: { old: "approved", new: "dispatched" } },
+        changes: {
+          status: { old: "approved", new: "dispatched" },
+          dispatch_notes: { old: null, new: parsed.data.notes ?? null },
+          quantities_sent: {
+            old: null,
+            new: resolvedDispatch.map((r) => ({ item: r.item.item_name, qty: r.sentQty })),
+          },
+        },
       });
+
+      // Tell the requester (and anyone else assigned to the destination) it's
+      // on the way. Never blocks or fails the dispatch itself.
+      try {
+        const targets = await resolveReceiptNotifyTargets(supabase, transfer.to_location_id, transfer.initiated_by, dbUser.id);
+        await createNotificationsForUsers(targets, {
+          type: "transfer_dispatched",
+          title: `Transfer ${transfer.transfer_number} dispatched — confirm receipt`,
+          body: `${transfer.from_location?.name ?? "Source"} → ${transfer.to_location?.name ?? "destination"}. Dispatched by ${dbUser.role}.`,
+          url: `/procurement/transfers/${id}`,
+          entityType: "stock_transfer",
+          entityId: id,
+        });
+      } catch (err) {
+        console.error("[transfer notify] dispatch targets failed:", err);
+      }
 
       return NextResponse.json({ data: { id, status: "dispatched" } });
     }
@@ -408,7 +808,10 @@ export async function PATCH(
         status: "open",
       }));
 
-      const { error: issueError } = await supabase.from("stock_transfer_issues").insert(issues);
+      const { data: insertedIssues, error: issueError } = await supabase
+        .from("stock_transfer_issues")
+        .insert(issues)
+        .select("id, transfer_item_id");
       if (issueError) return NextResponse.json({ error: issueError.message }, { status: 500 });
 
       const { error: updateError } = await supabase
@@ -429,7 +832,7 @@ export async function PATCH(
         },
       });
 
-      return NextResponse.json({ data: { id, status: "issue_raised" } });
+      return NextResponse.json({ data: { id, status: "issue_raised", issues: insertedIssues ?? [] } });
     }
 
     // ── RESOLVE ISSUE ───────────────────────────────────────────────────────
