@@ -26,6 +26,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { logAudit } from "@/lib/audit";
+import { computePhaseBoundaries, daysBetweenInclusiveYmd, addDaysToYmd, formatDateRange, type PhaseBoundary } from "@/lib/rate-phase-dates";
 
 export interface GenerateOptions {
   /** Target month (1-12). Defaults to current month in IST. */
@@ -176,7 +177,7 @@ async function fetchLocationNamesByContract(
   return map;
 }
 
-type RatePhaseDetail = { phase_order: number; duration_months: number; monthly_rate: number };
+export type RatePhaseDetail = { phase_order: number; duration_months: number; monthly_rate: number; end_date: string | null };
 
 /** contract_id → its tiered rate_phases (any order), for a set of contracts. */
 async function fetchRatePhasesByContract(
@@ -188,48 +189,137 @@ async function fetchRatePhasesByContract(
 
   const { data } = await supabase
     .from("contract_rate_phases")
-    .select("contract_id, phase_order, duration_months, monthly_rate")
+    .select("contract_id, phase_order, duration_months, monthly_rate, end_date")
     .in("contract_id", contractIds);
 
   for (const row of (data ?? []) as Array<RatePhaseDetail & { contract_id: string }>) {
     const list = map.get(row.contract_id) ?? [];
-    list.push({ phase_order: row.phase_order, duration_months: row.duration_months, monthly_rate: row.monthly_rate });
+    list.push({ phase_order: row.phase_order, duration_months: row.duration_months, monthly_rate: row.monthly_rate, end_date: row.end_date ?? null });
     map.set(row.contract_id, list);
   }
   return map;
 }
 
+// ── Day-precise rate-phase boundaries ──────────────────────────────────────
+// computePhaseBoundaries etc. live in rate-phase-dates.ts (a dependency-free
+// module also imported by the client-side phase editor and both PDF
+// generators) so every consumer computes phase dates identically.
+
+interface RateSegment { start: string; end: string; days: number; rate: number }
+
 /**
- * Resolves the monthly rent that applies for a given prepaid month, honouring
- * any tiered rate_phases anchored at phaseStartDate (falls back to the
- * contract's own start_date when phase_start_date isn't set — e.g. renewal
- * contracts, which anchor their own fresh phase clock). Returns flatAmount
- * unchanged when the contract has no phases configured. Once the configured
- * phases are exhausted, the last phase's rate continues flat — matches the
- * "After month N: flat at X/mo until renewed" copy shown in the rate-phase
- * editor.
+ * Clips phase boundaries against [periodStart, periodEnd] (typically one
+ * calendar month, already narrowed to the contract's own billable window),
+ * returning one segment per phase that overlaps — 2+ segments when a phase
+ * transition falls inside the period. Falls back to a single flatAmount
+ * segment when no phases are configured. Periods extending past the last
+ * configured phase get a flat-continuation segment at the last phase's rate.
  */
-function resolveMonthlyRate(
+function getRateSegmentsForPeriod(
+  boundaries: PhaseBoundary[],
+  flatAmount: number,
+  periodStart: string,
+  periodEnd: string
+): RateSegment[] {
+  if (boundaries.length === 0) {
+    return [{ start: periodStart, end: periodEnd, days: daysBetweenInclusiveYmd(periodStart, periodEnd), rate: flatAmount }];
+  }
+
+  const segments: RateSegment[] = [];
+  for (const b of boundaries) {
+    const segStart = b.start > periodStart ? b.start : periodStart;
+    const segEnd = b.end < periodEnd ? b.end : periodEnd;
+    if (segStart <= segEnd) {
+      segments.push({ start: segStart, end: segEnd, days: daysBetweenInclusiveYmd(segStart, segEnd), rate: b.rate });
+    }
+  }
+
+  // Period extends past the last configured phase — continue flat at its rate.
+  const last = boundaries[boundaries.length - 1];
+  if (periodEnd > last.end) {
+    const contStart = periodStart > addDaysToYmd(last.end, 1) ? periodStart : addDaysToYmd(last.end, 1);
+    if (contStart <= periodEnd) {
+      segments.push({ start: contStart, end: periodEnd, days: daysBetweenInclusiveYmd(contStart, periodEnd), rate: last.rate });
+    }
+  }
+
+  // Period starts before the first configured phase — shouldn't normally
+  // happen (phase_start_date should anchor at/before any billed period), but
+  // guard with the flat rate rather than silently dropping days.
+  const first = boundaries[0];
+  if (periodStart < first.start) {
+    const preEnd = periodEnd < addDaysToYmd(first.start, -1) ? periodEnd : addDaysToYmd(first.start, -1);
+    if (periodStart <= preEnd) {
+      segments.unshift({ start: periodStart, end: preEnd, days: daysBetweenInclusiveYmd(periodStart, preEnd), rate: flatAmount });
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * Full pipeline: phases + anchor → boundaries → segments clipped to the
+ * billable window → each segment's prorated amount (rate/daysInMonth×days,
+ * or the flat rate unrounded when a lone segment spans the whole month).
+ */
+function computeRentSegments(
   flatAmount: number,
   phaseAnchorDate: string | null | undefined,
   phases: RatePhaseDetail[] | null | undefined,
-  prepaidMonth: number,
-  prepaidYear: number
-): number {
-  if (!phases || phases.length === 0 || !phaseAnchorDate) return flatAmount;
+  billStartYmd: string,
+  billEndYmd: string,
+  prepaidDaysInMonth: number
+): (RateSegment & { amount: number })[] {
+  const boundaries = (phases && phases.length > 0 && phaseAnchorDate)
+    ? computePhaseBoundaries(phaseAnchorDate, phases)
+    : [];
+  const rawSegments = getRateSegmentsForPeriod(boundaries, flatAmount, billStartYmd, billEndYmd);
+  return rawSegments.map((seg) => ({
+    ...seg,
+    amount: seg.days >= prepaidDaysInMonth
+      ? Math.round(seg.rate)
+      : Math.round((seg.rate / prepaidDaysInMonth) * seg.days),
+  }));
+}
 
-  const [anchorYear, anchorMonth] = phaseAnchorDate.split("-").map(Number);
-  // 1-indexed: the month containing phaseAnchorDate is month 1.
-  const monthIndex = (prepaidYear - anchorYear) * 12 + (prepaidMonth - anchorMonth) + 1;
-  if (monthIndex < 1) return flatAmount; // prepaid month precedes the phase clock — shouldn't happen
+/**
+ * Builds rent line items across one or more rate segments (2+ only when a
+ * phase transition splits the month). Reuses buildRentLineItems per segment
+ * so multi-room space-allocation splitting still applies within each segment.
+ * monthly_rate/days_used/days_in_month are only persisted when something was
+ * actually prorated (a split month, or the existing contract-boundary case) —
+ * an untouched full month stays a plain line item, unchanged from before.
+ */
+function buildSegmentedRentLineItems(
+  segments: (RateSegment & { amount: number })[],
+  fallbackSeats: number,
+  allocations: SpaceAllocationDetail[],
+  contractLocationName: string | null,
+  billedMonthLabel: string,
+  prepaidDaysInMonth: number
+): { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] {
+  const multi = segments.length > 1;
+  const anyProration = multi || (segments.length === 1 && segments[0].days < prepaidDaysInMonth);
 
-  const sorted = [...phases].sort((a, b) => a.phase_order - b.phase_order);
-  let cursor = 0;
-  for (const phase of sorted) {
-    cursor += phase.duration_months;
-    if (monthIndex <= cursor) return Number(phase.monthly_rate);
+  const out: { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] = [];
+  for (const seg of segments) {
+    const label = multi ? formatDateRange(seg.start, seg.end) : billedMonthLabel;
+    const rawItems = buildRentLineItems(seg.amount, fallbackSeats, allocations, contractLocationName, label);
+    for (const it of rawItems) {
+      out.push({
+        description: it.description,
+        qty: it.seats,
+        unit_price: it.seats ? it.amount / it.seats : it.amount,
+        amount: it.amount,
+        ...(anyProration ? {
+          monthly_rate: it.seats ? seg.rate / it.seats : seg.rate,
+          days_used: seg.days,
+          days_in_month: prepaidDaysInMonth,
+        } : {}),
+      });
+    }
   }
-  return Number(sorted[sorted.length - 1].monthly_rate); // past all phases — flat continuation
+  return out;
 }
 
 /**
@@ -586,62 +676,41 @@ export async function generateMonthlyStatements(
       );
 
       const flatAmount = Number(contract.subtotal || contract.total_amount);
-      const baseAmount = resolveMonthlyRate(
-        flatAmount,
-        (contract.phase_start_date as string | null) || (contract.start_date as string | null),
-        ratePhasesByContract.get(cid) ?? null,
-        prepaid.month,
-        prepaid.year
-      );
-      let prepaidRentAmount: number;
-      // set when prorated — persisted on the line item so the PDF can show the calculation
-      let rentBillableDays: number | null = null;
+      const phaseAnchorYmd = (contract.phase_start_date as string | null) || (contract.start_date as string | null);
+      let prepaidRentAmount = 0;
+      let rentSegments: ReturnType<typeof computeRentSegments> = [];
 
-      if (contractEnd < prepaidFirstOfMonth) {
-        // Contract ends before next month — no prepaid rent
-        prepaidRentAmount = 0;
-      } else {
+      if (contractEnd >= prepaidFirstOfMonth) {
         // Prorate if contract ends mid-month in the prepaid month
         const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
         const billableStart = contractStart > prepaidFirstOfMonth ? contractStart : prepaidFirstOfMonth;
         const billableEnd = contractEnd < prepaidLastOfMonth ? contractEnd : prepaidLastOfMonth;
-        const billableDays = Math.floor((billableEnd.getTime() - billableStart.getTime()) / 86400000) + 1;
-
-        if (billableDays >= prepaidDaysInMonth) {
-          prepaidRentAmount = baseAmount;
-        } else {
-          prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
-          rentBillableDays = billableDays;
-        }
+        rentSegments = computeRentSegments(
+          flatAmount,
+          phaseAnchorYmd,
+          ratePhasesByContract.get(cid) ?? null,
+          billableStart.toISOString().slice(0, 10),
+          billableEnd.toISOString().slice(0, 10),
+          prepaidDaysInMonth
+        );
+        prepaidRentAmount = rentSegments.reduce((s, seg) => s + seg.amount, 0);
       }
 
       const prepaidSeatQty = Number(contract.seats) || 1;
       const prepaidRentItems = prepaidRentAmount > 0
-        ? buildRentLineItems(
-            prepaidRentAmount,
+        ? buildSegmentedRentLineItems(
+            rentSegments,
             prepaidSeatQty,
             spaceAllocationsByContract.get(contract.id as string) ?? [],
             locationNamesByContract.get(contract.id as string) ?? null,
-            monthLabelShort(prepaid.month, prepaid.year)
+            monthLabelShort(prepaid.month, prepaid.year),
+            prepaidDaysInMonth
           )
         : [];
       const prepaidSection: LineItemSection = {
         type: "prepaid_rent",
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
-        items: prepaidRentItems.map((it) => ({
-          description: it.description,
-          qty: it.seats,
-          unit_price: it.seats ? it.amount / it.seats : it.amount,
-          amount: it.amount,
-          // Persisted (not recomputed at display time) so the PDF breakdown always
-          // reflects the rate actually charged, even if the contract's rate later
-          // changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
-          ...(rentBillableDays !== null ? {
-            monthly_rate: baseAmount / prepaidSeatQty,
-            days_used: rentBillableDays,
-            days_in_month: prepaidDaysInMonth,
-          } : {}),
-        })),
+        items: prepaidRentItems,
         subtotal: prepaidRentAmount,
       };
 
@@ -1035,32 +1104,26 @@ export async function generateRentProformas(
 
       // ── 3. Proration ────────────────────────────────────────────────────
       const flatAmount    = Number(contract.subtotal || contract.total_amount);
-      const baseAmount    = resolveMonthlyRate(
-        flatAmount,
-        (contract.phase_start_date as string | null) || (contract.start_date as string | null),
-        ratePhasesByContract.get(cid) ?? null,
-        prepaid.month,
-        prepaid.year
-      );
+      const phaseAnchorYmd = (contract.phase_start_date as string | null) || (contract.start_date as string | null);
       const contractEnd   = new Date(String(contract.end_date) + "T00:00:00Z");
       const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
       const pFirst        = new Date(prepaidFirstOfMonth + "T00:00:00Z");
       const pLast         = new Date(prepaidLastOfMonth  + "T00:00:00Z");
 
-      let prepaidRentAmount: number;
-      let rentBillableDays: number | null = null; // set when prorated — persisted on the line item for PDF display
-      if (contractEnd < pFirst) {
-        prepaidRentAmount = 0; // contract ends before next month — nothing to bill
-      } else {
+      let prepaidRentAmount = 0;
+      let rentSegments: ReturnType<typeof computeRentSegments> = [];
+      if (contractEnd >= pFirst) {
         const billStart   = contractStart > pFirst ? contractStart : pFirst;
         const billEnd     = contractEnd   < pLast  ? contractEnd   : pLast;
-        const billableDays = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
-        if (billableDays >= prepaidDaysInMonth) {
-          prepaidRentAmount = baseAmount;
-        } else {
-          prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
-          rentBillableDays = billableDays;
-        }
+        rentSegments = computeRentSegments(
+          flatAmount,
+          phaseAnchorYmd,
+          ratePhasesByContract.get(cid) ?? null,
+          billStart.toISOString().slice(0, 10),
+          billEnd.toISOString().slice(0, 10),
+          prepaidDaysInMonth
+        );
+        prepaidRentAmount = rentSegments.reduce((s, seg) => s + seg.amount, 0);
       }
 
       if (prepaidRentAmount <= 0) {
@@ -1104,30 +1167,28 @@ export async function generateRentProformas(
       const totalPrepaidSubtotal = prepaidRentAmount + addonsSubtotal;
       const { cgst: combinedCgst, sgst: combinedSgst, taxAmount: combinedTax, totalAmount: combinedTotal } = computeGstAndRounding(totalPrepaidSubtotal, taxPercentage);
 
+      const isSplitMonth = rentSegments.length > 1;
+      const isProratedOrSplit = isSplitMonth || (rentSegments[0] && rentSegments[0].days < prepaidDaysInMonth);
+
       // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
         const previewSeatQty = Number(contract.seats) || 1;
-        const previewRentItems = buildRentLineItems(
-          prepaidRentAmount,
+        const previewRentItems = buildSegmentedRentLineItems(
+          rentSegments,
           previewSeatQty,
           spaceAllocationsByContract.get(cid) ?? [],
           locationNamesByContract.get(cid) ?? null,
-          monthLabelShort(prepaid.month, prepaid.year)
+          monthLabelShort(prepaid.month, prepaid.year),
+          prepaidDaysInMonth
         );
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
           monthly_rate?: number; days_used?: number; days_in_month?: number;
         }[] = [
-          ...previewRentItems.map((it) => ({
-            description: it.description,
-            amount: it.amount,
-            qty: it.seats,
-            unit_price: it.seats ? it.amount / it.seats : it.amount,
-            ...(prepaidRentAmount < baseAmount ? { note: `Pro-rated (contract ends mid-month)` } : {}),
-          })),
+          ...previewRentItems.map((it) => ({ ...it })),
           ...addonLineItems,
         ];
         result.preview.push({
@@ -1141,9 +1202,11 @@ export async function generateRentProformas(
           sgst_amount: combinedSgst,
           total_amount: combinedTotal,
           line_items: previewLineItems,
-          note: prepaidRentAmount < baseAmount
-            ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
-            : `Full month · CGST+SGST${addonNote}`,
+          note: isSplitMonth
+            ? `Split across ${rentSegments.length} rate phases · CGST+SGST${addonNote}`
+            : isProratedOrSplit
+              ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
+              : `Full month · CGST+SGST${addonNote}`,
           supersedes: toSupersede?.statement_number,
         });
         result.generated++;
@@ -1176,33 +1239,21 @@ export async function generateRentProformas(
       }
 
       const liveSeatQty = Number(contract.seats) || 1;
-      const liveRentItems = buildRentLineItems(
-        prepaidRentAmount,
+      // Persisted per-item (not recomputed at display time) so the PDF breakdown
+      // always reflects the rate actually charged, even if the contract's rate
+      // later changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
+      const liveRentItems = buildSegmentedRentLineItems(
+        rentSegments,
         liveSeatQty,
         spaceAllocationsByContract.get(cid) ?? [],
         locationNamesByContract.get(cid) ?? null,
-        monthLabelShort(prepaid.month, prepaid.year)
+        monthLabelShort(prepaid.month, prepaid.year),
+        prepaidDaysInMonth
       );
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
-        items: [
-          ...liveRentItems.map((it) => ({
-            description: it.description,
-            qty: it.seats,
-            unit_price: it.seats ? it.amount / it.seats : it.amount,
-            amount: it.amount,
-            // Persisted (not recomputed at display time) so the PDF breakdown always
-            // reflects the rate actually charged, even if the contract's rate later
-            // changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
-            ...(rentBillableDays !== null ? {
-              monthly_rate: baseAmount / liveSeatQty,
-              days_used: rentBillableDays,
-              days_in_month: prepaidDaysInMonth,
-            } : {}),
-          })),
-          ...addonLineItems,
-        ],
+        items: [...liveRentItems, ...addonLineItems],
         subtotal: totalPrepaidSubtotal,
       }];
 
