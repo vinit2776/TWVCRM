@@ -15,6 +15,9 @@ import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STOCK_DEPARTMENTS } from "@/lib/constants";
@@ -93,6 +96,14 @@ export default function NewTransferPage() {
       );
     });
   }, [isBranchRequester]);
+
+  // Anyone outside the floor in-charge team (floor_manager/fms) gets a
+  // dismissible heads-up before using this form — it's meant for the branch's
+  // own team, but nothing blocks someone else from filing on their behalf.
+  const [showNonFloorWarning, setShowNonFloorWarning] = useState(false);
+  useEffect(() => {
+    if (!userLoading && !isBranchRequester) setShowNonFloorWarning(true);
+  }, [userLoading, isBranchRequester]);
 
   // Once locations load, branch requesters get from_location locked to the
   // issuing source and to_location auto-set if they're only assigned one place.
@@ -274,6 +285,25 @@ export default function NewTransferPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      {/* ── Non floor in-charge heads-up ── */}
+      <Dialog open={showNonFloorWarning} onOpenChange={setShowNonFloorWarning}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Heads up
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The request should be done by the location Floor in-charge team. Use this only if they are unable to submit the request.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => router.push("/procurement/transfers")}>Go back</Button>
+            <Button onClick={() => setShowNonFloorWarning(false)}>Continue anyway</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Header ── */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => router.push("/procurement/transfers")}>

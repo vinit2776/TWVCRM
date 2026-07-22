@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ChevronLeft, Loader2, ArrowRight, MapPin, User, Calendar,
   FileText, Download, CheckCircle2, XCircle, Truck, PackageCheck,
-  AlertTriangle, BarChart3,
+  AlertTriangle, BarChart3, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,7 @@ interface ApprovalIntelligenceItem {
   consumption_30d: number;
   headcount: number | null;
   usage_per_head: number | null;
+  usage_per_head_prev_month: number | null;
   peer_usage_per_head: number | null;
   used_peer_benchmark: boolean;
 }
@@ -575,6 +576,20 @@ export default function TransferDetailPage() {
                     const usagePerHead = intel?.used_peer_benchmark
                       ? intel?.peer_usage_per_head ?? null
                       : intel?.usage_per_head ?? null;
+                    // Trend vs the prior 30-day period — only available when the
+                    // current figure is the location's own (not peer-benchmarked),
+                    // since a peer average has no local "last month" to compare.
+                    const prevUsagePerHead = intel?.used_peer_benchmark ? null : intel?.usage_per_head_prev_month ?? null;
+                    let usageTrend: "up" | "down" | null = null;
+                    if (usagePerHead !== null && prevUsagePerHead !== null) {
+                      if (prevUsagePerHead === 0) {
+                        if (usagePerHead > 0) usageTrend = "up";
+                      } else {
+                        const pctChange = (usagePerHead - prevUsagePerHead) / prevUsagePerHead;
+                        if (pctChange >= 0.15) usageTrend = "up";
+                        else if (pctChange <= -0.15) usageTrend = "down";
+                      }
+                    }
                     const impliedExpected = usagePerHead !== null && intel?.headcount ? usagePerHead * intel.headcount : null;
                     const isAnomaly = impliedExpected !== null && impliedExpected > 0 && item.quantity_requested > impliedExpected * 2;
                     return (
@@ -626,7 +641,19 @@ export default function TransferDetailPage() {
                         <td className="px-3 py-2 text-right text-muted-foreground">
                           {usagePerHead !== null ? (
                             <>
-                              {usagePerHead.toFixed(2)}
+                              <span className="inline-flex items-center gap-1 justify-end">
+                                {usagePerHead.toFixed(2)}
+                                {usageTrend === "up" && (
+                                  <span title={`Up from ${prevUsagePerHead!.toFixed(2)} last month`}>
+                                    <TrendingUp className="h-3 w-3 text-amber-600" />
+                                  </span>
+                                )}
+                                {usageTrend === "down" && (
+                                  <span title={`Down from ${prevUsagePerHead!.toFixed(2)} last month`}>
+                                    <TrendingDown className="h-3 w-3 text-blue-500" />
+                                  </span>
+                                )}
+                              </span>
                               {intel?.used_peer_benchmark && (
                                 <span className="block text-[10px] text-blue-600 font-normal">peer avg</span>
                               )}
