@@ -56,7 +56,6 @@ interface ApprovalIntelligenceItem {
   consumption_7d: number;
   consumption_30d: number;
   headcount: number | null;
-  headcount_window: "7d" | "30d" | null;
   usage_per_head: number | null;
   peer_usage_per_head: number | null;
   used_peer_benchmark: boolean;
@@ -622,7 +621,7 @@ export default function TransferDetailPage() {
                           {intel ? `${intel.consumption_7d} / ${intel.consumption_30d}` : "—"}
                         </td>
                         <td className="px-3 py-2 text-right text-muted-foreground">
-                          {intel?.headcount ? `${Math.round(intel.headcount)} (${intel.headcount_window})` : "—"}
+                          {intel?.headcount ? `${Math.round(intel.headcount)} (30d)` : "—"}
                         </td>
                         <td className="px-3 py-2 text-right text-muted-foreground">
                           {usagePerHead !== null ? (
