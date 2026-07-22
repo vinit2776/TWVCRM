@@ -111,6 +111,12 @@ interface ApprovalIntelligenceItem {
   consumption_30d: number;
   headcount: number | null;
   usage_per_head: number | null;
+  // Same-methodology usage/head for the prior 30-day period (days 31-60 ago),
+  // for the trend arrow next to the current figure. Only set when the current
+  // usage_per_head is trustworthy on its own (not peer-benchmarked) — if local
+  // history is too thin to trust for the current period, it's too thin to
+  // trend against either.
+  usage_per_head_prev_month: number | null;
   peer_usage_per_head: number | null;
   used_peer_benchmark: boolean;
 }
@@ -129,6 +135,9 @@ async function computeApprovalIntelligence(
   const now = new Date();
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  // Widened to 60 days so the prior 30-day period (for the trend arrow) can
+  // be sliced out of the same query instead of a second round-trip.
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
 
   const { data: localLogItems } = await supabase
     .from("consumption_log_items")
@@ -136,15 +145,18 @@ async function computeApprovalIntelligence(
     .in("item_id", itemIds)
     .eq("consumption_logs.location_id", toLocationId)
     .eq("consumption_logs.status", "active")
-    .gte("consumption_logs.logged_at", thirtyDaysAgo);
+    .gte("consumption_logs.logged_at", sixtyDaysAgo);
 
   const { data: headcountReadings } = await supabase
     .from("space_headcounts")
     .select("recorded_at, total_count")
     .eq("location_id", toLocationId)
-    .gte("recorded_at", thirtyDaysAgo);
+    .gte("recorded_at", sixtyDaysAgo);
 
-  const avgHeadcount = resolveHeadcount(headcountReadings ?? []);
+  const avgHeadcount = resolveHeadcount((headcountReadings ?? []).filter((r) => r.recorded_at >= thirtyDaysAgo));
+  const avgHeadcountPrev = resolveHeadcount(
+    (headcountReadings ?? []).filter((r) => r.recorded_at >= sixtyDaysAgo && r.recorded_at < thirtyDaysAgo)
+  );
 
   type LogItemRow = { item_id: string | null; quantity_consumed: number; consumption_logs: { logged_at: string } };
   const rows = (localLogItems ?? []) as unknown as LogItemRow[];
@@ -152,15 +164,21 @@ async function computeApprovalIntelligence(
   const items: ApprovalIntelligenceItem[] = [];
   for (const itemId of itemIds) {
     const itemRows = rows.filter((r) => r.item_id === itemId);
-    const consumption7d = itemRows
+    const current30dRows = itemRows.filter((r) => r.consumption_logs.logged_at >= thirtyDaysAgo);
+    const prev30dRows = itemRows.filter(
+      (r) => r.consumption_logs.logged_at >= sixtyDaysAgo && r.consumption_logs.logged_at < thirtyDaysAgo
+    );
+    const consumption7d = current30dRows
       .filter((r) => r.consumption_logs.logged_at >= sevenDaysAgo)
       .reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
-    const consumption30d = itemRows.reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
+    const consumption30d = current30dRows.reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
+    const consumption30dPrev = prev30dRows.reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
 
     const usagePerHead = avgHeadcount && avgHeadcount > 0 ? consumption30d / avgHeadcount : null;
+    const usagePerHeadPrev = avgHeadcountPrev && avgHeadcountPrev > 0 ? consumption30dPrev / avgHeadcountPrev : null;
 
     let peerUsagePerHead: number | null = null;
-    const usedPeerBenchmark = itemRows.length < MIN_LOCAL_CONSUMPTION_LOGS;
+    const usedPeerBenchmark = current30dRows.length < MIN_LOCAL_CONSUMPTION_LOGS;
     if (usedPeerBenchmark) {
       const { data: peerLogItems } = await supabase
         .from("consumption_log_items")
@@ -204,6 +222,7 @@ async function computeApprovalIntelligence(
       consumption_30d: consumption30d,
       headcount: avgHeadcount,
       usage_per_head: usagePerHead,
+      usage_per_head_prev_month: usedPeerBenchmark ? null : usagePerHeadPrev,
       peer_usage_per_head: peerUsagePerHead,
       used_peer_benchmark: usedPeerBenchmark,
     });
