@@ -831,42 +831,62 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             </section>
           )}
 
-          {/* Comment box */}
-          <section className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Add comment</div>
-            <Textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              rows={2}
-              placeholder="Update or note for this ticket…"
-              maxLength={2000}
-            />
-            <div className="flex justify-end">
-              <Button size="sm" onClick={submitComment} disabled={!comment.trim() || busy}>
-                <MessageSquare className="h-4 w-4 mr-1" /> Add comment
-              </Button>
-            </div>
-          </section>
-
-          {/* Timeline */}
-          <section className="rounded-lg border bg-card p-4 space-y-3">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Activity</div>
-            <ol className="space-y-3">
-              {(issue.events ?? []).map((e) => (
-                <li key={e.id} className="flex items-start gap-2 text-sm">
-                  <span className="mt-1 h-1.5 w-1.5 rounded-full bg-muted-foreground/40 shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm">{e.message ?? e.event_type}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">
+          {/* Activity — comments and status/ownership events merged into one
+              conversation thread, newest first, with the composer pinned at
+              the bottom. Previously these were two disconnected sections
+              (an "Add comment" box above a separate ascending-order
+              "Activity" timeline below it) — to see the latest update you
+              had to scroll to the bottom of a different box than the one
+              you'd type into. Event styling: resolved/reopened stand out
+              (they're the moments that matter most), comments read as plain
+              messages, everything else (assigned/claimed/routine status
+              ticks) stays quiet so it doesn't compete for attention. */}
+          <section className="rounded-lg border bg-card overflow-hidden">
+            <div className="px-4 pt-3 pb-2 text-xs uppercase tracking-wide text-muted-foreground">Activity</div>
+            <div className="max-h-[420px] overflow-y-auto px-4 pb-3 space-y-2">
+              {[...(issue.events ?? [])].reverse().map((e) => {
+                const isResolved = e.event_type === "resolved";
+                const isReopened = e.event_type === "reopened";
+                const isComment = e.event_type === "comment";
+                const highlighted = isResolved || isReopened || isComment;
+                return (
+                  <div
+                    key={e.id}
+                    className={cn(
+                      "rounded-md px-3 py-2",
+                      isResolved && "bg-emerald-50 text-emerald-900",
+                      isReopened && "bg-rose-50 text-rose-900",
+                      isComment && "bg-muted/40",
+                      !highlighted && "py-1",
+                    )}
+                  >
+                    <div className={highlighted ? "text-sm" : "text-xs text-muted-foreground"}>
+                      {e.message ?? e.event_type}
+                    </div>
+                    <div className={cn("text-xs mt-0.5", highlighted ? "opacity-70" : "text-muted-foreground")}>
                       {e.actor?.full_name ?? e.actor_label ?? "System"} · {timeAgo(e.created_at)}
                     </div>
                   </div>
-                </li>
-              ))}
+                );
+              })}
               {(issue.events ?? []).length === 0 && (
-                <li className="text-xs text-muted-foreground italic">No activity yet</li>
+                <div className="text-xs text-muted-foreground italic py-1">No activity yet</div>
               )}
-            </ol>
+            </div>
+            <div className="border-t p-3 space-y-2">
+              <Textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={2}
+                placeholder="Write an update…"
+                maxLength={2000}
+              />
+              <div className="flex justify-end">
+                <Button size="sm" onClick={submitComment} disabled={!comment.trim() || busy}>
+                  <MessageSquare className="h-4 w-4 mr-1" /> Add comment
+                </Button>
+              </div>
+            </div>
           </section>
         </div>
 
