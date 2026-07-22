@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -10,13 +10,24 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from("proposal_service_quotas")
-    .select("monthly_quota, overage_rate, service:service_catalog(name, unit_label)")
-    .eq("proposal_id", id)
-    .gt("monthly_quota", 0);
+  // `?raw=true` returns every configured row (incl. service_id) for prefilling
+  // the edit form. Default (PDF rendering) keeps the granted-only, display shape.
+  const raw = new URL(request.url).searchParams.get("raw") === "true";
 
+  let query = supabase
+    .from("proposal_service_quotas")
+    .select(raw
+      ? "service_id, monthly_quota, overage_rate"
+      : "monthly_quota, overage_rate, service:service_catalog(name, unit_label)")
+    .eq("proposal_id", id);
+  if (!raw) query = query.gt("monthly_quota", 0);
+
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (raw) {
+    return NextResponse.json({ data });
+  }
 
   type Row = {
     monthly_quota: number;

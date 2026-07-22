@@ -56,6 +56,7 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { ProposalForm } from "@/components/proposals/proposal-form";
 import dynamic from "next/dynamic";
 
 const CreateContractDialog = dynamic(
@@ -116,6 +117,9 @@ export default function ProposalDetailPage({
 
   // Create Contract dialog
   const [createContractOpen, setCreateContractOpen] = useState(false);
+
+  // Edit proposal dialog
+  const [editOpen, setEditOpen] = useState(false);
 
   // GST invoice preview dialog
   const [gstDialogOpen, setGstDialogOpen] = useState(false);
@@ -477,6 +481,19 @@ export default function ProposalDetailPage({
   const waiverVerified = !!proposal?.deposit_waiver_verified_at;
   const needsWaiver = isZeroDeposit && !waiverVerified;
 
+  // Editing is locked once money has moved or a linked contract has gone live —
+  // mirrors the server-side gate in POST /api/proposals/[id]/edit.
+  const CONTRACT_LOCK_STATUSES = ["active", "renewal_in_progress", "renewed", "expired", "terminated"];
+  const lockingContract = proposal?.contracts?.find((c) => CONTRACT_LOCK_STATUSES.includes(c.status));
+  const editLockReason =
+    proposal?.deposit_payment_status === "paid"
+      ? "Security deposit already collected"
+      : proposal?.payment_status === "paid"
+      ? "Pro-rata / monthly invoice already paid"
+      : lockingContract
+      ? `Contract ${lockingContract.contract_number} is already ${lockingContract.status}`
+      : null;
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -706,6 +723,20 @@ export default function ProposalDetailPage({
               </DropdownMenu>
             );
           })()}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={
+              editLockReason
+                ? () => toast.error(`Cannot edit — ${editLockReason.toLowerCase()}.`)
+                : () => setEditOpen(true)
+            }
+            disabled={!!editLockReason}
+            title={editLockReason ? `Cannot edit — ${editLockReason}` : "Edit proposal"}
+          >
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1325,6 +1356,18 @@ export default function ProposalDetailPage({
           open={bookingConfirmOpen}
           onOpenChange={setBookingConfirmOpen}
           proposal={proposal}
+          onSuccess={fetchProposal}
+        />
+      )}
+
+      {/* Edit Proposal Dialog */}
+      {editOpen && (
+        <ProposalForm
+          leadId={proposal.lead_id}
+          leadLocationId={proposal.location_id}
+          proposal={proposal}
+          open={editOpen}
+          onOpenChange={setEditOpen}
           onSuccess={fetchProposal}
         />
       )}
