@@ -83,9 +83,6 @@ async function resolveReceiptNotifyTargets(
   return Array.from(ids);
 }
 
-// Minimum distinct headcount-reading days within the trailing 7-day window
-// before we trust it over the 30-day fallback (avoids a noisy 1-2-reading average).
-const MIN_HEADCOUNT_READING_DAYS = 4;
 // Minimum consumption-log entries within 30 days before a location's own
 // history is considered enough to skip the peer-locations benchmark.
 const MIN_LOCAL_CONSUMPTION_LOGS = 3;
@@ -95,28 +92,17 @@ function average(nums: number[]): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
-// Daily average headcount, trailing-window aware: prefers the 7-day window
-// when it has enough distinct reading-days, otherwise falls back to 30-day.
-function resolveHeadcount(
-  readings: Array<{ recorded_at: string; total_count: number }>,
-  sevenDaysAgo: string
-): { avgHeadcount: number | null; window: "7d" | "30d" | null } {
+// Daily average headcount over the trailing 30-day window — averages
+// same-day readings first so one noisy day can't skew the overall average.
+function resolveHeadcount(readings: Array<{ recorded_at: string; total_count: number }>): number | null {
   const byDay = new Map<string, number[]>();
   for (const r of readings) {
     const day = r.recorded_at.slice(0, 10);
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day)!.push(Number(r.total_count));
   }
-  const dailyAverages = Array.from(byDay.entries()).map(([day, vals]) => ({ day, avg: average(vals)! }));
-
-  const sevenDayDailies = dailyAverages.filter((d) => d.day >= sevenDaysAgo.slice(0, 10));
-  if (sevenDayDailies.length >= MIN_HEADCOUNT_READING_DAYS) {
-    return { avgHeadcount: average(sevenDayDailies.map((d) => d.avg)), window: "7d" };
-  }
-  if (dailyAverages.length > 0) {
-    return { avgHeadcount: average(dailyAverages.map((d) => d.avg)), window: "30d" };
-  }
-  return { avgHeadcount: null, window: null };
+  const dailyAverages = Array.from(byDay.values()).map((vals) => average(vals)!);
+  return average(dailyAverages);
 }
 
 interface ApprovalIntelligenceItem {
@@ -124,7 +110,6 @@ interface ApprovalIntelligenceItem {
   consumption_7d: number;
   consumption_30d: number;
   headcount: number | null;
-  headcount_window: "7d" | "30d" | null;
   usage_per_head: number | null;
   peer_usage_per_head: number | null;
   used_peer_benchmark: boolean;
@@ -159,7 +144,7 @@ async function computeApprovalIntelligence(
     .eq("location_id", toLocationId)
     .gte("recorded_at", thirtyDaysAgo);
 
-  const { avgHeadcount, window: headcountWindow } = resolveHeadcount(headcountReadings ?? [], sevenDaysAgo);
+  const avgHeadcount = resolveHeadcount(headcountReadings ?? []);
 
   type LogItemRow = { item_id: string | null; quantity_consumed: number; consumption_logs: { logged_at: string } };
   const rows = (localLogItems ?? []) as unknown as LogItemRow[];
@@ -172,8 +157,7 @@ async function computeApprovalIntelligence(
       .reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
     const consumption30d = itemRows.reduce((sum, r) => sum + Number(r.quantity_consumed), 0);
 
-    const trendConsumption = headcountWindow === "30d" ? consumption30d : consumption7d;
-    const usagePerHead = avgHeadcount && avgHeadcount > 0 ? trendConsumption / avgHeadcount : null;
+    const usagePerHead = avgHeadcount && avgHeadcount > 0 ? consumption30d / avgHeadcount : null;
 
     let peerUsagePerHead: number | null = null;
     const usedPeerBenchmark = itemRows.length < MIN_LOCAL_CONSUMPTION_LOGS;
@@ -219,7 +203,6 @@ async function computeApprovalIntelligence(
       consumption_7d: consumption7d,
       consumption_30d: consumption30d,
       headcount: avgHeadcount,
-      headcount_window: headcountWindow,
       usage_per_head: usagePerHead,
       peer_usage_per_head: peerUsagePerHead,
       used_peer_benchmark: usedPeerBenchmark,
