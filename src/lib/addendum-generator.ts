@@ -23,7 +23,7 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
-import { computePhaseBoundaries, formatDateRange, formatYmd } from "@/lib/rate-phase-dates";
+import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
 
 export interface AddendumData {
   // Renewal (new) contract
@@ -232,9 +232,10 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   if (ratePhases.length > 0) {
     const anchor = data.renewal_phase_start_date || data.renewal_start_date;
     const boundaries = computePhaseBoundaries(anchor, ratePhases);
+    // No trailing "after the last phase..." line — what happens once this
+    // renewal term's own phase schedule ends is for the next renewal/addendum
+    // to define, not a "flat" continuation stated here.
     const lines = boundaries.map((b) => `${formatDateRange(b.start, b.end)}: INR ${formatCurrency(b.rate).replace("Rs. ", "")} + GST per month`);
-    const last = boundaries[boundaries.length - 1];
-    lines.push(`After ${formatYmd(last.end)}: INR ${formatCurrency(last.rate).replace("Rs. ", "")} + GST per month (flat, subject to escalation on renewal)`);
     ctx.addWrappedText(
       `The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below:\n${lines.join("\n")}`,
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5

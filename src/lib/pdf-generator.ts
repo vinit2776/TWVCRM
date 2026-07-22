@@ -3,7 +3,7 @@ import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
-import { computePhaseBoundaries, formatDateRange, formatYmd } from "@/lib/rate-phase-dates";
+import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -1359,10 +1359,11 @@ export function generateMembershipAgreementPDF(
       }
       const anchor = contract.phase_start_date || contract.start_date;
       const boundaries = computePhaseBoundaries(anchor, phases);
-      const lines = boundaries.map((b) => `${formatDateRange(b.start, b.end)}: ${formatCurrencyPDF(b.rate)} + GST per month`);
-      const last = boundaries[boundaries.length - 1];
-      lines.push(`After ${formatYmd(last.end)}: ${formatCurrencyPDF(last.rate)} + GST per month (flat, subject to escalation on renewal)`);
-      return lines.join("\n");
+      // No trailing "after the last phase..." line: what happens once the
+      // phase schedule ends is already governed by the Term, Auto-renewal,
+      // and Escalation clauses below — restating it here as "flat" previously
+      // contradicted the Escalation clause's stated renewal rate.
+      return boundaries.map((b) => `${formatDateRange(b.start, b.end)}: ${formatCurrencyPDF(b.rate)} + GST per month`).join("\n");
     })()],
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
