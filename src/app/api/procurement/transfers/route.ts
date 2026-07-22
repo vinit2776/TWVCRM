@@ -5,6 +5,9 @@ import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
 
 const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+// Branch requester roles create requests scoped to their own assigned
+// location(s), sourced only from the issuing-source location (locations.is_issuing_source).
+const BRANCH_REQUESTER_ROLES = ["floor_manager", "fms"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const createTransferSchema = z.object({
@@ -18,7 +21,8 @@ const createTransferSchema = z.object({
         item_id: z.string().uuid().optional(),
         item_name: z.string().min(1),
         unit: z.string().min(1),
-        quantity_sent: z.number().positive(),
+        quantity_requested: z.number().positive(),
+        notes: z.string().optional(),
       })
     )
     .min(1, "At least one item is required"),
@@ -42,6 +46,9 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
+  // statuses: comma-separated list, for views that span multiple statuses at
+  // once (e.g. the pipeline view — anything still in flight).
+  const statuses = searchParams.get("statuses");
   const locationId = searchParams.get("location_id");
   // incoming_to: transfers heading TO this location that are still in the
   // pipeline (requested → approved → on the way) — i.e. "upcoming inwards".
@@ -49,6 +56,7 @@ export async function GET(request: NextRequest) {
   // location_ids: scope the list to transfers involving any of these locations
   // (from OR to) — used to show a user only their assigned locations' transfers.
   const locationIds = searchParams.get("location_ids");
+  const search = searchParams.get("search")?.trim();
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -80,7 +88,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("stock_transfers")
     .select(
-      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), stock_transfer_items(id)`,
+      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), stock_transfer_items(id, item_name, unit, quantity_requested, quantity_approved, quantity_sent, quantity_received)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
@@ -90,6 +98,9 @@ export async function GET(request: NextRequest) {
     query = query
       .eq("to_location_id", incomingTo)
       .in("status", ["pending_approval", "approved", "dispatched"]);
+  } else if (statuses) {
+    const statusList = statuses.split(",").map((s) => s.trim()).filter(Boolean);
+    if (statusList.length > 0) query = query.in("status", statusList);
   } else if (status) {
     query = query.eq("status", status);
   }
@@ -103,6 +114,9 @@ export async function GET(request: NextRequest) {
     }
   } else if (locationId) {
     query = query.or(`from_location_id.eq.${locationId},to_location_id.eq.${locationId}`);
+  }
+  if (search) {
+    query = query.ilike("transfer_number", `%${search}%`);
   }
 
   const { data, error, count } = await query;
@@ -127,7 +141,9 @@ export async function POST(request: NextRequest) {
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  const isCrossLocation = CROSS_LOCATION_ROLES.includes(dbUser.role);
+  const isBranchRequester = BRANCH_REQUESTER_ROLES.includes(dbUser.role);
+  if (!isCrossLocation && !isBranchRequester) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -139,6 +155,43 @@ export async function POST(request: NextRequest) {
 
   if (parsed.data.from_location_id === parsed.data.to_location_id) {
     return NextResponse.json({ error: "From and To locations must be different" }, { status: 422 });
+  }
+
+  // Branch requesters (floor_manager/fms) can only request TO their own
+  // assigned location(s), and only FROM the designated issuing-source
+  // location — they don't get a free choice of either.
+  if (isBranchRequester) {
+    const { data: issuingSource } = await supabase
+      .from("locations")
+      .select("id")
+      .eq("is_issuing_source", true)
+      .maybeSingle();
+
+    if (!issuingSource || parsed.data.from_location_id !== issuingSource.id) {
+      return NextResponse.json(
+        { error: "Requests must be sourced from the designated issuing location" },
+        { status: 422 }
+      );
+    }
+
+    const { data: assignedRows } = await supabase
+      .from("user_locations")
+      .select("location_id")
+      .eq("user_id", dbUser.id);
+    const assignedIds = new Set((assignedRows ?? []).map((r: { location_id: string }) => r.location_id));
+
+    if (assignedIds.size === 0) {
+      return NextResponse.json(
+        { error: "You're not assigned to a location. Contact an admin to request transfers." },
+        { status: 403 }
+      );
+    }
+    if (!assignedIds.has(parsed.data.to_location_id)) {
+      return NextResponse.json(
+        { error: "You can only request transfers to your own assigned location" },
+        { status: 403 }
+      );
+    }
   }
 
   // Block non-stock items: services (AMC, rentals, pest control) and items from
@@ -183,14 +236,19 @@ export async function POST(request: NextRequest) {
 
   if (transferError) return NextResponse.json({ error: transferError.message }, { status: 500 });
 
-  // Insert transfer items
+  // Insert transfer items. quantity_sent is a placeholder until dispatch
+  // actually sets it (the issuer confirms the real amount sent then);
+  // quantity_approved is null until the approve step sets it.
   const items = parsed.data.items.map((item) => ({
     transfer_id: transfer.id,
     item_id: item.item_id ?? null,
     item_name: item.item_name,
     unit: item.unit,
-    quantity_sent: item.quantity_sent,
+    quantity_requested: item.quantity_requested,
+    quantity_approved: null,
+    quantity_sent: 0,
     quantity_received: 0,
+    notes: item.notes?.trim() || null,
   }));
 
   const { error: itemsError } = await supabase.from("stock_transfer_items").insert(items);

@@ -2623,10 +2623,29 @@ export interface StockTransferItem {
   item_id?: string;
   item_name: string;
   unit: string;
+  quantity_requested: number;
+  quantity_approved: number | null;
   quantity_sent: number;
   quantity_received: number;
   notes?: string;
+  // Set once an approver explicitly saves this line's decision — the
+  // transfer as a whole can't move to "approved" until every item has this.
+  approval_confirmed_at?: string | null;
+  approval_confirmed_by?: string | null;
   procurement_items?: { id: string; name: string } | null;
+}
+
+export interface StockTransferAttachment {
+  id: string;
+  transfer_id: string;
+  issue_id?: string | null;
+  file_url: string;
+  file_path: string;
+  file_type: string;
+  caption?: string | null;
+  uploaded_by?: string;
+  uploaded_at: string;
+  uploader?: { id: string; full_name?: string } | null;
 }
 
 export interface StockTransferIssue {
@@ -2660,6 +2679,7 @@ export interface StockTransfer {
   received_by?: string;
   received_at?: string;
   notes?: string;
+  approver_notes?: string | null;
   created_at: string;
   updated_at: string;
   from_location?: { id: string; name: string; code: string } | null;
@@ -2669,6 +2689,7 @@ export interface StockTransfer {
   receiver?: { id: string; full_name?: string } | null;
   stock_transfer_items?: StockTransferItem[];
   stock_transfer_issues?: StockTransferIssue[];
+  stock_transfer_attachments?: StockTransferAttachment[];
 }
 
 export interface ConsumptionLogItem {

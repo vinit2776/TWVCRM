@@ -18,7 +18,11 @@ import {
 import { toast } from "sonner";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { STOCK_DEPARTMENTS } from "@/lib/constants";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { EmptyState } from "@/components/shared/empty-state";
 import type { Location, LocationStock } from "@/types";
+
+const BRANCH_REQUESTER_ROLES = ["floor_manager", "fms"];
 
 interface LineItem {
   id: string;
@@ -61,6 +65,8 @@ function buildStockMap(stock: LocationStock[]): Record<string, number> {
 
 export default function NewTransferPage() {
   const router = useRouter();
+  const { user, loading: userLoading } = useCurrentUser();
+  const isBranchRequester = BRANCH_REQUESTER_ROLES.includes(user?.role ?? "");
 
   const [fromLocationId, setFromLocationId] = useState("");
   const [toLocationId, setToLocationId] = useState("");
@@ -74,6 +80,30 @@ export default function NewTransferPage() {
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [sourceStock, setSourceStock] = useState<LocationStock[]>([]);
   const [destStock, setDestStock] = useState<LocationStock[]>([]);
+
+  // Branch requesters (floor_manager/fms) can only request TO their own
+  // assigned location(s) — fetched once we know the role needs it.
+  const [assignedLocationIds, setAssignedLocationIds] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (!isBranchRequester) return;
+    fetch("/api/me/locations").then((r) => r.json()).then((json) => {
+      setAssignedLocationIds(
+        (json.data || []).map((row: { location_id: string }) => row.location_id)
+      );
+    });
+  }, [isBranchRequester]);
+
+  // Once locations load, branch requesters get from_location locked to the
+  // issuing source and to_location auto-set if they're only assigned one place.
+  useEffect(() => {
+    if (!isBranchRequester || locations.length === 0) return;
+    const source = locations.find((l) => (l as Location & { is_issuing_source?: boolean }).is_issuing_source);
+    if (source) setFromLocationId(source.id);
+    if (assignedLocationIds && assignedLocationIds.length === 1) {
+      setToLocationId(assignedLocationIds[0]);
+    }
+  }, [isBranchRequester, locations, assignedLocationIds]);
 
   const sourceStockMap = buildStockMap(sourceStock);
   const destStockMap   = buildStockMap(destStock);
@@ -162,7 +192,9 @@ export default function NewTransferPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceStock, destStock]);
 
-  const toLocations     = locations.filter((l) => l.id !== fromLocationId);
+  const toLocations = locations
+    .filter((l) => l.id !== fromLocationId)
+    .filter((l) => !isBranchRequester || (assignedLocationIds ?? []).includes(l.id));
   const fromLocationName = locations.find((l) => l.id === fromLocationId)?.name ?? "Source";
   const toLocationName   = locations.find((l) => l.id === toLocationId)?.name   ?? "Destination";
 
@@ -219,7 +251,8 @@ export default function NewTransferPage() {
             item_id:       li.item_id || undefined,
             item_name:     li.item_name.trim(),
             unit:          li.unit,
-            quantity_sent: parseFloat(li.quantity),
+            quantity_requested: parseFloat(li.quantity),
+            notes:         li.notes.trim() || undefined,
           })),
         }),
       });
@@ -234,6 +267,11 @@ export default function NewTransferPage() {
 
   const totalItems = items.filter((li) => li.item_name.trim() && parseFloat(li.quantity) > 0).length;
 
+  // Qualification gate: a branch requester with no location assignment can't
+  // request anything — show that clearly instead of a form that will 403 on submit.
+  const showNotQualified =
+    isBranchRequester && !userLoading && assignedLocationIds !== null && assignedLocationIds.length === 0;
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* ── Header ── */}
@@ -242,10 +280,21 @@ export default function NewTransferPage() {
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold">New Stock Transfer</h1>
-          <p className="text-sm text-muted-foreground">Move inventory between locations</p>
+          <h1 className="text-2xl font-bold">New Request</h1>
+          <p className="text-sm text-muted-foreground">
+            {isBranchRequester ? "Request stock for your location" : "Move inventory between locations"}
+          </p>
         </div>
       </div>
+
+      {showNotQualified ? (
+        <EmptyState
+          icon={AlertTriangle}
+          title="You're not assigned to a location"
+          description="Contact an admin to get assigned to a location before requesting transfers."
+        />
+      ) : (
+      <>
 
       {origin === "replenishment" && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-4 py-2.5 text-sm text-blue-800">
@@ -264,6 +313,7 @@ export default function NewTransferPage() {
             <Label htmlFor="from_location">From Location <span className="text-red-500">*</span></Label>
             <Select
               value={fromLocationId || "__none__"}
+              disabled={isBranchRequester}
               onValueChange={(v) => {
                 const val = v === "__none__" ? "" : v;
                 setFromLocationId(val);
@@ -528,10 +578,12 @@ export default function NewTransferPage() {
           <Button onClick={handleSubmit} disabled={submitting} size="lg">
             {submitting
               ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Creating...</>
-              : "Create Transfer"}
+              : "Create Request"}
           </Button>
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }
