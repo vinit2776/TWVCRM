@@ -788,6 +788,7 @@ export default function ContractDetailPage({
             tenureMonths={contract.tenure_months}
             baseMonthlyRate={contract.subtotal ?? contract.total_amount}
             phases={contract.rate_phases ?? []}
+            phaseStartDate={contract.phase_start_date || contract.start_date}
             canEdit={
               ["admin", "manager", "sales_rep"].includes(userRole ?? "") &&
               !(CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)

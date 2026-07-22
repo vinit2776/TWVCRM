@@ -3,6 +3,7 @@ import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { computePhaseBoundaries, formatDateRange, formatYmd } from "@/lib/rate-phase-dates";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -1352,19 +1353,15 @@ export function generateMembershipAgreementPDF(
       "\u2022 Coffee/Tea twice a day compliment, additional cups @ Rs.20/-\n" +
       "\u2022 Additional Car & Bike parking slots - subject to availability."],
     ["8", "Monthly Membership Fees (MMF)", (() => {
-      const phases = (contract.rate_phases ?? []).slice().sort((a, b) => a.phase_order - b.phase_order);
+      const phases = contract.rate_phases ?? [];
       if (phases.length === 0) {
         return `${formatCurrencyPDF(monthlyFee)} + GST per month\n(${amountInWords(monthlyFee)})`;
       }
-      let cursor = 1;
-      const lines = phases.map((p) => {
-        const start = cursor;
-        const end = cursor + p.duration_months - 1;
-        cursor = end + 1;
-        return `Month ${start}–${end}: ${formatCurrencyPDF(p.monthly_rate)} + GST per month`;
-      });
-      const lastRate = phases[phases.length - 1].monthly_rate;
-      lines.push(`Month ${cursor} onwards: ${formatCurrencyPDF(lastRate)} + GST per month (flat, subject to escalation on renewal)`);
+      const anchor = contract.phase_start_date || contract.start_date;
+      const boundaries = computePhaseBoundaries(anchor, phases);
+      const lines = boundaries.map((b) => `${formatDateRange(b.start, b.end)}: ${formatCurrencyPDF(b.rate)} + GST per month`);
+      const last = boundaries[boundaries.length - 1];
+      lines.push(`After ${formatYmd(last.end)}: ${formatCurrencyPDF(last.rate)} + GST per month (flat, subject to escalation on renewal)`);
       return lines.join("\n");
     })()],
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],

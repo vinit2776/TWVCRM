@@ -23,6 +23,7 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
+import { computePhaseBoundaries, formatDateRange, formatYmd } from "@/lib/rate-phase-dates";
 
 export interface AddendumData {
   // Renewal (new) contract
@@ -42,7 +43,9 @@ export interface AddendumData {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   renewal_items: { description: string; quantity: number; unit_price: number; total: number }[];
   /** Tiered rate schedule for the renewal contract, if configured (see contract_rate_phases). */
-  renewal_rate_phases?: { phase_order: number; duration_months: number; monthly_rate: number }[];
+  renewal_rate_phases?: { phase_order: number; duration_months: number; monthly_rate: number; end_date?: string | null }[];
+  /** Phase-clock anchor for renewal_rate_phases — the renewal's own phase_start_date (falls back to renewal_start_date). */
+  renewal_phase_start_date?: string;
 
   // Parent (original) contract
   parent_contract_number: string;
@@ -224,20 +227,16 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   doc.text("Revised Service Fee", ctx.marginLeft + 6, ctx.y);
   ctx.y += 5;
 
-  const ratePhases = (data.renewal_rate_phases ?? []).slice().sort((a, b) => a.phase_order - b.phase_order);
+  const ratePhases = data.renewal_rate_phases ?? [];
 
   if (ratePhases.length > 0) {
-    let cursor = 1;
-    const lines = ratePhases.map((p) => {
-      const start = cursor;
-      const end = cursor + p.duration_months - 1;
-      cursor = end + 1;
-      return `Month ${start}–${end}: INR ${formatCurrency(p.monthly_rate).replace("Rs. ", "")} + GST per month`;
-    });
-    const lastRate = ratePhases[ratePhases.length - 1].monthly_rate;
-    lines.push(`Month ${cursor} onwards: INR ${formatCurrency(lastRate).replace("Rs. ", "")} + GST per month (flat, subject to escalation on renewal)`);
+    const anchor = data.renewal_phase_start_date || data.renewal_start_date;
+    const boundaries = computePhaseBoundaries(anchor, ratePhases);
+    const lines = boundaries.map((b) => `${formatDateRange(b.start, b.end)}: INR ${formatCurrency(b.rate).replace("Rs. ", "")} + GST per month`);
+    const last = boundaries[boundaries.length - 1];
+    lines.push(`After ${formatYmd(last.end)}: INR ${formatCurrency(last.rate).replace("Rs. ", "")} + GST per month (flat, subject to escalation on renewal)`);
     ctx.addWrappedText(
-      `The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below, commencing ${formatDate(data.renewal_start_date)}:\n${lines.join("\n")}`,
+      `The Parties agree that the monthly service fee for this renewal term shall follow the tiered schedule below:\n${lines.join("\n")}`,
       ctx.marginLeft + 6, ctx.contentWidth - 6, 9, "normal", [50, 50, 50], 4.5
     );
   } else if (data.renewal_escalation_waived) {
@@ -506,7 +505,7 @@ export async function buildAddendumPdfBuffer(
         pan_number, gst_number, entity_type
       ),
       location:locations!contracts_location_id_fkey(id, name, address, city, state),
-      rate_phases:contract_rate_phases(phase_order, duration_months, monthly_rate)
+      rate_phases:contract_rate_phases(phase_order, duration_months, monthly_rate, end_date)
     `)
     .eq("id", contractId)
     .single();
@@ -556,6 +555,7 @@ export async function buildAddendumPdfBuffer(
     renewal_sequence: contract.renewal_sequence || 2,
     renewal_items: (contract.items || []) as AddendumData["renewal_items"],
     renewal_rate_phases: (contract.rate_phases || []) as AddendumData["renewal_rate_phases"],
+    renewal_phase_start_date: contract.phase_start_date || contract.start_date,
 
     parent_contract_number: parentData.contract_number,
     parent_start_date: parentData.start_date,

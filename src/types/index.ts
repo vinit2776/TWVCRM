@@ -581,6 +581,8 @@ export interface ContractRatePhase {
   phase_order: number;
   duration_months: number;
   monthly_rate: number;
+  /** Explicit day-precise end date, overriding the default calendar-month-bucket boundary. */
+  end_date?: string | null;
   created_at: string;
 }
 
