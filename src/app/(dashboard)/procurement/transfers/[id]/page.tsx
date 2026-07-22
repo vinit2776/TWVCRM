@@ -683,7 +683,7 @@ export default function TransferDetailPage() {
               <div className="flex items-start gap-2 sm:col-span-2">
                 <FileText className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <div>
-                  <p className="text-muted-foreground">Requester's Notes</p>
+                  <p className="text-muted-foreground">Requester&apos;s Notes</p>
                   <p className="font-medium">{transfer.notes}</p>
                 </div>
               </div>
@@ -692,7 +692,7 @@ export default function TransferDetailPage() {
               <div className="flex items-start gap-2 sm:col-span-2">
                 <FileText className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <div>
-                  <p className="text-muted-foreground">Approver's Notes</p>
+                  <p className="text-muted-foreground">Approver&apos;s Notes</p>
                   <p className="font-medium">{transfer.approver_notes}</p>
                 </div>
               </div>
@@ -780,7 +780,7 @@ export default function TransferDetailPage() {
                         {item.item_name}
                         <span className="block text-xs font-normal text-muted-foreground sm:hidden">{item.unit}</span>
                         {item.notes && (
-                          <span className="block text-xs font-normal text-muted-foreground italic">"{item.notes}"</span>
+                          <span className="block text-xs font-normal text-muted-foreground italic">&quot;{item.notes}&quot;</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">{item.quantity_requested}</td>
