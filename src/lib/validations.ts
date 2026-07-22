@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ACCOUNTING_HEADS } from "@/lib/constants";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
   const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>;
@@ -237,6 +238,10 @@ export const createInvoiceSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID").optional(),
   proposal_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
+  // Security deposits are never billed through an ad-hoc invoice — they go
+  // through the proposal deposit link instead (GST-exempt, tracked against
+  // the deposit ledger). Enforced server-side in the POST handler.
+  primary_head: z.enum(ACCOUNTING_HEADS, { message: "Select what this invoice is for" }),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
