@@ -11,6 +11,12 @@ function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
 }
 
+// Rounds to 2dp to avoid floating-point noise (e.g. summed duration_hours
+// producing 6.699999999999999) leaking into customer-facing emails.
+function roundHours(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 function formatDate(dateStr: string): string {
   // Anchor the date in IST so the displayed day matches the booking_date
   // column regardless of the server's local timezone.
@@ -368,7 +374,7 @@ export async function POST(
 
   const icsContent = generateICS({
     summary: `Meeting Room: ${spaceName} - The WorkVilla`,
-    description: `Booking: ${booking.booking_number}\nRoom: ${spaceName}\nDuration: ${booking.duration_hours}hrs\nAmount: ${formatCurrency(booking.total_amount)}`,
+    description: `Booking: ${booking.booking_number}\nRoom: ${spaceName}\nDuration: ${roundHours(Number(booking.duration_hours))}hrs\nAmount: ${formatCurrency(booking.total_amount)}`,
     location: `${spaceName}, ${locationName}${locationAddress ? ", " + locationAddress : ""}`,
     startDate: startUTC,
     endDate: endUTC,
@@ -520,12 +526,12 @@ export async function POST(
         .gte("booking_date", monthStart)
         .lte("booking_date", monthEnd);
 
-      const usedBefore      = (monthBookings ?? []).reduce((s, b) => s + Number(b.duration_hours), 0);
-      const usedThisBooking = Number(booking.duration_hours);
-      const usedAfter       = usedBefore + usedThisBooking;
-      const monthlyQuota    = Number(facility.free_quota);
-      const balanceAfter    = Math.max(0, monthlyQuota - usedAfter);
-      const overage         = Math.max(0, usedAfter - monthlyQuota);
+      const usedBefore      = roundHours((monthBookings ?? []).reduce((s, b) => s + Number(b.duration_hours), 0));
+      const usedThisBooking = roundHours(Number(booking.duration_hours));
+      const usedAfter       = roundHours(usedBefore + usedThisBooking);
+      const monthlyQuota    = roundHours(Number(facility.free_quota));
+      const balanceAfter    = roundHours(Math.max(0, monthlyQuota - usedAfter));
+      const overage         = roundHours(Math.max(0, usedAfter - monthlyQuota));
 
       const balanceColor  = balanceAfter === 0 ? "#b45309" : "#15803d";
       const balanceBg     = balanceAfter === 0 ? "#fffbeb" : "#f0fdf4";
@@ -576,7 +582,7 @@ export async function POST(
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Location</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${locationName}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Date</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${formatDate(booking.booking_date)}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Time</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${startTime} - ${endTime}</td></tr>
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Duration</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${booking.duration_hours} hour(s)</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Duration</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${roundHours(Number(booking.duration_hours))} hour(s)</td></tr>
           ${facilityList ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Facilities</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${facilityList}</td></tr>` : ""}
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${formatCurrency(booking.total_amount)}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;">Customer Type</td><td style="padding:10px 16px;color:#333;">${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type] || booking.customer_type}</td></tr>
