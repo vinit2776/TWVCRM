@@ -2,13 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createUsageChargeSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
-import { isContractOperational } from "@/lib/constants";
-
-// POST (create): admin, manager, accounts, floor_manager, sales_rep.
-// No DELETE handler exists — once created, charges can only be voided/removed
-// by admin via statement management. This is intentional: floor managers can
-// submit charges but cannot remove them.
-const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
+import { isContractOperational, CHARGE_ALLOWED_ROLES } from "@/lib/constants";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -80,6 +75,7 @@ export async function POST(request: NextRequest) {
   const chargeYear = chargeDate.getFullYear();
   const periodFirst = `${chargeYear}-${String(chargeMonth).padStart(2, "0")}-01`;
   const periodLast = `${chargeYear}-${String(chargeMonth).padStart(2, "0")}-${new Date(chargeYear, chargeMonth, 0).getDate()}`;
+  const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
 
   // Check if the accounting period is locked
   const { data: period } = await supabase
@@ -90,7 +86,6 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   if (period?.status === "locked") {
-    const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
     return NextResponse.json(
       { error: `The ${monthLabel} billing period is locked. Charges cannot be added to a locked period.` },
       { status: 400 },
@@ -101,6 +96,7 @@ export async function POST(request: NextRequest) {
   // charge — used below to override the client-supplied gst_rate so per-charge
   // GST always matches the statement-level rate.
   let contractTaxPercentage: number | null = null;
+  let contractNumber: string | null = null;
 
   // Defaults to the client-supplied values; overwritten below when
   // contract_facility_id is set, since quota math is server-authoritative.
@@ -113,7 +109,7 @@ export async function POST(request: NextRequest) {
     // Contract-based charge — must exist and be active
     const { data: contract, error: contractError } = await supabase
       .from("contracts")
-      .select("id, lead_id, status, end_date, tax_percentage")
+      .select("id, lead_id, status, end_date, tax_percentage, contract_number")
       .eq("id", result.data.contract_id)
       .single();
 
@@ -144,6 +140,7 @@ export async function POST(request: NextRequest) {
 
     leadId = contract.lead_id;
     contractTaxPercentage = contract.tax_percentage != null ? Number(contract.tax_percentage) : null;
+    contractNumber = contract.contract_number ?? null;
 
     // ── Facility-linked charge: quota is authoritative server-side ──────────
     // The client may pre-fill/override description + rate from the facility's
@@ -249,6 +246,84 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
   }
+
+  const chargeRef = contractNumber ? `contract ${contractNumber}` : "the booking";
+  const amountLine = `Qty ${facilityQuantity} × ₹${facilityUnitPrice} = ₹${subtotal}${gstAmount > 0 ? ` + ₹${gstAmount} GST = ₹${totalWithGst}` : ""}`;
+
+  const postInsertTasks: PromiseLike<unknown>[] = [];
+
+  // Surface every ad-hoc charge on the customer's Activities timeline (not
+  // just the admin-only audit log) so staff reviewing a lead/contract can
+  // see it without digging into Billing.
+  if (data && leadId && dbUser?.id) {
+    postInsertTasks.push(
+      supabase.from("activities").insert({
+        lead_id: leadId,
+        type: "note",
+        subject: `Charge added — ₹${totalWithGst}`,
+        description: `${result.data.description} (${amountLine}) on ${chargeRef}. Will be billed in the ${monthLabel} cycle.`,
+        created_by: dbUser.id,
+      }).then(({ error: activityError }) => {
+        if (activityError) console.error("[usage-charge activity]", activityError.message);
+      })
+    );
+  }
+
+  // Optional customer notification — staff explicitly opts in per charge.
+  // WhatsApp/SMS aren't available here: this app only sends pre-approved
+  // MSG91 templates and none exists for an ad-hoc charge notice, so email
+  // is the only channel wired up today.
+  if (data && leadId && body.notify_customer === true) {
+    postInsertTasks.push(
+      (async () => {
+        const { data: leadRow } = await supabase
+          .from("leads")
+          .select("email, billing_emails, first_name, last_name, company")
+          .eq("id", leadId)
+          .single();
+
+        const recipients = Array.from(
+          new Set([leadRow?.email, ...((leadRow?.billing_emails as string[] | null) ?? [])].filter(Boolean))
+        ) as string[];
+
+        if (recipients.length === 0) {
+          console.error("[usage-charge notify] no email on file for lead", leadId);
+          return;
+        }
+
+        const customerName = leadRow?.company || `${leadRow?.first_name ?? ""} ${leadRow?.last_name ?? ""}`.trim() || "there";
+
+        const html = `
+          <p>Hi ${customerName},</p>
+          <p>A new charge has been added to your account on ${chargeRef}:</p>
+          <table style="border-collapse:collapse;margin:12px 0">
+            <tr><td style="padding:4px 12px 4px 0;color:#666">Description</td><td>${result.data.description}</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#666">Amount</td><td>${amountLine}</td></tr>
+            <tr><td style="padding:4px 12px 4px 0;color:#666">Date</td><td>${result.data.charge_date}</td></tr>
+          </table>
+          <p>This will be billed at the end of the ${monthLabel} billing cycle along with your regular statement.</p>
+          <p style="font-size:12px;color:#888">If you believe this charge was made in error, please reply to this email or contact us within 24 hours so we can review it before it's billed.</p>
+        `;
+
+        try {
+          const sendResult = await resend.emails.send({
+            from: EMAIL_FROM,
+            to: recipients,
+            replyTo: EMAIL_REPLY_TO,
+            subject: `New charge added — ${chargeRef}`,
+            html,
+          });
+          if (sendResult.error) {
+            console.error("[usage-charge notify] send failed", sendResult.error.message);
+          }
+        } catch (sendErr) {
+          console.error("[usage-charge notify] send threw", sendErr instanceof Error ? sendErr.message : sendErr);
+        }
+      })()
+    );
+  }
+
+  await Promise.all(postInsertTasks);
 
   return NextResponse.json({ data }, { status: 201 });
 }

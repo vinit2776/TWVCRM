@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { CHARGE_ALLOWED_ROLES } from "@/lib/constants";
 
 export async function GET(
   _request: NextRequest,
@@ -47,6 +48,13 @@ export async function PATCH(
   }
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  if (!dbUser || !CHARGE_ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "You do not have permission to edit usage charges" },
+      { status: 403 }
+    );
+  }
 
   const body = await request.json();
   const allowedFields: Record<string, unknown> = {};

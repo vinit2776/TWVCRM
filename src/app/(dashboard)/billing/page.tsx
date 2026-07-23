@@ -9,6 +9,7 @@ import {
   Plus,
   Receipt,
   MoreHorizontal,
+  Pencil,
   Eye,
   Download,
   CheckCircle,
@@ -43,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
+import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
 const ViewStatementDialog = dynamic(
@@ -389,6 +391,8 @@ export default function BillingPage() {
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [chargesSearchQuery, setChargesSearchQuery]   = useState("");
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
+  const [editChargeOpen, setEditChargeOpen]           = useState(false);
+  const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
 
   // ── Billing Statements ────────────────────────────────────────────────────
@@ -1180,6 +1184,16 @@ export default function BillingPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
+                            {charge.status === "pending" && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setEditingCharge(charge);
+                                  setEditChargeOpen(true);
+                                }}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />Edit
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -1227,6 +1241,12 @@ export default function BillingPage() {
       {/* ── Dialogs ─────────────────────────────────────────────────────── */}
       <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
       <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
+      <EditUsageChargeDialog
+        open={editChargeOpen}
+        onOpenChange={setEditChargeOpen}
+        onSuccess={fetchCharges}
+        charge={editingCharge}
+      />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
 
