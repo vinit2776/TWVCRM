@@ -2378,3 +2378,9 @@ export const ELECTRICITY_MARKUP_TYPE_LABELS: Record<string, string> = {
   percent: "% on utility rate",
 };
 
+// Roles allowed to create/edit usage charges (ad-hoc contract/booking
+// charges). No DELETE handler exists — once created, charges can only be
+// voided/removed by admin via statement management. This is intentional:
+// floor managers can submit charges but cannot remove them.
+export const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
+

@@ -34,7 +34,8 @@ export type WidgetId =
   | "mtd_bookings"
   | "rent_revenue"
   | "network"
-  | "week_in_review";
+  | "week_in_review"
+  | "quick_charge";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
   network:                { id: "network",                title: "Network Status" },
   week_in_review:         { id: "week_in_review",         title: "Last 7 Days" },
+  quick_charge:           { id: "quick_charge",           title: "Log a Charge" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -83,6 +85,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   admin: [
     "pending_actions",
     "live_enquiries",
+    "quick_charge",
     "week_in_review",
     "mtd_bookings",
     "revenue_pulse",
@@ -105,6 +108,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   manager: [
     "pending_actions",
     "live_enquiries",
+    "quick_charge",
     "kpi_stats",
     "mtd_bookings",
     "schedule",
@@ -121,6 +125,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   sales_rep: [
     "live_enquiries",
+    "quick_charge",
     "schedule",
     "lead_funnel",
     "kpi_stats",
@@ -129,6 +134,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   ],
 
   floor_manager: [
+    "quick_charge",
     "live_enquiries",
     "schedule",
     "booking_summary",
@@ -139,6 +145,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   // Accounts: finance/accounts team
   accounts: [
+    "quick_charge",
     "mtd_bookings",
     "cash_aging",
     "revenue_pulse",

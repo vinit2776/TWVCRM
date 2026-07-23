@@ -35,6 +35,7 @@ import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-act
 import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-widget";
 import { NetworkWidget } from "@/components/network/network-widget";
 import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-review-widget";
+import { QuickChargeWidget } from "@/components/dashboard/widgets/quick-charge-widget";
 
 import Link from "next/link";
 import { Zap } from "lucide-react";
@@ -232,6 +233,8 @@ export default function DashboardPage() {
         return <NetworkWidget key="network" locationId={locationFilter ?? undefined} />;
       case "week_in_review":
         return <WeekInReviewWidget key="week_in_review" />;
+      case "quick_charge":
+        return <QuickChargeWidget key="quick_charge" />;
       default:
         return null;
     }

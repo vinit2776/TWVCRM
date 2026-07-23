@@ -19,6 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
 import { Loader2, FileText, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -100,6 +102,7 @@ export function AddUsageChargeDialog({
   const [notes, setNotes] = useState("");
   const [hsnSacCode, setHsnSacCode] = useState("999799");
   const [submitting, setSubmitting] = useState(false);
+  const [notifyCustomer, setNotifyCustomer] = useState(false);
 
   const subtotal = quantity * unitPrice;
   const gstAmount = parseFloat((subtotal * gstRate / 100).toFixed(2));
@@ -224,6 +227,7 @@ export function AddUsageChargeDialog({
     setChargeDate(defaultChargeDate || new Date().toISOString().split("T")[0]);
     setNotes("");
     setHsnSacCode("999799");
+    setNotifyCustomer(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -275,6 +279,7 @@ export function AddUsageChargeDialog({
           charge_date: chargeDate,
           hsn_sac_code: hsnSacCode,
           notes: notes.trim() || undefined,
+          notify_customer: notifyCustomer,
         }),
       });
 
@@ -382,25 +387,22 @@ export function AddUsageChargeDialog({
                   No active contracts found.
                 </p>
               ) : (
-                <Select
+                <SearchableSelect
                   value={selectedContractId}
                   onValueChange={setSelectedContractId}
                   disabled={!!contractId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a contract" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {contracts.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.contract_number}
-                        {c.lead
-                          ? ` — ${c.lead.company || `${c.lead.first_name} ${c.lead.last_name}`}`
-                          : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  placeholder="Select a contract"
+                  searchPlaceholder="Search by contract # or customer name..."
+                  emptyMessage="No matching contracts found."
+                  options={contracts.map((c) => ({
+                    value: c.id,
+                    label: `${c.contract_number}${
+                      c.lead
+                        ? ` — ${c.lead.company || `${c.lead.first_name} ${c.lead.last_name}`}`
+                        : ""
+                    }`,
+                  }))}
+                />
               )}
             </div>
           )}
@@ -500,6 +502,7 @@ export function AddUsageChargeDialog({
                   : "e.g., Additional meeting room hours"
               }
             />
+            <ImproveWordingButton description={description} onApply={setDescription} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -625,6 +628,28 @@ export function AddUsageChargeDialog({
               placeholder="Optional notes..."
               rows={2}
             />
+          </div>
+
+          {/* Notify customer — opt-in per charge, email only (WhatsApp/SMS
+              here require a pre-approved MSG91 template, which doesn't
+              exist yet for ad-hoc charges). */}
+          <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm text-blue-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={notifyCustomer}
+                onChange={(e) => setNotifyCustomer(e.target.checked)}
+                className="h-4 w-4 rounded"
+              />
+              Notify customer by email about this charge
+            </label>
+            {notifyCustomer && (
+              <p className="text-xs text-blue-600">
+                They&apos;ll be emailed the description and amount, told it will be billed
+                at the end of the billing cycle, and asked to report any discrepancy within
+                24 hours.
+              </p>
+            )}
           </div>
 
           <DialogFooter>
