@@ -8,6 +8,11 @@ import {
   isUnifiLocation,
   calcVoucherMinutes,
 } from "@/lib/unifi";
+import {
+  siteConfigFromLocation as ruijieSiteConfigFromLocation,
+  isRuijieLocation,
+  issueRuijieVoucherForContract,
+} from "@/lib/ruijie";
 
 export async function GET(
   request: NextRequest,
@@ -97,17 +102,19 @@ export async function POST(
   // ── Fetch location to determine voucher mode ──────────────────────
   const locationId: string | null = contract.location_id || null;
   let useUnifi = false;
+  let useRuijie = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let location: any = null;
 
   if (locationId) {
     const { data: loc } = await supabase
       .from("locations")
-      .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
+      .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id, name")
       .eq("id", locationId)
       .single();
     location = loc;
     useUnifi = loc ? isUnifiLocation(loc) : false;
+    useRuijie = loc ? isRuijieLocation(loc) : false;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -309,6 +316,201 @@ export async function POST(
         data: issuedVouchers,
         message: `${issuedVouchers.length} Unifi vouchers issued`,
         unifi_codes: issuedCodes,
+      },
+      { status: 201 }
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // RUIJIE PATH
+  // ──────────────────────────────────────────────────────────────────
+  if (useRuijie) {
+    const siteConfig = ruijieSiteConfigFromLocation(location);
+    if (!siteConfig) {
+      return NextResponse.json(
+        { error: "This location is set to Ruijie voucher mode but has no ruijie_group_id configured." },
+        { status: 400 }
+      );
+    }
+
+    const tenureMonths: number = contract.tenure_months || 1;
+    const targetDays = tenureMonths * 30;
+
+    const { data: dbUser } = await supabase
+      .from("users")
+      .select("id")
+      .eq("auth_id", user.id)
+      .single();
+
+    if (isPerSeatMode) {
+      const seatNumber = body.seat_number!;
+
+      if (seatNumber < 1 || seatNumber > totalSeats) {
+        return NextResponse.json(
+          { error: `Seat number must be between 1 and ${totalSeats}` },
+          { status: 400 }
+        );
+      }
+
+      const { data: existingSeat } = await supabase
+        .from("voucher_issuances")
+        .select("id")
+        .eq("contract_id", id)
+        .eq("seat_number", seatNumber)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (existingSeat) {
+        return NextResponse.json(
+          { error: `Seat ${seatNumber} already has an active voucher` },
+          { status: 400 }
+        );
+      }
+
+      const issued = await issueRuijieVoucherForContract(
+        siteConfig,
+        targetDays,
+        `${contract.contract_number}_seat${seatNumber}`
+      );
+
+      if ("error" in issued) {
+        return NextResponse.json({ error: issued.error }, { status: 400 });
+      }
+
+      const { data: issuance, error: insertError } = await supabase
+        .from("voucher_issuances")
+        .insert({
+          contract_id: id,
+          voucher_id: null,
+          lead_id: contract.lead_id || null,
+          seat_number: seatNumber,
+          issued_by: dbUser?.id,
+          valid_from: contract.start_date,
+          valid_until: contract.end_date,
+          seat_occupant_email: body.seat_occupant_email || null,
+          member_id: body.member_id || null,
+          is_active: true,
+          ruijie_voucher_uuid: issued.result.uuid,
+          ruijie_code: issued.result.code,
+        })
+        .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
+        .single();
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      if (dbUser?.id) {
+        logAudit(supabase, {
+          entityType: "voucher",
+          entityId: id,
+          action: "create",
+          performedBy: dbUser.id,
+          changes: {
+            seat_number: { old: null, new: seatNumber },
+            ruijie_voucher_uuid: { old: null, new: issued.result.uuid },
+            ruijie_code: { old: null, new: issued.result.code },
+          },
+        });
+      }
+
+      return NextResponse.json(
+        {
+          data: [issuance],
+          message: "1 Ruijie voucher issued",
+          ruijie_code: issued.result.code,
+          match_warning: issued.matchWarning,
+        },
+        { status: 201 }
+      );
+    }
+
+    // Bulk Ruijie mode: issue for all remaining seats
+    const remaining = totalSeats - issuedCount;
+
+    if (remaining <= 0) {
+      return NextResponse.json(
+        { error: "All seats already have vouchers issued" },
+        { status: 400 }
+      );
+    }
+
+    const { data: activeIssuances } = await supabase
+      .from("voucher_issuances")
+      .select("seat_number")
+      .eq("contract_id", id)
+      .eq("is_active", true);
+
+    const activeSeatNumbers = new Set((activeIssuances || []).map((i) => i.seat_number));
+    const unfilledSeats: number[] = [];
+    for (let s = 1; s <= totalSeats; s++) {
+      if (!activeSeatNumbers.has(s)) unfilledSeats.push(s);
+    }
+
+    const issuedVouchers = [];
+    const issuedCodes: string[] = [];
+    let lastMatchWarning: string | null = null;
+
+    for (const seatNumber of unfilledSeats) {
+      const issued = await issueRuijieVoucherForContract(
+        siteConfig,
+        targetDays,
+        `${contract.contract_number}_seat${seatNumber}`
+      );
+
+      if ("error" in issued) {
+        return NextResponse.json(
+          { error: `${issued.error} ${issuedVouchers.length} vouchers issued before failure.` },
+          { status: 400 }
+        );
+      }
+
+      const { data: issuance, error: insertError } = await supabase
+        .from("voucher_issuances")
+        .insert({
+          contract_id: id,
+          voucher_id: null,
+          lead_id: contract.lead_id || null,
+          seat_number: seatNumber,
+          issued_by: dbUser?.id,
+          valid_from: contract.start_date,
+          valid_until: contract.end_date,
+          is_active: true,
+          ruijie_voucher_uuid: issued.result.uuid,
+          ruijie_code: issued.result.code,
+        })
+        .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
+        .single();
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      issuedVouchers.push(issuance);
+      issuedCodes.push(issued.result.code);
+      lastMatchWarning = issued.matchWarning;
+    }
+
+    if (dbUser?.id) {
+      logAudit(supabase, {
+        entityType: "voucher",
+        entityId: id,
+        action: "create",
+        performedBy: dbUser.id,
+        changes: {
+          count: { old: null, new: issuedVouchers.length },
+          contract_id: { old: null, new: id },
+          mode: { old: null, new: "ruijie_api" },
+        },
+      });
+    }
+
+    return NextResponse.json(
+      {
+        data: issuedVouchers,
+        message: `${issuedVouchers.length} Ruijie vouchers issued`,
+        ruijie_codes: issuedCodes,
+        match_warning: lastMatchWarning,
       },
       { status: 201 }
     );
