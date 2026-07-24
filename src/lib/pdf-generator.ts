@@ -33,6 +33,22 @@ function formatCurrencyPDF(amount: number): string {
   );
 }
 
+// jsPDF's built-in "helvetica" font only supports WinAnsiEncoding (Latin-1).
+// Free-text fields (terms, notes, descriptions) can contain characters typed
+// or pasted by users — like ₹ or smart typography from Word/Docs — that fall
+// outside that range. Left unhandled, a single such character throws off
+// jsPDF's line-width calculation for the whole line it's in, producing
+// stretched-out spacing and clipped/missing text. Sanitize before rendering.
+function sanitizeForPdf(text: string): string {
+  return text
+    .replace(/₹/g, "Rs.")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/[^\x00-\xFF]/g, "");
+}
+
 function formatDatePDF(date: string | Date): string {
   return new Date(date).toLocaleDateString("en-IN", {
     timeZone: "Asia/Kolkata",
@@ -614,7 +630,7 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
     const tcLines = doc.splitTextToSize(
-      options.termsAndConditions,
+      sanitizeForPdf(options.termsAndConditions),
       pageWidth - 28
     );
     doc.text(tcLines, 14, y);
