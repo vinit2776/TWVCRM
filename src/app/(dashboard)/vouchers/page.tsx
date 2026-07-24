@@ -18,6 +18,7 @@ import { LowStockAlert } from "@/components/vouchers/low-stock-alert";
 import { ReclassifyVouchersDialog } from "@/components/vouchers/reclassify-vouchers-dialog";
 import { VoucherIssuanceDialog } from "@/components/vouchers/voucher-issuance-dialog";
 import { UnifiPanel } from "@/components/vouchers/unifi-panel";
+import { RuijiePanel } from "@/components/vouchers/ruijie-panel";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { useLocations } from "@/hooks/use-locations";
 import {
@@ -42,7 +43,7 @@ interface Voucher {
   location?: { id: string; name: string; code: string } | null;
 }
 
-type TabType = "inventory" | "all" | "unifi_live";
+type TabType = "inventory" | "all" | "unifi_live" | "ruijie_live";
 
 export default function VouchersPage() {
   const [activeTab, setActiveTab] = useState<TabType>("inventory");
@@ -84,16 +85,20 @@ export default function VouchersPage() {
     ? locations.find((l) => l.id === locationFilter) ?? null
     : null;
   const isUnifiLocation = Boolean(selectedLocation?.unifi_site_id);
+  const isRuijieLocation = selectedLocation?.wifi_voucher_mode === "ruijie_api";
+  const isLiveApiLocation = isUnifiLocation || isRuijieLocation;
 
-  // When a UniFi location is selected, auto-switch to the live tab
+  // When a live-API location is selected, auto-switch to its live tab
   useEffect(() => {
     if (isUnifiLocation) {
       setActiveTab("unifi_live");
-    } else if (activeTab === "unifi_live") {
+    } else if (isRuijieLocation) {
+      setActiveTab("ruijie_live");
+    } else if (activeTab === "unifi_live" || activeTab === "ruijie_live") {
       setActiveTab("inventory");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isUnifiLocation]);
+  }, [isUnifiLocation, isRuijieLocation]);
 
   // Fetch inventory
   const fetchInventory = useCallback(async () => {
@@ -164,8 +169,8 @@ export default function VouchersPage() {
             includeAllOption
             placeholder="All Locations"
           />
-          {/* Hide upload for UniFi-managed locations — they use the API, not batch imports */}
-          {!isUnifiLocation && (
+          {/* Hide upload for live-API-managed locations — they use the API, not batch imports */}
+          {!isLiveApiLocation && (
             <Button onClick={() => { setUploadPreselectedValidity(undefined); setUploadOpen(true); }}>
               <Upload className="mr-2 h-4 w-4" />
               Upload Vouchers
@@ -174,7 +179,7 @@ export default function VouchersPage() {
         </div>
       </div>
 
-      {/* UniFi location badge */}
+      {/* Live-API location badge */}
       {isUnifiLocation && selectedLocation && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-sm">
           <Wifi className="h-4 w-4 text-primary" />
@@ -184,11 +189,20 @@ export default function VouchersPage() {
           </span>
         </div>
       )}
+      {isRuijieLocation && selectedLocation && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-sm">
+          <Wifi className="h-4 w-4 text-primary" />
+          <span>
+            <strong>{selectedLocation.name}</strong> is managed via the Ruijie Cloud API.
+            Vouchers are issued from contracts; this tab is live monitoring only.
+          </span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b">
-        {/* Hide Inventory + All Vouchers tabs for UniFi locations — they're not applicable */}
-        {!isUnifiLocation && (
+        {/* Hide Inventory + All Vouchers tabs for live-API locations — they're not applicable */}
+        {!isLiveApiLocation && (
           <>
             <TabButton
               active={activeTab === "inventory"}
@@ -212,6 +226,14 @@ export default function VouchersPage() {
             label="Live (API)"
           />
         )}
+        {isRuijieLocation && (
+          <TabButton
+            active={activeTab === "ruijie_live"}
+            onClick={() => setActiveTab("ruijie_live")}
+            icon={<Wifi className="h-4 w-4" />}
+            label="Live (Ruijie)"
+          />
+        )}
       </div>
 
       {/* ===== UniFi Live Tab ===== */}
@@ -220,6 +242,14 @@ export default function VouchersPage() {
           locationId={selectedLocation.id}
           locationName={selectedLocation.name}
           userRole={userRole}
+        />
+      )}
+
+      {/* ===== Ruijie Live Tab ===== */}
+      {activeTab === "ruijie_live" && isRuijieLocation && selectedLocation && (
+        <RuijiePanel
+          locationId={selectedLocation.id}
+          locationName={selectedLocation.name}
         />
       )}
 

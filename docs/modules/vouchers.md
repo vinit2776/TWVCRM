@@ -2,15 +2,16 @@
 
 ## Purpose and Business Context
 
-The WiFi Vouchers module manages internet access provisioning for The WorkVilla's coworking space clients. It covers two distinct delivery modes:
+The WiFi Vouchers module manages internet access provisioning for The WorkVilla's coworking space clients. It covers three distinct delivery modes:
 
 1. **Repository mode** — pre-printed WiFi voucher codes uploaded from ISP-generated PDFs and assigned from a pool to contracts (one code per seat) or bookings (one code per N attendees).
 2. **UniFi API mode** — real-time voucher generation via the Ubiquiti UniFi cloud API for locations with a UniFi controller. Vouchers have precision durations matching the exact contract or booking window; no batch import needed.
+3. **Ruijie API mode** — real-time voucher generation via the Ruijie Cloud API, for locations running Ruijie Reyee hardware (currently Nungambakkam Arcade: RAP2200(E) AP + NBR6210-E gateway). Unlike UniFi, duration/quota come from pre-configured packages, not an exact per-voucher value — see "Ruijie Cloud API Integration Details" below, including a known gap (no revoke API).
 
 The module sits at the intersection of Operations (bookings, contracts) and IT (WiFi infrastructure). Key business functions:
 - Ensure every active contract seat has a valid WiFi code for the duration of the contract.
 - Issue temporary codes for day-use bookings.
-- Revoke access automatically on contract termination or renewal handover.
+- Revoke access automatically on contract termination or renewal handover (Ruijie-mode locations are a known exception — see below).
 - Provide an auditable trail of who got which code and when.
 
 ---
@@ -35,6 +36,7 @@ The module sits at the intersection of Operations (bookings, contracts) and IT (
 | `src/components/vouchers/reclassify-vouchers-dialog.tsx` | Bulk-assign `validity_days` to unclassified (`validity_days IS NULL`) available vouchers |
 | `src/components/vouchers/voucher-issuance-dialog.tsx` | Side-panel detail view for a clicked issued/revoked voucher row |
 | `src/components/vouchers/unifi-panel.tsx` | Live UniFi panel: stats bar, paginated voucher table, pending approval queue, ad-hoc issue dialog |
+| `src/components/vouchers/ruijie-panel.tsx` | Live Ruijie panel: device health cards, voucher stats + table, connected-clients table. Read-only monitoring — no ad-hoc issuance (vouchers come from the contract flow, same as repository mode) |
 | `src/components/contracts/contract-vouchers-section.tsx` | Contract detail page embedded section; seat-by-seat issuance, per-seat email, replace action |
 | `src/components/contracts/voucher-replace-dialog.tsx` | OTP-gated voucher replacement flow (3-step: confirm → OTP → success) |
 
@@ -54,6 +56,9 @@ The module sits at the intersection of Operations (bookings, contracts) and IT (
 | `src/app/api/unifi/vouchers/route.ts` | GET | List live vouchers from UniFi device (paginated, masked) |
 | `src/app/api/unifi/vouchers/adhoc/route.ts` | POST | Issue ad-hoc UniFi voucher; approval-gated for non-admin/manager |
 | `src/app/api/unifi/vouchers/reveal/route.ts` | POST | Reveal full code for a UniFi voucher (audit-logged) |
+| `src/app/api/ruijie/vouchers/route.ts` | GET | List live vouchers + stats from Ruijie Cloud (paginated, masked) |
+| `src/app/api/ruijie/devices/route.ts` | GET | Device status (AP/Gateway/Switch) + CPU/memory for a Ruijie location |
+| `src/app/api/ruijie/clients/route.ts` | GET | Currently-connected clients for a Ruijie location (signal quality, throughput) |
 
 ### Lib Files
 | File | Purpose |
@@ -61,6 +66,7 @@ The module sits at the intersection of Operations (bookings, contracts) and IT (
 | `src/lib/voucher-pdf-parser.ts` | Parse ISP-generated PDFs; extract XXXXX-XXXXX codes; detect validity; decode PUA font chars |
 | `src/lib/unifi.ts` | UniFi cloud API client: `createUnifiVoucher`, `revokeUnifiVoucher`, `getUnifiVoucher`, `getUnifiHotspotSsid`, `cachedUnifiRequest`, `isUnifiLocation`, `calcVoucherMinutes` |
 | `src/lib/unifi-share.ts` | `buildShareableMessage`, `fmtDuration` — for WhatsApp-friendly WiFi code sharing |
+| `src/lib/ruijie.ts` | Ruijie Cloud API client: `issueRuijieVoucherForContract`, `matchRuijiePackage`, `listRuijieVouchers`, `listRuijieDevices`, `getRuijieDevicePerformance`, `listRuijieClients`, `isRuijieLocation`. Reactive token refresh (catch `code: 4` → refresh → retry). No `revokeRuijieVoucher` — deliberately absent, see below. |
 
 ### Constants (`src/lib/constants.ts`)
 ```
@@ -131,6 +137,8 @@ Tracks which voucher was issued to which seat of which contract or booking.
 | `is_active` | BOOLEAN NOT NULL DEFAULT true | False = revoked or replaced |
 | `replaces_issuance_id` | UUID → `voucher_issuances.id` ON DELETE SET NULL | Back-reference to replaced issuance |
 | `unifi_voucher_id` | TEXT | UniFi internal `_id`; set when `wifi_voucher_mode = 'unifi_api'` |
+| `ruijie_voucher_uuid` | TEXT | Ruijie Cloud voucher `uuid`; set when `wifi_voucher_mode = 'ruijie_api'` |
+| `ruijie_code` | TEXT | Human-readable Ruijie voucher code |
 
 **Unique constraint (partial):**
 ```sql
@@ -167,7 +175,8 @@ Used exclusively for voucher replacement authorization.
 |--------|------|-------|
 | `unifi_site_id` | TEXT | UniFi site slug (e.g. `"default"`); NULL = repository mode |
 | `unifi_console_id` | TEXT | UniFi cloud console UUID; falls back to `UNIFI_CONSOLE_ID` env var |
-| `wifi_voucher_mode` | TEXT NOT NULL DEFAULT `'repository'` CHECK (`repository` or `unifi_api`) | Definitive flag for mode selection |
+| `ruijie_group_id` | INTEGER | Ruijie Cloud network group ID (site identifier); set when `wifi_voucher_mode = 'ruijie_api'` |
+| `wifi_voucher_mode` | TEXT NOT NULL DEFAULT `'repository'` CHECK (`repository`, `unifi_api`, or `ruijie_api`) | Definitive flag for mode selection |
 
 ---
 
@@ -409,6 +418,42 @@ return Boolean(location.unifi_site_id);
 
 ---
 
+## Ruijie Cloud API Integration Details
+
+### Environment variables
+| Var | Purpose |
+|-----|---------|
+| `RUIJIE_APP_ID` | App ID for Ruijie Cloud API (issued by Ruijie support — not self-serve) |
+| `RUIJIE_APP_SECRET` | App secret paired with `RUIJIE_APP_ID` |
+| `RUIJIE_CLOUD_URL_PREFIX` | Optional — defaults to `https://cloud-as.ruijienetworks.com` |
+
+### Auth flow
+`POST /service/api/oauth20/client/access_token?token=d63dss0a81e4415a889ac5b78fsc904a` with JSON body `{appid, secret}` returns an `accessToken`. Ruijie's own docs contradict themselves on lifetime (30 days vs. 30-minute idle expiry), so the client doesn't pre-track expiry — it caches for 25 minutes and, on any response with `code: 4` ("token expires"), clears the cache and retries once with a fresh token.
+
+### Site identification
+Ruijie's equivalent of `unifi_site_id` is `groupId` — an integer from `GET /service/api/group/single/tree?depth=DEVICE`. `locations.ruijie_group_id` stores this per location. Nungambakkam Arcade's `groupId` is `8921725` (Ruijie Cloud project name "WorkVilla_New" — note this does **not** match any TWV location name; Ruijie project names are set by whoever created them in the console and aren't kept in sync with CRM location names).
+
+### Voucher packages (no exact-duration API)
+Unlike UniFi, voucher duration/quota is **not a parameter on the create call** — it's fixed by a pre-configured "User Group" package in the Ruijie Cloud console (`GET /service/api/intl/usergroup/list/{groupId}`). `issueRuijieVoucherForContract()` picks the closest `CRM_`-prefixed package to the contract's `tenure_months * 30` target, using the same ±20% tolerance-matching as repository mode — it does **not** compute an exact duration like `calcVoucherMinutes()` does for UniFi.
+
+Five standard packages exist for Nungambakkam Arcade, created by IT specifically for CRM use (`userGroupId` / duration):
+`CRM_1Month` (30d) · `CRM_2Month` (60d) · `CRM_3Month` (90d) · `CRM_6Month` (180d) · `CRM_12Month` (365d) — all MAC-bound, 2 concurrent devices, unlimited quota/rate.
+
+IT also manages ~14 separate tenant/cabin-named packages (e.g. `TRINAMITE_GROOMING_HUB_cabin08`) for manually-issued vouchers predating this integration. `matchRuijiePackage()` only ever matches `CRM_`-prefixed packages — it will never touch or select IT's manual packages.
+
+### Known gap: no revoke/disable API (as of 2026-07)
+**Confirmed directly with Ruijie support** (not just undocumented) — there is no endpoint to revoke, disable, or delete an issued voucher. `voucher/create`, `voucher/customerCreate`, and `voucher/getList` are the only voucher endpoints. This means:
+- Contract termination does **not** cut off Ruijie-mode WiFi access immediately, unlike `unifi_api` locations where `revokeUnifiVoucher()` fires on termination. A terminated Nungambakkam Arcade seat's voucher stays live until its package's natural expiry.
+- MAC-bound vouchers (all `CRM_*` packages are bound) also cannot be unbound/reset via API — a device change on an active seat has no API-driven "replace" path for Ruijie vouchers (contrast with the repository/UniFi OTP-gated replace flow).
+- There is deliberately **no `revokeRuijieVoucher()` export** in `src/lib/ruijie.ts` — don't add a no-op stub. If Ruijie ships this later, wire it into contract termination the same way `revokeUnifiVoucher` is wired today.
+- This is currently an accepted, known business-policy gap, not a bug — flagged here so nobody "fixes" it by guessing at an endpoint that doesn't exist.
+
+### Read-only monitoring endpoints
+`listRuijieDevices()`, `getRuijieDevicePerformance()`, and `listRuijieClients()` back the `RuijiePanel` monitoring UI only — device status, CPU/memory, and connected-client signal quality. They are not used anywhere in the issuance path. Ruijie returns **HTTP 500** (not an empty list) when querying a device type with zero registered devices under a group — `listRuijieDevicesByType()` catches this and treats it as "none of this type" rather than surfacing an error.
+
+### Code masking
+Same `maskVoucherCode()` from `src/lib/utils.ts` used for repository codes — Ruijie codes are plain 6-character strings (e.g. `"5e7d3e"`), so the masking falls through to the generic "first 3 / last 1" fallback rather than the `XXXXX-XXXXX` path.
+
 ## PDF Parser Details (`src/lib/voucher-pdf-parser.ts`)
 
 Uses `unpdf` (serverless-compatible PDF.js). Extraction strategies, in order:
@@ -554,6 +599,8 @@ Response includes:
 | `locations.wifi_voucher_mode` | DB column | `'repository'` or `'unifi_api'` per location |
 | `locations.unifi_site_id` | DB column | Site slug; NULL = repository mode |
 | `locations.unifi_console_id` | DB column | Console UUID; NULL = use env var |
+| `RUIJIE_APP_ID` / `RUIJIE_APP_SECRET` | Env var | Required for any Ruijie Cloud API operation; issued by Ruijie support, not self-serve |
+| `locations.ruijie_group_id` | DB column | Ruijie Cloud site identifier; NULL = not a Ruijie-mode location |
 | `VOUCHER_LOW_STOCK_THRESHOLD = 10` | Code constant | Amber stock level threshold |
 | `OTP_EXPIRY_MINUTES = 10` | Code constant | OTP lifetime |
 | `OTP_MAX_ATTEMPTS = 5` | Code constant | Max OTP verification attempts |
