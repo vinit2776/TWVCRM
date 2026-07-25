@@ -57,17 +57,28 @@ export async function GET(req: NextRequest) {
   //   includes both pending (not linked) and historic (linked to the
   //   existing month statement). We want the full picture in the row, so
   //   we include both kinds.
+  //
+  //   These are two DISTINCT queries, not one range-filtered OR, because the
+  //   created_at window only makes sense for surfacing new pending charges.
+  //   A charge already linked to this month's statement is authoritatively
+  //   part of this period regardless of when the row was created — e.g. a
+  //   correction/backfill charge created weeks later must still show up, or
+  //   an operator can never review/finalize/re-send a statement that needed
+  //   a post-hoc fix.
   const stmtIds = (stmts || []).map((s) => s.id);
-  const { data: charges } = await admin
+  const { data: pendingCharges } = await admin
     .from("usage_charges")
     .select("id, contract_id, description, total, billing_statement_id, created_at")
+    .is("billing_statement_id", null)
     .gte("created_at", `${monthStart}T00:00:00`)
-    .lte("created_at", `${monthEnd}T23:59:59.999`)
-    .or(
-      stmtIds.length > 0
-        ? `billing_statement_id.is.null,billing_statement_id.in.(${stmtIds.join(",")})`
-        : "billing_statement_id.is.null",
-    );
+    .lte("created_at", `${monthEnd}T23:59:59.999`);
+  const { data: linkedCharges } = stmtIds.length > 0
+    ? await admin
+        .from("usage_charges")
+        .select("id, contract_id, description, total, billing_statement_id, created_at")
+        .in("billing_statement_id", stmtIds)
+    : { data: [] };
+  const charges = [...(pendingCharges || []), ...(linkedCharges || [])];
 
   // service_usage_records has no `used_at` or `total_amount` columns — the
   // correct period filter is period_year + period_month, and the billable
