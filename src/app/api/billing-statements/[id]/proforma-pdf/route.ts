@@ -78,13 +78,19 @@ export async function GET(
     return NextResponse.json({ error: "No contract, proposal, or invoice linked to this statement" }, { status: 400 });
   }
 
-  // Recalculate totals
+  // Recalculate totals — derive from the structured line_items sections (the
+  // same data the table below is built from) so the totals box can never
+  // drift from what's printed. Falls back to the legacy per-field sum only
+  // for statements predating the structured line_items JSONB.
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
   const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
-  const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
+  const structuredSections = (statement.line_items || []) as Array<{ type: string; label: string; items: Record<string, unknown>[]; subtotal: number }>;
+  const subtotal = structuredSections.length > 0
+    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
@@ -102,7 +108,6 @@ export async function GET(
 
   // Build line items
   const lineItems: GstInvoiceData["lineItems"] = [];
-  const structuredSections = (statement.line_items || []) as Array<{ type: string; label: string; items: Record<string, unknown>[]; subtotal: number }>;
 
   if (structuredSections.length > 0) {
     for (const section of structuredSections) {

@@ -130,13 +130,21 @@ export async function dispatchProforma(
     ? Array.from(new Set(toOverride.filter(Boolean)))
     : Array.from(new Set([customerEmail, ...billingEmails].filter((e): e is string => Boolean(e))));
 
-  // ── Calculate GST totals ─────────────────────────────────────────────────
+  // ── Calculate GST totals — derive from the structured line_items sections
+  // (the same data the table below is built from) so the totals box can
+  // never drift from what's printed. Falls back to the legacy per-field sum
+  // only for statements predating the structured line_items JSONB.
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
   const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
-  const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
+  const structuredSections = (statement.line_items || []) as Array<{
+    type: string; label: string; items: Record<string, unknown>[]; subtotal: number
+  }>;
+  const subtotal = structuredSections.length > 0
+    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
   const buyerState = (lead?.state || "").toLowerCase().trim();
@@ -233,9 +241,6 @@ export async function dispatchProforma(
 
   // ── Build PDF line items ─────────────────────────────────────────────────
   const lineItems: GstInvoiceData["lineItems"] = [];
-  const structuredSections = (statement.line_items || []) as Array<{
-    type: string; label: string; items: Record<string, unknown>[]; subtotal: number
-  }>;
 
   if (structuredSections.length > 0) {
     for (const section of structuredSections) {
@@ -570,13 +575,21 @@ export async function dispatchGstDirect(
     };
   }
 
-  // ── Totals ────────────────────────────────────────────────────────────────
+  // ── Totals — derive from the structured line_items sections (the same
+  // data the table below is built from) so the totals box can never drift
+  // from what's printed. Falls back to the legacy per-field sum only for
+  // statements predating the structured line_items JSONB. ───────────────────
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
   const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
-  const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
+  const structuredSections = (statement.line_items || []) as Array<{
+    type: string; label: string; items: Record<string, unknown>[]; subtotal: number
+  }>;
+  const subtotal = structuredSections.length > 0
+    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
   const isInterstate = false;
   const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
@@ -664,9 +677,6 @@ export async function dispatchGstDirect(
 
   // ── Build PDF line items ──────────────────────────────────────────────────
   const lineItems: GstInvoiceData["lineItems"] = [];
-  const structuredSections = (statement.line_items || []) as Array<{
-    type: string; label: string; items: Record<string, unknown>[]; subtotal: number
-  }>;
   if (structuredSections.length > 0) {
     for (const section of structuredSections) {
       for (const item of section.items) {
