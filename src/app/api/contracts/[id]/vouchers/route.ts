@@ -11,7 +11,7 @@ import {
 import {
   siteConfigFromLocation as ruijieSiteConfigFromLocation,
   isRuijieLocation,
-  issueRuijieVoucherForContract,
+  issueRuijieVoucher,
 } from "@/lib/ruijie";
 
 export async function GET(
@@ -367,7 +367,7 @@ export async function POST(
         );
       }
 
-      const issued = await issueRuijieVoucherForContract(
+      const issued = await issueRuijieVoucher(
         siteConfig,
         targetDays,
         `${contract.contract_number}_seat${seatNumber}`
@@ -452,7 +452,7 @@ export async function POST(
     let lastMatchWarning: string | null = null;
 
     for (const seatNumber of unfilledSeats) {
-      const issued = await issueRuijieVoucherForContract(
+      const issued = await issueRuijieVoucher(
         siteConfig,
         targetDays,
         `${contract.contract_number}_seat${seatNumber}`
