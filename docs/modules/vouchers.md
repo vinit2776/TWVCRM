@@ -37,6 +37,7 @@ The module sits at the intersection of Operations (bookings, contracts) and IT (
 | `src/components/vouchers/voucher-issuance-dialog.tsx` | Side-panel detail view for a clicked issued/revoked voucher row |
 | `src/components/vouchers/unifi-panel.tsx` | Live UniFi panel: stats bar, paginated voucher table, pending approval queue, ad-hoc issue dialog |
 | `src/components/vouchers/ruijie-panel.tsx` | Live Ruijie panel: device health cards, voucher stats + table, connected-clients table. Read-only monitoring — no ad-hoc issuance (vouchers come from the contract flow, same as repository mode) |
+| `src/components/contracts/link-ruijie-voucher-dialog.tsx` | "Link Existing" flow: lookup-by-exact-code + preview + explicit confirm. Never a search/suggestion — see "Linking already-issued vouchers" below |
 | `src/components/contracts/contract-vouchers-section.tsx` | Contract detail page embedded section; seat-by-seat issuance, per-seat email, replace action |
 | `src/components/contracts/voucher-replace-dialog.tsx` | OTP-gated voucher replacement flow (3-step: confirm → OTP → success) |
 
@@ -59,6 +60,7 @@ The module sits at the intersection of Operations (bookings, contracts) and IT (
 | `src/app/api/ruijie/vouchers/route.ts` | GET | List live vouchers + stats from Ruijie Cloud (paginated, masked) |
 | `src/app/api/ruijie/devices/route.ts` | GET | Device status (AP/Gateway/Switch) + CPU/memory for a Ruijie location |
 | `src/app/api/ruijie/clients/route.ts` | GET | Currently-connected clients for a Ruijie location (signal quality, throughput) |
+| `src/app/api/contracts/[id]/vouchers/link-ruijie/route.ts` | POST | Look up a Ruijie voucher by exact code (preview) and, with `confirm: true`, link it to a contract seat |
 
 ### Lib Files
 | File | Purpose |
@@ -447,6 +449,9 @@ IT also manages ~14 separate tenant/cabin-named packages (e.g. `TRINAMITE_GROOMI
 - MAC-bound vouchers (all `CRM_*` packages are bound) also cannot be unbound/reset via API — a device change on an active seat has no API-driven "replace" path for Ruijie vouchers (contrast with the repository/UniFi OTP-gated replace flow).
 - There is deliberately **no `revokeRuijieVoucher()` export** in `src/lib/ruijie.ts` — don't add a no-op stub. If Ruijie ships this later, wire it into contract termination the same way `revokeUnifiVoucher` is wired today.
 - This is currently an accepted, known business-policy gap, not a bug — flagged here so nobody "fixes" it by guessing at an endpoint that doesn't exist.
+
+### Linking already-issued vouchers to existing contracts
+Nungambakkam Arcade had ~56 vouchers already issued manually by IT before this integration existed — none of those are recorded in `voucher_issuances`. There is **deliberately no automatic or name-based matching** to reconcile them; `POST /api/contracts/[id]/vouchers/link-ruijie` (`LinkRuijieVoucherDialog`, a "Link Existing" button next to "Issue" on `ContractVouchersSection` for Ruijie-mode locations) is a lookup-by-exact-code-and-confirm flow only. Staff must first verify which voucher belongs to which customer out-of-band (e.g. checking the customer's actual device against the "Connected Clients" list in `RuijiePanel`), then type in the exact code they've verified. The endpoint returns a preview (package, status, device count) for visual confirmation before anything is written — never a search or suggestion list. This is intentional: package names like `TRINAMITE_GROOMING_HUB_cabin08` are informal strings IT typed by hand, not a reliable matching key.
 
 ### Read-only monitoring endpoints
 `listRuijieDevices()`, `getRuijieDevicePerformance()`, and `listRuijieClients()` back the `RuijiePanel` monitoring UI only — device status, CPU/memory, and connected-client signal quality. They are not used anywhere in the issuance path. Ruijie returns **HTTP 500** (not an empty list) when querying a device type with zero registered devices under a group — `listRuijieDevicesByType()` catches this and treats it as "none of this type" rather than surfacing an error.

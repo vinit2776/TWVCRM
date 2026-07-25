@@ -316,6 +316,18 @@ interface VoucherListResponse extends RuijieResponse {
   };
 }
 
+/**
+ * Look up one voucher by its exact code — for manually linking a voucher that
+ * was already issued outside the CRM (e.g. by IT, before this integration
+ * existed) to a contract/seat. Staff must have already verified the code
+ * belongs to the right customer's device; this is a lookup, not a search.
+ */
+export async function findRuijieVoucherByCode(groupId: number, code: string): Promise<RuijieVoucherSummary | null> {
+  const vouchers = await listRuijieVouchers(groupId);
+  const normalized = code.trim().toLowerCase();
+  return vouchers.find((v) => v.code.toLowerCase() === normalized) ?? null;
+}
+
 /** Full voucher list for a site — not cached, this backs a live monitoring view. */
 export async function listRuijieVouchers(groupId: number): Promise<RuijieVoucherSummary[]> {
   const data = await ruijieRequest<VoucherListResponse>(
