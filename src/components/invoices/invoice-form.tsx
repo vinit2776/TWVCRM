@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +12,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { Loader2 } from "lucide-react";
+import { Loader2, ShieldAlert, Info, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
 
 interface InvoiceFormProps {
   leadId: string;
@@ -21,6 +25,12 @@ interface InvoiceFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  // Whether this lead has a non-terminal proposal to route to when the user
+  // picks "Security Deposit" — deposits are always collected there, never
+  // via an ad-hoc invoice.
+  hasActiveProposal: boolean;
+  activeProposalId?: string;
+  onRequestProposal: () => void;
 }
 
 export function InvoiceForm({
@@ -29,7 +39,12 @@ export function InvoiceForm({
   open,
   onOpenChange,
   onSuccess,
+  hasActiveProposal,
+  activeProposalId,
+  onRequestProposal,
 }: InvoiceFormProps) {
+  const router = useRouter();
+  const [primaryHead, setPrimaryHead] = useState<AccountingHead | "">("");
   const [title, setTitle] = useState("");
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
@@ -40,7 +55,10 @@ export function InvoiceForm({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const isDeposit = primaryHead === "security_deposit";
+
   const resetForm = () => {
+    setPrimaryHead("");
     setTitle("");
     setItems([{ description: "", quantity: 1, unit_price: 0, total: 0 }]);
     setTaxPercentage(18);
@@ -49,8 +67,23 @@ export function InvoiceForm({
     setNotes("");
   };
 
+  const handleGoToProposal = () => {
+    onOpenChange(false);
+    resetForm();
+    if (hasActiveProposal && activeProposalId) {
+      router.push(`/proposals/${activeProposalId}`);
+    } else {
+      onRequestProposal();
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!primaryHead) {
+      toast.error("Select what this invoice is for");
+      return;
+    }
 
     if (!title.trim()) {
       toast.error("Please enter an invoice title");
@@ -74,6 +107,7 @@ export function InvoiceForm({
     const body = {
       lead_id: leadId,
       proposal_id: proposalId || undefined,
+      primary_head: primaryHead,
       title: title.trim(),
       items: validItems.map((item) => ({
         description: item.description,
@@ -114,50 +148,111 @@ export function InvoiceForm({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="invoice-title">
-              Title <span className="text-destructive">*</span>
+            <Label htmlFor="invoice-purpose">
+              What is this invoice for? <span className="text-destructive">*</span>
             </Label>
-            <Input
-              id="invoice-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Private Office - January 2026"
-            />
+            <Select
+              value={primaryHead}
+              onValueChange={(v) => setPrimaryHead(v as AccountingHead)}
+            >
+              <SelectTrigger id="invoice-purpose">
+                <SelectValue placeholder="Select a purpose" />
+              </SelectTrigger>
+              <SelectContent>
+                {ACCOUNTING_HEADS.map((head) => (
+                  <SelectItem key={head} value={head}>
+                    {ACCOUNTING_HEAD_LABELS[head]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          {/* Line Items */}
-          <div>
-            <Label className="mb-3 block">Line Items</Label>
-            <LineItemsEditor
-              items={items}
-              onChange={setItems}
-              taxPercentage={taxPercentage}
-              onTaxChange={setTaxPercentage}
-              discountPercentage={discountPercentage}
-              onDiscountChange={setDiscountPercentage}
-            />
-          </div>
+          {isDeposit ? (
+            <Card className="border-amber-300 bg-amber-50">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base text-amber-800 flex items-center gap-2">
+                  <ShieldAlert className="h-5 w-5" />
+                  Security deposits aren&apos;t collected this way
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-md border border-amber-200 bg-white px-4 py-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <Info className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div className="text-xs text-amber-800 space-y-1">
+                      <p>
+                        Security deposits are refundable and GST-exempt — collecting one through an
+                        ad-hoc invoice books it as taxed revenue and it won&apos;t be tracked against
+                        the customer&apos;s deposit balance or be adjustable later.
+                      </p>
+                      <p className="font-medium">
+                        {hasActiveProposal
+                          ? "Use the deposit link on this lead's proposal instead."
+                          : "Deposits are collected on proposals — create one first."}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  className="w-full bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={handleGoToProposal}
+                >
+                  {hasActiveProposal ? "Go to Proposal" : "Create Proposal First"}
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="invoice-title">
+                  Title <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="invoice-title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Private Office - January 2026"
+                />
+              </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="due-date">Due Date</Label>
-            <Input
-              id="due-date"
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-            />
-          </div>
+              {/* Line Items */}
+              <div>
+                <Label className="mb-3 block">Line Items</Label>
+                <LineItemsEditor
+                  items={items}
+                  onChange={setItems}
+                  taxPercentage={taxPercentage}
+                  onTaxChange={setTaxPercentage}
+                  discountPercentage={discountPercentage}
+                  onDiscountChange={setDiscountPercentage}
+                />
+              </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="invoice-notes">Notes</Label>
-            <Textarea
-              id="invoice-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Internal notes..."
-              rows={2}
-            />
-          </div>
+              <div className="space-y-2">
+                <Label htmlFor="due-date">Due Date</Label>
+                <Input
+                  id="due-date"
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="invoice-notes">Notes</Label>
+                <Textarea
+                  id="invoice-notes"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Internal notes..."
+                  rows={2}
+                />
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -167,10 +262,12 @@ export function InvoiceForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Invoice
-            </Button>
+            {!isDeposit && (
+              <Button type="submit" disabled={submitting || !primaryHead}>
+                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Create Invoice
+              </Button>
+            )}
           </div>
         </form>
       </DialogContent>
