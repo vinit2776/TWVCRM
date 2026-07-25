@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
   Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart, ShieldCheck,
-  Activity, ArrowRight, Receipt,
+  Activity, ArrowRight, Receipt, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
+import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -204,6 +205,8 @@ export default function PurchaseRequestDetailPage() {
   const [editPricesOpen, setEditPricesOpen] = useState(false);
   // Bill Customer (reimbursement department only)
   const [billCustomerOpen, setBillCustomerOpen] = useState(false);
+  // Correct Department (admin-only)
+  const [correctDeptOpen, setCorrectDeptOpen] = useState(false);
   // Keyed by line item id → string (so empty input is preserved)
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
 
@@ -355,6 +358,17 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
+              {userRole === "admin" && !["cancelled", "rejected"].includes(pr.status) && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                  title="Correct department"
+                  onClick={() => setCorrectDeptOpen(true)}
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              )}
               {pr.expenditure_type && pr.expenditure_type !== "operational" && (
                 <Badge variant="secondary" className={EXPENDITURE_TYPE_COLORS[pr.expenditure_type] ?? "bg-gray-100 text-gray-800"}>
                   {EXPENDITURE_TYPE_LABELS[pr.expenditure_type]}
@@ -1513,6 +1527,17 @@ export default function PurchaseRequestDetailPage() {
               : ""
           }`}
           seedItems={(pr.purchase_request_items ?? []).map((it) => ({ item_name: it.item_name, quantity: Number(it.quantity) }))}
+          onSuccess={fetchPr}
+        />
+      )}
+
+      {userRole === "admin" && (
+        <CorrectDepartmentDialog
+          open={correctDeptOpen}
+          onOpenChange={setCorrectDeptOpen}
+          prId={pr.id}
+          prNumber={pr.pr_number}
+          currentDepartment={pr.department}
           onSuccess={fetchPr}
         />
       )}
