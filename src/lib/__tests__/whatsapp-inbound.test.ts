@@ -168,3 +168,42 @@ describe("parseInboundMessage", () => {
     }
   });
 });
+
+/**
+ * Template body parameters. Meta rejects newlines, tabs and runs of 4+ spaces,
+ * which MSG91 returns as HTTP 400 "next line(\n) is not supported for body
+ * value". Facility ticket nudges hit this because the link is built from
+ * NEXT_PUBLIC_APP_URL, stored in Vercel with a trailing newline.
+ */
+describe("sanitiseParam", () => {
+  // Mirrors the implementation in src/lib/whatsapp.ts.
+  const sanitiseParam = (value: string): string => {
+    const s = String(value ?? "").trim();
+    if (/^https?:\/\//i.test(s)) return s.replace(/\s+/g, "");
+    return s.replace(/\s+/g, " ");
+  };
+
+  it("strips whitespace from URLs instead of collapsing it to a space", () => {
+    // Collapsing would give "https://twv-crm.vercel.app /facility/..." — a send
+    // that succeeds but delivers an unclickable link.
+    const url = "https://twv-crm.vercel.app\n/facility/issues/abc123";
+    expect(sanitiseParam(url)).toBe("https://twv-crm.vercel.app/facility/issues/abc123");
+    expect(sanitiseParam(url)).not.toContain(" ");
+  });
+
+  it("collapses whitespace in prose, so a multi-line ticket description still sends", () => {
+    expect(sanitiseParam("WiFi down\nin the board room\t— urgent"))
+      .toBe("WiFi down in the board room — urgent");
+  });
+
+  it("leaves already-clean values untouched", () => {
+    expect(sanitiseParam("FI-2026-0042")).toBe("FI-2026-0042");
+    expect(sanitiseParam("https://twv-crm.vercel.app/x")).toBe("https://twv-crm.vercel.app/x");
+  });
+
+  it("never emits a value containing a newline", () => {
+    for (const v of ["a\nb", "https://x.test/a\nb", "  \n lead \n ", "tab\there"]) {
+      expect(sanitiseParam(v)).not.toMatch(/[\n\r\t]/);
+    }
+  });
+});
