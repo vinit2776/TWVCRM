@@ -43,6 +43,95 @@ const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
 
 const TOKEN_HEADER = "x-msg91-webhook-token";
 
+/**
+ * Pulls the readable message out of an inbound MSG91 event.
+ *
+ * The top-level `text` field is only populated for plain typed messages. For
+ * everything else it arrives empty and the real content sits inside `content`,
+ * which is itself a JSON *string*. Requiring `text` therefore dropped most
+ * inbound traffic — of 51 inbound events between 1–26 Jul 2026, only 8 had a
+ * usable `text`.
+ *
+ * Observed shapes, by frequency:
+ *   29x  Click-to-WhatsApp ad reply — content.referral.text holds the customer's
+ *        message; the sibling body/headline are the *ad creative*, not the
+ *        customer's words. These are inbound leads from Instagram/Facebook.
+ *   11x  content is null (reactions, stickers and similar unsupported types)
+ *    7x  plain text — content.text
+ *    3x  media — content.attachment_url
+ *    1x  WhatsApp Flow submission — content.reply.response_json (a form payload)
+ */
+export function parseInboundMessage(event: Record<string, unknown>): {
+  body: string;
+  messageType: string;
+  referral?: { sourceType?: string; sourceUrl?: string; headline?: string };
+  attachmentUrl?: string;
+} {
+  const messageType = String(event.messageType ?? "text");
+  const topText = typeof event.text === "string" ? event.text.trim() : "";
+  // MSG91 renders {{text}} by stringifying whatever it has, so a structured
+  // message arrives as the literal "[object Object]". Treat that as absent —
+  // for Flow submissions the real content (name, email) is in `content`.
+  if (topText && topText !== "[object Object]") return { body: topText, messageType };
+
+  const raw = event.content;
+  if (raw == null || raw === "null" || raw === "") {
+    return { body: `[${messageType}]`, messageType };
+  }
+
+  // `content` is a JSON string for every structured type; a bare string for some.
+  let parsed: unknown = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch { return { body: raw.trim(), messageType }; }
+  }
+  if (parsed == null || typeof parsed !== "object") {
+    return { body: String(parsed ?? `[${messageType}]`), messageType };
+  }
+  const c = parsed as Record<string, unknown>;
+
+  if (typeof c.text === "string" && c.text.trim()) {
+    return { body: c.text.trim(), messageType };
+  }
+
+  const referral = c.referral as Record<string, unknown> | undefined;
+  if (referral) {
+    const msg = typeof referral.text === "string" ? referral.text.trim() : "";
+    return {
+      body: msg || `[replied to ${referral.source_type ?? "ad"}]`,
+      messageType,
+      referral: {
+        sourceType: referral.source_type as string | undefined,
+        sourceUrl:  referral.source_url as string | undefined,
+        headline:   referral.headline as string | undefined,
+      },
+    };
+  }
+
+  const reply = c.reply as Record<string, unknown> | undefined;
+  if (reply) {
+    // WhatsApp Flow form submission — response_json is another nested JSON string.
+    if (typeof reply.response_json === "string") {
+      try {
+        const fields = JSON.parse(reply.response_json) as Record<string, unknown>;
+        const pairs = Object.entries(fields)
+          .filter(([k]) => k !== "flow_token")
+          // "screen_0_Name_0" -> "Name"
+          .map(([k, v]) => `${k.replace(/^screen_\d+_/, "").replace(/_\d+$/, "")}: ${v}`);
+        if (pairs.length) return { body: `[form] ${pairs.join(", ")}`, messageType };
+      } catch { /* fall through to the plain reply body */ }
+    }
+    if (typeof reply.body === "string" && reply.body.trim()) {
+      return { body: reply.body.trim(), messageType };
+    }
+  }
+
+  if (typeof c.attachment_url === "string" && c.attachment_url) {
+    return { body: `[${messageType}] ${c.attachment_url}`, messageType, attachmentUrl: c.attachment_url };
+  }
+
+  return { body: `[${messageType}]`, messageType };
+}
+
 /** Constant-time compare so a wrong token can't be recovered by timing. */
 function tokenMatches(candidate: string | null | undefined): boolean {
   if (!candidate || !WEBHOOK_TOKEN) return false;
@@ -135,8 +224,10 @@ export async function POST(request: NextRequest) {
   for (const event of events) {
     const requestId = event.requestId as string | undefined;
     const rawStatus = event.status as string | undefined;
-    const fromNumber = event.from as string | undefined;
-    const text = event.text as string | undefined;
+    // Inbound events populate both `from` and `customerNumber`; prefer whichever
+    // is present so a payload that only carries one is still attributed.
+    const senderNumber =
+      (event.from as string | undefined) || (event.customerNumber as string | undefined);
 
     const mappedStatus = rawStatus ? STATUS_MAP[rawStatus] : undefined;
 
@@ -194,13 +285,20 @@ export async function POST(request: NextRequest) {
           }).then(({ error }) => { if (error) console.error("[webhook] activity insert failed:", error.message); });
         }
       }
-    } else if (fromNumber && text) {
-      // Inbound message — link to lead if phone matches, log activity, alert dashboard
+    } else if (senderNumber) {
+      // Inbound message — link to lead if phone matches, log activity, alert dashboard.
+      //
+      // Keyed on the sender alone, NOT on `text`. Most inbound events carry an
+      // empty `text` and hold the message inside `content`; requiring `text`
+      // silently discarded 43 of 51 inbound events, including every
+      // Click-to-WhatsApp ad lead. See parseInboundMessage().
       const channel = (event.channel as string | undefined) ?? "whatsapp";
       const inboundChannel = channel === "sms" ? "sms" : "whatsapp";
 
+      const { body: messageBody, messageType, referral } = parseInboundMessage(event);
+
       // Normalise from_number to last 10 digits for fuzzy phone matching
-      const digits = fromNumber.replace(/\D/g, "");
+      const digits = senderNumber.replace(/\D/g, "");
       const last10 = digits.slice(-10);
 
       // Find a matching lead by phone or mobile (suffix match on last 10 digits)
@@ -218,29 +316,41 @@ export async function POST(request: NextRequest) {
       await supabase.from("whatsapp_messages").insert({
         direction:    "inbound",
         channel:      inboundChannel,
-        from_number:  fromNumber,
-        message_body: text,
+        from_number:  senderNumber,
+        message_body: messageBody,
+        template_name: messageType === "text" ? null : messageType,
         status:       "delivered",
         entity_type:  matchedLeadId ? "lead" : null,
         entity_id:    matchedLeadId ?? null,
       });
 
+      // An ad reply is a fresh inbound lead — surface where it came from, since
+      // the number often won't match any existing lead.
+      if (referral) {
+        console.info(
+          `[messaging webhook] Inbound ${referral.sourceType ?? "ad"} reply from ${last10 ? "…" + last10.slice(-4) : "unknown"}` +
+          `${referral.headline ? ` (ad: ${referral.headline})` : ""}${matchedLeadId ? "" : " — no matching lead"}`
+        );
+      }
+
       // Log activity on the lead timeline so the team can see the reply
       if (matchedLeadId) {
+        const adNote = referral
+          ? ` (via ${referral.sourceType ?? "ad"}${referral.headline ? `: ${referral.headline}` : ""})`
+          : "";
         await supabase.from("activities").insert({
           lead_id:     matchedLeadId,
           type:        "note",
           subject:     `WhatsApp reply received`,
-          description: `Customer replied via WhatsApp from ${fromNumber}: "${text.substring(0, 200)}${text.length > 200 ? "…" : ""}"`,
+          description: `Customer replied via WhatsApp from ${senderNumber}${adNote}: "${messageBody.substring(0, 200)}${messageBody.length > 200 ? "…" : ""}"`,
         }).then(({ error }) => {
           if (error) console.error("[webhook] inbound activity insert failed:", error.message);
         });
       }
     } else {
-      // Neither a delivery report nor an inbound message we recognise.
-      // MSG91 logs far more inbound messages than we store, so the payload
-      // shape here is wrong for some events. Log the KEYS only — never the
-      // values, which carry customer phone numbers and message text.
+      // Neither a delivery report nor something with a sender we can attribute.
+      // Log the KEYS only — never the values, which carry customer phone
+      // numbers and message text.
       console.warn(
         "[messaging webhook] Unhandled event shape. Top-level keys:",
         Object.keys(event).join(","),
