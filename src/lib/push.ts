@@ -4,7 +4,13 @@ import { createAdminClient } from "@/lib/supabase/server";
 
 const VAPID_PUBLIC  = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY  || "";
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY             || "";
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT                 || "mailto:space@theworkvilla.com";
+// .trim() — VAPID_SUBJECT was stored in Vercel with a trailing newline, which
+// went straight into the JWT `sub` claim. Apple Web Push validates that claim
+// strictly and rejected every notification with 403 BadJwtToken, while FCM
+// ignored it — so push worked on Android/Chrome and silently failed on
+// Safari/iOS. The keys were already trimmed by stripVapidKey(); the subject
+// was not.
+const VAPID_SUBJECT = (process.env.VAPID_SUBJECT || "").trim() || "mailto:space@theworkvilla.com";
 
 let vapidConfigured = false;
 

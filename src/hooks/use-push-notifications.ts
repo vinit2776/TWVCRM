@@ -8,8 +8,11 @@ const LS_KEY = "twv_push_dismissed";
  *  Safari requires Uint8Array specifically — ArrayBuffer throws
  *  "The string did not match the expected pattern." */
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  // Strip any whitespace before measuring: the padding below is length-derived,
+  // so a stray newline shifts it and yields a corrupt key.
+  const clean = base64String.replace(/\s+/g, "");
+  const padding = "=".repeat((4 - (clean.length % 4)) % 4);
+  const base64 = (clean + padding).replace(/-/g, "+").replace(/_/g, "/");
   const rawData = atob(base64);
   const output = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) {
@@ -35,7 +38,12 @@ export function usePushNotifications() {
   const [loading, setLoading]       = useState(false);
   const [dismissed, setDismissed]   = useState(false);
 
-  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  // .trim() — the key was stored in Vercel with a trailing newline. atob() strips
+  // whitespace, so this decoded correctly in practice, but the newline still
+  // skewed the length-based padding maths in urlBase64ToUint8Array(). Hardening,
+  // not a live fix: subscribe() below swallows its errors, so anything that did
+  // go wrong here would fail silently.
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim();
   // Evaluated only after mount so server and client agree on the initial render,
   // preventing the React 19 hydration mismatch that made the whole tree non-responsive.
   const isSupported =
