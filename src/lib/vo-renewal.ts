@@ -6,7 +6,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { sendWhatsApp } from "@/lib/whatsapp";
+import { sendWhatsAppDocument } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { logAudit } from "@/lib/audit";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -426,29 +426,67 @@ export async function sendRenewalEmail(params: {
 // Send renewal reminder via WhatsApp
 // ---------------------------------------------------------------------------
 
+/**
+ * Sends the renewal proforma over WhatsApp using the approved `gst_invoice_doc`
+ * template ("Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is
+ * attached. Click to pay: {{4}}."), which matches this message exactly.
+ *
+ * This previously used `vo_renewal_reminder` / `vo_renewal_final_notice`. Neither
+ * was ever registered in MSG91, so every send failed with "template name does
+ * not exist in en" — VO renewal reminders have never gone out over WhatsApp.
+ *
+ * `gst_invoice_doc` has a document header, so the PI PDF must be uploaded and
+ * signed first. Callers already generate this buffer for the email attachment.
+ * Note the approved template carries no "final notice" wording, so the grace
+ * notice reads the same as the first reminder on WhatsApp; the escalation is
+ * still conveyed by the email.
+ */
 export async function sendRenewalWhatsApp(params: {
   caseData: VoCaseForRenewal;
   isGraceNotice: boolean;
   piNumber: string;
   totalAmount: number;
   razorpayUrl: string;
+  pdfBuffer?: Buffer;
+  supabase: SupabaseClient;
 }): Promise<boolean> {
-  const { caseData, piNumber, totalAmount, razorpayUrl, isGraceNotice } = params;
+  const { caseData, piNumber, totalAmount, razorpayUrl, pdfBuffer, supabase } = params;
   if (!caseData.client_phone) return false;
 
-  const templateName = isGraceNotice ? "vo_renewal_final_notice" : "vo_renewal_reminder";
+  if (!pdfBuffer) {
+    console.warn(`[vo-renewal] No PI PDF for ${piNumber} — WhatsApp renewal skipped.`);
+    return false;
+  }
+
   const clientName = caseData.client_company_name || caseData.client_name;
 
   try {
-    const result = await sendWhatsApp({
+    const storagePath = `vo-renewals/${caseData.id}/${piNumber.replace(/\//g, "-")}.pdf`;
+    await supabase.storage
+      .from("crm-documents")
+      .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+
+    const { data: signed } = await supabase.storage
+      .from("crm-documents")
+      .createSignedUrl(storagePath, 365 * 24 * 3600);
+
+    const pdfUrl = signed?.signedUrl;
+    if (!pdfUrl) {
+      console.error(`[vo-renewal] Could not sign PI PDF URL for ${piNumber} — WhatsApp skipped.`);
+      return false;
+    }
+
+    // Called directly rather than via messaging.invoiceDocument() so the row is
+    // tagged entity_type "case" — that wrapper hardcodes "proposal", which would
+    // break the delivery webhook's lead lookup for a VO case.
+    const result = await sendWhatsAppDocument({
       to: caseData.client_phone,
-      template: templateName,
-      params: [
-        clientName,
-        piNumber,
-        `Rs. ${totalAmount.toLocaleString("en-IN")}`,
-        razorpayUrl,
-      ],
+      template: "gst_invoice_doc",
+      documentUrl: pdfUrl,
+      documentFilename: `${piNumber.replace(/\//g, "-")}.pdf`,
+      // Template renders "Rs.{{3}}", so pass the bare number — the old code
+      // passed "Rs. 12,000" here, which would have rendered "Rs.Rs. 12,000".
+      params: [clientName, piNumber, totalAmount.toLocaleString("en-IN"), razorpayUrl],
       entityType: "case",
       entityId: caseData.id,
     });

@@ -211,25 +211,11 @@ export async function POST(
   const customerPhone = lead?.phone || lead?.mobile;
   if (customerPhone && dispatchResult.razorpayLinkUrl) {
     const amountFormatted = totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 });
-    messaging.proposalInvoice(
-      customerPhone,
-      customerName,
-      dispatchResult.proformaRef,
-      amountFormatted,
-      dispatchResult.razorpayLinkUrl,
-      id
-    ).catch((e: unknown) => console.error("[messaging] invoice WhatsApp failed:", e));
 
-    if (proposal.lead_id && dbUser?.id) {
-      logWhatsAppActivity(supabase, {
-        leadId: proposal.lead_id,
-        subject: `Invoice ${dispatchResult.proformaRef} sent`,
-        description: `Prorated proforma invoice ${dispatchResult.proformaRef} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${dispatchResult.razorpayLinkUrl}`,
-        createdBy: dbUser.id,
-      });
-    }
-
-    // WhatsApp document (invoice PDF) — fire-and-forget
+    // gst_invoice_doc's body already carries the invoice number, amount and
+    // payment link, so the old proposal_invoice text send was a duplicate — and
+    // that template was never registered in MSG91, so it always failed while
+    // this document send succeeded.
     if (dispatchResult.pdfStoragePath) {
       const { data: signedUrlData } = await adminSupabase.storage
         .from("crm-documents")
@@ -245,7 +231,22 @@ export async function POST(
           invoicePdfUrl,
           id
         ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
+
+        if (proposal.lead_id && dbUser?.id) {
+          logWhatsAppActivity(supabase, {
+            leadId: proposal.lead_id,
+            subject: `Invoice ${dispatchResult.proformaRef} sent`,
+            description: `Prorated proforma invoice ${dispatchResult.proformaRef} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${dispatchResult.razorpayLinkUrl}`,
+            createdBy: dbUser.id,
+          });
+        }
       }
+    } else {
+      // Without a PDF we cannot send this template at all — it has a document
+      // header. Log it rather than failing silently.
+      console.warn(
+        `[send-invoice] No invoice PDF for ${dispatchResult.proformaRef} — WhatsApp invoice skipped.`
+      );
     }
   }
 

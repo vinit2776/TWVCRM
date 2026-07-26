@@ -91,6 +91,8 @@ export async function GET(request: Request) {
           piNumber,
           totalAmount,
           razorpayUrl: razorpayLink.url,
+          pdfBuffer,
+          supabase: adminSupabase,
         }),
       ]);
 
@@ -197,6 +199,8 @@ export async function GET(request: Request) {
           piNumber,
           totalAmount,
           razorpayUrl: razorpayLink.url,
+          pdfBuffer,
+          supabase: adminSupabase,
         }),
       ]);
 
@@ -296,6 +300,8 @@ export async function GET(request: Request) {
           piNumber,
           totalAmount,
           razorpayUrl: razorpayLink.url,
+          pdfBuffer,
+          supabase: adminSupabase,
         }),
       ]);
 

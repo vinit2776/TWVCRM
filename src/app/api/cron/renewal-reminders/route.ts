@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { sendWhatsApp } from "@/lib/whatsapp";
 import { dltSms } from "@/lib/whatsapp";
 
 export const maxDuration = 60;
@@ -13,9 +12,11 @@ export const maxDuration = 60;
  * approaching their end_date at 60, 30, 15, and 7 day milestones.
  *
  * Communication channels (all fire in parallel, best-effort):
- *   1. Email   — rich HTML to customer + CC to staff
- *   2. WhatsApp — MSG91 template "contract_renewal"
- *   3. SMS     — DLT template "contract_renewal" (if enabled)
+ *   1. Email — rich HTML to customer + CC to staff
+ *   2. SMS   — DLT template "contract_renewal" (if enabled)
+ *
+ * There is deliberately no WhatsApp channel here: no approved MSG91 template
+ * carries renewal wording. See the note at the send site.
  *
  * Idempotency: each milestone fires only once. The cron uses
  * renewal_reminder_count to track the number of reminders sent and
@@ -202,21 +203,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── 2. WhatsApp ───────────────────────────────────────────────────────
-    if (customerPhone) {
-      try {
-        const waResult = await sendWhatsApp({
-          to: customerPhone,
-          template: "contract_renewal",
-          params: [customerName, endDateFormatted],
-          entityType: "contract",
-          entityId: contract.id,
-        });
-        if (waResult.success) channels.push("whatsapp");
-      } catch (err) {
-        console.error(`[renewal-reminders] WhatsApp failed for ${contract.contract_number}:`, err);
-      }
-    }
+    // ── 2. WhatsApp — intentionally not sent ──────────────────────────────
+    // This used the "contract_renewal" template, which was never registered in
+    // MSG91: every send failed with "template name (contract_renewal) does not
+    // exist in en". None of the approved templates carry renewal wording, and
+    // reusing one that does not (e.g. payment_reminder, which says "Invoice
+    // {{1}} ... is due") would tell customers something untrue. Renewals go out
+    // by email above and by the DLT-approved SMS below until a
+    // renewal-specific WhatsApp template is approved in MSG91.
 
     // ── 3. DLT SMS ────────────────────────────────────────────────────────
     if (customerPhone) {
