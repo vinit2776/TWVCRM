@@ -34,12 +34,28 @@ import { createAdminClient } from "@/lib/supabase/server";
 // Config
 // ---------------------------------------------------------------------------
 
-const AUTH_KEY      = process.env.MSG91_AUTH_KEY;
-const WA_SENDER     = process.env.MSG91_WHATSAPP_SENDER;
+/**
+ * Reads an env var and strips surrounding whitespace.
+ *
+ * Vercel stores whatever was pasted into the dashboard, newline included.
+ * A trailing "\n" on MSG91_WHATSAPP_SENDER made every outbound WhatsApp call
+ * fail with "WhatsApp not integrated: 917200001638\n" because the integrated
+ * number is matched as an exact string on MSG91's side. Trim on read so a
+ * stray newline can never take the channel down again.
+ */
+function envStr(name: string): string | undefined {
+  const raw = process.env[name];
+  if (raw == null) return undefined;
+  const trimmed = raw.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+const AUTH_KEY      = envStr("MSG91_AUTH_KEY");
+const WA_SENDER     = envStr("MSG91_WHATSAPP_SENDER");
 
 // SMS is disabled until DLT sender ID is approved on TRAI portal.
 // Set MSG91_SMS_ENABLED=true in Vercel env vars to re-enable.
-const SMS_ENABLED   = process.env.MSG91_SMS_ENABLED === "true";
+const SMS_ENABLED   = envStr("MSG91_SMS_ENABLED") === "true";
 
 const WA_API_URL    = "https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
 const SMS_API_URL   = "https://control.msg91.com/api/v5/flow/";
@@ -47,9 +63,9 @@ const SMS_API_URL   = "https://control.msg91.com/api/v5/flow/";
 // SMS flow IDs — must match MSG91_SMS_DLT_FLOW_* env vars set in Vercel
 // Only used when SMS_ENABLED is true.
 const SMS_FLOWS = {
-  booking:  SMS_ENABLED ? process.env.MSG91_SMS_DLT_FLOW_BOOKING          : undefined,
+  booking:  SMS_ENABLED ? envStr("MSG91_SMS_DLT_FLOW_BOOKING")          : undefined,
   billing:  undefined as string | undefined, // no billing-specific DLT SMS flow
-  reminder: SMS_ENABLED ? process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER : undefined,
+  reminder: SMS_ENABLED ? envStr("MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER") : undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,7 +73,7 @@ const SMS_FLOWS = {
 // ---------------------------------------------------------------------------
 
 const DLT_PE_ID     = "1201177261686683603";
-const DLT_SENDER    = process.env.MSG91_SMS_SENDER_ID || "TWVLLA";
+const DLT_SENDER    = envStr("MSG91_SMS_SENDER_ID") || "TWVLLA";
 
 /**
  * DLT-registered template IDs (Jio TrueConnect).
@@ -241,7 +257,9 @@ export async function sendWhatsApp(options: SendTemplateOptions): Promise<SendRe
     if (json.hasError === false || json.status === "success") {
       result = { success: true, requestId: json.request_id as string, channel: "whatsapp" };
     } else {
-      result = { success: false, error: JSON.stringify(json.errors ?? json), channel: "whatsapp" };
+      // Prefix the HTTP status — MSG91 returns 200 for template/param errors but
+      // 4xx for auth and integrated-number problems, and the two need different fixes.
+      result = { success: false, error: `HTTP ${res.status}: ${JSON.stringify(json.errors ?? json)}`, channel: "whatsapp" };
     }
   } catch (err) {
     console.error("[messaging] WhatsApp network error:", err);
@@ -341,7 +359,9 @@ export async function sendWhatsAppDocument(options: SendDocumentOptions): Promis
     if (json.hasError === false || json.status === "success") {
       result = { success: true, requestId: json.request_id as string, channel: "whatsapp" };
     } else {
-      result = { success: false, error: JSON.stringify(json.errors ?? json), channel: "whatsapp" };
+      // Prefix the HTTP status — MSG91 returns 200 for template/param errors but
+      // 4xx for auth and integrated-number problems, and the two need different fixes.
+      result = { success: false, error: `HTTP ${res.status}: ${JSON.stringify(json.errors ?? json)}`, channel: "whatsapp" };
     }
   } catch (err) {
     console.error("[messaging] WhatsApp document network error:", err);
@@ -406,9 +426,14 @@ export async function sendSms(
     const json = await res.json() as Record<string, unknown>;
 
     if (json.type === "success" || json.status === "success") {
-      result = { success: true, requestId: json.request_id as string, channel: "sms" };
+      // The Flow API returns the request ID in `message`, not `request_id`
+      // (unlike the WhatsApp API). Without this fallback every SMS row is
+      // stored with a null wa_message_id, so the delivery-report webhook can
+      // never match it and the status is stuck at "sent" forever.
+      const requestId = (json.request_id ?? json.message) as string | undefined;
+      result = { success: true, requestId, channel: "sms" };
     } else {
-      result = { success: false, error: JSON.stringify(json), channel: "sms" };
+      result = { success: false, error: `HTTP ${res.status}: ${JSON.stringify(json)}`, channel: "sms" };
     }
   } catch (err) {
     console.error("[messaging] SMS network error:", err);
@@ -503,9 +528,14 @@ export async function sendDltSms(
     const json = await res.json() as Record<string, unknown>;
 
     if (json.type === "success" || json.status === "success") {
-      result = { success: true, requestId: json.request_id as string, channel: "sms" };
+      // The Flow API returns the request ID in `message`, not `request_id`
+      // (unlike the WhatsApp API). Without this fallback every SMS row is
+      // stored with a null wa_message_id, so the delivery-report webhook can
+      // never match it and the status is stuck at "sent" forever.
+      const requestId = (json.request_id ?? json.message) as string | undefined;
+      result = { success: true, requestId, channel: "sms" };
     } else {
-      result = { success: false, error: JSON.stringify(json), channel: "sms" };
+      result = { success: false, error: `HTTP ${res.status}: ${JSON.stringify(json)}`, channel: "sms" };
     }
   } catch (err) {
     console.error("[messaging] DLT SMS network error:", err);
@@ -530,14 +560,14 @@ export async function sendDltSms(
 
 // MSG91 Flow IDs for each DLT template (set in Vercel env vars)
 const SMS_DLT_FLOWS: Record<DltTemplateKey, string | undefined> = {
-  otp:              process.env.MSG91_SMS_DLT_FLOW_OTP,
-  booking:          process.env.MSG91_SMS_DLT_FLOW_BOOKING          || SMS_FLOWS.booking,
-  contract_welcome: process.env.MSG91_SMS_DLT_FLOW_CONTRACT_WELCOME,
-  contract_renewal: process.env.MSG91_SMS_DLT_FLOW_CONTRACT_RENEWAL,
-  payment_reminder: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER || SMS_FLOWS.reminder,
-  payment_followup: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_FOLLOWUP,
+  otp:              envStr("MSG91_SMS_DLT_FLOW_OTP"),
+  booking:          envStr("MSG91_SMS_DLT_FLOW_BOOKING")          || SMS_FLOWS.booking,
+  contract_welcome: envStr("MSG91_SMS_DLT_FLOW_CONTRACT_WELCOME"),
+  contract_renewal: envStr("MSG91_SMS_DLT_FLOW_CONTRACT_RENEWAL"),
+  payment_reminder: envStr("MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER") || SMS_FLOWS.reminder,
+  payment_followup: envStr("MSG91_SMS_DLT_FLOW_PAYMENT_FOLLOWUP"),
   // Set MSG91_SMS_DLT_FLOW_ACCESS_PIN once the DLT template is TRAI-approved
-  access_pin:       process.env.MSG91_SMS_DLT_FLOW_ACCESS_PIN,
+  access_pin:       envStr("MSG91_SMS_DLT_FLOW_ACCESS_PIN"),
 };
 
 // ---------------------------------------------------------------------------

@@ -177,6 +177,17 @@ export async function POST(request: NextRequest) {
           if (error) console.error("[webhook] inbound activity insert failed:", error.message);
         });
       }
+    } else {
+      // Neither a delivery report nor an inbound message we recognise.
+      // MSG91 logs far more inbound messages than we store, so the payload
+      // shape here is wrong for some events. Log the KEYS only — never the
+      // values, which carry customer phone numbers and message text.
+      console.warn(
+        "[messaging webhook] Unhandled event shape. Top-level keys:",
+        Object.keys(event).join(","),
+        "| status:", rawStatus ?? "-",
+        "| hasRequestId:", !!requestId
+      );
     }
   }
 
