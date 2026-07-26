@@ -55,6 +55,12 @@ interface IssuedVoucher {
   locationName: string;
 }
 
+interface IssuedRuijieVoucher {
+  code: string;
+  packageUsed: string;
+  locationName: string;
+}
+
 interface PendingBill {
   id: string;
   bill_number: string;
@@ -70,6 +76,7 @@ const APPROVAL_TYPE_LABELS: Record<string, string> = {
   escalation_reduction:  "Escalation Reduction",
   escalation_waiver:     "Escalation Waiver",
   unifi_adhoc_voucher:   "WiFi Voucher Request",
+  ruijie_adhoc_voucher:  "WiFi Voucher Request",
   comp_request:          "Comp Request",
 };
 
@@ -83,8 +90,9 @@ export function ApprovalBell() {
   const [actingOnId, setActingOnId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
-  // After a UniFi voucher is approved, show the code inline before dismissing
+  // After a UniFi/Ruijie voucher is approved, show the code inline before dismissing
   const [issuedVouchers, setIssuedVouchers] = useState<Record<string, IssuedVoucher>>({});
+  const [issuedRuijieVouchers, setIssuedRuijieVouchers] = useState<Record<string, IssuedRuijieVoucher>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
   const [billActingOnId, setBillActingOnId] = useState<string | null>(null);
@@ -126,6 +134,7 @@ export function ApprovalBell() {
     } else {
       setApprovals(prev => prev.filter(a => a.status !== "approved"));
       setIssuedVouchers({});
+      setIssuedRuijieVouchers({});
       setBillChoosingBatchId(null);
     }
   }, [open, fetchApprovals]);
@@ -196,6 +205,9 @@ export function ApprovalBell() {
           // Don't remove from list yet — show the code first
           setIssuedVouchers(prev => ({ ...prev, [id]: json.voucher as IssuedVoucher }));
           setApprovals(prev => prev.map(a => a.id === id ? { ...a, status: "approved" } : a));
+        } else if (action === "approve" && json.ruijie_voucher) {
+          setIssuedRuijieVouchers(prev => ({ ...prev, [id]: json.ruijie_voucher as IssuedRuijieVoucher }));
+          setApprovals(prev => prev.map(a => a.id === id ? { ...a, status: "approved" } : a));
         } else {
           setApprovals(prev => prev.filter(a => a.id !== id));
         }
@@ -214,6 +226,7 @@ export function ApprovalBell() {
 
   function dismissIssued(id: string) {
     setIssuedVouchers(prev => { const n = { ...prev }; delete n[id]; return n; });
+    setIssuedRuijieVouchers(prev => { const n = { ...prev }; delete n[id]; return n; });
     setApprovals(prev => prev.filter(a => a.id !== id));
   }
 
@@ -222,6 +235,13 @@ export function ApprovalBell() {
     navigator.clipboard.writeText(msg);
     setCopiedId(id);
     toast.success("Shareable message copied");
+    setTimeout(() => setCopiedId(null), 2000);
+  }
+
+  function copyRuijieShareable(id: string, voucher: IssuedRuijieVoucher) {
+    navigator.clipboard.writeText(`WiFi voucher for ${voucher.locationName}: ${voucher.code} (${voucher.packageUsed})`);
+    setCopiedId(id);
+    toast.success("Message copied");
     setTimeout(() => setCopiedId(null), 2000);
   }
 
@@ -287,7 +307,10 @@ export function ApprovalBell() {
               const meta = a.metadata || {};
               const isRejecting = rejectingId === a.id;
               const isUnifi = a.entity_type === "unifi_adhoc_voucher";
+              const isRuijie = a.entity_type === "ruijie_adhoc_voucher";
+              const isVoucherRequest = isUnifi || isRuijie;
               const issued = issuedVouchers[a.id];
+              const issuedRuijie = issuedRuijieVouchers[a.id];
               const ts = a.requested_at || a.created_at;
 
               return (
@@ -298,12 +321,12 @@ export function ApprovalBell() {
                   {/* Badge + timestamp */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
-                      {isUnifi && <Wifi className="h-3.5 w-3.5 text-primary shrink-0" />}
+                      {isVoucherRequest && <Wifi className="h-3.5 w-3.5 text-primary shrink-0" />}
                       {a.approval_type === "comp_request" && <Gift className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
                       <Badge
                         variant="secondary"
                         className={`text-[10px] px-1.5 py-0 ${
-                          isUnifi
+                          isVoucherRequest
                             ? "bg-blue-100 text-blue-800"
                             : a.approval_type === "comp_request"
                               ? "bg-emerald-100 text-emerald-800"
@@ -311,6 +334,7 @@ export function ApprovalBell() {
                         }`}
                       >
                         {APPROVAL_TYPE_LABELS[a.approval_type] || a.approval_type}
+                        {isRuijie ? " (Ruijie)" : ""}
                       </Badge>
                     </div>
                     <span className="text-[10px] text-muted-foreground shrink-0">{ts ? timeAgo(ts) : ""}</span>
@@ -400,6 +424,110 @@ export function ApprovalBell() {
                               ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
                               : <CheckCircle2 className="h-3 w-3 mr-1" />}
                             Approve & Issue
+                          </Button>
+                          {isRejecting ? (
+                            <Button
+                              size="sm" variant="destructive" className="flex-1 h-7 text-xs"
+                              disabled={actingOnId === a.id || !rejectionReason.trim()}
+                              onClick={() => handleAction(a.id, "reject")}
+                            >
+                              {actingOnId === a.id
+                                ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                                : <XCircle className="h-3 w-3 mr-1" />}
+                              Confirm Reject
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm" variant="outline" className="flex-1 h-7 text-xs text-destructive hover:text-destructive"
+                              onClick={() => { setRejectingId(a.id); setRejectionReason(""); }}
+                            >
+                              <XCircle className="h-3 w-3 mr-1" />Reject
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  ) : isRuijie ? (
+                    issuedRuijie ? (
+                      /* ── Issued: show code ── */
+                      <div className="space-y-2">
+                        <div className="rounded-md bg-green-50 border border-green-200 p-3 space-y-1.5">
+                          <p className="text-xs font-semibold text-green-800 flex items-center gap-1.5">
+                            <CheckCircle2 className="h-3.5 w-3.5" /> Voucher Issued
+                          </p>
+                          <p className="font-mono text-base font-bold tracking-widest text-center py-1">
+                            {issuedRuijie.code}
+                          </p>
+                          <div className="text-[11px] text-green-700 space-y-0.5">
+                            <p>Package: <strong>{issuedRuijie.packageUsed}</strong></p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 h-7 text-xs"
+                            onClick={() => copyRuijieShareable(a.id, issuedRuijie)}
+                          >
+                            {copiedId === a.id
+                              ? <><Check className="h-3 w-3 mr-1 text-green-600" /> Copied!</>
+                              : <><Copy className="h-3 w-3 mr-1" /> Copy shareable message</>}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs text-muted-foreground"
+                            onClick={() => dismissIssued(a.id)}
+                          >
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* ── Pending Ruijie request ── */
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground space-y-0.5">
+                          <p>
+                            <span className="font-medium text-foreground">
+                              {(a.requester as { full_name?: string } | null)?.full_name || "Unknown"}
+                            </span>
+                            {" "}is requesting a WiFi voucher
+                          </p>
+                          <p>
+                            Location: <span className="font-medium text-foreground">{String(meta.location_name ?? "—")}</span>
+                          </p>
+                          <p>
+                            Package: <span className="font-medium text-foreground">{String(meta.package_name ?? "—")}</span>
+                          </p>
+                          {meta.note != null && (
+                            <p>Note: <span className="text-foreground">{String(meta.note)}</span></p>
+                          )}
+                          {a.reason && (
+                            <p className="italic">&ldquo;{a.reason}&rdquo;</p>
+                          )}
+                        </div>
+
+                        {isRejecting && (
+                          <Input
+                            autoFocus
+                            value={rejectionReason}
+                            onChange={(e) => setRejectionReason(e.target.value)}
+                            placeholder="Reason for rejection..."
+                            className="h-7 text-xs"
+                          />
+                        )}
+
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1 h-7 text-xs bg-green-600 hover:bg-green-700"
+                            disabled={actingOnId === a.id}
+                            onClick={() => handleAction(a.id, "approve")}
+                          >
+                            {actingOnId === a.id
+                              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                            Approve &amp; Issue
                           </Button>
                           {isRejecting ? (
                             <Button

@@ -22,6 +22,13 @@
  *   - Duration = booking duration in minutes + 60-minute buffer.
  *   - Each voucher has quota=2 (2 devices).
  *   - unifi_voucher_id is stored on the issuance row for revocation.
+ *
+ * For Ruijie locations (wifi_voucher_mode = 'ruijie_api', e.g. Nungambakkam
+ * Arcade): vouchers are generated on-demand via the Ruijie Cloud API,
+ * matched to the closest CRM_ package by duration (see src/lib/ruijie.ts).
+ * Ruijie can't do exact-minute durations like Unifi — very short bookings
+ * (hours) will fail with a clear error until IT creates short-duration
+ * CRM_ packages; this is expected, not a bug.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -32,6 +39,11 @@ import {
   siteConfigFromLocation,
   isUnifiLocation,
 } from "@/lib/unifi";
+import {
+  siteConfigFromLocation as ruijieSiteConfigFromLocation,
+  isRuijieLocation,
+  issueRuijieVoucher,
+} from "@/lib/ruijie";
 
 export async function POST(
   request: NextRequest,
@@ -88,7 +100,7 @@ export async function POST(
   const { data: location } = bk.location_id
     ? await supabase
         .from("locations")
-        .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
+        .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id")
         .eq("id", bk.location_id)
         .single()
     : { data: null };
@@ -173,6 +185,90 @@ export async function POST(
       shortfall: 0,
       codes,
       total_issued: alreadyIssued + issuances.length,
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // RUIJIE PATH
+  // ──────────────────────────────────────────────────────────────────
+  if (location && isRuijieLocation(location)) {
+    const siteConfig = ruijieSiteConfigFromLocation(location);
+    if (!siteConfig) {
+      return NextResponse.json(
+        { error: "This location is set to Ruijie voucher mode but has no ruijie_group_id configured." },
+        { status: 400 }
+      );
+    }
+
+    const durationHours = Number(bk.duration_hours || 1);
+    const targetDays = durationHours / 24;
+
+    const now = new Date();
+    const issuances = [];
+    const codes: string[] = [];
+    let lastMatchWarning: string | null = null;
+
+    for (let i = 0; i < requestedCount; i++) {
+      const seatNumber = alreadyIssued + i + 1;
+
+      const issued = await issueRuijieVoucher(
+        siteConfig,
+        targetDays,
+        `booking_${id}_seat${seatNumber}`
+      );
+
+      if ("error" in issued) {
+        return NextResponse.json(
+          { error: `${issued.error} ${issuances.length} vouchers issued before failure.` },
+          { status: 400 }
+        );
+      }
+
+      const { error: insertError } = await supabase.from("voucher_issuances").insert({
+        contract_id: bk.contract_id || null,
+        voucher_id: null,
+        lead_id: bk.lead_id || null,
+        booking_id: id,
+        seat_number: seatNumber,
+        issued_by: dbUser.id,
+        issued_at: now.toISOString(),
+        valid_from: bk.booking_date,
+        valid_until: bk.booking_date,
+        is_active: true,
+        seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
+        ruijie_voucher_uuid: issued.result.uuid,
+        ruijie_code: issued.result.code,
+      });
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      issuances.push({ seat_number: seatNumber, ruijie_voucher_uuid: issued.result.uuid, code: issued.result.code });
+      codes.push(issued.result.code);
+      lastMatchWarning = issued.matchWarning;
+    }
+
+    logAudit(supabase, {
+      entityType: "voucher",
+      entityId: id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        booking_id: { old: null, new: id },
+        mode: { old: null, new: "ruijie_api" },
+        count: { old: null, new: issuances.length },
+        ruijie_codes: { old: null, new: codes },
+      },
+    });
+
+    return NextResponse.json({
+      issued: issuances.length,
+      needed: requestedCount,
+      shortfall: 0,
+      codes,
+      total_issued: alreadyIssued + issuances.length,
+      match_warning: lastMatchWarning,
     });
   }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createUnifiVoucher, getUnifiHotspotSsid } from "@/lib/unifi";
+import { issueAdhocRuijieVoucher, siteConfigFromLocation as ruijieSiteConfigFromLocation } from "@/lib/ruijie";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { createNotification } from "@/lib/in-app-notifications";
 
@@ -153,6 +154,70 @@ export async function PATCH(
       };
     } catch (err) {
       console.error("[approval-requests] UniFi voucher issuance failed after approval:", err);
+      await admin
+        .from("approval_requests")
+        .update({ metadata: { ...(approvalReq.metadata || {}), issuance_error: err instanceof Error ? err.message : String(err) } })
+        .eq("id", id);
+    }
+  }
+
+  // ── Ruijie ad-hoc voucher ─────────────────────────────────────────────────
+  let ruijieIssuanceResult: { code: string; ruijieVoucherUuid: string; packageUsed: string; locationName: string } | null = null;
+
+  if (approvalReq.entity_type === "ruijie_adhoc_voucher" && action === "approve") {
+    const meta = approvalReq.metadata || {};
+    try {
+      const { data: location } = await admin
+        .from("locations")
+        .select("ruijie_group_id")
+        .eq("id", String(meta.location_id || approvalReq.entity_id))
+        .single();
+      const siteConfig = location ? ruijieSiteConfigFromLocation(location) : null;
+
+      if (!siteConfig) {
+        throw new Error("Location has no ruijie_group_id configured.");
+      }
+
+      const comment = `adhoc_${String(meta.note || `adhoc_${approvalReq.id}`)}`.slice(0, 200);
+      const issued = await issueAdhocRuijieVoucher(siteConfig, String(meta.package_name || ""), comment);
+
+      if ("error" in issued) throw new Error(issued.error);
+
+      // Persist code back onto the request for future reference
+      await admin
+        .from("approval_requests")
+        .update({
+          metadata: {
+            ...meta,
+            issued_code:          issued.result.code,
+            issued_voucher_uuid:  issued.result.uuid,
+          },
+        })
+        .eq("id", id);
+
+      logAudit(admin, {
+        entityType: "location",
+        entityId:   String(meta.location_id || approvalReq.entity_id),
+        action:     "create",
+        performedBy: dbUser.id,
+        changes: {
+          type:                { old: null, new: "ruijie_adhoc_voucher_issued" },
+          code:                { old: null, new: issued.result.code },
+          ruijie_voucher_uuid: { old: null, new: issued.result.uuid },
+          package_used:        { old: null, new: issued.packageUsed },
+          approved_by:         { old: null, new: dbUser.full_name },
+          approval_request_id: { old: null, new: id },
+        },
+      });
+
+      ruijieIssuanceResult = {
+        code: issued.result.code,
+        ruijieVoucherUuid: issued.result.uuid,
+        packageUsed: issued.packageUsed,
+        locationName: String(meta.location_name ?? ""),
+      };
+    } catch (err) {
+      console.error("[approval-requests] Ruijie voucher issuance failed after approval:", err);
       await admin
         .from("approval_requests")
         .update({ metadata: { ...(approvalReq.metadata || {}), issuance_error: err instanceof Error ? err.message : String(err) } })
@@ -382,7 +447,7 @@ export async function PATCH(
     },
   });
 
-  // Build response — include voucher details for UniFi ad-hoc so the UI can show the code
+  // Build response — include voucher details for UniFi/Ruijie ad-hoc so the UI can show the code
   const baseMessage =
     approvalReq.entity_type === "unifi_adhoc_voucher"
       ? action === "approve"
@@ -390,19 +455,26 @@ export async function PATCH(
           ? "Voucher issued successfully."
           : "Approved, but voucher issuance encountered an error — check server logs."
         : "Request rejected."
-      : approvalReq.approval_type === "comp_request"
+      : approvalReq.entity_type === "ruijie_adhoc_voucher"
         ? action === "approve"
-          ? "Complimentary approved — booking has been zeroed and marked as waived."
-          : "Comp request rejected. The floor manager has been notified."
-        : action === "approve"
-          ? "Approval granted — the negotiated rate is confirmed."
-          : "Request rejected — escalation has been reverted to the default rate.";
+          ? ruijieIssuanceResult
+            ? "Voucher issued successfully."
+            : "Approved, but voucher issuance encountered an error — check server logs."
+          : "Request rejected."
+        : approvalReq.approval_type === "comp_request"
+          ? action === "approve"
+            ? "Complimentary approved — booking has been zeroed and marked as waived."
+            : "Comp request rejected. The floor manager has been notified."
+          : action === "approve"
+            ? "Approval granted — the negotiated rate is confirmed."
+            : "Request rejected — escalation has been reverted to the default rate.";
 
   return NextResponse.json({
     success: true,
     status: newStatus,
     message: baseMessage,
-    // Only present for unifi_adhoc_voucher approvals
+    // Only present for unifi_adhoc_voucher / ruijie_adhoc_voucher approvals
     ...(unifiIssuanceResult ? { voucher: unifiIssuanceResult } : {}),
+    ...(ruijieIssuanceResult ? { ruijie_voucher: ruijieIssuanceResult } : {}),
   });
 }

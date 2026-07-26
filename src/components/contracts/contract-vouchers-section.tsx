@@ -16,6 +16,7 @@ import {
   EyeOff,
   Send,
   RefreshCw,
+  Link2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
@@ -24,6 +25,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VOUCHER_STATUS_LABELS, VOUCHER_STATUS_COLORS } from "@/lib/constants";
 import { VoucherReplaceDialog } from "./voucher-replace-dialog";
+import { LinkRuijieVoucherDialog } from "./link-ruijie-voucher-dialog";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -129,6 +131,14 @@ export function ContractVouchersSection({
 
   const [previewIssuance, setPreviewIssuance] = useState<VoucherIssuance | null>(null);
 
+  const [isRuijieLocation, setIsRuijieLocation] = useState(false);
+  const [linkDialog, setLinkDialog] = useState<{
+    open: boolean;
+    memberId?: string;
+    memberName: string;
+    seatNumber: number;
+  }>({ open: false, memberName: "", seatNumber: 0 });
+
   // ── Data loading ─────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -151,6 +161,14 @@ export function ContractVouchersSection({
   }, [contractId, showHistory]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!locationId) { setIsRuijieLocation(false); return; }
+    fetch(`/api/locations/${locationId}`)
+      .then((r) => r.json())
+      .then((json) => setIsRuijieLocation(json.data?.wifi_voucher_mode === "ruijie_api"))
+      .catch(() => setIsRuijieLocation(false));
+  }, [locationId]);
 
   // ── Inventory check ──────────────────────────────────────────────────────────
 
@@ -197,7 +215,8 @@ export function ContractVouchersSection({
   }, [tenureMonths, locationId]);
 
   useEffect(() => {
-    if (!loading && unissuedMembers.length > 0 && contractStatus === "active") {
+    // Repository-mode inventory only — Ruijie packages aren't tracked in voucher_repository
+    if (!loading && unissuedMembers.length > 0 && contractStatus === "active" && !isRuijieLocation) {
       checkInventory(unissuedMembers.length);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -382,7 +401,7 @@ export function ContractVouchersSection({
         )}
 
         {/* Inventory check */}
-        {expectedValidity && isContractActive && unissuedMembers.length > 0 && !loading && (
+        {expectedValidity && isContractActive && unissuedMembers.length > 0 && !loading && !isRuijieLocation && (
           <div className="mb-2 rounded-md border p-3 space-y-1.5">
             <div className="text-xs text-muted-foreground flex items-center gap-1">
               Required type: <Badge variant="outline" className="text-xs ml-1 font-medium">{getValidityLabel(expectedValidity)}</Badge>
@@ -493,6 +512,22 @@ export function ContractVouchersSection({
                                 ? <Loader2 className="h-3 w-3 animate-spin" />
                                 : <><Ticket className="mr-1 h-3 w-3" />Issue</>
                               }
+                            </Button>
+                          )}
+                          {!hasVoucher && canIssue && isRuijieLocation && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs h-7"
+                              onClick={() => {
+                                const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
+                                let nextSeat = 1;
+                                while (activeSeatNumbers.has(nextSeat) && nextSeat <= seats) nextSeat++;
+                                setLinkDialog({ open: true, memberId: member.id, memberName: member.name, seatNumber: nextSeat });
+                              }}
+                              title="Link an already-issued Ruijie voucher (verified against the customer's device)"
+                            >
+                              <Link2 className="mr-1 h-3 w-3" />Link Existing
                             </Button>
                           )}
                           {hasVoucher && (
@@ -662,6 +697,16 @@ export function ContractVouchersSection({
         seatNumber={replaceDialog.seatNumber}
         currentVoucherCode={replaceDialog.voucherCode}
         seatEmail={replaceDialog.seatEmail}
+        onSuccess={load}
+      />
+
+      <LinkRuijieVoucherDialog
+        open={linkDialog.open}
+        onOpenChange={(open) => setLinkDialog((prev) => ({ ...prev, open }))}
+        contractId={contractId}
+        memberId={linkDialog.memberId}
+        memberName={linkDialog.memberName}
+        seatNumber={linkDialog.seatNumber}
         onSuccess={load}
       />
     </Card>

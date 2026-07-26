@@ -195,8 +195,9 @@ export function matchRuijiePackage(
     const available = crmPackages
       .map((p) => `${p.name} (${Math.round(p.timePeriodMinutes / 1440)}d)`)
       .join(", ");
+    const targetLabel = targetDays < 1 ? `${Math.round(targetDays * 24)}-hour` : `${Math.round(targetDays)}-day`;
     return {
-      error: `No CRM_ package matches a ${targetDays}-day contract within tolerance. Available: ${available}`,
+      error: `No CRM_ package matches a ${targetLabel} target within tolerance. Available: ${available}`,
     };
   }
 
@@ -204,9 +205,10 @@ export function matchRuijiePackage(
     (a, b) => Math.abs(a.timePeriodMinutes - targetMinutes) - Math.abs(b.timePeriodMinutes - targetMinutes)
   );
   const pkg = sorted[0];
+  const targetLabel = targetDays < 1 ? `${Math.round(targetDays * 24)}-hour` : `${Math.round(targetDays)}-day`;
   const matchWarning =
     pkg.timePeriodMinutes !== targetMinutes
-      ? `Exact ${targetDays}-day package not available. Using closest match: ${pkg.name} (${Math.round(pkg.timePeriodMinutes / 1440)} days).`
+      ? `Exact ${targetLabel} package not available. Using closest match: ${pkg.name} (${Math.round(pkg.timePeriodMinutes / 1440)} days).`
       : null;
 
   return { pkg, matchWarning };
@@ -253,16 +255,20 @@ async function createRuijieVoucher(opts: {
 }
 
 /**
- * Issue one voucher for a contract seat: look up this site's CRM_ packages,
- * pick the closest match to targetDays, and create the voucher against it.
+ * Issue one voucher for a contract seat or booking: look up this site's
+ * CRM_ packages, pick the closest match to targetDays, and create the
+ * voucher against it. Shared by both the contract and booking issuance
+ * routes — the package-matching logic doesn't care which one is calling.
  *
  * @param site        Ruijie site config (groupId)
- * @param targetDays  Target contract length in days (tenure_months * 30, matching
- *                    the repository-mode convention — Ruijie can't do exact-day
- *                    durations, only pick from pre-set packages)
+ * @param targetDays  Target length in days (contracts: tenure_months * 30;
+ *                    bookings: duration_hours / 24) — Ruijie can't do exact
+ *                    durations, only pick from pre-set packages, so very short
+ *                    bookings will fail to match until short CRM_ packages exist.
  * @param comment     Alias stored on the voucher, e.g. "{contract_number}_seat{N}"
+ *                    or "booking_{id}_seat{N}"
  */
-export async function issueRuijieVoucherForContract(
+export async function issueRuijieVoucher(
   site: RuijieSiteConfig,
   targetDays: number,
   comment: string
@@ -279,6 +285,46 @@ export async function issueRuijieVoucherForContract(
   });
 
   return { result, matchWarning: matched.matchWarning };
+}
+
+// ─── Ad-hoc issuance (walk-in guests, no linked contract/booking) ──────────
+//
+// Ruijie can't take an arbitrary duration, so ad-hoc issuance can't offer a
+// "custom minutes" option the way UniFi's does — it must pick one of a small,
+// explicitly-approved set of IT's existing generic (non-tenant) packages.
+// This is deliberately NOT "any non-CRM_ package" — the ~14 tenant/cabin-named
+// packages (e.g. DHICONSULTANCY_Cabin05) must never be touched here.
+export const ADHOC_ALLOWED_PACKAGES = ["daypass"] as const;
+export type AdhocPackageName = (typeof ADHOC_ALLOWED_PACKAGES)[number];
+
+export interface AdhocRuijieVoucherResult {
+  result: RuijieVoucherResult;
+  packageUsed: string;
+}
+
+export async function issueAdhocRuijieVoucher(
+  site: RuijieSiteConfig,
+  packageName: string,
+  comment: string
+): Promise<AdhocRuijieVoucherResult | { error: string }> {
+  if (!ADHOC_ALLOWED_PACKAGES.includes(packageName as AdhocPackageName)) {
+    return { error: `"${packageName}" is not an approved ad-hoc package. Allowed: ${ADHOC_ALLOWED_PACKAGES.join(", ")}` };
+  }
+
+  const packages = await cachedListRuijiePackages(site.groupId);
+  const pkg = packages.find((p) => p.name === packageName);
+  if (!pkg) {
+    return { error: `Package "${packageName}" was not found for this location in Ruijie Cloud.` };
+  }
+
+  const result = await createRuijieVoucher({
+    groupId: site.groupId,
+    userGroupId: pkg.id,
+    authProfileId: pkg.authProfileId,
+    comment,
+  });
+
+  return { result, packageUsed: pkg.name };
 }
 
 // ─── Voucher listing (for the monitoring panel) ────────────────────────────
@@ -314,6 +360,18 @@ interface VoucherListResponse extends RuijieResponse {
       comment: string;
     }>;
   };
+}
+
+/**
+ * Look up one voucher by its exact code — for manually linking a voucher that
+ * was already issued outside the CRM (e.g. by IT, before this integration
+ * existed) to a contract/seat. Staff must have already verified the code
+ * belongs to the right customer's device; this is a lookup, not a search.
+ */
+export async function findRuijieVoucherByCode(groupId: number, code: string): Promise<RuijieVoucherSummary | null> {
+  const vouchers = await listRuijieVouchers(groupId);
+  const normalized = code.trim().toLowerCase();
+  return vouchers.find((v) => v.code.toLowerCase() === normalized) ?? null;
 }
 
 /** Full voucher list for a site — not cached, this backs a live monitoring view. */

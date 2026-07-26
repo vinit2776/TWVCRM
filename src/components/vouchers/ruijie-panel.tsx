@@ -1,28 +1,44 @@
 "use client";
 
 /**
- * RuijiePanel — read-only network + voucher monitoring for Ruijie-managed
- * locations (currently Nungambakkam Arcade).
+ * RuijiePanel — network + voucher monitoring for Ruijie-managed locations
+ * (currently Nungambakkam Arcade), plus ad-hoc voucher issuance for walk-in
+ * guests (from a small allowlist of IT's existing generic packages — never
+ * the tenant-specific ones, never a custom duration).
  *
- * Voucher issuance for Ruijie locations happens through the normal contract
- * flow (ContractVouchersSection), same as repository mode — this panel is
- * for visibility only: device health, voucher status, connected clients.
+ * Contract-driven voucher issuance for Ruijie locations happens through the
+ * normal contract flow (ContractVouchersSection), same as repository mode.
  *
  * Sections (top → bottom):
- *  1. Device status cards — online/offline, client count, CPU/memory, firmware
- *  2. Voucher stats + table — masked codes, matches ContractVouchersSection data
- *  3. Connected clients — signal quality, throughput, session duration
+ *  1. Pending ad-hoc requests queue — visible to admin/manager only
+ *  2. Device status cards — online/offline, client count, CPU/memory, firmware
+ *  3. Voucher stats + table — masked codes, matches ContractVouchersSection data
+ *  4. Connected clients — signal quality, throughput, session duration
+ *  5. Issue Ad-hoc dialog — direct (admin/manager) or approval-gated (others)
  */
 
 import { useState, useEffect, useCallback } from "react";
 import {
   Wifi, RefreshCw, CheckCircle2, XCircle, Activity, Cpu, HardDrive,
-  Users, AlertTriangle, Signal, ArrowDown, ArrowUp,
+  Users, AlertTriangle, Signal, ArrowDown, ArrowUp, Plus, Clock,
+  ChevronDown, ChevronUp, Copy, Check, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
+import { toast } from "sonner";
+
+const ADHOC_ALLOWED_PACKAGES = ["daypass"] as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,9 +88,18 @@ interface RuijieClient {
 
 interface VoucherStats { total: number; unused: number; inUse: number; expired: number; }
 
+interface PendingRequest {
+  id: string;
+  reason: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+  requester?: { full_name: string; email: string; role: string } | null;
+}
+
 interface RuijiePanelProps {
   locationId: string;
   locationName: string;
+  userRole: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -113,6 +138,14 @@ function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+function timeAgoIso(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 function scoreColor(score: number): string {
   if (score >= 70) return "bg-green-100 text-green-800";
   if (score >= 40) return "bg-amber-100 text-amber-800";
@@ -121,7 +154,27 @@ function scoreColor(score: number): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function RuijiePanel({ locationId, locationName }: RuijiePanelProps) {
+export function RuijiePanel({ locationId, locationName, userRole }: RuijiePanelProps) {
+  const canApprove = ["admin", "manager"].includes(userRole);
+  const canIssueDirect = canApprove;
+
+  // Pending requests queue state (admin/manager only)
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [queueOpen, setQueueOpen] = useState(true);
+  const [actingOnId, setActingOnId] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [issuedVouchers, setIssuedVouchers] = useState<Record<string, { code: string; packageUsed: string }>>({});
+  const [copiedShareId, setCopiedShareId] = useState<string | null>(null);
+
+  // Issue dialog state
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issueLoading, setIssueLoading] = useState(false);
+  const [issuePackage, setIssuePackage] = useState<string>(ADHOC_ALLOWED_PACKAGES[0]);
+  const [issueNote, setIssueNote] = useState("");
+  const [issueReason, setIssueReason] = useState("");
+  const [directIssued, setDirectIssued] = useState<{ code: string; packageUsed: string } | null>(null);
+
   const [devices, setDevices] = useState<RuijieDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [devicesError, setDevicesError] = useState<string | null>(null);
@@ -184,8 +237,191 @@ export function RuijiePanel({ locationId, locationName }: RuijiePanelProps) {
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 
+  const fetchPendingRequests = useCallback(async () => {
+    if (!canApprove) return;
+    try {
+      const res = await fetch(`/api/ruijie/requests?location_id=${locationId}&status=pending`);
+      if (res.ok) {
+        const json = await res.json();
+        setPendingRequests(json.data || []);
+      }
+    } catch { /* silent */ }
+  }, [locationId, canApprove]);
+
+  useEffect(() => {
+    fetchPendingRequests();
+    const interval = setInterval(fetchPendingRequests, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchPendingRequests]);
+
+  async function handleQueueAction(id: string, action: "approve" | "reject") {
+    setActingOnId(id);
+    try {
+      const body: Record<string, string> = { action };
+      if (action === "reject") {
+        if (!rejectionReason.trim()) { toast.error("Reason required"); setActingOnId(null); return; }
+        body.rejection_reason = rejectionReason.trim();
+      }
+      const res = await fetch(`/api/approval-requests/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `Failed to ${action}`);
+
+      toast.success(json.message || `Request ${action}d`);
+
+      if (action === "approve" && json.ruijie_voucher) {
+        setIssuedVouchers(prev => ({ ...prev, [id]: { code: json.ruijie_voucher.code, packageUsed: json.ruijie_voucher.packageUsed } }));
+        setPendingRequests(prev => prev.filter(r => r.id !== id));
+        fetchVouchers();
+      } else {
+        setPendingRequests(prev => prev.filter(r => r.id !== id));
+      }
+      setRejectingId(null); setRejectionReason("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    }
+    setActingOnId(null);
+  }
+
+  function copyShareMsg(id: string, voucher: { code: string; packageUsed: string }) {
+    navigator.clipboard.writeText(`WiFi voucher for ${locationName}: ${voucher.code} (${voucher.packageUsed})`);
+    setCopiedShareId(id);
+    toast.success("Message copied");
+    setTimeout(() => setCopiedShareId(null), 2000);
+  }
+
+  function resetIssueForm() {
+    setIssuePackage(ADHOC_ALLOWED_PACKAGES[0]); setIssueNote(""); setIssueReason(""); setDirectIssued(null);
+  }
+
+  async function handleIssue() {
+    if (!issueNote.trim()) { toast.error("Note / label is required"); return; }
+    if (!canIssueDirect && !issueReason.trim()) { toast.error("Reason is required for approval request"); return; }
+
+    setIssueLoading(true);
+    try {
+      const res = await fetch("/api/ruijie/vouchers/adhoc", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location_id: locationId, package_name: issuePackage,
+          note: issueNote.trim(), reason: issueReason.trim() || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok && res.status !== 202) throw new Error(json.error || "Failed");
+
+      if (json.issued) {
+        setDirectIssued({ code: json.code, packageUsed: json.package_used });
+        fetchVouchers();
+      } else {
+        toast.success("Request submitted for approval");
+        setIssueOpen(false);
+        resetIssueForm();
+        fetchPendingRequests();
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to issue voucher");
+    } finally {
+      setIssueLoading(false);
+    }
+  }
+
+  const pendingCount = pendingRequests.length;
+
   return (
     <div className="space-y-6">
+      {/* ── Pending Requests Queue (admin/manager only) ── */}
+      {canApprove && (pendingCount > 0 || Object.keys(issuedVouchers).length > 0) && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/50 overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-amber-50 transition-colors"
+            onClick={() => setQueueOpen(v => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-amber-600" />
+              <span className="text-sm font-semibold text-amber-800">Pending Voucher Requests</span>
+              {pendingCount > 0 && (
+                <Badge className="bg-amber-600 text-white text-[10px] px-1.5 py-0 h-4">{pendingCount}</Badge>
+              )}
+            </div>
+            {queueOpen ? <ChevronUp className="h-4 w-4 text-amber-600" /> : <ChevronDown className="h-4 w-4 text-amber-600" />}
+          </button>
+
+          {queueOpen && (
+            <div className="divide-y divide-amber-100 border-t border-amber-200">
+              {Object.entries(issuedVouchers).map(([reqId, voucher]) => (
+                <div key={reqId} className="px-4 py-3 bg-green-50 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                    <span className="text-sm font-medium text-green-800">Voucher Issued</span>
+                  </div>
+                  <div className="text-center py-1">
+                    <p className="font-mono text-lg font-bold tracking-widest">{voucher.code}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{voucher.packageUsed}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button className="flex-1 h-7 text-xs" variant="outline" onClick={() => copyShareMsg(reqId, voucher)}>
+                      {copiedShareId === reqId
+                        ? <><Check className="h-3 w-3 mr-1 text-green-600" />Copied!</>
+                        : <><Copy className="h-3 w-3 mr-1" />Copy message</>}
+                    </Button>
+                    <Button variant="ghost" className="h-7 text-xs"
+                      onClick={() => setIssuedVouchers(prev => { const n = { ...prev }; delete n[reqId]; return n; })}>
+                      Dismiss
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              {pendingRequests.map((req) => {
+                const meta = req.metadata || {};
+                const isRej = rejectingId === req.id;
+                return (
+                  <div key={req.id} className="px-4 py-3 space-y-2">
+                    <div className="text-xs text-muted-foreground space-y-0.5">
+                      <p>
+                        <span className="font-medium text-foreground">{req.requester?.full_name || "Unknown"}</span>
+                        {" "}· {timeAgoIso(req.created_at)}
+                      </p>
+                      <p>Package: <strong className="text-foreground">{String(meta.package_name ?? "—")}</strong></p>
+                      {meta.note != null && <p>Note: <span className="text-foreground">{String(meta.note)}</span></p>}
+                      {req.reason && <p className="italic text-amber-700">&ldquo;{req.reason}&rdquo;</p>}
+                    </div>
+
+                    {isRej && (
+                      <Input autoFocus value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)}
+                        placeholder="Reason for rejection..." className="h-7 text-xs" />
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button size="sm" className="flex-1 h-7 text-xs bg-green-600 hover:bg-green-700"
+                        disabled={actingOnId === req.id} onClick={() => handleQueueAction(req.id, "approve")}>
+                        {actingOnId === req.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                        Approve &amp; Issue
+                      </Button>
+                      {isRej ? (
+                        <Button size="sm" variant="destructive" className="flex-1 h-7 text-xs"
+                          disabled={actingOnId === req.id || !rejectionReason.trim()} onClick={() => handleQueueAction(req.id, "reject")}>
+                          {actingOnId === req.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <XCircle className="h-3 w-3 mr-1" />}
+                          Confirm Reject
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-destructive hover:text-destructive"
+                          onClick={() => { setRejectingId(req.id); setRejectionReason(""); }}>
+                          <XCircle className="h-3 w-3 mr-1" />Reject
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Header bar ── */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
@@ -193,13 +429,18 @@ export function RuijiePanel({ locationId, locationName }: RuijiePanelProps) {
           <span className="font-semibold text-sm">Live — {locationName}</span>
           <Badge variant="outline" className="text-xs font-mono">Ruijie Cloud API</Badge>
         </div>
-        <Button
-          variant="outline" size="sm" onClick={refreshAll}
-          disabled={devicesLoading || vouchersLoading || clientsLoading}
-        >
-          <RefreshCw className={`h-4 w-4 mr-1 ${devicesLoading || vouchersLoading || clientsLoading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline" size="sm" onClick={refreshAll}
+            disabled={devicesLoading || vouchersLoading || clientsLoading}
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${devicesLoading || vouchersLoading || clientsLoading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          <Button size="sm" onClick={() => { resetIssueForm(); setIssueOpen(true); }}>
+            <Plus className="h-4 w-4 mr-1" />Issue Ad-hoc
+          </Button>
+        </div>
       </div>
 
       {/* ── Section 1: Device status ── */}
@@ -323,6 +564,85 @@ export function RuijiePanel({ locationId, locationName }: RuijiePanelProps) {
           </div>
         )}
       </section>
+
+      {/* ── Issue Ad-hoc Dialog ── */}
+      <Dialog open={issueOpen} onOpenChange={(v) => { setIssueOpen(v); if (!v) resetIssueForm(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wifi className="h-5 w-5 text-primary" />
+              {directIssued ? "Voucher Issued" : "Issue Ad-hoc WiFi Voucher"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {directIssued ? (
+            <div className="space-y-4 py-2">
+              <div className="text-center py-2">
+                <p className="text-xs text-muted-foreground mb-1">Voucher Code</p>
+                <p className="font-mono text-xl font-bold tracking-widest">{directIssued.code}</p>
+                <p className="text-xs text-muted-foreground mt-1">{directIssued.packageUsed}</p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1" variant="outline"
+                  onClick={() => copyShareMsg("direct", directIssued)}
+                >
+                  {copiedShareId === "direct"
+                    ? <><Check className="h-4 w-4 mr-1.5 text-green-600" />Copied!</>
+                    : <><Copy className="h-4 w-4 mr-1.5" />Copy message</>}
+                </Button>
+                <Button variant="ghost" onClick={() => { setIssueOpen(false); resetIssueForm(); }}>Done</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 py-2">
+              {!canIssueDirect && (
+                <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>Requires manager or admin approval before the voucher is issued. Your request will be queued for review.</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label>Package</Label>
+                <Select value={issuePackage} onValueChange={setIssuePackage}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ADHOC_ALLOWED_PACKAGES.map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Only IT&apos;s existing generic packages can be used — never a tenant-specific one, never a custom duration.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Note / Label</Label>
+                <Input placeholder="e.g. Guest day pass, Meeting room visitor"
+                  value={issueNote} onChange={(e) => setIssueNote(e.target.value)} maxLength={200} />
+                <p className="text-xs text-muted-foreground">Stored on the voucher&apos;s comment field for traceability.</p>
+              </div>
+
+              {!canIssueDirect && (
+                <div className="space-y-1.5">
+                  <Label>Reason <span className="text-destructive">*</span></Label>
+                  <Textarea placeholder="Why is this voucher needed? Who is it for?"
+                    value={issueReason} onChange={(e) => setIssueReason(e.target.value)} rows={3} maxLength={500} />
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setIssueOpen(false); resetIssueForm(); }}>Cancel</Button>
+                <Button onClick={handleIssue} disabled={issueLoading}>
+                  {issueLoading ? "Processing…" : canIssueDirect ? "Issue Voucher" : "Submit for Approval"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
