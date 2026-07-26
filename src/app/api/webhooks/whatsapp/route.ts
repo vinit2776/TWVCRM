@@ -285,13 +285,19 @@ export async function POST(request: NextRequest) {
           }).then(({ error }) => { if (error) console.error("[webhook] activity insert failed:", error.message); });
         }
       }
-    } else if (senderNumber) {
+    } else if (senderNumber && !rawStatus) {
       // Inbound message — link to lead if phone matches, log activity, alert dashboard.
       //
-      // Keyed on the sender alone, NOT on `text`. Most inbound events carry an
-      // empty `text` and hold the message inside `content`; requiring `text`
-      // silently discarded 43 of 51 inbound events, including every
-      // Click-to-WhatsApp ad lead. See parseInboundMessage().
+      // Not keyed on `text`: most inbound events carry an empty `text` and hold
+      // the message inside `content`, so requiring it silently discarded 43 of
+      // 51 inbound events, including every Click-to-WhatsApp ad lead. See
+      // parseInboundMessage().
+      //
+      // `!rawStatus` is what separates the two. Delivery reports also carry a
+      // `from` (the customer's number), so keying on the sender alone turned
+      // every "sent" callback — a status this handler otherwise ignores — into
+      // a phantom inbound message. Only delivery reports have a `status` field;
+      // inbound events never do.
       const channel = (event.channel as string | undefined) ?? "whatsapp";
       const inboundChannel = channel === "sms" ? "sms" : "whatsapp";
 

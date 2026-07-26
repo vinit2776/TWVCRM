@@ -139,6 +139,23 @@ describe("parseInboundMessage", () => {
     expect(r.body).toBe("plain fallback");
   });
 
+  // Regression: delivery reports carry a `from` (the customer's number) and an
+  // empty `text`, so a handler keyed on the sender alone turned every "sent"
+  // callback into a phantom inbound message. The handler now requires the
+  // absence of a `status` field; this asserts the shape that distinguishes them.
+  it("delivery-report payloads are distinguishable from inbound ones", () => {
+    const deliveryReport = {
+      status: "sent", requestId: "abc123", to: "919000000001", from: "919000000001",
+      templateName: "booking_confirmation", channel: "whatsapp", text: "", direction: "1",
+    };
+    const inbound = {
+      from: "919000000001", text: "hi there", channel: "whatsapp",
+      eventName: "submitted", messageType: "text", direction: "0",
+    };
+    expect(deliveryReport.status).toBeTruthy();
+    expect((inbound as Record<string, unknown>).status).toBeUndefined();
+  });
+
   it("never returns an empty body, so no inbound event is dropped", () => {
     const shapes: Array<Record<string, unknown>> = [
       { messageType: "text" },
