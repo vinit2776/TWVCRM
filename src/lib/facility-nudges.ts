@@ -15,7 +15,9 @@ import { sendTrackedPushToUsers } from "@/lib/push";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
-const WA_TEMPLATE_NUDGE = process.env.MSG91_WA_TEMPLATE_FACILITY_NUDGE;
+// .trim() — a stray newline pasted into the Vercel env var makes MSG91 reject
+// the template name outright. See the envStr() note in src/lib/whatsapp.ts.
+const WA_TEMPLATE_NUDGE = process.env.MSG91_WA_TEMPLATE_FACILITY_NUDGE?.trim() || undefined;
 
 function issueUrl(issueId: string) {
   const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com";

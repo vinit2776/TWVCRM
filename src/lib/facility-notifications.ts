@@ -33,7 +33,9 @@ const FULL_BROADCAST_EVENTS = new Set(["created", "priority_escalated", "reopene
 
 // Approved MSG91 WhatsApp template name for ticket assignment/escalation —
 // set once the template is approved (see draft in facility settings docs).
-const WA_TEMPLATE_ASSIGNED = process.env.MSG91_WA_TEMPLATE_FACILITY_ASSIGNED;
+// .trim() — a stray newline pasted into the Vercel env var makes MSG91 reject
+// the template name outright. See the envStr() note in src/lib/whatsapp.ts.
+const WA_TEMPLATE_ASSIGNED = process.env.MSG91_WA_TEMPLATE_FACILITY_ASSIGNED?.trim() || undefined;
 
 function issueUrl(issueId: string) {
   const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com";
