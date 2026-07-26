@@ -417,7 +417,7 @@ export async function sendOneReminder(
   const whatsAppRef = isEarlyGst ? (s.gst_invoice_number as string) : s.statement_number;
   if (stage.whatsApp && phone) {
     try {
-      const r = await messaging.paymentReminder(phone, whatsAppRef, amountStr, dueStr, s.id);
+      const r = await messaging.paymentReminder(phone, customerName, whatsAppRef, amountStr, dueStr, s.id);
       whatsAppSent = r?.success === true;
       if (!whatsAppSent) errors.push(`whatsapp: ${r?.error || "unknown"}`);
     } catch (err) {
