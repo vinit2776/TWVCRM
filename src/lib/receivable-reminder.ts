@@ -270,7 +270,7 @@ export async function sendReceivableReminder(
   let whatsAppSent = false;
   if (stage.whatsApp && phone) {
     try {
-      const r = await messaging.paymentReminder(phone, reference, amountStr, dueStr, id);
+      const r = await messaging.paymentReminder(phone, partyName, reference, amountStr, dueStr, id);
       whatsAppSent = !!r?.success;
       if (!whatsAppSent) errors.push(`whatsapp: ${r?.error || "unknown"}`);
     } catch (err) {

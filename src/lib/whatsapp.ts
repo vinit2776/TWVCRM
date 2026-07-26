@@ -117,6 +117,34 @@ function normalisePhone(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Duplicate suppression
+// ---------------------------------------------------------------------------
+
+/** Matches MSG91's own "same request twice within 10 seconds" dedup window. */
+const DEDUP_WINDOW_MS = 10_000;
+
+const recentSends = new Map<string, number>();
+
+/**
+ * True when this exact message was already sent within DEDUP_WINDOW_MS.
+ *
+ * In-process only, which is enough for the case it exists to catch: a single
+ * cron invocation looping over two passes inside one function instance. It is
+ * deliberately not a distributed lock — the per-statement reminder_count and
+ * last_reminder_sent_at gates remain the real idempotency mechanism.
+ */
+function isDuplicateSend(key: string): boolean {
+  const now = Date.now();
+  for (const [k, at] of recentSends) {
+    if (now - at > DEDUP_WINDOW_MS) recentSends.delete(k);
+  }
+  const seenAt = recentSends.get(key);
+  if (seenAt !== undefined && now - seenAt <= DEDUP_WINDOW_MS) return true;
+  recentSends.set(key, now);
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // DB logging helper
 // ---------------------------------------------------------------------------
 
@@ -404,10 +432,19 @@ export async function sendSms(
 
   const toNumber = normalisePhone(to);
 
+  // MSG91 flow variables are case-sensitive and the DLT bodies use ##VAR1##.
+  // Passing "var1" substitutes nothing and the SMS goes out with the value
+  // blank — which is exactly how production sent "Dear , your payment of Rs.
+  // is due" for months. Normalise varN -> VARN so that cannot recur.
+  const normalisedVars: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    normalisedVars[/^var\d+$/.test(k) ? k.toUpperCase() : k] = v;
+  }
+
   const payload = {
     flow_id: flowId,
     sender: DLT_SENDER,
-    recipients: [{ mobiles: toNumber, ...vars }],
+    recipients: [{ mobiles: toNumber, ...normalisedVars }],
   };
 
   let result: SendResult = { success: false, error: "Unknown error", channel: "sms" };
@@ -484,6 +521,17 @@ export async function sendDltSms(
   if (variables.length !== tpl.vars) {
     console.error(`[messaging] DLT template "${templateKey}" expects ${tpl.vars} variable(s), got ${variables.length}`);
     return { success: false, error: `Variable count mismatch: expected ${tpl.vars}`, channel: "sms" };
+  }
+
+  // Suppress an identical resend inside MSG91's own dedup window. The payment
+  // reminder cron makes two passes — billing statements, then other
+  // receivables — and a customer appearing in both would otherwise be sent the
+  // same SMS twice seconds apart. MSG91 discards the second with error 311, so
+  // it never reached the customer, but it also never surfaced as a failure.
+  // Keyed on the full message, so two genuinely different reminders still send.
+  if (isDuplicateSend(`sms|${templateKey}|${normalisePhone(to)}|${variables.join("")}`)) {
+    console.warn(`[messaging] Suppressed duplicate DLT SMS "${templateKey}" within ${DEDUP_WINDOW_MS}ms.`);
+    return { success: false, error: "Duplicate suppressed", channel: "sms" };
   }
 
   // Guard: TRAI DLT template ID is empty — template not yet approved by TRAI.
@@ -574,18 +622,32 @@ const SMS_DLT_FLOWS: Record<DltTemplateKey, string | undefined> = {
 // sendTemplate — WhatsApp first, SMS fallback if WhatsApp fails
 // ---------------------------------------------------------------------------
 
+/**
+ * The SMS fallback routes through sendDltSms(), NOT the raw sendSms().
+ *
+ * It previously called sendSms() with lowercase `var1/var2/var3` keys. MSG91
+ * flow variables are case-sensitive (the DLT bodies use ##VAR1##), so nothing
+ * substituted and every fallback SMS went out with blank values — customers
+ * received "Dear , your payment of Rs. is due for your workspace at The Work
+ * Villa." That also caused MSG91 error 311 ("same request generated twice
+ * within 10 seconds"): with all variables blank, two reminders to the same
+ * person were byte-identical, so MSG91 discarded the second as a duplicate.
+ *
+ * sendDltSms() builds uppercase VARn and validates the count against the
+ * registered DLT template, so a mismatch now fails loudly instead of sending
+ * an empty message.
+ */
 export async function sendTemplate(
   options: SendTemplateOptions,
-  smsFallback?: { flowId: string; vars: Record<string, string> }
+  smsFallback?: { template: DltTemplateKey; variables: string[] }
 ): Promise<SendResult> {
   const waResult = await sendWhatsApp(options);
 
-  if (!waResult.success && smsFallback?.flowId) {
+  if (!waResult.success && smsFallback) {
     console.log(`[messaging] WhatsApp failed for ${options.template}, trying SMS fallback`);
-    return sendSms(smsFallback.flowId, options.to, smsFallback.vars, {
-      entityType:   options.entityType,
-      entityId:     options.entityId,
-      templateName: options.template,
+    return sendDltSms(smsFallback.template, options.to, smsFallback.variables, {
+      entityType: options.entityType,
+      entityId:   options.entityId,
     });
   }
 
@@ -599,7 +661,8 @@ export async function sendTemplate(
 export const messaging = {
   /**
    * Booking confirmation → guest / booker phone.
-   * WhatsApp first, falls back to SMS (MSG91_SMS_FLOW_BOOKING).
+   * WhatsApp first, falling back to the DLT `booking` SMS
+   * ("Dear {name}, your booking ... is confirmed. Booking Ref: {ref}.").
    */
   bookingConfirmation(
     to: string,
@@ -610,15 +673,13 @@ export const messaging = {
   ) {
     return sendTemplate(
       { to, template: "booking_confirmation", params: [guestName, bookingNumber, date], entityType: "booking", entityId: bookingId },
-      SMS_FLOWS.booking
-        ? { flowId: SMS_FLOWS.booking, vars: { var1: guestName, var2: bookingNumber, var3: date } }
-        : undefined
+      { template: "booking", variables: [guestName, bookingNumber] }
     );
   },
 
   /**
    * Billing statement ready → customer phone.
-   * WhatsApp first, falls back to SMS (MSG91_SMS_FLOW_BILLING).
+   * No SMS fallback — there is no DLT-registered template for this message.
    */
   billingStatementReady(
     to: string,
@@ -628,19 +689,21 @@ export const messaging = {
     statementId: string
   ) {
     return sendTemplate(
-      { to, template: "billing_statement_ready", params: [customerName, statementNumber, amount], entityType: "billing_statement", entityId: statementId },
-      SMS_FLOWS.billing
-        ? { flowId: SMS_FLOWS.billing, vars: { var1: customerName, var2: statementNumber, var3: amount } }
-        : undefined
+      { to, template: "billing_statement_ready", params: [customerName, statementNumber, amount], entityType: "billing_statement", entityId: statementId }
     );
   },
 
   /**
    * Payment reminder → customer phone.
-   * WhatsApp first, falls back to SMS (MSG91_SMS_FLOW_REMINDER).
+   * WhatsApp first, falling back to the DLT `payment_reminder` SMS
+   * ("Dear {name}, your payment of Rs.{amount} is due ...").
+   *
+   * customerName is required by that DLT template. It used to receive the
+   * invoice number in that slot, which would have read "Dear TWV-2026-0001".
    */
   paymentReminder(
     to: string,
+    customerName: string,
     invoiceNumber: string,
     amount: string,
     dueDate: string,
@@ -648,9 +711,7 @@ export const messaging = {
   ) {
     return sendTemplate(
       { to, template: "payment_reminder", params: [invoiceNumber, amount, dueDate], entityType: "billing_statement", entityId: statementId },
-      SMS_FLOWS.reminder
-        ? { flowId: SMS_FLOWS.reminder, vars: { var1: invoiceNumber, var2: amount, var3: dueDate } }
-        : undefined
+      { template: "payment_reminder", variables: [customerName, amount] }
     );
   },
 
