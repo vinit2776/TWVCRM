@@ -230,25 +230,50 @@ export async function POST(
     .eq("id", id);
 
   // WhatsApp — fire to phone if available (fire-and-forget)
+  //
+  // Uses the approved `booking_confirmation_doc` template, whose body already
+  // reads "...pay the security deposit of Rs.{{3}} here: {{4}}". The previous
+  // `proposal_deposit_request` template was never registered in MSG91, so every
+  // one of these sends failed silently.
+  //
+  // That template carries a document header, so it needs the proposal PDF.
+  // pdf_storage_path is only set on proposals sent through the newer flow; when
+  // it is missing we skip WhatsApp rather than send a broken template — the
+  // email above still carries the Pay button.
   if (customerPhone && depositLinkUrl) {
     const amountFormatted = `${depositAmount.toLocaleString("en-IN")}`;
-    messaging.proposalDepositRequest(
-      customerPhone,
-      customerName,
-      amountFormatted,
-      proposal.proposal_number,
-      depositLinkUrl,
-      id
-    ).catch((e: unknown) => console.error("[messaging] deposit WhatsApp failed:", e));
 
-    // Log in lead activities
-    if (proposal.lead_id && dbUser?.id) {
-      logWhatsAppActivity(supabase, {
-        leadId: proposal.lead_id,
-        subject: `Security deposit payment link sent`,
-        description: `Security deposit of ₹${amountFormatted} for ${proposal.proposal_number} sent via WhatsApp to ${customerPhone}. Payment link: ${depositLinkUrl}`,
-        createdBy: dbUser.id,
-      });
+    if (proposal.pdf_storage_path) {
+      const adminSupabase = createAdminClient();
+      const { data: signed } = await adminSupabase.storage
+        .from("crm-documents")
+        .createSignedUrl(proposal.pdf_storage_path, 365 * 24 * 3600);
+
+      if (signed?.signedUrl) {
+        messaging.bookingConfirmationDocument(
+          customerPhone,
+          customerName,
+          proposal.proposal_number,
+          amountFormatted,
+          depositLinkUrl,
+          signed.signedUrl,
+          id
+        ).catch((e: unknown) => console.error("[messaging] deposit WhatsApp failed:", e));
+
+        // Log in lead activities
+        if (proposal.lead_id && dbUser?.id) {
+          logWhatsAppActivity(supabase, {
+            leadId: proposal.lead_id,
+            subject: `Security deposit payment link sent`,
+            description: `Security deposit of ₹${amountFormatted} for ${proposal.proposal_number} sent via WhatsApp to ${customerPhone}. Payment link: ${depositLinkUrl}`,
+            createdBy: dbUser.id,
+          });
+        }
+      }
+    } else {
+      console.warn(
+        `[deposit-link] No stored PDF for ${proposal.proposal_number} — WhatsApp deposit request skipped (email sent).`
+      );
     }
   }
 

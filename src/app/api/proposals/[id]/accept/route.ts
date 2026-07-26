@@ -261,32 +261,15 @@ export async function POST(
     }
   }
 
-  // ── 5 & 6. WhatsApp — text (deposit link) + document (PDF) ───────────────
+  // ── 5. WhatsApp — booking confirmation PDF, which carries the deposit ask ─
+  // booking_confirmation_doc's body already states the deposit amount and the
+  // payment link ("...pay the security deposit of Rs.{{3}} here: {{4}}"), so a
+  // separate text message duplicated it. The old proposal_deposit_request send
+  // was removed: that template was never registered in MSG91, so every one of
+  // those sends failed while this document send succeeded.
   if (customerPhone) {
     const amountFormatted = depositAmount.toLocaleString("en-IN");
 
-    // Text message with deposit link
-    if (hasDeposit && depositLinkUrl) {
-      messaging.proposalDepositRequest(
-        customerPhone,
-        customerName,
-        amountFormatted,
-        proposal.proposal_number,
-        depositLinkUrl,
-        id
-      ).catch((e: unknown) => console.error("[messaging] booking WA text failed:", e));
-
-      if (proposal.lead_id && dbUser?.id) {
-        logWhatsAppActivity(supabase, {
-          leadId: proposal.lead_id,
-          subject: `Booking confirmation & deposit link sent`,
-          description: `Booking confirmed for ${proposal.proposal_number}. Security deposit of ₹${amountFormatted} requested via WhatsApp to ${customerPhone}. Payment link: ${depositLinkUrl}`,
-          createdBy: dbUser.id,
-        });
-      }
-    }
-
-    // Document message with proposal PDF
     if (pdfPublicUrl) {
       messaging.bookingConfirmationDocument(
         customerPhone,
@@ -297,6 +280,25 @@ export async function POST(
         pdfPublicUrl,
         id
       ).catch((e: unknown) => console.error("[messaging] booking WA doc failed:", e));
+
+      if (proposal.lead_id && dbUser?.id) {
+        logWhatsAppActivity(supabase, {
+          leadId: proposal.lead_id,
+          subject: hasDeposit && depositLinkUrl
+            ? `Booking confirmation & deposit link sent`
+            : `Booking confirmation sent`,
+          description: hasDeposit && depositLinkUrl
+            ? `Booking confirmed for ${proposal.proposal_number}. Security deposit of ₹${amountFormatted} requested via WhatsApp to ${customerPhone}. Payment link: ${depositLinkUrl}`
+            : `Booking confirmation for ${proposal.proposal_number} sent via WhatsApp to ${customerPhone}.`,
+          createdBy: dbUser.id,
+        });
+      }
+    } else {
+      // Without a PDF we cannot send this template at all — it has a document
+      // header. Log it rather than failing silently.
+      console.warn(
+        `[accept] No proposal PDF for ${proposal.proposal_number} — WhatsApp booking confirmation skipped.`
+      );
     }
   }
 

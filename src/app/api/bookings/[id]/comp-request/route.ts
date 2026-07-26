@@ -42,8 +42,8 @@ export async function GET(
  * Floor managers submit a complimentary-booking approval request.
  * Creates a row in the generic `approval_requests` table
  * (approval_type = 'comp_request', entity_type = 'booking'),
- * then fires email + WhatsApp + in-app notifications to all
- * active admins and managers.
+ * then fires email + in-app notifications to all active admins
+ * and managers.
  *
  * The request expires after 24 hours if not acted on.
  *
@@ -62,7 +62,6 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
-import { sendWhatsApp } from "@/lib/whatsapp";
 import {
   BOOKING_COMPLIMENTARY_REASON_LABELS,
 } from "@/lib/constants";
@@ -302,27 +301,12 @@ export async function POST(
     }).catch(err => console.error("[comp-request] email failed:", err));
   }
 
-  // ── WhatsApp notifications ────────────────────────────────────────────────
-  // Template: comp_request_notify (Utility)
-  // Body: "Hi {{1}}, {{2}} has submitted a complimentary booking request for {{3}}. Reason: {{4}}. Review in the CRM. – TWV"
-  // Status: Template needs to be created in MSG91 dashboard.
-  //         Once approved and synced, WhatsApp delivery will activate automatically.
-  for (const approver of approverList) {
-    if (approver.phone) {
-      sendWhatsApp({
-        to:         approver.phone,
-        template:   "comp_request_notify",
-        params:     [
-          approver.full_name || "Team",
-          dbUser.full_name,
-          booking.booking_number,
-          reasonLabel,
-        ],
-        entityType: "booking",
-        entityId:   bookingId,
-      }).catch(err => console.warn("[comp-request] WhatsApp failed:", err));
-    }
-  }
+  // ── WhatsApp notifications — intentionally not sent ───────────────────────
+  // This used "comp_request_notify", which was never created in MSG91 (the
+  // original comment here said as much). Every send failed with "template name
+  // does not exist in en". No approved template fits an internal comp-request
+  // alert — internal_new_lead would tell approvers this is a "New lead" — so
+  // approvers are notified by the email above until the template is approved.
 
   return NextResponse.json({
     data: { id: approvalReq.id, expires_at: expiresAt },
