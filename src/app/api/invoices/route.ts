@@ -38,13 +38,28 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "sales_rep", "floor_manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, sales_rep, or floor_manager can create invoices" }, { status: 403 });
+  }
+
   const body = await request.json();
   const result = createInvoiceSchema.safeParse(body);
   if (!result.success) {
     return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
   }
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  // Security deposits are refundable and GST-exempt — collecting one through an
+  // ad-hoc invoice books it as taxed revenue and makes it invisible to the
+  // deposit ledger (get_deposit_available_balance). Always redirect to the
+  // proposal deposit link instead. No override — client already blocks this
+  // in the UI, this is defense in depth.
+  if (result.data.primary_head === "security_deposit") {
+    return NextResponse.json(
+      { error: "Security deposits can't be collected via an ad-hoc invoice. Use the deposit link on the proposal instead." },
+      { status: 400 }
+    );
+  }
 
   const items = result.data.items;
   const subtotal = items.reduce((sum, item) => sum + item.total, 0);

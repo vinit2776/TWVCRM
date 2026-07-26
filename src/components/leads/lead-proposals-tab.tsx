@@ -63,6 +63,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
 
+  // Newest non-terminal proposal — where the deposit link lives. Proposals
+  // come back newest-first, so this is just the first one that isn't
+  // rejected/expired; falls back to the newest overall if all are terminal.
+  const activeProposal =
+    proposals.find((p) => p.status !== "rejected" && p.status !== "expired") ?? proposals[0];
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     const [proposalsRes, invoicesRes, leadRes] = await Promise.all([
@@ -555,6 +561,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
         open={invoiceFormOpen}
         onOpenChange={setInvoiceFormOpen}
         onSuccess={handleSuccess}
+        hasActiveProposal={!!activeProposal}
+        activeProposalId={activeProposal?.id}
+        onRequestProposal={() => {
+          setInvoiceFormOpen(false);
+          setProposalFormOpen(true);
+        }}
       />
 
       {/* Email Dialog */}
