@@ -4,24 +4,76 @@
  * Receives delivery status callbacks for both WhatsApp and SMS sent via MSG91.
  *
  * GET  — Simple token verification (used when registering the webhook URL in MSG91)
- * POST — Delivery status updates from MSG91
+ * POST — Delivery status updates + inbound messages from MSG91
  *
- * Register at:
- *   MSG91 Dashboard → Settings → Webhooks
+ * Authentication
+ * --------------
+ * MSG91 does not sign webhook payloads, so a shared secret is the strongest
+ * mechanism available. Its webhook config accepts arbitrary custom headers, so
+ * both webhooks send `x-msg91-webhook-token: <MSG91_WEBHOOK_TOKEN>`.
+ *
+ * Register at MSG91 → WhatsApp → Webhook, on BOTH "CRM Delivery Status" and
+ * "CRM Inbound Messages":
  *   Callback URL: https://<your-domain>/api/webhooks/whatsapp
- *   Token:        <MSG91_WEBHOOK_TOKEN env var>
+ *   Header:       x-msg91-webhook-token: <MSG91_WEBHOOK_TOKEN env var>
  *
- * MSG91 POST body (WhatsApp delivery report):
- *   { "requestId": "...", "status": "DELIVERED"|"READ"|"FAILED", "to": "91...", "channel": "whatsapp" }
+ * A `?token=` query parameter is accepted as a fallback, because MSG91's UI
+ * lets the URL be edited more easily than the headers. Without authentication
+ * anyone could forge delivery statuses and inject fake inbound messages and
+ * lead activities.
  *
- * MSG91 POST body (SMS delivery report):
- *   { "requestId": "...", "status": "DELIVERED"|"FAILED", "to": "91...", "channel": "sms" }
+ * If MSG91_WEBHOOK_TOKEN is unset the request is allowed through with a
+ * warning — failing closed on a missing env var would silently drop every
+ * delivery report instead of surfacing the misconfiguration.
+ *
+ * MSG91 POST body (WhatsApp delivery report) — per its resPayloadFormat:
+ *   { "status": "...", "requestId": "...", "to": "91...", "from": "91...",
+ *     "templateName": "...", "channel": "whatsapp", "reason": "...", ... }
+ *
+ * MSG91 POST body (inbound message):
+ *   { "from": "91...", "text": "...", "channel": "whatsapp",
+ *     "messageType": "text", "requestId": "...", ... }
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 
-const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN;
+const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
+
+const TOKEN_HEADER = "x-msg91-webhook-token";
+
+/** Constant-time compare so a wrong token can't be recovered by timing. */
+function tokenMatches(candidate: string | null | undefined): boolean {
+  if (!candidate || !WEBHOOK_TOKEN) return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(WEBHOOK_TOKEN);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Returns null when the caller is authorised, or the response to send back.
+ */
+function authorise(request: NextRequest): NextResponse | null {
+  if (!WEBHOOK_TOKEN) {
+    console.warn(
+      "[messaging webhook] MSG91_WEBHOOK_TOKEN is not set — accepting unauthenticated callback. Set it to enable verification."
+    );
+    return null;
+  }
+
+  const header = request.headers.get(TOKEN_HEADER);
+  const query = new URL(request.url).searchParams.get("token");
+
+  if (tokenMatches(header) || tokenMatches(query)) return null;
+
+  // Never log the supplied value — it is a credential guess.
+  console.warn(
+    `[messaging webhook] Rejected unauthenticated POST (header ${header ? "present but wrong" : "absent"}, query token ${query ? "present but wrong" : "absent"}).`
+  );
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
 
 // Map MSG91 status strings → our DB status values
 const STATUS_MAP: Record<string, string> = {
@@ -41,9 +93,12 @@ const STATUS_MAP: Record<string, string> = {
 // ---------------------------------------------------------------------------
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const token = searchParams.get("token") ?? searchParams.get("hub.verify_token");
+  const token =
+    searchParams.get("token") ??
+    searchParams.get("hub.verify_token") ??
+    request.headers.get(TOKEN_HEADER);
 
-  if (token && token === WEBHOOK_TOKEN) {
+  if (tokenMatches(token)) {
     // Return the challenge if present (Meta-style) or just 200
     const challenge = searchParams.get("hub.challenge");
     return new Response(challenge ?? "ok", { status: 200 });
@@ -57,6 +112,10 @@ export async function GET(request: NextRequest) {
 // POST — delivery status updates + inbound messages
 // ---------------------------------------------------------------------------
 export async function POST(request: NextRequest) {
+  // Authenticate before parsing or touching the database.
+  const unauthorised = authorise(request);
+  if (unauthorised) return unauthorised;
+
   let body: Record<string, unknown>;
 
   try {
