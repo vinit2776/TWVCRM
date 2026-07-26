@@ -275,7 +275,9 @@ export async function dispatchTallyInvoice(
         customerPhone,
         customerName,
         ack.invoiceNumber,
-        `Rs. ${Math.round(totalAmount).toLocaleString("en-IN")}`,
+        // gst_invoice_doc renders "Rs.{{3}}", so pass the bare number —
+        // prefixing it here rendered as "Rs.Rs. 50,000".
+        Math.round(totalAmount).toLocaleString("en-IN"),
         razorpayLinkUrl || "",
         pdfPublicUrl,
         billingStatementId,
