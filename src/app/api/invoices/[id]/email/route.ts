@@ -295,7 +295,9 @@ export async function POST(
         customerPhone,
         customerName,
         invoice.invoice_number,
-        totalFormatted,
+        // gst_invoice_doc renders "Rs.{{3}}", so pass the bare number.
+        // totalFormatted carries a "₹" and would render as "Rs.₹50,000".
+        Number(invoice.total_amount).toLocaleString("en-IN"),
         paymentLinkUrl || "",
         pdfPublicUrl,
         id

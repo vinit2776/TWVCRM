@@ -714,47 +714,11 @@ export const messaging = {
     });
   },
 
-  /**
-   * Security deposit payment request → lead/customer phone.
-   * "Hi {{1}}, please pay the security deposit of Rs.{{2}} for proposal {{3}} at The Work Villa. Click to pay: {{4}}"
-   */
-  proposalDepositRequest(
-    to: string,
-    customerName: string,
-    depositAmount: string,
-    proposalNumber: string,
-    paymentLink: string,
-    proposalId: string
-  ) {
-    return sendWhatsApp({
-      to,
-      template: "proposal_deposit_request",
-      params: [customerName, depositAmount, proposalNumber, paymentLink],
-      entityType: "proposal",
-      entityId: proposalId,
-    });
-  },
-
-  /**
-   * Prorated GST invoice with payment link → lead/customer phone.
-   * "Hi {{1}}, your invoice {{2}} of Rs.{{3}} is ready. Pay now at The Work Villa: {{4}}"
-   */
-  proposalInvoice(
-    to: string,
-    customerName: string,
-    invoiceNumber: string,
-    totalAmount: string,
-    paymentLink: string,
-    proposalId: string
-  ) {
-    return sendWhatsApp({
-      to,
-      template: "proposal_invoice",
-      params: [customerName, invoiceNumber, totalAmount, paymentLink],
-      entityType: "proposal",
-      entityId: proposalId,
-    });
-  },
+  // proposalDepositRequest() and proposalInvoice() were removed. They sent the
+  // templates "proposal_deposit_request" and "proposal_invoice", neither of
+  // which exists in MSG91 — every call failed with "template name does not
+  // exist in en". Their content is covered by the approved document templates
+  // below: bookingConfirmationDocument() and invoiceDocument().
 
   // ── Document (PDF) wrappers ────────────────────────────────────────────────
   // Each requires a matching MSG91 template with a Document header.
