@@ -117,6 +117,35 @@ function normalisePhone(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Template parameter sanitisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Meta forbids newlines, tabs and runs of four or more spaces inside template
+ * body values. MSG91 surfaces that as HTTP 400 "next line(\n) is not supported
+ * for body value" and the whole send fails.
+ *
+ * This bit facility ticket nudges: the link is built from NEXT_PUBLIC_APP_URL,
+ * which is stored in Vercel with a trailing newline, so the URL arrived as
+ * "https://twv-crm.vercel.app\n/facility/issues/...". The same hazard applies to
+ * anything a user typed — facility_ticket_assigned passes the issue description
+ * straight through, and a two-line description would fail the same way.
+ *
+ * URLs have whitespace stripped rather than collapsed: turning the newline into
+ * a space would produce "https://twv-crm.vercel.app /facility/issues/..." — a
+ * send that succeeds but delivers a link nobody can click. Everything else
+ * collapses to single spaces, which keeps prose readable.
+ *
+ * This is a backstop, not the cure. The real fix for the case above is the
+ * trailing newline on NEXT_PUBLIC_APP_URL in Vercel.
+ */
+function sanitiseParam(value: string): string {
+  const s = String(value ?? "").trim();
+  if (/^https?:\/\//i.test(s)) return s.replace(/\s+/g, "");
+  return s.replace(/\s+/g, " ");
+}
+
+// ---------------------------------------------------------------------------
 // Duplicate suppression
 // ---------------------------------------------------------------------------
 
@@ -250,7 +279,7 @@ export async function sendWhatsApp(options: SendTemplateOptions): Promise<SendRe
   // Build MSG91 component map: body_1, body_2, ...
   const components: Record<string, { type: string; value: string }> = {};
   params.forEach((value, i) => {
-    components[`body_${i + 1}`] = { type: "text", value };
+    components[`body_${i + 1}`] = { type: "text", value: sanitiseParam(value) };
   });
 
   const payload = {
@@ -338,20 +367,20 @@ export async function sendWhatsAppDocument(options: SendDocumentOptions): Promis
   const components: Record<string, unknown> = {
     header_1: {
       type: "document",
-      value: documentUrl,
-      filename: documentFilename,
+      value: documentUrl.trim(),
+      filename: sanitiseParam(documentFilename),
     },
   };
 
   if (namedParams) {
     // Named variables — keys must match exactly what MSG91 shows in Template Code panel
     Object.entries(namedParams).forEach(([key, value]) => {
-      components[key] = { type: "text", value };
+      components[key] = { type: "text", value: sanitiseParam(value) };
     });
   } else {
     // Positional variables — body_1, body_2, ...
     params.forEach((value, i) => {
-      components[`body_${i + 1}`] = { type: "text", value };
+      components[`body_${i + 1}`] = { type: "text", value: sanitiseParam(value) };
     });
   }
 
