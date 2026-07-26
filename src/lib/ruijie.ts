@@ -287,6 +287,46 @@ export async function issueRuijieVoucher(
   return { result, matchWarning: matched.matchWarning };
 }
 
+// ─── Ad-hoc issuance (walk-in guests, no linked contract/booking) ──────────
+//
+// Ruijie can't take an arbitrary duration, so ad-hoc issuance can't offer a
+// "custom minutes" option the way UniFi's does — it must pick one of a small,
+// explicitly-approved set of IT's existing generic (non-tenant) packages.
+// This is deliberately NOT "any non-CRM_ package" — the ~14 tenant/cabin-named
+// packages (e.g. DHICONSULTANCY_Cabin05) must never be touched here.
+export const ADHOC_ALLOWED_PACKAGES = ["daypass"] as const;
+export type AdhocPackageName = (typeof ADHOC_ALLOWED_PACKAGES)[number];
+
+export interface AdhocRuijieVoucherResult {
+  result: RuijieVoucherResult;
+  packageUsed: string;
+}
+
+export async function issueAdhocRuijieVoucher(
+  site: RuijieSiteConfig,
+  packageName: string,
+  comment: string
+): Promise<AdhocRuijieVoucherResult | { error: string }> {
+  if (!ADHOC_ALLOWED_PACKAGES.includes(packageName as AdhocPackageName)) {
+    return { error: `"${packageName}" is not an approved ad-hoc package. Allowed: ${ADHOC_ALLOWED_PACKAGES.join(", ")}` };
+  }
+
+  const packages = await cachedListRuijiePackages(site.groupId);
+  const pkg = packages.find((p) => p.name === packageName);
+  if (!pkg) {
+    return { error: `Package "${packageName}" was not found for this location in Ruijie Cloud.` };
+  }
+
+  const result = await createRuijieVoucher({
+    groupId: site.groupId,
+    userGroupId: pkg.id,
+    authProfileId: pkg.authProfileId,
+    comment,
+  });
+
+  return { result, packageUsed: pkg.name };
+}
+
 // ─── Voucher listing (for the monitoring panel) ────────────────────────────
 
 export interface RuijieVoucherSummary {

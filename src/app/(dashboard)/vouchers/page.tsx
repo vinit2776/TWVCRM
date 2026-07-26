@@ -250,6 +250,7 @@ export default function VouchersPage() {
         <RuijiePanel
           locationId={selectedLocation.id}
           locationName={selectedLocation.name}
+          userRole={userRole}
         />
       )}
 
