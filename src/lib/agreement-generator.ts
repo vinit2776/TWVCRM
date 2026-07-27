@@ -62,7 +62,7 @@ PURPOSE: Provision of virtual office address for the purpose of GST Registration
 SCHEDULE:
 1. Address: {{location_name}}, {{location_address}}
 2. Service: Virtual Office for GST Registration
-3. Monthly Fee: {{rate_formatted}} + applicable GST
+3. Fee: {{rate_formatted}} + applicable GST
 4. Tenure: {{tenure_months}} months from {{start_date_formatted}}
 5. Security Deposit: {{security_deposit_formatted}}
 {{#if client_gst_number}}6. Client GST: {{client_gst_number}}{{/if}}
@@ -93,7 +93,7 @@ PURPOSE: Provision of registered office address for Company/LLP registration wit
 SCHEDULE:
 1. Address: {{location_name}}, {{location_address}}
 2. Service: Registered Office Address for MCA Registration
-3. Monthly Fee: {{rate_formatted}} + applicable GST
+3. Fee: {{rate_formatted}} + applicable GST
 4. Tenure: {{tenure_months}} months from {{start_date_formatted}}
 5. Security Deposit: {{security_deposit_formatted}}
 {{#if client_cin_number}}6. CIN/LLPIN: {{client_cin_number}}{{/if}}
@@ -123,7 +123,7 @@ PURPOSE: Provision of virtual office address for establishing a branch office pr
 SCHEDULE:
 1. Address: {{location_name}}, {{location_address}}
 2. Service: Branch Office Virtual Address
-3. Monthly Fee: {{rate_formatted}} + applicable GST
+3. Fee: {{rate_formatted}} + applicable GST
 4. Tenure: {{tenure_months}} months from {{start_date_formatted}}
 5. Security Deposit: {{security_deposit_formatted}}
 {{#if client_gst_number}}6. Client GST: {{client_gst_number}}{{/if}}
@@ -151,7 +151,7 @@ PURPOSE: Provision of business address with mail handling and forwarding service
 SCHEDULE:
 1. Address: {{location_name}}, {{location_address}}
 2. Service: Mail Handling & Business Address
-3. Monthly Fee: {{rate_formatted}} + applicable GST
+3. Fee: {{rate_formatted}} + applicable GST
 4. Tenure: {{tenure_months}} months from {{start_date_formatted}}
 5. Security Deposit: {{security_deposit_formatted}}
 
@@ -178,7 +178,7 @@ PURPOSE: Provision of virtual office services including business address and rel
 SCHEDULE:
 1. Address: {{location_name}}, {{location_address}}
 2. Service: Virtual Office & Business Address
-3. Monthly Fee: {{rate_formatted}} + applicable GST
+3. Fee: {{rate_formatted}} + applicable GST
 4. Tenure: {{tenure_months}} months from {{start_date_formatted}}
 5. Security Deposit: {{security_deposit_formatted}}
 
@@ -312,7 +312,7 @@ export function generateAgreementPdf(
   const ctx = createPdfContext(doc, startY);
 
   // ── Title ──
-  const titleText = `VIRTUAL OFFICE AGREEMENT`;
+  const titleText = `VIRTUAL OFFICE PROPOSAL`;
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
