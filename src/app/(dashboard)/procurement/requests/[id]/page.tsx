@@ -1526,6 +1526,8 @@ export default function PurchaseRequestDetailPage() {
               ? ` — ${pr.billable_contract.lead.company || `${pr.billable_contract.lead.first_name} ${pr.billable_contract.lead.last_name}`}`
               : ""
           }`}
+          taxPercentage={pr.billable_contract.tax_percentage ?? 18}
+          billingMode={pr.billable_contract.billing_mode}
           seedItems={(pr.purchase_request_items ?? []).map((it) => ({ item_name: it.item_name, quantity: Number(it.quantity) }))}
           onSuccess={fetchPr}
         />

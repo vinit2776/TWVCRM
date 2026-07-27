@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Loader2 } from "lucide-react";
+import { Plus, Trash2, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 interface BillLineItem {
   id: string; // local draft id
@@ -34,17 +35,22 @@ type Props = {
   prId: string;
   prNumber: string;
   contractLabel: string;
+  /** Contract's locked GST rate — used to show an accurate preview total before anything is sent. */
+  taxPercentage: number;
+  /** 'proforma_first' sends a pay-first PI; 'gst_direct' sends the GST tax invoice immediately. */
+  billingMode?: string;
   /** Pre-fills the line-item editor from the MR's own items — pricing is entered fresh, not copied. */
   seedItems: { item_name: string; quantity: number }[];
   onSuccess: () => void;
 };
 
 export function BillCustomerDialog({
-  open, onOpenChange, prId, prNumber, contractLabel, seedItems, onSuccess,
+  open, onOpenChange, prId, prNumber, contractLabel, taxPercentage, billingMode, seedItems, onSuccess,
 }: Props) {
   const [items, setItems] = useState<BillLineItem[]>([]);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -59,6 +65,7 @@ export function BillCustomerDialog({
         : [{ id: generateLocalId(), description: "", quantity: "1", unit_price: "" }]
     );
     setNotes("");
+    setPreviewing(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -81,15 +88,17 @@ export function BillCustomerDialog({
     return sum;
   }, 0);
 
-  const handleSubmit = async () => {
-    const cleanedItems = items
-      .map((li) => ({
-        description: li.description.trim(),
-        quantity: parseFloat(li.quantity),
-        unit_price: parseFloat(li.unit_price),
-      }))
-      .filter((li) => li.description && !isNaN(li.quantity) && li.quantity > 0 && !isNaN(li.unit_price) && li.unit_price >= 0);
+  const cleanedItems = items
+    .map((li) => ({
+      description: li.description.trim(),
+      quantity: parseFloat(li.quantity),
+      unit_price: parseFloat(li.unit_price),
+    }))
+    .filter((li) => li.description && !isNaN(li.quantity) && li.quantity > 0 && !isNaN(li.unit_price) && li.unit_price >= 0);
 
+  const gst = computeGstAndRounding(subtotal, taxPercentage);
+
+  const goToPreview = () => {
     if (cleanedItems.length === 0) {
       toast.error("Add at least one line item with a description, quantity, and price");
       return;
@@ -98,7 +107,10 @@ export function BillCustomerDialog({
       toast.error("Total amount must be greater than zero");
       return;
     }
+    setPreviewing(true);
+  };
 
+  const handleConfirmSend = async () => {
     setSubmitting(true);
     try {
       const res = await fetch(`/api/procurement/requests/${prId}/bill-customer`, {
@@ -147,84 +159,141 @@ export function BillCustomerDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Bill Customer — {prNumber}</DialogTitle>
-          <DialogDescription>
-            Invoicing {contractLabel}. Enter the customer-facing price for each line — this is manually
-            marked up, it does not have to match the vendor cost. You can bill this in full now, or bill
-            part of it as an advance and the rest later.
-          </DialogDescription>
-        </DialogHeader>
+        {!previewing ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Bill Customer — {prNumber}</DialogTitle>
+              <DialogDescription>
+                Invoicing {contractLabel}. Enter the customer-facing price for each line — this is manually
+                marked up, it does not have to match the vendor cost. You can bill this in full now, or bill
+                part of it as an advance and the rest later.
+              </DialogDescription>
+            </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="grid grid-cols-[1fr_80px_110px_36px] gap-2 text-xs font-medium text-muted-foreground px-1">
-            <span>Description</span>
-            <span>Qty</span>
-            <span>Price</span>
-            <span />
-          </div>
-          {items.map((li) => (
-            <div key={li.id} className="grid grid-cols-[1fr_80px_110px_36px] gap-2 items-start">
-              <Input
-                placeholder="e.g. Office chairs (x4)"
-                value={li.description}
-                onChange={(e) => updateItem(li.id, "description", e.target.value)}
-              />
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={li.quantity}
-                onChange={(e) => updateItem(li.id, "quantity", e.target.value)}
-              />
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Rate"
-                value={li.unit_price}
-                onChange={(e) => updateItem(li.id, "unit_price", e.target.value)}
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-muted-foreground hover:text-red-600"
-                onClick={() => removeItem(li.id)}
-                disabled={items.length <= 1}
-              >
-                <Trash2 className="h-4 w-4" />
+            <div className="space-y-3">
+              <div className="grid grid-cols-[1fr_80px_110px_36px] gap-2 text-xs font-medium text-muted-foreground px-1">
+                <span>Description</span>
+                <span>Qty</span>
+                <span>Price</span>
+                <span />
+              </div>
+              {items.map((li) => (
+                <div key={li.id} className="grid grid-cols-[1fr_80px_110px_36px] gap-2 items-start">
+                  <Input
+                    placeholder="e.g. Office chairs (x4)"
+                    value={li.description}
+                    onChange={(e) => updateItem(li.id, "description", e.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={li.quantity}
+                    onChange={(e) => updateItem(li.id, "quantity", e.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Rate"
+                    value={li.unit_price}
+                    onChange={(e) => updateItem(li.id, "unit_price", e.target.value)}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-red-600"
+                    onClick={() => removeItem(li.id)}
+                    disabled={items.length <= 1}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={addItem}>
+                <Plus className="h-4 w-4 mr-1" /> Add line
               </Button>
+
+              <div className="space-y-1.5 pt-2">
+                <Label htmlFor="bill-customer-notes">Notes (optional)</Label>
+                <Textarea
+                  id="bill-customer-notes"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={2}
+                  placeholder="Internal note — not shown on the invoice"
+                />
+              </div>
+
+              <div className="flex justify-end text-sm font-medium pt-2 border-t">
+                Subtotal: {formatCurrency(subtotal)} <span className="text-muted-foreground font-normal ml-1">(+ GST)</span>
+              </div>
             </div>
-          ))}
-          <Button variant="outline" size="sm" onClick={addItem}>
-            <Plus className="h-4 w-4 mr-1" /> Add line
-          </Button>
 
-          <div className="space-y-1.5 pt-2">
-            <Label htmlFor="bill-customer-notes">Notes (optional)</Label>
-            <Textarea
-              id="bill-customer-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              placeholder="Internal note — not shown on the invoice"
-            />
-          </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button onClick={goToPreview} disabled={subtotal <= 0}>
+                Preview Invoice
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Preview — {prNumber}</DialogTitle>
+              <DialogDescription>
+                Nothing has been sent yet. Check every line before confirming — this is exactly what will
+                go out to the customer.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="flex justify-end text-sm font-medium pt-2 border-t">
-            Subtotal: {formatCurrency(subtotal)} <span className="text-muted-foreground font-normal ml-1">(+ GST)</span>
-          </div>
-        </div>
+            <div className="rounded-md border overflow-hidden">
+              <div className="bg-muted/50 px-4 py-2.5 text-sm">
+                <p className="font-medium">{contractLabel}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Will be sent as{" "}
+                  {billingMode === "gst_direct"
+                    ? "a GST tax invoice, immediately"
+                    : "a proforma invoice — the GST invoice follows after payment"}
+                </p>
+              </div>
+              <div className="divide-y">
+                {cleanedItems.map((li, i) => (
+                  <div key={i} className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm">
+                    <span>{li.description}</span>
+                    <span className="font-medium shrink-0">{formatCurrency(li.quantity * li.unit_price)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="border-t px-4 py-3 space-y-1 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span>{formatCurrency(subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>GST ({taxPercentage}%)</span>
+                  <span>{formatCurrency(gst.taxAmount)}</span>
+                </div>
+                <div className="flex justify-between font-semibold text-base pt-1 border-t">
+                  <span>Total</span>
+                  <span>{formatCurrency(gst.totalAmount)}</span>
+                </div>
+              </div>
+            </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={submitting || subtotal <= 0}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-            Bill Customer & Send
-          </Button>
-        </DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreviewing(false)} disabled={submitting}>
+                <ArrowLeft className="h-4 w-4 mr-1" /> Back to edit
+              </Button>
+              <Button onClick={handleConfirmSend} disabled={submitting}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                Confirm & Send to Customer
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
