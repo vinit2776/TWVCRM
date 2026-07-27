@@ -409,7 +409,7 @@ export function generateLeaveLicensePdf(
     ],
     ["Licensed Premises", `${variables.location_name}, ${variables.property_address}`],
     ["Purpose", variables.purpose_label],
-    ["Monthly License Fee", `${variables.rate_formatted} + applicable GST`],
+    ["License Fee", `${variables.rate_formatted} + applicable GST`],
     ["Security Deposit", variables.security_deposit_formatted],
   ];
 
