@@ -65,6 +65,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/aggregator-invoicing",
+      "schedule": "0 4 1 * *"
+    },
+    {
       "path": "/api/cron/renewal-reminders",
       "schedule": "0 4 * * *"
     },
