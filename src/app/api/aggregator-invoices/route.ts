@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
 import { z } from "zod";
 
 const generateInvoiceSchema = z.object({
@@ -91,162 +92,36 @@ export async function POST(request: NextRequest) {
   const { aggregator_id, period_month, period_year, tax_percentage, notes } =
     result.data;
 
-  // Check for duplicate invoice
-  const { data: existing } = await supabase
-    .from("aggregator_invoices")
-    .select("id, invoice_number")
-    .eq("aggregator_id", aggregator_id)
-    .eq("period_month", period_month)
-    .eq("period_year", period_year)
-    .single();
-
-  if (existing) {
-    return NextResponse.json(
-      {
-        error: `Invoice already exists for this period: ${existing.invoice_number}`,
-      },
-      { status: 409 }
-    );
-  }
-
-  // Get the aggregator for interstate check
-  const { data: aggregator } = await supabase
-    .from("aggregators")
-    .select("id, name, same_state_as_twv")
-    .eq("id", aggregator_id)
-    .single();
-
-  if (!aggregator) {
-    return NextResponse.json(
-      { error: "Aggregator not found" },
-      { status: 404 }
-    );
-  }
-
-  // Get all active cases for this aggregator in the given period
-  const { data: cases } = await supabase
-    .from("cases")
-    .select("id, case_number, client_name, purpose, rate, tenure_months, start_date, activated_at, status")
-    .eq("aggregator_id", aggregator_id)
-    .in("status", [
-      "active",
-      "renewal_due",
-      "invoiced",
-      "executed",
-    ]);
-
-  if (!cases || cases.length === 0) {
-    return NextResponse.json(
-      { error: "No active cases found for this aggregator in the period" },
-      { status: 400 }
-    );
-  }
-
-  // Calculate line items with pro-rating
-  const periodStart = new Date(period_year, period_month - 1, 1);
-  const periodEnd = new Date(period_year, period_month, 0); // Last day of month
-  const totalDaysInMonth = periodEnd.getDate();
-
-  const lineItems = cases
-    .filter((c) => c.rate && c.rate > 0)
-    .map((c) => {
-      let activeDays = totalDaysInMonth;
-      let proRatedDays: number | undefined;
-
-      // Pro-rate if activated mid-month
-      if (c.activated_at) {
-        const activatedDate = new Date(c.activated_at);
-        if (
-          activatedDate.getMonth() === period_month - 1 &&
-          activatedDate.getFullYear() === period_year
-        ) {
-          activeDays = totalDaysInMonth - activatedDate.getDate() + 1;
-          proRatedDays = activeDays;
-        }
-      }
-
-      const monthlyRate = c.rate || 0;
-      const amount =
-        proRatedDays !== undefined
-          ? Math.round(
-              (monthlyRate / totalDaysInMonth) * activeDays * 100
-            ) / 100
-          : monthlyRate;
-
-      return {
-        case_id: c.id,
-        case_number: c.case_number,
-        client_name: c.client_name,
-        purpose: c.purpose,
-        rate: monthlyRate,
-        pro_rated_days: proRatedDays,
-        total_days: totalDaysInMonth,
-        amount,
-      };
-    });
-
-  const subtotal = lineItems.reduce((sum, item) => sum + item.amount, 0);
-  const isInterstate = !aggregator.same_state_as_twv;
-  const taxAmount = Math.round(subtotal * (tax_percentage / 100) * 100) / 100;
-
-  let cgstAmount = 0;
-  let sgstAmount = 0;
-  let igstAmount = 0;
-
-  if (isInterstate) {
-    igstAmount = taxAmount;
-  } else {
-    cgstAmount = Math.round((taxAmount / 2) * 100) / 100;
-    sgstAmount = Math.round((taxAmount / 2) * 100) / 100;
-  }
-
-  const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
-
   const { data: dbUser } = await supabase
     .from("users")
     .select("id")
     .eq("auth_id", user.id)
     .single();
 
-  // Create the invoice
-  const { data: invoice, error: invoiceError } = await supabase
-    .from("aggregator_invoices")
-    .insert({
-      aggregator_id,
-      period_month,
-      period_year,
-      status: "draft",
-      items: lineItems,
-      subtotal,
-      cgst_amount: cgstAmount,
-      sgst_amount: sgstAmount,
-      igst_amount: igstAmount,
-      total_amount: totalAmount,
-      is_interstate: isInterstate,
-      tax_percentage,
-      notes,
-      created_by: dbUser?.id,
-    })
-    .select("*")
-    .single();
+  const { invoice, error, status } = await generateConsolidatedInvoice({
+    supabase,
+    aggregatorId: aggregator_id,
+    periodMonth: period_month,
+    periodYear: period_year,
+    taxPercentage: tax_percentage,
+    notes,
+    createdBy: dbUser?.id,
+  });
 
-  if (invoiceError) {
-    return NextResponse.json(
-      { error: invoiceError.message },
-      { status: 500 }
-    );
+  if (error) {
+    return NextResponse.json({ error }, { status });
   }
 
   // Audit
   if (dbUser?.id && invoice) {
     logAudit(supabase, {
       entityType: "aggregator_invoice",
-      entityId: invoice.id,
+      entityId: invoice.id as string,
       action: "create",
       performedBy: dbUser.id,
       changes: { record: { old: null, new: invoice } },
     });
   }
 
-  return NextResponse.json({ data: invoice }, { status: 201 });
+  return NextResponse.json({ data: invoice }, { status });
 }

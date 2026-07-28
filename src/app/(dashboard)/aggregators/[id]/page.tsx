@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { useAggregator } from "@/hooks/use-aggregators";
 import { AggregatorContactsTab } from "@/components/aggregators/aggregator-contacts-tab";
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
+import { AggregatorBillingTab } from "@/components/aggregators/aggregator-billing-tab";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
@@ -110,6 +111,9 @@ export default function AggregatorDetailPage({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="rate-cards">Rate Cards</TabsTrigger>
+          {aggregator.billing_method === "postpaid" && (
+            <TabsTrigger value="billing">Billing</TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -242,6 +246,23 @@ export default function AggregatorDetailPage({
             </CardContent>
           </Card>
         </TabsContent>
+
+        {aggregator.billing_method === "postpaid" && (
+          <TabsContent value="billing" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Billing</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AggregatorBillingTab
+                  aggregatorId={id}
+                  creditLimit={aggregator.credit_limit}
+                  primaryEmail={aggregator.primary_email}
+                />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Delete Dialog */}
