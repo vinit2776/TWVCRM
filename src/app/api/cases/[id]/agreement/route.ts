@@ -403,7 +403,7 @@ export async function PATCH(
   // Fetch current agreement to validate status transitions
   const { data: currentAgreement } = await supabase
     .from("case_agreements")
-    .select("status, variables, agreement_number, template_key, generated_document:documents!case_agreements_generated_document_id_fkey(file_path, file_name)")
+    .select("status, type, variables, agreement_number, template_key, generated_document:documents!case_agreements_generated_document_id_fkey(file_path, file_name)")
     .eq("id", agreementId)
     .eq("case_id", caseId)
     .single();
@@ -426,6 +426,34 @@ export async function PATCH(
       { error: `Cannot ${action.replace(/_/g, " ")} — agreement must be in ${validTransitions[action].join(" or ")} status (currently: ${currentAgreement.status})` },
       { status: 400 }
     );
+  }
+
+  // Prepaid aggregators require an approved Payment Proof document before
+  // the Leave & License Agreement can be executed.
+  if (action === "mark_executed" && currentAgreement.type === "leave_license") {
+    const { data: caseRow } = await supabase
+      .from("cases")
+      .select("aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
+      .eq("id", caseId)
+      .single();
+
+    const aggregator = caseRow?.aggregator as { billing_method?: string } | null;
+
+    if (aggregator?.billing_method === "prepaid") {
+      const { data: paymentProof } = await supabase
+        .from("case_documents")
+        .select("status")
+        .eq("case_id", caseId)
+        .eq("document_type", "payment_proof")
+        .maybeSingle();
+
+      if (!paymentProof || paymentProof.status !== "approved") {
+        return NextResponse.json(
+          { error: "This aggregator is prepaid — Payment Proof must be uploaded and approved (Documents tab) before this agreement can be executed." },
+          { status: 400 }
+        );
+      }
+    }
   }
 
   const updateData: Record<string, unknown> = {};

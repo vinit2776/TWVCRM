@@ -906,6 +906,18 @@ export const AGGREGATOR_STATUS_COLORS: Record<string, string> = {
   suspended: "bg-red-100 text-red-800",
 };
 
+export const AGGREGATOR_BILLING_METHODS = ["postpaid", "prepaid"] as const;
+
+export const AGGREGATOR_BILLING_METHOD_LABELS: Record<string, string> = {
+  postpaid: "Postpaid",
+  prepaid: "Prepaid",
+};
+
+export const AGGREGATOR_BILLING_METHOD_COLORS: Record<string, string> = {
+  postpaid: "bg-blue-100 text-blue-800",
+  prepaid: "bg-amber-100 text-amber-800",
+};
+
 // ==========================================
 // Virtual Office Purpose Constants
 // ==========================================

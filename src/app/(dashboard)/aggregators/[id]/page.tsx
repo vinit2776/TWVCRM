@@ -21,7 +21,8 @@ import { useAggregator } from "@/hooks/use-aggregators";
 import { AggregatorContactsTab } from "@/components/aggregators/aggregator-contacts-tab";
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
 import { toast } from "sonner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatCurrency } from "@/lib/utils";
+import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
 import {
   Dialog,
   DialogContent,
@@ -129,6 +130,10 @@ export default function AggregatorDetailPage({
                     <InfoRow label="PAN Number" value={aggregator.pan_number} />
                     <InfoRow label="Commission" value={aggregator.commission_percentage ? `${aggregator.commission_percentage}%` : undefined} />
                     <InfoRow label="GST Type" value={aggregator.same_state_as_twv ? "Intra-state (CGST+SGST)" : "Inter-state (IGST)"} />
+                    <InfoRow label="Billing Method" value={AGGREGATOR_BILLING_METHOD_LABELS[aggregator.billing_method]} />
+                    {aggregator.billing_method === "postpaid" && (
+                      <InfoRow label="Credit Limit" value={aggregator.credit_limit ? formatCurrency(aggregator.credit_limit) : "No limit"} />
+                    )}
                   </div>
                 </CardContent>
               </Card>

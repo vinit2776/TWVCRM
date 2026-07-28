@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
 
         const { data: matchedAggregator } = await supabase
           .from("aggregators")
-          .select("id, name, code")
+          .select("id, name, code, billing_method")
           .eq("email_domain", senderDomain)
           .eq("status", "active")
           .limit(1)
@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
         // Auto-generate document checklist
         const docChecklist =
           DOCUMENT_CHECKLISTS[parsed.purpose]?.[parsed.client_entity_type] || [];
-        if (docChecklist.length > 0 && newCase) {
+        if (newCase) {
           const docRows = docChecklist.map((doc) => ({
             case_id: newCase.id,
             document_type: doc.type,
@@ -177,7 +177,22 @@ export async function POST(request: NextRequest) {
             is_required: doc.required,
             status: "pending" as const,
           }));
-          await supabase.from("case_documents").insert(docRows);
+
+          // Prepaid aggregators require an approved Payment Proof before the
+          // Leave & License Agreement can be executed (see agreement/route.ts).
+          if (matchedAggregator.billing_method === "prepaid") {
+            docRows.push({
+              case_id: newCase.id,
+              document_type: "payment_proof",
+              label: "Payment Proof",
+              is_required: true,
+              status: "pending" as const,
+            });
+          }
+
+          if (docRows.length > 0) {
+            await supabase.from("case_documents").insert(docRows);
+          }
         }
 
         // Auto-generate compliance checks
