@@ -1200,7 +1200,7 @@ export const DOCUMENT_CHECKLISTS: Record<string, Record<string, { type: string; 
       { type: "aadhaar_card", label: "Proprietor Aadhaar Card", required: true },
       { type: "photograph", label: "Passport Size Photo", required: true },
       { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
-      { type: "trade_license", label: "Trade License / Shop Establishment", required: false },
+      { type: "trade_license", label: "Trade License / Shop Establishment / Other certificates", required: false },
     ],
     partnership: [
       { type: "partnership_deed", label: "Partnership Deed", required: true },
