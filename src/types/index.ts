@@ -1716,6 +1716,8 @@ export interface Aggregator {
   same_state_as_twv: boolean;
   commission_percentage: number;
   default_rate_card: Record<string, number>;
+  billing_method: "postpaid" | "prepaid";
+  credit_limit?: number;
   kyc_verified: boolean;
   kyc_verified_at?: string;
   agreement_signed: boolean;

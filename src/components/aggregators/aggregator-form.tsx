@@ -19,7 +19,12 @@ import { Switch } from "@/components/ui/switch";
 import { createAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
 import type { Aggregator } from "@/types";
 import { Loader2, Plus, Trash2 } from "lucide-react";
-import { AGGREGATOR_STATUSES, AGGREGATOR_STATUS_LABELS } from "@/lib/constants";
+import {
+  AGGREGATOR_STATUSES,
+  AGGREGATOR_STATUS_LABELS,
+  AGGREGATOR_BILLING_METHODS,
+  AGGREGATOR_BILLING_METHOD_LABELS,
+} from "@/lib/constants";
 
 interface AggregatorFormProps {
   aggregator?: Aggregator;
@@ -53,6 +58,8 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
       billing_pincode: aggregator?.billing_pincode || "",
       same_state_as_twv: aggregator?.same_state_as_twv ?? false,
       commission_percentage: aggregator?.commission_percentage ?? 0,
+      billing_method: aggregator?.billing_method ?? "postpaid",
+      credit_limit: aggregator?.credit_limit,
       notes: aggregator?.notes || "",
       tags: aggregator?.tags || [],
       contacts: aggregator?.contacts?.map((c) => ({
@@ -71,6 +78,7 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   });
 
   const sameState = watch("same_state_as_twv");
+  const billingMethod = watch("billing_method");
 
   const onFormSubmit = async (data: CreateAggregatorInput) => {
     setSubmitting(true);
@@ -132,6 +140,44 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
                 {...register("commission_percentage", { valueAsNumber: true })}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="billing_method">Billing Method</Label>
+              <Select
+                value={billingMethod}
+                onValueChange={(value) => setValue("billing_method", value as "postpaid" | "prepaid")}
+              >
+                <SelectTrigger id="billing_method">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {AGGREGATOR_BILLING_METHODS.map((method) => (
+                    <SelectItem key={method} value={method}>
+                      {AGGREGATOR_BILLING_METHOD_LABELS[method]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {billingMethod === "prepaid"
+                  ? "Each case requires an approved Payment Proof document before its Leave & License Agreement can be executed."
+                  : "Referrals accumulate and are invoiced monthly or ad-hoc."}
+              </p>
+            </div>
+            {billingMethod === "postpaid" && (
+              <div className="space-y-2">
+                <Label htmlFor="credit_limit">Credit Limit</Label>
+                <Input
+                  id="credit_limit"
+                  type="number"
+                  step="1"
+                  placeholder="No limit"
+                  {...register("credit_limit", { valueAsNumber: true })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Advisory only — shows a warning when outstanding unbilled amount exceeds this. Leave blank for no limit.
+                </p>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <Switch

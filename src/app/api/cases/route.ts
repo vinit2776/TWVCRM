@@ -136,15 +136,33 @@ export async function POST(request: NextRequest) {
     const entityType = result.data.client_entity_type;
     const docChecklist = DOCUMENT_CHECKLISTS[purpose]?.[entityType] || [];
 
-    if (docChecklist.length > 0) {
-      const docRows = docChecklist.map((doc) => ({
-        case_id: data.id,
-        document_type: doc.type,
-        label: doc.label,
-        is_required: doc.required,
-        status: "pending" as const,
-      }));
+    const docRows = docChecklist.map((doc) => ({
+      case_id: data.id,
+      document_type: doc.type,
+      label: doc.label,
+      is_required: doc.required,
+      status: "pending" as const,
+    }));
 
+    // Prepaid aggregators require an approved Payment Proof before the
+    // Leave & License Agreement can be executed (see agreement/route.ts).
+    const { data: aggregatorRow } = await supabase
+      .from("aggregators")
+      .select("billing_method")
+      .eq("id", result.data.aggregator_id)
+      .single();
+
+    if (aggregatorRow?.billing_method === "prepaid") {
+      docRows.push({
+        case_id: data.id,
+        document_type: "payment_proof",
+        label: "Payment Proof",
+        is_required: true,
+        status: "pending" as const,
+      });
+    }
+
+    if (docRows.length > 0) {
       await supabase.from("case_documents").insert(docRows);
     }
 
