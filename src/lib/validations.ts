@@ -672,7 +672,7 @@ export const transitionCaseStatusSchema = z.object({
     "intake_received", "docs_requested", "docs_received", "under_review",
     "compliance_check", "internal_approved", "sent_for_client_approval",
     "client_approved", "signing_in_progress", "executed",
-    "invoiced", "active", "renewal_due", "renewed", "lapsed",
+    "invoiced", "active", "renewal_due", "grace_period", "renewed", "lapsed",
   ]),
   notes: z.string().optional(),
 });
