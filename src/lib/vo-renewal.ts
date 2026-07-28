@@ -567,12 +567,11 @@ export async function handleRenewalPayment(params: {
   const newEnd = new Date(currentEnd);
   newEnd.setMonth(newEnd.getMonth() + tenureMonths);
 
-  // Update case: renewed, clear renewal tracking
+  // Update case: back to active for the new term, clear renewal tracking
   await adminSupabase
     .from("cases")
     .update({
-      status: "renewed",
-      ll_agreement_status: "renewed",
+      status: "active",
       start_date: newStart.toISOString().split("T")[0],
       end_date: newEnd.toISOString().split("T")[0],
       renewal_billing_statement_id: null,
