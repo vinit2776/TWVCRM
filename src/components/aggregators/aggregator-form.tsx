@@ -137,7 +137,9 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
                 id="commission_percentage"
                 type="number"
                 step="0.1"
-                {...register("commission_percentage", { valueAsNumber: true })}
+                {...register("commission_percentage", {
+                  setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                })}
               />
             </div>
             <div className="space-y-2">
@@ -171,7 +173,9 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
                   type="number"
                   step="1"
                   placeholder="No limit"
-                  {...register("credit_limit", { valueAsNumber: true })}
+                  {...register("credit_limit", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Advisory only — shows a warning when outstanding unbilled amount exceeds this. Leave blank for no limit.
