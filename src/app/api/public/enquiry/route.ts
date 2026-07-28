@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { sendPushToAll } from "@/lib/push";
+import { messaging } from "@/lib/whatsapp";
 
 /** Normalise a phone number to a canonical 10-digit Indian mobile number.
  *  Strips all non-digit characters, then removes a leading country code
@@ -249,6 +250,23 @@ export async function POST(request: NextRequest) {
     new Set(["space@theworkvilla.com", ...staffEmails])
   );
 
+  // WhatsApp alert — only for Google Ads / Meta Ads enquiries, to sales reps + managers
+  const shouldSendWhatsApp = source === "google_ads" || source === "meta_ads";
+  let salesPhones: string[] = [];
+  if (shouldSendWhatsApp) {
+    const { data: salesRows } = await supabase
+      .from("users")
+      .select("phone")
+      .in("role", ["sales_rep", "manager"])
+      .eq("is_active", true)
+      .not("phone", "is", null)
+      .neq("phone", "");
+
+    salesPhones = (salesRows ?? [])
+      .map((u: { phone: string }) => u.phone)
+      .filter(Boolean);
+  }
+
   if (existing) {
     // Returning enquiry — add a note activity to the existing lead
     await supabase.from("activities").insert({
@@ -287,6 +305,12 @@ export async function POST(request: NextRequest) {
       url: `${APP_URL}/leads/${existing.id}`,
       tag: `re-enquiry-${existing.id}`,
     }).catch(() => {});
+
+    salesPhones.forEach((phone) => {
+      messaging
+        .internalNewLead(phone, `${firstName} ${lastName}`, company || "—", sourceLabel, existing.id)
+        .catch(() => {});
+    });
 
     return NextResponse.json({ success: true, returning: true });
   }
@@ -343,6 +367,12 @@ export async function POST(request: NextRequest) {
     url: `${APP_URL}/leads/${newLead.id}`,
     tag: `new-enquiry-${newLead.id}`,
   }).catch(() => {});
+
+  salesPhones.forEach((phone) => {
+    messaging
+      .internalNewLead(phone, `${firstName} ${lastName}`, company || "—", sourceLabel, newLead.id)
+      .catch(() => {});
+  });
 
   return NextResponse.json({ success: true, returning: false });
 }
