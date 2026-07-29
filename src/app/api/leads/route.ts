@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -265,6 +266,26 @@ export async function POST(request: NextRequest) {
       performedBy: dbUser.id,
       changes: { record: { old: null, new: data } },
     });
+
+    // WhatsApp alert to the lead's owner only — skip if they created it themselves
+    if (data.assigned_to && data.assigned_to !== dbUser.id) {
+      (async () => {
+        const { data: owner } = await supabase
+          .from("users")
+          .select("phone")
+          .eq("id", data.assigned_to)
+          .single();
+
+        if (owner?.phone) {
+          const leadName = `${data.first_name} ${data.last_name}`.trim();
+          const company  = data.company ?? "—";
+          const source   = data.source  ?? "direct";
+
+          messaging.internalNewLead(owner.phone, leadName, company, source, data.id)
+            .catch(console.error);
+        }
+      })();
+    }
   }
 
   return NextResponse.json({ data }, { status: 201 });
