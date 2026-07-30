@@ -267,25 +267,25 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
 
-    // WhatsApp alert to all staff with a phone number — fire-and-forget
-    (async () => {
-      const { data: staffList } = await supabase
-        .from("users")
-        .select("phone")
-        .not("phone", "is", null)
-        .neq("phone", "");
+    // WhatsApp alert to the lead's owner only — skip if they created it themselves
+    if (data.assigned_to && data.assigned_to !== dbUser.id) {
+      (async () => {
+        const { data: owner } = await supabase
+          .from("users")
+          .select("phone")
+          .eq("id", data.assigned_to)
+          .single();
 
-      const leadName = `${data.first_name} ${data.last_name}`.trim();
-      const company  = data.company ?? "—";
-      const source   = data.source  ?? "direct";
+        if (owner?.phone) {
+          const leadName = `${data.first_name} ${data.last_name}`.trim();
+          const company  = data.company ?? "—";
+          const source   = data.source  ?? "direct";
 
-      staffList?.forEach((staff) => {
-        if (staff.phone) {
-          messaging.internalNewLead(staff.phone, leadName, company, source, data.id)
+          messaging.internalNewLead(owner.phone, leadName, company, source, data.id)
             .catch(console.error);
         }
-      });
-    })();
+      })();
+    }
   }
 
   return NextResponse.json({ data }, { status: 201 });
