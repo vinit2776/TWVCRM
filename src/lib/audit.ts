@@ -1,9 +1,19 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import type { AuditAction, AuditEntityType } from "@/types";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Log an event to the audit_trail table.
  * Fires and forgets — does not throw on failure so it never blocks the main operation.
+ *
+ * performed_by is a UUID FK to users(id). Non-human callers (webhooks, cron jobs,
+ * the Tally bridge) pass sentinel labels like "system" or "tally-bridge" instead of
+ * a user id — those never resolve to a UUID, so Postgres rejected the insert outright
+ * with "invalid input syntax for type uuid" and the row was silently dropped (logAudit
+ * doesn't throw on failure, so callers never saw it fail). Any non-UUID value is
+ * normalized to NULL here and preserved as `_actor_label` in the changes payload
+ * instead, so the entry is still attributable without breaking the FK.
  */
 export async function logAudit(
   supabase: SupabaseClient,
@@ -11,19 +21,27 @@ export async function logAudit(
     entityType: AuditEntityType;
     entityId: string;
     action: AuditAction;
-    performedBy: string;
+    performedBy: string | null;
     changes?: Record<string, { old: unknown; new: unknown }>;
   }
 ) {
   const { entityType, entityId, action, performedBy, changes } = params;
+  const isUuid = !!performedBy && UUID_RE.test(performedBy);
 
-  await supabase.from("audit_trail").insert({
+  const { error } = await supabase.from("audit_trail").insert({
     entity_type: entityType,
     entity_id: entityId,
     action,
-    performed_by: performedBy,
-    changes: changes || {},
+    performed_by: isUuid ? performedBy : null,
+    changes: {
+      ...(changes || {}),
+      ...(!isUuid && performedBy ? { _actor_label: { old: null, new: performedBy } } : {}),
+    },
   });
+
+  if (error) {
+    console.error(`[audit] failed to log ${action} on ${entityType}/${entityId}:`, error.message);
+  }
 }
 
 /**
