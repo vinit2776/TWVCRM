@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { logAudit, diffChanges } from "@/lib/audit";
 
 /**
  * POST /api/proposals/[id]/deposit-payment
@@ -133,23 +134,32 @@ export async function POST(
 
   // Update proposal
   const receivedAt = new Date().toISOString();
+  const depositUpdate = {
+    deposit_payment_status: "paid",
+    deposit_payment_amount: amount,
+    deposit_payment_reference: reference,
+    deposit_payment_medium: paymentMedium,
+    deposit_payment_received_at: receivedAt,
+    deposit_payment_screenshot_url: screenshotUrl,
+    ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
+  };
   const { error: updateError } = await supabase
     .from("proposals")
-    .update({
-      deposit_payment_status: "paid",
-      deposit_payment_amount: amount,
-      deposit_payment_reference: reference,
-      deposit_payment_medium: paymentMedium,
-      deposit_payment_received_at: receivedAt,
-      deposit_payment_screenshot_url: screenshotUrl,
-      ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
-    })
+    .update(depositUpdate)
     .eq("id", id);
 
   if (updateError) {
     console.error("[deposit-payment] update error:", updateError);
     return NextResponse.json({ error: "Failed to update proposal" }, { status: 500 });
   }
+
+  logAudit(supabase, {
+    entityType: "proposal",
+    entityId: id,
+    action: "update",
+    performedBy: actor.id,
+    changes: diffChanges(proposal, depositUpdate),
+  }).catch(() => {});
 
   // Send confirmation email to customer
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
