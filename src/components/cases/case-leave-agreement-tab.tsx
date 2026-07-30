@@ -171,6 +171,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + tenureMonths);
+      endDate.setDate(endDate.getDate() - 1);
 
       const fmtCurrency = (amt: number) =>
         "Rs. " +

@@ -84,6 +84,7 @@ export function calculateEndDate(
   const start = new Date(startDate);
   const end = new Date(start);
   end.setMonth(end.getMonth() + tenureMonths);
+  end.setDate(end.getDate() - 1);
   return end.toISOString();
 }
 
