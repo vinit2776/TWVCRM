@@ -107,6 +107,7 @@ export function mergeLeaveLicenseVariables(params: {
   const startDate = new Date(params.startDate);
   const endDate = new Date(startDate);
   endDate.setMonth(endDate.getMonth() + params.tenureMonths);
+  endDate.setDate(endDate.getDate() - 1);
   const serviceRetainer = 1000; // Fixed INR 1000 + GST as per template
 
   return {

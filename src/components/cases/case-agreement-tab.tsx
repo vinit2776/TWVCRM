@@ -140,6 +140,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
 
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + tenureMonths);
+      endDate.setDate(endDate.getDate() - 1);
 
       const formatCurrency = (amt: number) =>
         "Rs. " +

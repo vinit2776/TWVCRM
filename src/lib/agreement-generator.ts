@@ -251,6 +251,7 @@ export function mergeVariables(params: {
   const startDate = new Date(params.startDate);
   const endDate = new Date(startDate);
   endDate.setMonth(endDate.getMonth() + params.tenureMonths);
+  endDate.setDate(endDate.getDate() - 1);
 
   return {
     agreement_date: formatDate(params.agreementDate),
