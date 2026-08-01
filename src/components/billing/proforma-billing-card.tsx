@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -83,6 +83,32 @@ export function ProformaBillingCard({
   const [doneThisCycle, setDoneThisCycle] = useState<boolean | null>(null);
   // Background dispatch run state (rent mode only)
   const [activeRunId, setActiveRunId]   = useState<string | null>(null);
+
+  // Restore the Dispatch Progress panel on mount/navigation if a run for
+  // this period is still in flight or ended with failures — otherwise a
+  // page refresh mid-run silently drops the only visibility into per-contract
+  // send status until someone thinks to reopen it manually.
+  useEffect(() => {
+    if (!isRent) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = new URLSearchParams({ mode: "rent" });
+        if (month) params.set("month", String(month));
+        if (year) params.set("year", String(year));
+        const res = await fetch(`/api/billing/dispatch-run?${params.toString()}`);
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
+        const run = json.run as { id: string; status: string } | null;
+        if (run && ["queued", "running", "partial", "failed"].includes(run.status)) {
+          setActiveRunId(run.id);
+        }
+      } catch {
+        // Best-effort restore — silent failure just means the panel stays closed.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isRent, month, year]);
 
   const handlePreview = async () => {
     setPreviewing(true);

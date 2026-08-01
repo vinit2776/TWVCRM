@@ -146,6 +146,7 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
   const [run, setRun] = useState<DispatchRun | null>(null);
   const [jobs, setJobs] = useState<DispatchJob[]>([]);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = async () => {
@@ -154,6 +155,7 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
     const data = await res.json();
     if (data.run) setRun(data.run as DispatchRun);
     if (data.jobs) setJobs(data.jobs as DispatchJob[]);
+    setLastCheckedAt(new Date());
   };
 
   useEffect(() => {
@@ -226,6 +228,11 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
           <Badge className={`text-xs capitalize ${RUN_STATUS_BADGE[run.status] || ""}`}>
             {run.status}
           </Badge>
+          {isRunning && lastCheckedAt && (
+            <span className="text-xs text-muted-foreground">
+              · last checked {lastCheckedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
         </div>
         {onClose && (
           <Button size="sm" variant="ghost" onClick={onClose} className="h-7 px-2 text-xs">
