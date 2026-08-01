@@ -200,6 +200,52 @@ async function fetchRatePhasesByContract(
   return map;
 }
 
+export type RenewalDraftPricing = {
+  id: string;
+  start_date: string;
+  end_date: string;
+  total_amount: number;
+  subtotal: number | null;
+  tax_percentage: number | null;
+  phase_start_date: string | null;
+  seats: number | null;
+};
+
+/**
+ * parent_contract_id → its current (non-rejected) renewal draft, for a set of
+ * renewal_in_progress parents. Once a parent's own end_date has lapsed, rent
+ * billing must switch to the renewal draft's escalated terms (rate, seats,
+ * phase schedule) rather than the parent's stale pre-renewal terms — the old
+ * contract keeps billing continuity, but at the negotiated new rate.
+ * A parent can have more than one draft row (e.g. a prior rejected attempt);
+ * `renewal_sequence desc` + first-wins-per-parent keeps only the latest.
+ */
+async function fetchActiveRenewalDraftsByParentId(
+  supabase: SupabaseClient,
+  parentIds: string[]
+): Promise<Map<string, RenewalDraftPricing>> {
+  const map = new Map<string, RenewalDraftPricing>();
+  if (parentIds.length === 0) return map;
+
+  const { data } = await supabase
+    .from("contracts")
+    .select("id, parent_contract_id, start_date, end_date, total_amount, subtotal, tax_percentage, phase_start_date, seats, renewal_sequence")
+    .in("parent_contract_id", parentIds)
+    .neq("status", "rejected")
+    .order("renewal_sequence", { ascending: false });
+
+  for (const row of (data ?? []) as Array<RenewalDraftPricing & { parent_contract_id: string }>) {
+    if (!map.has(row.parent_contract_id)) {
+      map.set(row.parent_contract_id, {
+        id: row.id, start_date: row.start_date, end_date: row.end_date,
+        total_amount: row.total_amount, subtotal: row.subtotal, tax_percentage: row.tax_percentage,
+        phase_start_date: row.phase_start_date, seats: row.seats,
+      });
+    }
+  }
+  return map;
+}
+
 // ── Day-precise rate-phase boundaries ──────────────────────────────────────
 // computePhaseBoundaries etc. live in rate-phase-dates.ts (a dependency-free
 // module also imported by the client-side phase editor and both PDF
@@ -502,14 +548,16 @@ export async function generateMonthlyStatements(
   let contractsQuery = supabase
     .from("contracts")
     .select(`
-      id, contract_number, title, total_amount, subtotal, tax_percentage, tax_amount,
+      id, contract_number, title, status, total_amount, subtotal, tax_percentage, tax_amount,
       billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
       location_id, lead_id,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress"])
     .lte("start_date", lastOfMonth)
-    .gte("end_date", firstOfMonth);
+    // renewal_in_progress contracts stay billable indefinitely even after their
+    // original end_date lapses — see generateRentProformas for rationale.
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
 
@@ -636,8 +684,17 @@ export async function generateMonthlyStatements(
     contracts as Array<{ id: string; location_id?: string | null }>
   );
 
-  // 3d. Pre-fetch tiered rate phases, for contracts using tiered pricing
-  const ratePhasesByContract = await fetchRatePhasesByContract(supabase, contractIds);
+  // 3d. Pre-fetch renewal drafts for renewal_in_progress parents — their escalated
+  // terms supersede the parent's stale pre-renewal rate once end_date has lapsed.
+  const renewalInProgressIds = (contracts as Array<{ id: string; status: string }>)
+    .filter((c) => c.status === "renewal_in_progress")
+    .map((c) => c.id);
+  const renewalDraftByParentId = await fetchActiveRenewalDraftsByParentId(supabase, renewalInProgressIds);
+  const draftIds = [...renewalDraftByParentId.values()].map((d) => d.id);
+
+  // 3e. Pre-fetch tiered rate phases, for contracts using tiered pricing
+  // (includes renewal draft ids so escalated tiered contracts resolve correctly)
+  const ratePhasesByContract = await fetchRatePhasesByContract(supabase, [...contractIds, ...draftIds]);
 
   // 4. Generate drafts
   for (const contract of contracts as Array<Record<string, unknown>>) {
@@ -666,8 +723,21 @@ export async function generateMonthlyStatements(
 
       // ── Section A: Prepaid rent for NEXT month ──────────────────────
 
-      // Check if contract extends into the prepaid month
-      const contractEnd = new Date(String(contract.end_date) + "T00:00:00Z");
+      // If this parent's own term has lapsed while renewal_in_progress, price
+      // this month off its renewal draft's escalated terms instead of the
+      // parent's stale pre-renewal rate. The statement still attaches to the
+      // parent (cid) — the draft itself isn't activated/billable yet.
+      const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
+      const priceStartDate = renewalDraft ? renewalDraft.start_date : (contract.start_date as string);
+      const priceEndDate = renewalDraft ? renewalDraft.end_date : (contract.end_date as string);
+      const priceSubtotal = renewalDraft ? renewalDraft.subtotal : (contract.subtotal as number | null);
+      const priceTotalAmount = renewalDraft ? renewalDraft.total_amount : (contract.total_amount as number);
+      const pricePhaseStart = renewalDraft ? renewalDraft.phase_start_date : (contract.phase_start_date as string | null);
+      const priceSeats = renewalDraft ? renewalDraft.seats : (contract.seats as number | null);
+      const ratePhaseLookupId = renewalDraft ? renewalDraft.id : cid;
+
+      // Check if contract (or its renewal draft, if lapsed) extends into the prepaid month
+      const contractEnd = new Date(String(priceEndDate) + "T00:00:00Z");
       const prepaidFirstOfMonth = new Date(
         `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-01T00:00:00Z`
       );
@@ -675,20 +745,20 @@ export async function generateMonthlyStatements(
         `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-${prepaidDaysInMonth}T00:00:00Z`
       );
 
-      const flatAmount = Number(contract.subtotal || contract.total_amount);
-      const phaseAnchorYmd = (contract.phase_start_date as string | null) || (contract.start_date as string | null);
+      const flatAmount = Number(priceSubtotal || priceTotalAmount);
+      const phaseAnchorYmd = pricePhaseStart || priceStartDate;
       let prepaidRentAmount = 0;
       let rentSegments: ReturnType<typeof computeRentSegments> = [];
 
       if (contractEnd >= prepaidFirstOfMonth) {
         // Prorate if contract ends mid-month in the prepaid month
-        const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
+        const contractStart = new Date(String(priceStartDate) + "T00:00:00Z");
         const billableStart = contractStart > prepaidFirstOfMonth ? contractStart : prepaidFirstOfMonth;
         const billableEnd = contractEnd < prepaidLastOfMonth ? contractEnd : prepaidLastOfMonth;
         rentSegments = computeRentSegments(
           flatAmount,
           phaseAnchorYmd,
-          ratePhasesByContract.get(cid) ?? null,
+          ratePhasesByContract.get(ratePhaseLookupId) ?? null,
           billableStart.toISOString().slice(0, 10),
           billableEnd.toISOString().slice(0, 10),
           prepaidDaysInMonth
@@ -696,7 +766,7 @@ export async function generateMonthlyStatements(
         prepaidRentAmount = rentSegments.reduce((s, seg) => s + seg.amount, 0);
       }
 
-      const prepaidSeatQty = Number(contract.seats) || 1;
+      const prepaidSeatQty = Number(priceSeats) || 1;
       const prepaidRentItems = prepaidRentAmount > 0
         ? buildSegmentedRentLineItems(
             rentSegments,
@@ -811,7 +881,7 @@ export async function generateMonthlyStatements(
       const bookingUsageTotal = bookingSection.subtotal;
 
       const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageTotal;
-      const taxPercentage = Number(contract.tax_percentage || 18);
+      const taxPercentage = Number((renewalDraft ? renewalDraft.tax_percentage : contract.tax_percentage) || 18);
 
       // GST split — intra-state (TN) vs inter-state
       const buyerState = (lead?.state || "").toLowerCase().trim();
@@ -983,14 +1053,17 @@ export async function generateRentProformas(
   let contractsQuery = supabase
     .from("contracts")
     .select(`
-      id, contract_number, title, total_amount, subtotal, tax_percentage,
+      id, contract_number, title, status, total_amount, subtotal, tax_percentage,
       billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
       location_id, lead_id, billing_mode,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress"])
     .lte("start_date", prepaidLastOfMonth)
-    .gte("end_date", firstOfTargetMonth);
+    // renewal_in_progress contracts stay billable indefinitely even after their
+    // original end_date lapses — the parent keeps billing at its existing terms
+    // until the renewal is activated (status flips to "renewed") or terminated.
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
   const { data: contracts } = await contractsQuery;
@@ -1071,14 +1144,28 @@ export async function generateRentProformas(
     contracts as Array<{ id: string; location_id?: string | null }>
   );
 
+  // Pre-fetch renewal drafts for renewal_in_progress parents — their escalated
+  // terms supersede the parent's stale pre-renewal rate once end_date has lapsed.
+  const renewalInProgressIds = (contracts as Array<{ id: string; status: string }>)
+    .filter((c) => c.status === "renewal_in_progress")
+    .map((c) => c.id);
+  const renewalDraftByParentId = await fetchActiveRenewalDraftsByParentId(adminSupabase, renewalInProgressIds);
+  const draftIds = [...renewalDraftByParentId.values()].map((d) => d.id);
+
   // Pre-fetch tiered rate phases, for contracts using tiered pricing
-  const ratePhasesByContract = await fetchRatePhasesByContract(adminSupabase, contractIds);
+  // (includes renewal draft ids so escalated tiered contracts resolve correctly)
+  const ratePhasesByContract = await fetchRatePhasesByContract(adminSupabase, [...contractIds, ...draftIds]);
 
   for (const contract of contracts as Array<Record<string, unknown>>) {
     const cid            = contract.id as string;
     const contractNumber = contract.contract_number as string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead           = contract.lead as any;
+    // If this parent's own term has lapsed while renewal_in_progress, price
+    // this month off its renewal draft's escalated terms instead of the
+    // parent's stale pre-renewal rate. The statement still attaches to the
+    // parent (cid) — the draft itself isn't activated/billable yet.
+    const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
 
     try {
       // ── 1. Quarterly gate ───────────────────────────────────────────────
@@ -1103,10 +1190,18 @@ export async function generateRentProformas(
       const toSupersede = supersedable.get(cid); // may be undefined
 
       // ── 3. Proration ────────────────────────────────────────────────────
-      const flatAmount    = Number(contract.subtotal || contract.total_amount);
-      const phaseAnchorYmd = (contract.phase_start_date as string | null) || (contract.start_date as string | null);
-      const contractEnd   = new Date(String(contract.end_date) + "T00:00:00Z");
-      const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
+      const priceStartDate = renewalDraft ? renewalDraft.start_date : (contract.start_date as string);
+      const priceEndDate = renewalDraft ? renewalDraft.end_date : (contract.end_date as string);
+      const priceSubtotal = renewalDraft ? renewalDraft.subtotal : (contract.subtotal as number | null);
+      const priceTotalAmount = renewalDraft ? renewalDraft.total_amount : (contract.total_amount as number);
+      const pricePhaseStart = renewalDraft ? renewalDraft.phase_start_date : (contract.phase_start_date as string | null);
+      const priceSeats = renewalDraft ? renewalDraft.seats : (contract.seats as number | null);
+      const ratePhaseLookupId = renewalDraft ? renewalDraft.id : cid;
+
+      const flatAmount    = Number(priceSubtotal || priceTotalAmount);
+      const phaseAnchorYmd = pricePhaseStart || priceStartDate;
+      const contractEnd   = new Date(String(priceEndDate) + "T00:00:00Z");
+      const contractStart = new Date(String(priceStartDate) + "T00:00:00Z");
       const pFirst        = new Date(prepaidFirstOfMonth + "T00:00:00Z");
       const pLast         = new Date(prepaidLastOfMonth  + "T00:00:00Z");
 
@@ -1118,7 +1213,7 @@ export async function generateRentProformas(
         rentSegments = computeRentSegments(
           flatAmount,
           phaseAnchorYmd,
-          ratePhasesByContract.get(cid) ?? null,
+          ratePhasesByContract.get(ratePhaseLookupId) ?? null,
           billStart.toISOString().slice(0, 10),
           billEnd.toISOString().slice(0, 10),
           prepaidDaysInMonth
@@ -1133,7 +1228,7 @@ export async function generateRentProformas(
 
       // ── 4. Recurring add-ons for the prepaid month ─────────────────────
       // addons are pre-fetched in bulk before the loop — no per-contract DB query needed
-      const taxPercentage = Number(contract.tax_percentage || 18);
+      const taxPercentage = Number((renewalDraft ? renewalDraft.tax_percentage : contract.tax_percentage) || 18);
       const addons = addonsByContractId.get(cid) ?? null;
 
       let addonsSubtotal = 0;
@@ -1174,7 +1269,7 @@ export async function generateRentProformas(
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
-        const previewSeatQty = Number(contract.seats) || 1;
+        const previewSeatQty = Number(priceSeats) || 1;
         const previewRentItems = buildSegmentedRentLineItems(
           rentSegments,
           previewSeatQty,
@@ -1238,7 +1333,7 @@ export async function generateRentProformas(
         result.superseded.push(toSupersede.statement_number);
       }
 
-      const liveSeatQty = Number(contract.seats) || 1;
+      const liveSeatQty = Number(priceSeats) || 1;
       // Persisted per-item (not recomputed at display time) so the PDF breakdown
       // always reflects the rate actually charged, even if the contract's rate
       // later changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
@@ -1421,7 +1516,9 @@ export async function generateUsageStatements(
     `)
     .in("status", ["active", "renewal_in_progress"])
     .lte("start_date", lastOfMonth)
-    .gte("end_date", firstOfMonth);
+    // renewal_in_progress contracts stay billable indefinitely even after their
+    // original end_date lapses — see generateRentProformas for rationale.
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
   const { data: contracts } = await contractsQuery;
