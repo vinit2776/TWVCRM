@@ -190,11 +190,13 @@ export async function GET(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // Today in IST (UTC+5:30) — same convention as /api/digest.
+  // Today in IST (UTC+5:30) — same convention as /api/digest. ?date=YYYY-MM-DD
+  // overrides it for on-demand/backfill generation (same param name as /api/digest).
+  const { searchParams } = new URL(request.url);
   const now = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000;
   const istNow = new Date(now.getTime() + istOffset);
-  const todayIST = istNow.toISOString().slice(0, 10);
+  const todayIST = searchParams.get("date") || istNow.toISOString().slice(0, 10);
   const rangeStart = `${todayIST}T00:00:00`;
   const rangeEnd = `${todayIST}T23:59:59`;
   const dateLabel = new Date(`${todayIST}T00:00:00`).toLocaleDateString("en-IN", {
