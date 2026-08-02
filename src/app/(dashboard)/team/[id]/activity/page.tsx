@@ -33,6 +33,9 @@ interface AuditEntry {
   id: string;
   entity_type: string;
   entity_id: string;
+  // Server-resolved link target for entity types (case_document, case_agreement)
+  // whose entity_id is a sub-record id rather than the linkable parent's id.
+  link_entity_id?: string;
   action: string;
   changes: Record<string, { old: unknown; new: unknown }>;
   created_at: string;
@@ -118,8 +121,9 @@ const ENTITY_ROUTES: Record<string, (id: string) => string> = {
   user: (id) => `/team/${id}/activity`,
 };
 
-function entityLink(entityType: string, entityId: string): string | null {
-  return ENTITY_ROUTES[entityType]?.(entityId) ?? null;
+function entityLink(entry: AuditEntry): string | null {
+  const linkId = entry.link_entity_id ?? entry.entity_id;
+  return ENTITY_ROUTES[entry.entity_type]?.(linkId) ?? null;
 }
 
 function displayValue(val: unknown): string {
@@ -325,7 +329,7 @@ export default function UserActivityStoryboardPage({
                   const expanded = expandedId === entry.id;
                   const clickable = changeKeys.length > 0;
                   const summary = summarizeChanges(entry.changes);
-                  const link = entityLink(entry.entity_type, entry.entity_id);
+                  const link = entityLink(entry);
                   return (
                     <div key={entry.id} className="rounded-md border bg-muted/10 overflow-hidden">
                       <div

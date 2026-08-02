@@ -102,6 +102,28 @@ export async function GET(
     return NextResponse.json({ error: breakdownResult.error.message }, { status: 500 });
   }
 
+  const timeline = timelineResult.data || [];
+
+  // case_document/case_agreement audit rows log the sub-record's own id, never
+  // the parent case's id — resolve it here so the UI can link to /cases/[id]
+  // without guessing. Only queried for entity types where entity_id isn't
+  // already the linkable id, and only for the current page of results.
+  const caseDocIds = timeline.filter((r) => r.entity_type === "case_document").map((r) => r.entity_id);
+  const caseAgreementIds = timeline.filter((r) => r.entity_type === "case_agreement").map((r) => r.entity_id);
+  const parentCaseId = new Map<string, string>();
+  if (caseDocIds.length > 0) {
+    const { data } = await supabase.from("case_documents").select("id, case_id").in("id", caseDocIds);
+    for (const d of data || []) parentCaseId.set(d.id, d.case_id);
+  }
+  if (caseAgreementIds.length > 0) {
+    const { data } = await supabase.from("case_agreements").select("id, case_id").in("id", caseAgreementIds);
+    for (const a of data || []) parentCaseId.set(a.id, a.case_id);
+  }
+  const enrichedTimeline = timeline.map((row) => {
+    const linkEntityId = parentCaseId.get(row.entity_id);
+    return linkEntityId ? { ...row, link_entity_id: linkEntityId } : row;
+  });
+
   const breakdownMap = new Map<string, number>();
   for (const row of breakdownResult.data || []) {
     const key = `${row.entity_type}:${row.action}`;
@@ -121,7 +143,7 @@ export async function GET(
 
   return NextResponse.json({
     data: {
-      timeline: timelineResult.data || [],
+      timeline: enrichedTimeline,
       total: currentCount,
       limit,
       offset,
