@@ -13,6 +13,10 @@
       "schedule": "0 15 * * *"
     },
     {
+      "path": "/api/cron/team-activity-digest",
+      "schedule": "5 15 * * *"
+    },
+    {
       "path": "/api/cron/billing-reminder",
       "schedule": "30 4 28-31 * *"
     },
