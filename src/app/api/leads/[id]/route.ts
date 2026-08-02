@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { updateLeadSchema } from "@/lib/validations";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -48,6 +48,11 @@ export async function GET(
       (data as Record<string, unknown>)._followup = flags;
     }
     delete (data as Record<string, unknown>)._pending_followups;
+  }
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "lead", entityId: id, performedBy: dbUser.id });
   }
 
   return NextResponse.json({ data });

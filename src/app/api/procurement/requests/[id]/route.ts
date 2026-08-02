@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
@@ -111,6 +111,8 @@ export async function GET(
       })
     );
   }
+
+  await logView(supabase, { entityType: "purchase_request", entityId: id, performedBy: dbUser.id });
 
   return NextResponse.json({ data, approval_threshold: approvalThreshold });
 }

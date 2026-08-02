@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 
 export const maxDuration = 30;
@@ -159,6 +159,11 @@ export async function GET(
     .select("id, amount, tds_amount, payment_date, payment_mode, payment_reference, razorpay_payment_id, recorded_by_user:users!billing_payments_recorded_by_fkey(full_name)")
     .eq("billing_statement_id", id)
     .order("payment_date", { ascending: true });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "billing_statement", entityId: id, performedBy: dbUser.id });
+  }
 
   return NextResponse.json({
     data: {
