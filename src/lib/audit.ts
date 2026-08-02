@@ -35,7 +35,7 @@ export async function logAudit(
  */
 export async function logView(
   supabase: SupabaseClient,
-  params: { entityType: AuditEntityType; entityId: string; performedBy: string | null }
+  params: { entityType: AuditEntityType; entityId: string; performedBy: string }
 ) {
   await logAudit(supabase, { ...params, action: "view" });
 }
