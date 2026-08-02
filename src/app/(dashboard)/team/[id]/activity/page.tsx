@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronDown,
   ArrowRight,
+  ExternalLink,
   TrendingUp,
   TrendingDown,
   Minus,
@@ -96,6 +97,29 @@ function summarizeChanges(changes: Record<string, { old: unknown; new: unknown }
   const shown = keys.slice(0, 3).map((k) => k.replace(/_/g, " "));
   const more = keys.length > 3 ? ` +${keys.length - 3} more` : "";
   return shown.join(", ") + more;
+}
+
+// Entity types with a confirmed standalone detail route. Deliberately partial —
+// entity types not listed here (billing_statement, voucher, usage_charge, ...)
+// have no reliable single-record page to deep-link to, so they render without
+// a link rather than guessing at a route that might not resolve.
+const ENTITY_ROUTES: Record<string, (id: string) => string> = {
+  lead: (id) => `/leads/${id}`,
+  proposal: (id) => `/proposals/${id}`,
+  contract: (id) => `/contracts/${id}`,
+  purchase_request: (id) => `/procurement/requests/${id}`,
+  booking: (id) => `/bookings/${id}`,
+  vendor_bill: (id) => `/procurement/bills/${id}`,
+  case: (id) => `/cases/${id}`,
+  case_agreement: (id) => `/cases/${id}`,
+  case_document: (id) => `/cases/${id}`,
+  procurement_vendor: (id) => `/procurement/vendors/${id}`,
+  aggregator: (id) => `/aggregators/${id}`,
+  user: (id) => `/team/${id}/activity`,
+};
+
+function entityLink(entityType: string, entityId: string): string | null {
+  return ENTITY_ROUTES[entityType]?.(entityId) ?? null;
 }
 
 function displayValue(val: unknown): string {
@@ -301,6 +325,7 @@ export default function UserActivityStoryboardPage({
                   const expanded = expandedId === entry.id;
                   const clickable = changeKeys.length > 0;
                   const summary = summarizeChanges(entry.changes);
+                  const link = entityLink(entry.entity_type, entry.entity_id);
                   return (
                     <div key={entry.id} className="rounded-md border bg-muted/10 overflow-hidden">
                       <div
@@ -347,6 +372,16 @@ export default function UserActivityStoryboardPage({
                             )}
                           </p>
                         </div>
+                        {link && (
+                          <Link
+                            href={link}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex items-center gap-1 text-[10px] text-blue-600 hover:underline shrink-0 pt-0.5"
+                          >
+                            View record
+                            <ExternalLink className="h-2.5 w-2.5" />
+                          </Link>
+                        )}
                       </div>
                       {expanded && changeKeys.length > 0 && (
                         <div className="border-t bg-muted/5 px-3 py-2 space-y-1.5">
