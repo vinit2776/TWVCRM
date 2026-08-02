@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
@@ -32,6 +32,11 @@ export async function GET(
     const joined = (data as Record<string, unknown>)[`${key}_by_user`] as { full_name: string } | null;
     actorNames[`${key}_by_name`] = joined?.full_name || null;
     delete (data as Record<string, unknown>)[`${key}_by_user`];
+  }
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "contract", entityId: id, performedBy: dbUser.id });
   }
 
   return NextResponse.json({ data: { ...data, ...actorNames } });

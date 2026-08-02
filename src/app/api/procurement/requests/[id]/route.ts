@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 
@@ -35,6 +35,12 @@ const patchPrSchema = z.discriminatedUnion("action", [
         })
       )
       .optional(),
+  }),
+  z.object({
+    action: z.literal("correct_department"),
+    department: z.enum(PROCUREMENT_DEPARTMENTS),
+    billable_contract_id: z.string().uuid().optional().nullable(),
+    reason: z.string().min(1, "Reason is required"),
   }),
 ]);
 
@@ -105,6 +111,8 @@ export async function GET(
       })
     );
   }
+
+  await logView(supabase, { entityType: "purchase_request", entityId: id, performedBy: dbUser.id });
 
   return NextResponse.json({ data, approval_threshold: approvalThreshold });
 }
@@ -399,6 +407,58 @@ export async function PATCH(
       }
       break;
     }
+
+    case "correct_department": {
+      // Admin-only escape hatch for MRs filed under the wrong department (a real
+      // recurring mistake around the reimbursement flow — see PR-2607-146/147).
+      // Never editable by requesters/managers since it can redirect spend into or
+      // out of a customer-billed bucket. Status is otherwise untouched: no
+      // re-approval, no PO/bill impact.
+      if (dbUser.role !== "admin") {
+        return NextResponse.json({ error: "Only admins can correct an MR's department" }, { status: 403 });
+      }
+      if (["cancelled", "rejected"].includes(pr.status)) {
+        return NextResponse.json({ error: "Cannot correct department on a cancelled or rejected MR" }, { status: 422 });
+      }
+      const newDepartment = parsed.data.department;
+      if (newDepartment === pr.department) {
+        return NextResponse.json({ error: "MR is already in that department" }, { status: 422 });
+      }
+      if (newDepartment === "reimbursement") {
+        if (!parsed.data.billable_contract_id) {
+          return NextResponse.json(
+            { error: "Select which customer's contract this will be billed to" },
+            { status: 422 }
+          );
+        }
+        const { data: contract } = await supabase
+          .from("contracts")
+          .select("id")
+          .eq("id", parsed.data.billable_contract_id)
+          .maybeSingle();
+        if (!contract) {
+          return NextResponse.json({ error: "Linked contract not found" }, { status: 404 });
+        }
+      }
+      // Moving away from reimbursement must not orphan invoices already issued to the customer.
+      if (pr.department === "reimbursement" && newDepartment !== "reimbursement") {
+        const { count: activeStatements } = await supabase
+          .from("billing_statements")
+          .select("*", { count: "exact", head: true })
+          .eq("source_pr_id", id)
+          .is("voided_at", null);
+        if (activeStatements && activeStatements > 0) {
+          return NextResponse.json({
+            error: "This MR already has reimbursement invoice(s) issued to the customer. Void them first before changing the department.",
+          }, { status: 422 });
+        }
+      }
+      updatePayload = {
+        department: newDepartment,
+        billable_contract_id: newDepartment === "reimbursement" ? parsed.data.billable_contract_id : null,
+      };
+      break;
+    }
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -413,6 +473,9 @@ export async function PATCH(
   const auditChanges = diffChanges(pr as Record<string, unknown>, { ...pr, ...updatePayload } as Record<string, unknown>);
   if (action === "approve" && parsed.data.quotation_override_reason) {
     auditChanges["quotation_override_reason"] = { old: null, new: parsed.data.quotation_override_reason };
+  }
+  if (action === "correct_department") {
+    auditChanges["correction_reason"] = { old: null, new: parsed.data.reason };
   }
   await logAudit(supabase, {
     entityType: "purchase_request",

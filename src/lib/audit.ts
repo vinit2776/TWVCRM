@@ -45,6 +45,20 @@ export async function logAudit(
 }
 
 /**
+ * Log a detail-page view for the activity storyboard. Reuses the existing
+ * action:"view" convention (see the unifi voucher-reveal route) instead of a
+ * parallel logging path, so adding view-tracking to another detail page is
+ * a one-line call rather than hand-rolled logAudit boilerplate.
+ * Fire-and-forget — never blocks the response.
+ */
+export async function logView(
+  supabase: SupabaseClient,
+  params: { entityType: AuditEntityType; entityId: string; performedBy: string | null }
+) {
+  await logAudit(supabase, { ...params, action: "view" });
+}
+
+/**
  * Log an email-send event as a lead activity.
  * Fires and forgets — does not throw on failure so it never blocks the main operation.
  */
