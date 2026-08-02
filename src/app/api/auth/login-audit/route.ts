@@ -51,5 +51,12 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  // First-class session-start record for the activity storyboard (see user_sessions table).
+  await supabase.from("user_sessions").insert({
+    user_id: dbUser.id,
+    ip_address: ip === "unknown" ? null : ip,
+    user_agent: userAgent,
+  });
+
   return NextResponse.json({ message: "Login audit logged" });
 }

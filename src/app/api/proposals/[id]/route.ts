@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -19,6 +19,11 @@ export async function GET(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "proposal", entityId: id, performedBy: dbUser.id });
+  }
 
   return NextResponse.json({ data });
 }

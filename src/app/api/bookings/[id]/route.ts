@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { logAudit, diffChanges } from "@/lib/audit";
+import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
@@ -130,6 +130,11 @@ export async function GET(
         remaining_after: Math.max(0, monthlyQuota - usedThisMonth),
       };
     }
+  }
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    await logView(supabase, { entityType: "booking", entityId: id, performedBy: dbUser.id });
   }
 
   return NextResponse.json({
