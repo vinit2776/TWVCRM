@@ -14,6 +14,13 @@ export interface PeriodBounds {
  * window, since that reads more naturally in an appraisal conversation.
  * "hour" has no calendar-aligned equivalent, so it's a trailing 60-minute
  * window instead.
+ *
+ * The current period is capped at `now` rather than the nominal period end,
+ * and the previous period is matched to that same elapsed duration — e.g. on
+ * Aug 2, "this month" compares the first 2 days of August against the first
+ * 2 days of July, not the first 2 days of August against the FULL 31 days of
+ * July. Without this, every partially-elapsed period reads as a dramatic
+ * decline purely because it just started.
  */
 export function computePeriodBounds(
   range: ActivityRange,
@@ -41,60 +48,48 @@ export function computePeriodBounds(
     };
   }
 
-  if (range === "day") {
-    const currentStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const currentEnd = new Date(currentStart.getTime() + 24 * 60 * 60 * 1000);
-    return {
-      currentStart,
-      currentEnd,
-      previousStart: new Date(currentStart.getTime() - 24 * 60 * 60 * 1000),
-      previousEnd: currentStart,
-    };
-  }
+  let currentStart: Date;
+  let previousStart: Date;
 
-  if (range === "week") {
+  if (range === "day") {
+    currentStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    previousStart = new Date(currentStart.getTime() - 24 * 60 * 60 * 1000);
+  } else if (range === "week") {
     // ISO week: Monday start.
     const dayOfWeek = (now.getDay() + 6) % 7; // 0 = Monday
-    const currentStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
-    const currentEnd = new Date(currentStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-    return {
-      currentStart,
-      currentEnd,
-      previousStart: new Date(currentStart.getTime() - 7 * 24 * 60 * 60 * 1000),
-      previousEnd: currentStart,
-    };
-  }
-
-  if (range === "month") {
-    const currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const currentEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    return {
-      currentStart,
-      currentEnd,
-      previousStart: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-      previousEnd: currentStart,
-    };
-  }
-
-  if (range === "quarter") {
+    currentStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+    previousStart = new Date(currentStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+  } else if (range === "month") {
+    currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    previousStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  } else if (range === "quarter") {
     const q = Math.floor(now.getMonth() / 3);
-    const currentStart = new Date(now.getFullYear(), q * 3, 1);
-    const currentEnd = new Date(now.getFullYear(), q * 3 + 3, 1);
-    return {
-      currentStart,
-      currentEnd,
-      previousStart: new Date(now.getFullYear(), q * 3 - 3, 1),
-      previousEnd: currentStart,
-    };
+    currentStart = new Date(now.getFullYear(), q * 3, 1);
+    previousStart = new Date(now.getFullYear(), q * 3 - 3, 1);
+  } else {
+    // year
+    currentStart = new Date(now.getFullYear(), 0, 1);
+    previousStart = new Date(now.getFullYear() - 1, 0, 1);
   }
 
-  // year
-  const currentStart = new Date(now.getFullYear(), 0, 1);
-  const currentEnd = new Date(now.getFullYear() + 1, 0, 1);
+  // `now` is always within the current period (it just started, at latest),
+  // so this is really just `now` — but expressed as a cap in case of clock skew.
+  const currentEnd = new Date(Math.min(now.getTime(), currentEndFor(range, currentStart)));
+  const elapsedMs = currentEnd.getTime() - currentStart.getTime();
+
   return {
     currentStart,
     currentEnd,
-    previousStart: new Date(now.getFullYear() - 1, 0, 1),
-    previousEnd: currentStart,
+    previousStart,
+    previousEnd: new Date(previousStart.getTime() + elapsedMs),
   };
+}
+
+/** Nominal (full) end of the period starting at `start`, before capping at `now`. */
+function currentEndFor(range: ActivityRange, start: Date): number {
+  if (range === "day") return start.getTime() + 24 * 60 * 60 * 1000;
+  if (range === "week") return start.getTime() + 7 * 24 * 60 * 60 * 1000;
+  if (range === "month") return new Date(start.getFullYear(), start.getMonth() + 1, 1).getTime();
+  if (range === "quarter") return new Date(start.getFullYear(), start.getMonth() + 3, 1).getTime();
+  return new Date(start.getFullYear() + 1, 0, 1).getTime(); // year
 }
