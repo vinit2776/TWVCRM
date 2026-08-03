@@ -23,7 +23,7 @@ interface Props {
 }
 
 export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
-  const lead = row.contract?.lead;
+  const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
   const customerHasGstin = !!lead?.gst_number;
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
   const expectedPrefix = customerHasGstin ? "SD/A/" : "SD/B/";
