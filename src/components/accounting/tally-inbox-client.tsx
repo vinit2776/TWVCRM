@@ -1701,6 +1701,12 @@ function StatementPaymentPanel({
                       <span className="font-mono text-green-800">{p.payment_reference}</span>
                     </>
                   )}
+                  {p.recorded_by_name && (
+                    <>
+                      <span className="text-muted-foreground">Recorded by</span>
+                      <span>{p.recorded_by_name}</span>
+                    </>
+                  )}
                 </div>
               )}
             </div>
