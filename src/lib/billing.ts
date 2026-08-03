@@ -525,6 +525,7 @@ export async function generateMonthlyStatements(
   // Prepaid rent covers the NEXT month
   const prepaid = nextMonth(targetMonth, targetYear);
   const prepaidDaysInMonth = new Date(prepaid.year, prepaid.month, 0).getDate();
+  const prepaidFirstOfMonthYmd = `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-01`;
 
   // 1. Ensure accounting period exists
   const { data: existingPeriod } = await supabase
@@ -726,8 +727,14 @@ export async function generateMonthlyStatements(
       // If this parent's own term has lapsed while renewal_in_progress, price
       // this month off its renewal draft's escalated terms instead of the
       // parent's stale pre-renewal rate. The statement still attaches to the
-      // parent (cid) — the draft itself isn't activated/billable yet.
-      const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
+      // parent (cid) — the draft itself isn't activated/billable yet. Only
+      // switch once the parent's own end_date is actually before the prepaid
+      // month being billed — otherwise the parent's own term still fully
+      // covers this month and must be priced at its own (pre-renewal) rate.
+      const parentHasLapsed = (contract.end_date as string) < prepaidFirstOfMonthYmd;
+      const renewalDraft = contract.status === "renewal_in_progress" && parentHasLapsed
+        ? renewalDraftByParentId.get(cid)
+        : undefined;
       const priceStartDate = renewalDraft ? renewalDraft.start_date : (contract.start_date as string);
       const priceEndDate = renewalDraft ? renewalDraft.end_date : (contract.end_date as string);
       const priceSubtotal = renewalDraft ? renewalDraft.subtotal : (contract.subtotal as number | null);
@@ -1164,8 +1171,15 @@ export async function generateRentProformas(
     // If this parent's own term has lapsed while renewal_in_progress, price
     // this month off its renewal draft's escalated terms instead of the
     // parent's stale pre-renewal rate. The statement still attaches to the
-    // parent (cid) — the draft itself isn't activated/billable yet.
-    const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
+    // parent (cid) — the draft itself isn't activated/billable yet. Only
+    // switch once the parent's own end_date is actually before the prepaid
+    // month being billed — otherwise the parent's own term still fully
+    // covers this month and must be priced at its own (pre-renewal) rate,
+    // not the draft's (which may not even start until a later month).
+    const parentHasLapsed = (contract.end_date as string) < prepaidFirstOfMonth;
+    const renewalDraft = contract.status === "renewal_in_progress" && parentHasLapsed
+      ? renewalDraftByParentId.get(cid)
+      : undefined;
 
     try {
       // ── 1. Quarterly gate ───────────────────────────────────────────────
