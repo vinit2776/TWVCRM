@@ -238,12 +238,26 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Label>Lead Status</Label>
             {(SYSTEM_LEAD_STATUSES as readonly string[]).includes(status) ? (
               /* System-driven status — read-only, can only be changed by
-                 logging a tour, creating a proposal, or activating a contract */
-              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm flex items-center justify-between">
-                <span className="font-medium">{LEAD_STATUS_LABELS[status]}</span>
-                <span className="text-xs text-muted-foreground ml-2">
-                  🔒 Set automatically
-                </span>
+                 logging a tour, creating a proposal, or activating a contract.
+                 Exception: "won" already has an active contract behind it, so
+                 it stays fully locked. The others can still be escaped to
+                 lost/junk if the deal goes cold after a tour/proposal. */
+              <div className="space-y-1.5">
+                <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm flex items-center justify-between">
+                  <span className="font-medium">{LEAD_STATUS_LABELS[status]}</span>
+                  <span className="text-xs text-muted-foreground ml-2">
+                    🔒 Set automatically
+                  </span>
+                </div>
+                {status !== "won" && (
+                  <button
+                    type="button"
+                    onClick={() => setValue("status", "lost")}
+                    className="text-xs text-destructive hover:underline"
+                  >
+                    This lead went cold — mark as lost instead
+                  </button>
+                )}
               </div>
             ) : (
               <Select
