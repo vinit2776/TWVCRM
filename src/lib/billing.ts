@@ -328,6 +328,87 @@ function computeRentSegments(
   }));
 }
 
+type RenewalSplitResult = {
+  /** Own + draft segments concatenated, in date order — feed straight to buildSegmentedRentLineItems (own/draft built separately, see isRenewalSplit). */
+  segments: (RateSegment & { amount: number })[];
+  ownSegments: (RateSegment & { amount: number })[];
+  draftSegments: (RateSegment & { amount: number })[];
+  amount: number;
+  taxPercentage: number;
+  /** True only when the prepaid month is actually divided between the parent's own rate and the draft's rate — i.e. the parent's end_date lands mid-month. */
+  isRenewalSplit: boolean;
+};
+
+/**
+ * Prices one contract's rent for a single prepaid month, splitting the bill
+ * between the contract's own current terms and — only for the portion of the
+ * month after the parent's own end_date — a renewal draft's escalated terms.
+ * Reduces to plain single-source proration when `draft` is undefined, when
+ * the parent's own term still covers the whole month, or when the parent's
+ * term already lapsed before the month starts (draft covers 100% of it).
+ * A real gap between the parent's end_date and the draft's start_date (rare —
+ * implies days nobody is contractually billable for) is left unbilled rather
+ * than fabricated.
+ */
+function computeRenewalSplitRentSegments(
+  cid: string,
+  ownStartYmd: string,
+  ownEndYmd: string,
+  ownSubtotal: number | null,
+  ownTotalAmount: number,
+  ownPhaseStartYmd: string | null,
+  ownTaxPercentage: number | null,
+  draft: RenewalDraftPricing | undefined,
+  ratePhasesByContract: Map<string, RatePhaseDetail[]>,
+  pFirstYmd: string,
+  pLastYmd: string,
+  prepaidDaysInMonth: number
+): RenewalSplitResult {
+  const ownFlatAmount = Number(ownSubtotal || ownTotalAmount);
+  const ownPhaseAnchorYmd = ownPhaseStartYmd || ownStartYmd;
+
+  let ownSegments: (RateSegment & { amount: number })[] = [];
+  if (ownEndYmd >= pFirstYmd) {
+    const billStart = ownStartYmd > pFirstYmd ? ownStartYmd : pFirstYmd;
+    const billEnd = ownEndYmd < pLastYmd ? ownEndYmd : pLastYmd;
+    if (billStart <= billEnd) {
+      ownSegments = computeRentSegments(
+        ownFlatAmount, ownPhaseAnchorYmd, ratePhasesByContract.get(cid) ?? null,
+        billStart, billEnd, prepaidDaysInMonth
+      );
+    }
+  }
+
+  let draftSegments: (RateSegment & { amount: number })[] = [];
+  if (draft) {
+    const draftFlatAmount = Number(draft.subtotal || draft.total_amount);
+    const draftPhaseAnchorYmd = draft.phase_start_date || draft.start_date;
+    // Never re-bill a day already covered by the parent's own segment above.
+    const afterOwnEnd = ownEndYmd >= pFirstYmd ? addDaysToYmd(ownEndYmd, 1) : pFirstYmd;
+    const draftBillStart = [draft.start_date, afterOwnEnd, pFirstYmd].reduce((a, b) => (a > b ? a : b));
+    const draftBillEnd = draft.end_date < pLastYmd ? draft.end_date : pLastYmd;
+    if (draftBillStart <= draftBillEnd) {
+      draftSegments = computeRentSegments(
+        draftFlatAmount, draftPhaseAnchorYmd, ratePhasesByContract.get(draft.id) ?? null,
+        draftBillStart, draftBillEnd, prepaidDaysInMonth
+      );
+    }
+  }
+
+  const ownDays = ownSegments.reduce((s, seg) => s + seg.days, 0);
+  const draftDays = draftSegments.reduce((s, seg) => s + seg.days, 0);
+  const taxPercentage = Number((draftDays > ownDays ? draft?.tax_percentage : ownTaxPercentage) || 18);
+
+  return {
+    segments: [...ownSegments, ...draftSegments],
+    ownSegments,
+    draftSegments,
+    amount: ownSegments.reduce((s, seg) => s + seg.amount, 0) + draftSegments.reduce((s, seg) => s + seg.amount, 0),
+    taxPercentage,
+    isRenewalSplit: ownSegments.length > 0 && draftSegments.length > 0,
+  };
+}
+
 /**
  * Builds rent line items across one or more rate segments (2+ only when a
  * phase transition splits the month). Reuses buildRentLineItems per segment
@@ -335,6 +416,9 @@ function computeRentSegments(
  * monthly_rate/days_used/days_in_month are only persisted when something was
  * actually prorated (a split month, or the existing contract-boundary case) —
  * an untouched full month stays a plain line item, unchanged from before.
+ * `forceRangeLabel` shows each segment's date range even when there's only
+ * one — used when this call covers only one side (own or draft) of a
+ * renewal split-month, so a lone partial segment doesn't read as a full month.
  */
 function buildSegmentedRentLineItems(
   segments: (RateSegment & { amount: number })[],
@@ -342,9 +426,10 @@ function buildSegmentedRentLineItems(
   allocations: SpaceAllocationDetail[],
   contractLocationName: string | null,
   billedMonthLabel: string,
-  prepaidDaysInMonth: number
+  prepaidDaysInMonth: number,
+  forceRangeLabel: boolean = false
 ): { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] {
-  const multi = segments.length > 1;
+  const multi = segments.length > 1 || forceRangeLabel;
   const anyProration = multi || (segments.length === 1 && segments[0].days < prepaidDaysInMonth);
 
   const out: { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] = [];
@@ -526,6 +611,7 @@ export async function generateMonthlyStatements(
   const prepaid = nextMonth(targetMonth, targetYear);
   const prepaidDaysInMonth = new Date(prepaid.year, prepaid.month, 0).getDate();
   const prepaidFirstOfMonthYmd = `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-01`;
+  const prepaidLastOfMonthYmd = `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-${prepaidDaysInMonth}`;
 
   // 1. Ensure accounting period exists
   const { data: existingPeriod } = await supabase
@@ -724,65 +810,39 @@ export async function generateMonthlyStatements(
 
       // ── Section A: Prepaid rent for NEXT month ──────────────────────
 
-      // If this parent's own term has lapsed while renewal_in_progress, price
-      // this month off its renewal draft's escalated terms instead of the
-      // parent's stale pre-renewal rate. The statement still attaches to the
-      // parent (cid) — the draft itself isn't activated/billable yet. Only
-      // switch once the parent's own end_date is actually before the prepaid
-      // month being billed — otherwise the parent's own term still fully
-      // covers this month and must be priced at its own (pre-renewal) rate.
-      const parentHasLapsed = (contract.end_date as string) < prepaidFirstOfMonthYmd;
-      const renewalDraft = contract.status === "renewal_in_progress" && parentHasLapsed
-        ? renewalDraftByParentId.get(cid)
-        : undefined;
-      const priceStartDate = renewalDraft ? renewalDraft.start_date : (contract.start_date as string);
-      const priceEndDate = renewalDraft ? renewalDraft.end_date : (contract.end_date as string);
-      const priceSubtotal = renewalDraft ? renewalDraft.subtotal : (contract.subtotal as number | null);
-      const priceTotalAmount = renewalDraft ? renewalDraft.total_amount : (contract.total_amount as number);
-      const pricePhaseStart = renewalDraft ? renewalDraft.phase_start_date : (contract.phase_start_date as string | null);
-      const priceSeats = renewalDraft ? renewalDraft.seats : (contract.seats as number | null);
-      const ratePhaseLookupId = renewalDraft ? renewalDraft.id : cid;
+      // Renewal draft (if any) for this renewal_in_progress parent. Its terms
+      // only apply to the portion of the prepaid month after the parent's own
+      // end_date — see computeRenewalSplitRentSegments for the split logic
+      // (whole month at own rate, whole month at draft rate, or a genuine
+      // split when the parent's end_date lands mid-month).
+      const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
 
-      // Check if contract (or its renewal draft, if lapsed) extends into the prepaid month
-      const contractEnd = new Date(String(priceEndDate) + "T00:00:00Z");
-      const prepaidFirstOfMonth = new Date(
-        `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-01T00:00:00Z`
+      const split = computeRenewalSplitRentSegments(
+        cid,
+        contract.start_date as string,
+        contract.end_date as string,
+        contract.subtotal as number | null,
+        contract.total_amount as number,
+        contract.phase_start_date as string | null,
+        contract.tax_percentage as number | null,
+        renewalDraft,
+        ratePhasesByContract,
+        prepaidFirstOfMonthYmd,
+        prepaidLastOfMonthYmd,
+        prepaidDaysInMonth
       );
-      const prepaidLastOfMonth = new Date(
-        `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-${prepaidDaysInMonth}T00:00:00Z`
-      );
-
-      const flatAmount = Number(priceSubtotal || priceTotalAmount);
-      const phaseAnchorYmd = pricePhaseStart || priceStartDate;
-      let prepaidRentAmount = 0;
-      let rentSegments: ReturnType<typeof computeRentSegments> = [];
-
-      if (contractEnd >= prepaidFirstOfMonth) {
-        // Prorate if contract ends mid-month in the prepaid month
-        const contractStart = new Date(String(priceStartDate) + "T00:00:00Z");
-        const billableStart = contractStart > prepaidFirstOfMonth ? contractStart : prepaidFirstOfMonth;
-        const billableEnd = contractEnd < prepaidLastOfMonth ? contractEnd : prepaidLastOfMonth;
-        rentSegments = computeRentSegments(
-          flatAmount,
-          phaseAnchorYmd,
-          ratePhasesByContract.get(ratePhaseLookupId) ?? null,
-          billableStart.toISOString().slice(0, 10),
-          billableEnd.toISOString().slice(0, 10),
-          prepaidDaysInMonth
-        );
-        prepaidRentAmount = rentSegments.reduce((s, seg) => s + seg.amount, 0);
-      }
-
-      const prepaidSeatQty = Number(priceSeats) || 1;
+      const prepaidRentAmount = split.amount;
+      const ownSeatQty = Number(contract.seats) || 1;
+      const draftSeatQty = renewalDraft ? (Number(renewalDraft.seats) || 1) : ownSeatQty;
       const prepaidRentItems = prepaidRentAmount > 0
-        ? buildSegmentedRentLineItems(
-            rentSegments,
-            prepaidSeatQty,
-            spaceAllocationsByContract.get(contract.id as string) ?? [],
-            locationNamesByContract.get(contract.id as string) ?? null,
-            monthLabelShort(prepaid.month, prepaid.year),
-            prepaidDaysInMonth
-          )
+        ? [
+            ...(split.ownSegments.length > 0
+              ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
+              : []),
+            ...(split.draftSegments.length > 0
+              ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
+              : []),
+          ]
         : [];
       const prepaidSection: LineItemSection = {
         type: "prepaid_rent",
@@ -888,7 +948,7 @@ export async function generateMonthlyStatements(
       const bookingUsageTotal = bookingSection.subtotal;
 
       const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageTotal;
-      const taxPercentage = Number((renewalDraft ? renewalDraft.tax_percentage : contract.tax_percentage) || 18);
+      const taxPercentage = split.taxPercentage;
 
       // GST split — intra-state (TN) vs inter-state
       const buyerState = (lead?.state || "").toLowerCase().trim();
@@ -1168,18 +1228,12 @@ export async function generateRentProformas(
     const contractNumber = contract.contract_number as string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead           = contract.lead as any;
-    // If this parent's own term has lapsed while renewal_in_progress, price
-    // this month off its renewal draft's escalated terms instead of the
-    // parent's stale pre-renewal rate. The statement still attaches to the
-    // parent (cid) — the draft itself isn't activated/billable yet. Only
-    // switch once the parent's own end_date is actually before the prepaid
-    // month being billed — otherwise the parent's own term still fully
-    // covers this month and must be priced at its own (pre-renewal) rate,
-    // not the draft's (which may not even start until a later month).
-    const parentHasLapsed = (contract.end_date as string) < prepaidFirstOfMonth;
-    const renewalDraft = contract.status === "renewal_in_progress" && parentHasLapsed
-      ? renewalDraftByParentId.get(cid)
-      : undefined;
+    // Renewal draft (if any) for this renewal_in_progress parent. Its terms
+    // only apply to the portion of the prepaid month after the parent's own
+    // end_date — see computeRenewalSplitRentSegments for the split logic
+    // (whole month at own rate, whole month at draft rate, or a genuine
+    // split when the parent's end_date lands mid-month).
+    const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
 
     try {
       // ── 1. Quarterly gate ───────────────────────────────────────────────
@@ -1203,37 +1257,37 @@ export async function generateRentProformas(
       }
       const toSupersede = supersedable.get(cid); // may be undefined
 
-      // ── 3. Proration ────────────────────────────────────────────────────
-      const priceStartDate = renewalDraft ? renewalDraft.start_date : (contract.start_date as string);
-      const priceEndDate = renewalDraft ? renewalDraft.end_date : (contract.end_date as string);
-      const priceSubtotal = renewalDraft ? renewalDraft.subtotal : (contract.subtotal as number | null);
-      const priceTotalAmount = renewalDraft ? renewalDraft.total_amount : (contract.total_amount as number);
-      const pricePhaseStart = renewalDraft ? renewalDraft.phase_start_date : (contract.phase_start_date as string | null);
-      const priceSeats = renewalDraft ? renewalDraft.seats : (contract.seats as number | null);
-      const ratePhaseLookupId = renewalDraft ? renewalDraft.id : cid;
+      // ── 3. Proration — own terms, split against the renewal draft's terms
+      // for any days after the parent's own end_date (see helper doc) ──────
+      const pFirst = new Date(prepaidFirstOfMonth + "T00:00:00Z");
+      const pLast  = new Date(prepaidLastOfMonth  + "T00:00:00Z");
 
-      const flatAmount    = Number(priceSubtotal || priceTotalAmount);
-      const phaseAnchorYmd = pricePhaseStart || priceStartDate;
-      const contractEnd   = new Date(String(priceEndDate) + "T00:00:00Z");
-      const contractStart = new Date(String(priceStartDate) + "T00:00:00Z");
-      const pFirst        = new Date(prepaidFirstOfMonth + "T00:00:00Z");
-      const pLast         = new Date(prepaidLastOfMonth  + "T00:00:00Z");
-
-      let prepaidRentAmount = 0;
-      let rentSegments: ReturnType<typeof computeRentSegments> = [];
-      if (contractEnd >= pFirst) {
-        const billStart   = contractStart > pFirst ? contractStart : pFirst;
-        const billEnd     = contractEnd   < pLast  ? contractEnd   : pLast;
-        rentSegments = computeRentSegments(
-          flatAmount,
-          phaseAnchorYmd,
-          ratePhasesByContract.get(ratePhaseLookupId) ?? null,
-          billStart.toISOString().slice(0, 10),
-          billEnd.toISOString().slice(0, 10),
-          prepaidDaysInMonth
-        );
-        prepaidRentAmount = rentSegments.reduce((s, seg) => s + seg.amount, 0);
-      }
+      const split = computeRenewalSplitRentSegments(
+        cid,
+        contract.start_date as string,
+        contract.end_date as string,
+        contract.subtotal as number | null,
+        contract.total_amount as number,
+        contract.phase_start_date as string | null,
+        contract.tax_percentage as number | null,
+        renewalDraft,
+        ratePhasesByContract,
+        prepaidFirstOfMonth,
+        prepaidLastOfMonth,
+        prepaidDaysInMonth
+      );
+      const rentSegments = split.segments;
+      const prepaidRentAmount = split.amount;
+      const ownSeatQty = Number(contract.seats) || 1;
+      const draftSeatQty = renewalDraft ? (Number(renewalDraft.seats) || 1) : ownSeatQty;
+      const buildCombinedRentItems = () => [
+        ...(split.ownSegments.length > 0
+          ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
+          : []),
+        ...(split.draftSegments.length > 0
+          ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
+          : []),
+      ];
 
       if (prepaidRentAmount <= 0) {
         result.skipped++;
@@ -1242,7 +1296,7 @@ export async function generateRentProformas(
 
       // ── 4. Recurring add-ons for the prepaid month ─────────────────────
       // addons are pre-fetched in bulk before the loop — no per-contract DB query needed
-      const taxPercentage = Number((renewalDraft ? renewalDraft.tax_percentage : contract.tax_percentage) || 18);
+      const taxPercentage = split.taxPercentage;
       const addons = addonsByContractId.get(cid) ?? null;
 
       let addonsSubtotal = 0;
@@ -1283,15 +1337,7 @@ export async function generateRentProformas(
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
-        const previewSeatQty = Number(priceSeats) || 1;
-        const previewRentItems = buildSegmentedRentLineItems(
-          rentSegments,
-          previewSeatQty,
-          spaceAllocationsByContract.get(cid) ?? [],
-          locationNamesByContract.get(cid) ?? null,
-          monthLabelShort(prepaid.month, prepaid.year),
-          prepaidDaysInMonth
-        );
+        const previewRentItems = buildCombinedRentItems();
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
@@ -1311,11 +1357,13 @@ export async function generateRentProformas(
           sgst_amount: combinedSgst,
           total_amount: combinedTotal,
           line_items: previewLineItems,
-          note: isSplitMonth
-            ? `Split across ${rentSegments.length} rate phases · CGST+SGST${addonNote}`
-            : isProratedOrSplit
-              ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
-              : `Full month · CGST+SGST${addonNote}`,
+          note: split.isRenewalSplit
+            ? `Split: pre-renewal rate + escalated renewal rate · CGST+SGST${addonNote}`
+            : isSplitMonth
+              ? `Split across ${rentSegments.length} rate phases · CGST+SGST${addonNote}`
+              : isProratedOrSplit
+                ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
+                : `Full month · CGST+SGST${addonNote}`,
           supersedes: toSupersede?.statement_number,
         });
         result.generated++;
@@ -1347,18 +1395,10 @@ export async function generateRentProformas(
         result.superseded.push(toSupersede.statement_number);
       }
 
-      const liveSeatQty = Number(priceSeats) || 1;
       // Persisted per-item (not recomputed at display time) so the PDF breakdown
       // always reflects the rate actually charged, even if the contract's rate
       // later changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
-      const liveRentItems = buildSegmentedRentLineItems(
-        rentSegments,
-        liveSeatQty,
-        spaceAllocationsByContract.get(cid) ?? [],
-        locationNamesByContract.get(cid) ?? null,
-        monthLabelShort(prepaid.month, prepaid.year),
-        prepaidDaysInMonth
-      );
+      const liveRentItems = buildCombinedRentItems();
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
