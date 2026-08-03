@@ -152,6 +152,7 @@ interface BudgetRow {
   monthly_budget: number | null;
   is_active: boolean;
   spent_this_month: number;
+  provisional_this_month: number;
   amc_spent_this_month: number;
   utilisation_pct: number | null;
   is_over_budget: boolean;
@@ -174,7 +175,7 @@ const DEPT_EMOJI: Record<string, string> = {
 };
 
 function BudgetBar({ row }: { row: BudgetRow }) {
-  const { department, monthly_budget, is_active, spent_this_month, amc_spent_this_month } = row;
+  const { department, monthly_budget, is_active, spent_this_month, provisional_this_month, amc_spent_this_month } = row;
   const hasBudget = !!monthly_budget && is_active;
 
   const rawPct = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
@@ -280,6 +281,11 @@ function BudgetBar({ row }: { row: BudgetRow }) {
           )}
         </div>
         <div className="flex items-center gap-3 text-[11px] shrink-0">
+          {provisional_this_month > 0 && (
+            <span className="text-amber-700 font-medium" title="Submitted, pending approval — not yet counted as spent">
+              +{formatCurrency(provisional_this_month)} in pipeline
+            </span>
+          )}
           {amc_spent_this_month > 0 && (
             <span className="text-purple-600 font-medium" title="AMC / Annual Contract — excluded from budget">
               +{formatCurrency(amc_spent_this_month)} AMC
