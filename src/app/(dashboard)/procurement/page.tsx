@@ -471,7 +471,7 @@ export default function ProcurementDashboard() {
                           const now = new Date();
                           const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
                           const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
-                          router.push(`/procurement/requests?department=${dept}&status=active&from_date=${monthStart}&to_date=${monthEnd}&expenditure_type=operational&budget_view=1`);
+                          router.push(`/procurement/requests?department=${dept}&status=committed&from_date=${monthStart}&to_date=${monthEnd}&expenditure_type=operational&budget_view=1`);
                         }}
                       >
                         <BudgetBar row={row} />

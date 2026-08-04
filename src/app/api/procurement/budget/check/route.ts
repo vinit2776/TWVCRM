@@ -108,16 +108,29 @@ export async function GET(request: NextRequest) {
 
   const monthlyBudget = Number(budget.monthly_budget);
 
-  const { data: mrs } = await supabase
+  // Same committed/provisional split as the AMC check above and the dashboard
+  // budget route: only approved-and-beyond requests count as real spend.
+  // Draft/submitted requests haven't actually been committed yet.
+  const { data: committed } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
-    .not("status", "in", '("cancelled","rejected")');
+    .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
 
-  const spentSoFar = (mrs ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
+  const { data: provisional } = await supabase
+    .from("purchase_requests")
+    .select("total_estimated_amount")
+    .eq("department", department)
+    .eq("expenditure_type", "operational")
+    .gte("created_at", monthStart)
+    .lte("created_at", monthEnd)
+    .eq("status", "submitted");
+
+  const spentSoFar = (committed ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
+  const provisionalTotal = (provisional ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
   const projectedTotal = spentSoFar + mrAmount;
   const isOverBudget = projectedTotal > monthlyBudget;
   const remainingBudget = Math.max(0, monthlyBudget - spentSoFar);
@@ -127,6 +140,7 @@ export async function GET(request: NextRequest) {
     budget_type: "monthly",
     monthly_budget: monthlyBudget,
     spent_so_far: spentSoFar,
+    provisional_in_pipeline: provisionalTotal,
     this_mr_amount: mrAmount,
     projected_total: projectedTotal,
     remaining_before_mr: remainingBudget,

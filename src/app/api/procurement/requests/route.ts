@@ -96,9 +96,12 @@ export async function GET(request: NextRequest) {
   const toDate = searchParams.get("to_date");
   const expenditureType = searchParams.get("expenditure_type");
 
-  // "active" is a meta-status: all non-cancelled, non-rejected — matches what the budget bar counts
+  // "active" is a meta-status: all non-cancelled, non-rejected.
+  // "committed" is a meta-status: approved and beyond — matches what the budget bar counts as spend.
   if (status === "active") {
     query = query.not("status", "in", '("cancelled","rejected")');
+  } else if (status === "committed") {
+    query = query.in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
   } else if (status) {
     query = query.eq("status", status);
   }

@@ -416,10 +416,21 @@ function DeptDrilldownSheet({
 
   if (!dept) return null;
 
+  const COMMITTED_STATUSES = ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"];
   const operationalMrs = mrs.filter((m) => m.expenditure_type !== "amc");
   const amcMrs = mrs.filter((m) => m.expenditure_type === "amc");
-  const operationalTotal = operationalMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
-  const amcTotal = amcMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  // Only committed (approved+) requests count as real spend — matches the budget
+  // bar and approval gate. Draft/submitted/rejected/cancelled are shown in the
+  // list below for visibility but excluded from this total.
+  const operationalTotal = operationalMrs
+    .filter((m) => COMMITTED_STATUSES.includes(m.status))
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  const operationalPipeline = operationalMrs
+    .filter((m) => m.status === "submitted")
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  const amcTotal = amcMrs
+    .filter((m) => COMMITTED_STATUSES.includes(m.status))
+    .reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
 
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -446,6 +457,13 @@ function DeptDrilldownSheet({
                   <p className="text-[10px] text-muted-foreground">of {formatCurrency(budgetAmt)} budget</p>
                 )}
               </div>
+              {operationalPipeline > 0 && (
+                <div className="rounded-lg border bg-amber-50 border-amber-200 px-3 py-2 flex-1 min-w-[120px]">
+                  <p className="text-[10px] text-amber-700 font-medium uppercase tracking-wide">In Pipeline</p>
+                  <p className="text-sm font-bold text-amber-800 mt-0.5">{formatCurrency(operationalPipeline)}</p>
+                  <p className="text-[10px] text-amber-600">Submitted, pending approval</p>
+                </div>
+              )}
               {amcTotal > 0 && (
                 <div className="rounded-lg border bg-purple-50 border-purple-200 px-3 py-2 flex-1 min-w-[120px]">
                   <p className="text-[10px] text-purple-700 font-medium uppercase tracking-wide">AMC / Annual Contracts</p>
