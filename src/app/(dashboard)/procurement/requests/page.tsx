@@ -248,8 +248,9 @@ function PurchaseRequestsContent() {
         <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
           <PieChart className="h-4 w-4 shrink-0 text-blue-600" />
           <span>
-            Budget drill-through — showing active {deptFilter ? PROCUREMENT_DEPARTMENT_LABELS[deptFilter] : ""} MRs
-            {budgetMonthLabel ? ` for ${budgetMonthLabel}` : ""}. These are the requests counted in the budget spend.
+            Budget drill-through — showing committed {deptFilter ? PROCUREMENT_DEPARTMENT_LABELS[deptFilter] : ""} MRs
+            {budgetMonthLabel ? ` for ${budgetMonthLabel}` : ""}. These are the requests counted in the budget spend
+            (approved and beyond — submitted-but-pending requests aren&apos;t counted yet).
           </span>
           <button
             className="ml-auto text-blue-600 hover:text-blue-900 underline text-xs shrink-0"
@@ -310,6 +311,7 @@ function PurchaseRequestsContent() {
             <SelectContent position="popper">
               <SelectItem value="all">All Statuses</SelectItem>
               <SelectItem value="active">Active (excl. cancelled)</SelectItem>
+              <SelectItem value="committed">Committed (counts as spend)</SelectItem>
               {PR_STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>{PR_STATUS_LABELS[s]}</SelectItem>
               ))}

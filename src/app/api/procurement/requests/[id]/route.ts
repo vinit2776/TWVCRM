@@ -291,7 +291,7 @@ export async function PATCH(
               .eq("expenditure_type", "operational")
               .gte("created_at", monthStart)
               .lte("created_at", monthEnd)
-              .not("status", "in", '("cancelled","rejected")')
+              .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"])
               .neq("id", id);
 
             const spentSoFar = (existingMrs ?? []).reduce(
