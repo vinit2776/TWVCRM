@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/dialog";
 import { LeadTimeline } from "@/components/activities/lead-timeline";
 import { ActivityForm } from "@/components/activities/activity-form";
+import { MarkLostDialog } from "@/components/leads/mark-lost-dialog";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
@@ -76,6 +77,7 @@ export default function LeadDetailPage({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activityFormOpen, setActivityFormOpen] = useState(false);
+  const [markLostOpen, setMarkLostOpen] = useState(false);
   // Billing emails inline editor
   const [billingEmailInput, setBillingEmailInput] = useState("");
   const [billingEmailError, setBillingEmailError] = useState<string | null>(null);
@@ -300,6 +302,15 @@ export default function LeadDetailPage({
             >
               📝 <span className="ml-1.5 hidden sm:inline">Add Note</span>
             </Button>
+            {!["lost", "won"].includes(lead.status) && (
+              <Button
+                variant="outline"
+                className="flex-1 justify-center text-destructive hover:text-destructive"
+                onClick={() => setMarkLostOpen(true)}
+              >
+                ❌ <span className="ml-1.5 hidden sm:inline">Mark Lost</span>
+              </Button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -603,6 +614,15 @@ export default function LeadDetailPage({
                   >
                     📝 <span className="ml-2">Add Note</span>
                   </Button>
+                  {!["lost", "won"].includes(lead.status) && (
+                    <Button
+                      variant="outline"
+                      className="justify-start w-full text-destructive hover:text-destructive"
+                      onClick={() => setMarkLostOpen(true)}
+                    >
+                      ❌ <span className="ml-2">Mark as Lost</span>
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
 
@@ -729,6 +749,18 @@ export default function LeadDetailPage({
         onOpenChange={setActivityFormOpen}
         onSuccess={handleActivitySuccess}
         defaultType={activityDefaultType}
+      />
+
+      {/* Mark Lost Dialog — same Quick Log tier as Log Call/Meeting/Note,
+          so a lead can be marked lost without going through the edit form. */}
+      <MarkLostDialog
+        leadId={id}
+        open={markLostOpen}
+        onOpenChange={setMarkLostOpen}
+        onSuccess={() => {
+          handleActivitySuccess();
+          refetchLead();
+        }}
       />
 
       {/* Print Usage Dialog — scoped to this lead's active contracts.
