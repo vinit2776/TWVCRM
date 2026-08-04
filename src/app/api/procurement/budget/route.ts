@@ -49,13 +49,24 @@ export async function GET(request: NextRequest) {
     .order("department");
 
   // ── Operational MR spend per department (this calendar month) ────────────
-  const { data: mrSpend } = await supabase
+  // Two-state model, same as AMC below: committed (approved and beyond) counts
+  // as real spend; submitted-but-not-yet-approved is provisional/pipeline only.
+  // Draft and rejected/cancelled requests are excluded from both.
+  const { data: mrCommitted } = await supabase
     .from("purchase_requests")
-    .select("department, total_estimated_amount, status")
+    .select("department, total_estimated_amount")
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
-    .not("status", "in", '("cancelled","rejected")');
+    .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+
+  const { data: mrProvisional } = await supabase
+    .from("purchase_requests")
+    .select("department, total_estimated_amount")
+    .eq("expenditure_type", "operational")
+    .gte("created_at", monthStart)
+    .lte("created_at", monthEnd)
+    .eq("status", "submitted");
 
   // ── AMC MR spend for current FY — two-state model ────────────────────────
   // Committed: approved and beyond
@@ -78,9 +89,13 @@ export async function GET(request: NextRequest) {
 
   // ── Aggregate operational spend ──────────────────────────────────────────
   const spendMap: Record<string, number> = {};
-  for (const dept of DEPARTMENTS) { spendMap[dept] = 0; }
-  for (const mr of mrSpend ?? []) {
+  const provisionalMap: Record<string, number> = {};
+  for (const dept of DEPARTMENTS) { spendMap[dept] = 0; provisionalMap[dept] = 0; }
+  for (const mr of mrCommitted ?? []) {
     spendMap[mr.department] = (spendMap[mr.department] ?? 0) + Number(mr.total_estimated_amount ?? 0);
+  }
+  for (const mr of mrProvisional ?? []) {
+    provisionalMap[mr.department] = (provisionalMap[mr.department] ?? 0) + Number(mr.total_estimated_amount ?? 0);
   }
 
   // ── Build operational department rows (unchanged logic) ──────────────────
@@ -98,6 +113,7 @@ export async function GET(request: NextRequest) {
       notes: budget?.notes ?? null,
       id: budget?.id ?? null,
       spent_this_month: spent,
+      provisional_this_month: provisionalMap[dept] ?? 0,
       amc_spent_this_month: 0, // AMC no longer rolled up per-dept — has its own budget
       utilisation_pct: utilisation,
       is_over_budget: budgetAmount != null && spent > budgetAmount,
