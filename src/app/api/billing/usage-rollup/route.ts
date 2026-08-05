@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { isContractOperational } from "@/lib/constants";
 
 /**
  * GET /api/billing/usage-rollup?year=YYYY&month=M
@@ -137,17 +138,26 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── 4. Add active + recently-terminated contracts ─────────────────────────
+  // ── 4. Add operational + recently-terminated contracts ─────────────────
   //   Include terminated contracts where terminated_at >= month_start so that
   //   the final billing month (e.g. May for a contract terminated 30-May) is
-  //   still accessible for print entry and PI dispatch.
+  //   still accessible for print entry and PI dispatch. Also include
+  //   renewal_in_progress contracts that are still operational (end_date not
+  //   yet passed) — a contract mid-renewal is still the customer's live
+  //   contract and should keep showing the Print Log section.
   const { data: allActiveContracts } = await admin
     .from("contracts")
-    .select("id")
-    .or(`status.eq.active,and(status.eq.terminated,terminated_at.gte.${monthStart})`);
+    .select("id, status, end_date")
+    .or(`status.eq.active,status.eq.renewal_in_progress,and(status.eq.terminated,terminated_at.gte.${monthStart})`);
 
   for (const c of allActiveContracts || []) {
     const cid = c.id as string;
+    if (
+      c.status === "renewal_in_progress" &&
+      !isContractOperational({ status: c.status as string, end_date: c.end_date as string })
+    ) {
+      continue;
+    }
     if (!agg.has(cid)) {
       agg.set(cid, { contract_id: cid, free_count: 0, paid_count: 0, paid_total: 0, line_items: [], has_print_quota: true });
     } else {
