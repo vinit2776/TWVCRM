@@ -87,6 +87,15 @@ export async function PATCH(
     allowedFields.waived_by = dbUser.id;
     allowedFields.waived_at = new Date().toISOString();
     allowedFields.waive_reason = body.waive_reason || null;
+    // Every other writer of status:"waived" in this codebase (free-quota
+    // bookings, free-quota facility charges, cancelled-booking waivers)
+    // zeroes the amount fields — displays like the Billing page's Usage
+    // Charges table read `total` directly without checking status, so a
+    // non-zero total on a "waived" row reads as still being charged.
+    allowedFields.unit_price = 0;
+    allowedFields.total = 0;
+    allowedFields.gst_amount = 0;
+    allowedFields.total_with_gst = 0;
   } else if (body.status !== undefined) {
     allowedFields.status = body.status;
   }

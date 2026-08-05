@@ -109,11 +109,18 @@ export async function executeBookingCancellationSideEffects(
   }
 
   // ── 2. Waive linked usage charge ───────────────────────────────
+  // Zero the amount fields along with the status — every other waiver
+  // path in the codebase (free-quota bookings, free-quota facility
+  // charges) treats status:"waived" as meaning ₹0, and downstream
+  // displays (e.g. the Billing page's Usage Charges table) read
+  // `total` directly without checking status. Leaving a stale total
+  // here made a cancelled, never-billed booking look like it was
+  // still charging the customer.
   if (booking.usageChargeId && !options.skipUsageChargeWaiver) {
     try {
       await supabase
         .from("usage_charges")
-        .update({ status: "waived" })
+        .update({ status: "waived", unit_price: 0, total: 0, gst_amount: 0, total_with_gst: 0 })
         .eq("id", booking.usageChargeId);
       result.usageChargeWaived = true;
     } catch (err) {
