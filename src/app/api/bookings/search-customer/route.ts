@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
     supabase
       .from("leads")
       .select("id, first_name, last_name, company, email, phone, mobile")
+      .is("archived_at", null)
       .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,company.ilike.%${q}%`)
       .limit(10),
     // 2. Search past bookings for repeat walk-in / guest customers
@@ -48,6 +49,7 @@ export async function GET(request: NextRequest) {
     supabase
       .from("leads")
       .select("id")
+      .is("archived_at", null)
       .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,company.ilike.%${q}%`)
       .limit(20),
   ]);
