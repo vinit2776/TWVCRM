@@ -80,6 +80,7 @@ export async function GET(request: NextRequest) {
 
   const results: CustomerSuggestion[] = [];
   const seen = new Set<string>(); // dedupe by phone
+  const leadIdsWithContract = new Set<string>(); // suppress the redundant plain-lead row below
 
   // Add matching contracts first — a contract is the strongest, most specific
   // match for a customer and should outrank a plain lead row in the picker so
@@ -91,6 +92,7 @@ export async function GET(request: NextRequest) {
     const key = `contract-${c.id}`;
     if (!seen.has(key)) {
       seen.add(key);
+      leadIdsWithContract.add(lead.id);
       results.push({
         type: "contract",
         id: c.id,
@@ -105,8 +107,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Add leads
+  // Add leads — skip any lead already represented by a contract suggestion
+  // above, so the same contract holder doesn't show up twice in the picker.
   for (const l of leads || []) {
+    if (leadIdsWithContract.has(l.id)) continue;
     const phone = l.mobile || l.phone || "";
     const key = `lead-${l.id}`;
     if (!seen.has(key)) {
