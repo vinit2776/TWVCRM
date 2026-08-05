@@ -163,13 +163,6 @@ export async function PATCH(
   const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role);
-  if (!canAct) {
-    return NextResponse.json({ error: "Access denied" }, { status: 403 });
-  }
-  // Approval actions require admin only
-  const canApproveOrReject = dbUser.role === "admin";
-
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
     .select("*")
@@ -177,6 +170,17 @@ export async function PATCH(
     .single();
 
   if (fetchError || !bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
+
+  // The bill's own creator can always act on it (e.g. fix and resubmit a
+  // rejection) even if their role isn't in the general procurement list —
+  // mirrors the requester bypass on the Material Request PATCH route.
+  const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role)
+    || bill.created_by === dbUser.id;
+  if (!canAct) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+  // Approval actions require admin only
+  const canApproveOrReject = dbUser.role === "admin";
 
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
