@@ -459,15 +459,35 @@ export async function POST(request: NextRequest) {
     // Fetch contract
     const { data: contract, error: contractErr } = await supabase
       .from("contracts")
-      .select("id, lead_id, status, end_date")
+      .select("id, lead_id, status, start_date, end_date, terminated_at")
       .eq("id", input.contract_id!)
       .single();
 
     if (contractErr || !contract) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
     }
-    if (!isContractOperational(contract)) {
-      return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
+
+    // Exception: a terminated contract can still take a booking if it's being
+    // logged retroactively for a date the contract was actually active for
+    // (e.g. an old booking that never got entered before termination). The
+    // booking date must fall within [start_date, terminated_at] — this is not
+    // a general reopen of terminated contracts for new business.
+    const isBackdatedOnTerminated =
+      contract.status === "terminated" &&
+      !!contract.terminated_at &&
+      input.booking_date >= contract.start_date &&
+      input.booking_date <= contract.terminated_at.split("T")[0];
+
+    if (!isContractOperational(contract) && !isBackdatedOnTerminated) {
+      return NextResponse.json(
+        {
+          error:
+            contract.status === "terminated"
+              ? "This contract was terminated — the booking date must fall within the period the contract was active (before termination)."
+              : "Contract is not active",
+        },
+        { status: 400 }
+      );
     }
 
     contractId = contract.id;

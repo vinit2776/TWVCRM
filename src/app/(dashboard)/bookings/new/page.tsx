@@ -84,6 +84,7 @@ function NewBookingForm() {
   const [idProofLookingUp, setIdProofLookingUp] = useState(false);
 
   const [contracts, setContracts] = useState<ContractOption[]>([]);
+  const [includeTerminatedContracts, setIncludeTerminatedContracts] = useState(false);
   const [outstandingCharges, setOutstandingCharges] = useState<OutstandingCharge[]>([]);
   const [selectedChargeIds, setSelectedChargeIds] = useState<Set<string>>(new Set());
   const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
@@ -475,15 +476,21 @@ function NewBookingForm() {
 
   // Contracts
   useEffect(() => {
-    if (debouncedCustomerType === "contract_holder") {
-      const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
-      if (debouncedLocationId) params.set("location_id", debouncedLocationId);
-      fetch(`/api/contracts?${params}`)
-        .then(r => r.json())
-        .then(json => setContracts(json.data || []))
-        .catch(() => setContracts([]));
+    if (debouncedCustomerType !== "contract_holder") return;
+    const params = new URLSearchParams({ status: "active,renewal_in_progress", limit: "100" });
+    if (debouncedLocationId) params.set("location_id", debouncedLocationId);
+
+    const requests = [fetch(`/api/contracts?${params}`).then(r => r.json())];
+    if (includeTerminatedContracts) {
+      const terminatedParams = new URLSearchParams({ status: "terminated", limit: "100" });
+      if (debouncedLocationId) terminatedParams.set("location_id", debouncedLocationId);
+      requests.push(fetch(`/api/contracts?${terminatedParams}`).then(r => r.json()));
     }
-  }, [debouncedCustomerType, debouncedLocationId]);
+
+    Promise.all(requests)
+      .then(results => setContracts(results.flatMap(json => json.data || [])))
+      .catch(() => setContracts([]));
+  }, [debouncedCustomerType, debouncedLocationId, includeTerminatedContracts]);
 
   // ── Image compression ───────────────────────────────────────────────────────
   const compressIdProof = async (file: File): Promise<File> => {
@@ -627,6 +634,7 @@ function NewBookingForm() {
     bookerGstNumber, setBookerGstNumber, gstError, setGstError,
     selectedCustomer, setSelectedCustomer,
     idProofFile, setIdProofFile, leadHasIdProof, idProofLookingUp, contracts,
+    includeTerminatedContracts, setIncludeTerminatedContracts,
     selectedFacilities, setSelectedFacilities,
     paymentMode, setPaymentMode, paymentReference, setPaymentReference,
     notes, setNotes, aggregatorBookingId, setAggregatorBookingId,
@@ -659,6 +667,7 @@ function NewBookingForm() {
     guestName, guestEmail, guestPhone, guestCompany,
     bookerGstNumber, gstError, selectedCustomer,
     idProofFile, leadHasIdProof, idProofLookingUp, contracts,
+    includeTerminatedContracts,
     selectedFacilities, paymentMode, paymentReference, notes,
     aggregatorBookingId, purpose, loiNumber, accessProvidedBy, collectAdvancePayment, advancePaymentMode,
     advancePaymentReference, advancePaymentAmount, razorpayEnabled,
