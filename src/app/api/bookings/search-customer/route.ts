@@ -3,9 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { isContractOperational } from "@/lib/constants";
 
 /**
- * GET /api/bookings/search-customer?q=<phone_or_name>
- * Searches across leads (phone/mobile/name), past bookings (booker_phone/guest_name/guest_phone),
- * and voucher issuances (seat_occupant_email) to find repeat customers.
+ * GET /api/bookings/search-customer?q=<phone_or_name_or_company>
+ * Searches across leads (phone/mobile/name/company), past bookings
+ * (booker_phone/guest_name/guest_phone/guest_company), and voucher issuances
+ * (seat_occupant_email) to find repeat customers.
  * Returns a unified list of customer suggestions with their details.
  */
 export async function GET(request: NextRequest) {
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Fire all three search queries in parallel — they're independent.
-  // The trgm GIN indexes on leads (first_name, last_name, phone) and
+  // The trgm GIN indexes on leads (first_name, last_name, phone, company) and
   // bookings (guest_name, guest_phone, booker_phone) make each ILIKE
   // use the index instead of a sequential scan.
   const [
@@ -29,17 +30,17 @@ export async function GET(request: NextRequest) {
     { data: pastBookings },
     { data: matchingLeadIds },
   ] = await Promise.all([
-    // 1. Search leads by phone, mobile, or name
+    // 1. Search leads by phone, mobile, name, or company
     supabase
       .from("leads")
       .select("id, first_name, last_name, company, email, phone, mobile")
-      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,company.ilike.%${q}%`)
       .limit(10),
     // 2. Search past bookings for repeat walk-in / guest customers
     supabase
       .from("bookings")
       .select("booker_phone, guest_name, guest_email, guest_phone, guest_company, customer_type, lead_id")
-      .or(`booker_phone.ilike.%${q}%,guest_phone.ilike.%${q}%,guest_name.ilike.%${q}%`)
+      .or(`booker_phone.ilike.%${q}%,guest_phone.ilike.%${q}%,guest_name.ilike.%${q}%,guest_company.ilike.%${q}%`)
       .is("lead_id", null)
       .order("created_at", { ascending: false })
       .limit(20),
@@ -47,7 +48,7 @@ export async function GET(request: NextRequest) {
     supabase
       .from("leads")
       .select("id")
-      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%,company.ilike.%${q}%`)
       .limit(20),
   ]);
 
