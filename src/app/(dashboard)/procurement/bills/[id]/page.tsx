@@ -25,6 +25,7 @@ import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   BILL_PAYMENT_MODE_LABELS,
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  AUTO_APPROVED_BADGE_CLASS,
   REJECTION_OUTCOME_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PAYMENT_BATCH_TYPE_LABELS,
@@ -595,10 +596,18 @@ export default function VendorBillDetailPage() {
               <Badge variant="secondary" className={BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}>
                 {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
               </Badge>
+              {bill.auto_approved && (
+                <Badge variant="secondary" className={AUTO_APPROVED_BADGE_CLASS}>
+                  Auto-approved
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
             </p>
+            {bill.auto_approved && bill.auto_approval_note && (
+              <p className="text-xs text-muted-foreground mt-1">{bill.auto_approval_note}</p>
+            )}
           </div>
         </div>
 

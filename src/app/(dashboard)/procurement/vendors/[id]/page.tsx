@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { VENDOR_CATEGORIES, VENDOR_CATEGORY_LABELS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import { VendorRecurringBillsTab } from "@/components/procurement/vendor-recurring-bills-tab";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ProcurementVendor, VendorCategory } from "@/types";
@@ -566,6 +567,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
           </TabsTrigger>
           <TabsTrigger value="activity">
             Activity &amp; Insights
+          </TabsTrigger>
+          <TabsTrigger value="recurring-bills">
+            Recurring Bills
           </TabsTrigger>
         </TabsList>
 
@@ -1663,6 +1667,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               )}
             </>
           )}
+        </TabsContent>
+
+        <TabsContent value="recurring-bills" className="mt-4">
+          <VendorRecurringBillsTab vendorId={vendor.id} isAdmin={userRole === "admin"} />
         </TabsContent>
       </Tabs>
 

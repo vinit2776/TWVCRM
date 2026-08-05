@@ -990,7 +990,8 @@ export type AuditEntityType =
   | "unifi_device_label"
   | "unifi_ap_alert"
   | "deposit_adjustment"
-  | "deposit_topup";
+  | "deposit_topup"
+  | "recurring_bill_rule";
 
 export interface AuditLog {
   id: string;
@@ -2389,6 +2390,10 @@ export interface VendorBill {
   manual_expenditure_type?: string | null;
   // Set when this vendor bill was auto-created from a landlord electricity bill
   electricity_bill_id?: string | null;
+  // Set when this bill skipped manual approval via an active recurring bill rule
+  auto_approved: boolean;
+  recurring_rule_id?: string | null;
+  auto_approval_note?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -2422,6 +2427,31 @@ export interface VendorBill {
     partial_reason: string | null;
     recorder: { id: string; full_name: string } | null;
   }>;
+}
+
+export type RecurringBillRuleStatus = "active" | "paused";
+
+export interface RecurringBillRule {
+  id: string;
+  vendor_id: string;
+  department: string;
+  billing_cycle: ServicePoBillingCycle;
+  expected_amount: number;
+  tolerance_percent: number;
+  max_auto_approve_amount: number;
+  default_batch_type: PaymentBatchType;
+  status: RecurringBillRuleStatus;
+  anchor_bill_id: string;
+  first_bill_id?: string | null;
+  notes?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  anchor_bill?: Pick<VendorBill, "id" | "bill_number" | "total_amount" | "invoice_date"> | null;
+  latest_bill?: Pick<VendorBill, "id" | "bill_number" | "invoice_date" | "total_amount"> | null;
+  creator?: { id: string; full_name?: string } | null;
 }
 
 export interface ItemHistoryEntry {
