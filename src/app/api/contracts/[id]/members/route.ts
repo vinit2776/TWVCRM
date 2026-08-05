@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { provisionUser, memberCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
+import { provisionMemberAccess } from "@/lib/cosec";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 import { isContractOperational } from "@/lib/constants";
@@ -116,64 +116,18 @@ export async function POST(
     created_by: dbUser?.id || null,
   });
 
-  // Provision on all COSEC devices at this location (fire-and-forget)
+  // Provision on all COSEC devices at this location (fire-and-forget).
+  // If the contract isn't operational yet (still draft), this is skipped —
+  // activation backfills it for any member left un-provisioned (see
+  // the `status === "active"` handler in contracts/[id]/route.ts).
   if (isContractOperational(contract) && contract.location_id) {
-    (async () => {
-      try {
-        const { data: devices } = await admin
-          .from("cosec_devices")
-          .select("id, device_ip, device_port, device_password")
-          .eq("location_id", contract.location_id)
-          .eq("is_enabled", true)
-          .eq("device_category", "entry_point"); // business_centre devices (conference/meeting rooms) are excluded
-
-        if (!devices || devices.length === 0) return;
-
-        const cosecUserId = memberCosecId(member.id);
-        const cosecRefId  = uuidToRefId(member.id, 1, 49999);
-        const pin         = generatePin();
-        const validUntil  = contract.end_date ? new Date(contract.end_date) : undefined;
-        const now         = new Date().toISOString();
-
-        await Promise.allSettled(devices.map(async (dev) => {
-          try {
-            await provisionUser(
-              { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
-              {
-                cosecUserId,
-                cosecRefId,
-                name: parsed.data.name.slice(0, 15),
-                userActive: false,
-                validUntil,
-                pin,
-                selfEnrollmentEnable: true,
-              }
-            );
-            await admin.from("cosec_access_users").upsert({
-              device_id:         dev.id,
-              cosec_user_id:     cosecUserId,
-              cosec_ref_id:      cosecRefId,
-              user_type:         "member",
-              entity_id:         member.id,
-              enrollment_status: "provisioned",
-              access_pin:        pin,
-              valid_until:       contract.end_date ?? null,
-              provisioned_at:    now,
-              updated_at:        now,
-            }, { onConflict: "device_id,cosec_user_id" });
-          } catch (err) {
-            console.error(`[members] provision failed on device ${dev.id}:`, err);
-          }
-        }));
-
-        // Send enrollment PIN via WhatsApp + SMS
-        const { dltSms } = await import("@/lib/whatsapp");
-        dltSms.otp(parsed.data.phone, pin, member.id).catch(() => null);
-
-      } catch (err) {
-        console.error("[members] COSEC provision error:", err);
-      }
-    })();
+    provisionMemberAccess(admin, {
+      memberId: member.id,
+      memberName: parsed.data.name,
+      memberPhone: parsed.data.phone,
+      locationId: contract.location_id,
+      contractEndDate: contract.end_date,
+    }).catch((err) => console.error("[members] COSEC provision error:", err));
   }
 
   return NextResponse.json({ data: member }, { status: 201 });
