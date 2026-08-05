@@ -10,7 +10,10 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { INVOICE_STATUSES, INVOICE_STATUS_LABELS } from "@/lib/constants";
+import {
+  INVOICE_STATUSES, INVOICE_STATUS_LABELS,
+  ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead,
+} from "@/lib/constants";
 import { formatDate, formatCurrency, isOverdue } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { ProformaInvoice } from "@/types";
@@ -64,6 +67,7 @@ export default function InvoicesPage() {
               <th className="px-4 py-3 text-left font-medium">Invoice #</th>
               <th className="px-4 py-3 text-left font-medium">Title</th>
               <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Lead</th>
+              <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Head</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
               <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Amount</th>
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Due Date</th>
@@ -72,8 +76,19 @@ export default function InvoicesPage() {
             <tbody>{invoices.map((inv) => (
               <tr key={inv.id} className="border-b hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3 font-mono text-xs">{inv.invoice_number}</td>
-                <td className="px-4 py-3 font-medium">{inv.title}</td>
+                <td className="px-4 py-3 font-medium" title={inv.internal_notes ? `Internal note: ${inv.internal_notes}` : undefined}>{inv.title}</td>
                 <td className="px-4 py-3 hidden md:table-cell">{inv.lead ? <Link href={`/leads/${inv.lead.id}`} className="text-primary hover:underline">{inv.lead.first_name} {inv.lead.last_name}</Link> : "-"}</td>
+                <td className="px-4 py-3 hidden md:table-cell">
+                  {inv.primary_head ? (
+                    <Badge variant="outline" className={cn("text-xs", ACCOUNTING_HEAD_COLORS[inv.primary_head as AccountingHead])}>
+                      {ACCOUNTING_HEAD_LABELS[inv.primary_head as AccountingHead] || inv.primary_head}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-xs bg-amber-50 text-amber-800 border-amber-200">
+                      Needs Review
+                    </Badge>
+                  )}
+                </td>
                 <td className="px-4 py-3"><Badge variant="secondary" className={STATUS_COLORS[inv.status]}>{INVOICE_STATUS_LABELS[inv.status]}</Badge></td>
                 <td className="px-4 py-3 text-right hidden md:table-cell font-medium">{formatCurrency(inv.total_amount)}</td>
                 <td className="px-4 py-3 hidden lg:table-cell">

@@ -26,6 +26,7 @@ import {
   type DepositTopupCategory,
   type DepositTopupStatus,
 } from "@/types";
+import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 
 interface Props {
   contractId: string;
@@ -112,7 +113,10 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
   async function handleCollect() {
     const amt = Number(amount);
     if (!amt || amt <= 0) { toast.error("Amount must be positive"); return; }
-    if (category === "other" && !categoryNote.trim()) { toast.error("A note is required for 'Other'"); return; }
+    if (categoryNote.trim().length < 10) {
+      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -242,7 +246,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {item.category === "other" && item.category_note && <>{item.category_note} · </>}
+                  {item.category_note && <>{item.category_note} · </>}
                   Created by {item.created_by_name ?? "—"} on {formatDate(item.created_at)}
                   {item.status === "paid" && item.paid_at && <> · Paid {formatDate(item.paid_at)}</>}
                   {item.status === "reversed" && item.reversed_by_name && (
@@ -326,12 +330,22 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
               </Select>
             </div>
 
-            {category === "other" && (
-              <div className="space-y-1.5">
-                <Label>Note</Label>
-                <Textarea value={categoryNote} onChange={(e) => setCategoryNote(e.target.value)} rows={2} placeholder="Describe the reason…" />
-              </div>
-            )}
+            <div className="space-y-1.5">
+              <Label>
+                Internal Note (for Accounts) <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                value={categoryNote}
+                onChange={(e) => setCategoryNote(e.target.value)}
+                rows={2}
+                placeholder="Why this additional deposit exists — never shown to the customer"
+              />
+              <CheckAccountingNoteButton
+                note={categoryNote}
+                accountingHead="Security Deposit"
+                context={`Additional deposit — ${DEPOSIT_TOPUP_CATEGORY_LABELS[category]}`}
+              />
+            </div>
 
             <label className="flex items-center gap-2 text-xs cursor-pointer">
               <input
@@ -380,7 +394,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCollectOpen(false)}>Cancel</Button>
-            <Button onClick={handleCollect} disabled={submitting || !amount}>
+            <Button onClick={handleCollect} disabled={submitting || !amount || categoryNote.trim().length < 10}>
               {submitting ? "Submitting…" : method === "razorpay_link" ? "Send Link" : "Record Payment"}
             </Button>
           </DialogFooter>

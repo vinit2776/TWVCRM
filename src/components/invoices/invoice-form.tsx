@@ -18,6 +18,11 @@ import { LineItemsEditor, type LineItemData } from "@/components/shared/line-ite
 import { Loader2, ShieldAlert, Info, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
+import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
+
+// "Other Income" is too open-ended a catch-all for staff to reach for by
+// default — new invoices pick from the remaining heads, or "I don't know".
+const SELECTABLE_HEADS = ACCOUNTING_HEADS.filter((h) => h !== "other_income");
 
 interface InvoiceFormProps {
   leadId: string;
@@ -44,7 +49,7 @@ export function InvoiceForm({
   onRequestProposal,
 }: InvoiceFormProps) {
   const router = useRouter();
-  const [primaryHead, setPrimaryHead] = useState<AccountingHead | "">("");
+  const [primaryHead, setPrimaryHead] = useState<AccountingHead | "unsure" | "">("");
   const [title, setTitle] = useState("");
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
@@ -53,6 +58,7 @@ export function InvoiceForm({
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
+  const [internalNotes, setInternalNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const isDeposit = primaryHead === "security_deposit";
@@ -65,6 +71,7 @@ export function InvoiceForm({
     setDiscountPercentage(0);
     setDueDate("");
     setNotes("");
+    setInternalNotes("");
   };
 
   const handleGoToProposal = () => {
@@ -102,12 +109,17 @@ export function InvoiceForm({
       return;
     }
 
+    if (internalNotes.trim().length < 10) {
+      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      return;
+    }
+
     setSubmitting(true);
 
     const body = {
       lead_id: leadId,
       proposal_id: proposalId || undefined,
-      primary_head: primaryHead,
+      primary_head: primaryHead === "unsure" ? null : primaryHead,
       title: title.trim(),
       items: validItems.map((item) => ({
         description: item.description,
@@ -120,6 +132,7 @@ export function InvoiceForm({
       discount_percentage: discountPercentage,
       due_date: dueDate || undefined,
       notes: notes.trim() || undefined,
+      internal_notes: internalNotes.trim(),
     };
 
     const res = await fetch("/api/invoices", {
@@ -153,17 +166,18 @@ export function InvoiceForm({
             </Label>
             <Select
               value={primaryHead}
-              onValueChange={(v) => setPrimaryHead(v as AccountingHead)}
+              onValueChange={(v) => setPrimaryHead(v as AccountingHead | "unsure")}
             >
               <SelectTrigger id="invoice-purpose">
                 <SelectValue placeholder="Select a purpose" />
               </SelectTrigger>
               <SelectContent>
-                {ACCOUNTING_HEADS.map((head) => (
+                {SELECTABLE_HEADS.map((head) => (
                   <SelectItem key={head} value={head}>
                     {ACCOUNTING_HEAD_LABELS[head]}
                   </SelectItem>
                 ))}
+                <SelectItem value="unsure">I don&apos;t know</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -242,13 +256,35 @@ export function InvoiceForm({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="invoice-notes">Notes</Label>
+                <Label htmlFor="invoice-notes">Customer-Facing Notes</Label>
                 <Textarea
                   id="invoice-notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Internal notes..."
+                  placeholder="Appears on the invoice PDF and email sent to the customer..."
                   rows={2}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="invoice-internal-notes">
+                  Internal Note (for Accounts) <span className="text-destructive">*</span>
+                </Label>
+                <Textarea
+                  id="invoice-internal-notes"
+                  value={internalNotes}
+                  onChange={(e) => setInternalNotes(e.target.value)}
+                  placeholder={
+                    primaryHead === "unsure"
+                      ? "Describe what this is for so accounts can figure out the right head — never shown to the customer"
+                      : "Why this invoice exists and how accounts should book it — never shown to the customer"
+                  }
+                  rows={2}
+                />
+                <CheckAccountingNoteButton
+                  note={internalNotes}
+                  accountingHead={primaryHead && primaryHead !== "unsure" ? ACCOUNTING_HEAD_LABELS[primaryHead] : undefined}
+                  context={title || "ad-hoc invoice"}
                 />
               </div>
             </>

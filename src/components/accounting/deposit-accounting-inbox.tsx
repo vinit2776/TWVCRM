@@ -146,6 +146,11 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                           <span className="text-amber-600">date not on file</span>
                         )}
                       </span>
+                      {row.internal_note && (
+                        <span className="block text-xs text-muted-foreground mt-0.5 italic truncate" title={row.internal_note}>
+                          {row.internal_note}
+                        </span>
+                      )}
                       {subTab === "closed" && row.accounted_at && (
                         <span className="block text-[11px] text-green-700 mt-0.5">
                           Accounted by {row.accounted_by_name || "—"} on {formatDate(row.accounted_at)}

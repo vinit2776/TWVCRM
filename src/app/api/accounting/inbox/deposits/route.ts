@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
       deposit_payment_amount, deposit_payment_reference,
       deposit_payment_medium, deposit_payment_received_at,
       deposit_payment_screenshot_url, deposit_razorpay_link_id, deposit_razorpay_link_url,
-      deposit_settled_at, deposit_settlement_id,
+      deposit_settled_at, deposit_settlement_id, deposit_internal_notes,
       deposit_accounted, deposit_accounted_at, deposit_accounted_by, deposit_accounted_proof_path,
       lead:leads!proposals_lead_id_fkey(first_name, last_name, company),
       contract:contracts!contracts_proposal_id_fkey(contract_number)
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
     .from("deposit_topups")
     .select(`
       id, amount, category, payment_mode, payment_reference, paid_at,
-      collection_method, proof_path, settled_at, settlement_id,
+      collection_method, proof_path, settled_at, settlement_id, category_note,
       razorpay_payment_link_id, razorpay_payment_link_url,
       accounted, accounted_at, accounted_by, accounted_proof_path,
       contract:contracts!deposit_topups_contract_id_fkey(
@@ -115,6 +115,7 @@ export async function GET(request: NextRequest) {
         razorpay_link_url: d.deposit_razorpay_link_url,
         settled_at: d.deposit_settled_at,
         settlement_id: d.deposit_settlement_id,
+        internal_note: d.deposit_internal_notes,
         accounted: !!d.deposit_accounted,
         accounted_at: d.deposit_accounted_at,
         accounted_by_name: d.deposit_accounted_by ? namesById.get(d.deposit_accounted_by) || null : null,
@@ -130,6 +131,7 @@ export async function GET(request: NextRequest) {
         party_name: partyName(contract?.lead ?? null),
         contract_number: contract?.contract_number ?? null,
         category: t.category as DepositTopupCategory,
+        internal_note: t.category_note,
         amount: t.amount == null ? null : Number(t.amount),
         payment_reference: t.payment_reference,
         payment_medium: t.payment_mode,
