@@ -577,46 +577,6 @@ export async function PATCH(
         );
       }
 
-      // Determine PO type to decide outcome handling
-      let poType: string | null = null;
-      if (bill.po_id) {
-        const { data: linkedPo } = await supabase
-          .from("purchase_orders")
-          .select("po_type, status")
-          .eq("id", bill.po_id)
-          .single();
-        poType = linkedPo?.po_type ?? null;
-
-        if (poType === "service") {
-          // Service PO: void the bill (delete it so the cycle can accept a new invoice)
-          await supabase.from("vendor_bills").delete().eq("id", id);
-
-          await logAudit(supabase, {
-            entityType: "vendor_bill",
-            entityId: id,
-            action: "delete",
-            performedBy: dbUser.id,
-            changes: {
-              approval_status: { old: "pending", new: "rejected (voided)" },
-              rejection_reason: { old: null, new: parsed.data.rejection_reason },
-            },
-          });
-
-          sendPushToProcurementRoles({
-            title: "Service Invoice Rejected",
-            body: `${bill.bill_number} voided — a new invoice can be uploaded for this cycle`,
-            url: bill.po_id ? `/procurement/orders/${bill.po_id}` : `/procurement/bills`,
-            tag: `bill-approval-${id}`,
-          }).catch((err) => console.error("[push] service rejection notification failed:", err));
-
-          return NextResponse.json({
-            data: null,
-            message: "Invoice rejected and voided. A new invoice can be uploaded for this service cycle.",
-          });
-        }
-
-      }
-
       updatePayload = {
         approval_status: "rejected",
         approved_by: dbUser.id,
