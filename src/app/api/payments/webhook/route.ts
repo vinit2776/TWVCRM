@@ -7,6 +7,7 @@ import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { handleRenewalPayment } from "@/lib/vo-renewal";
 import { computeSettlement } from "@/lib/settlement";
+import { logAudit, diffChanges } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -185,23 +186,32 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a proposal (main payment)
     const { data: proposal } = await supabase
       .from("proposals")
-      .select("id, proposal_number, lead_id, payment_status")
+      .select("id, proposal_number, lead_id, status, payment_status, payment_amount, payment_reference, payment_received_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
 
     if (proposal && proposal.payment_status !== "paid") {
       const now = new Date().toISOString();
+      const proposalUpdate = {
+        payment_status: "paid",
+        status: "accepted",
+        accepted_at: now,
+        payment_received_at: now,
+        payment_amount: amountPaid,
+        payment_reference: razorpayPaymentId || paymentLinkId,
+      };
       await supabase
         .from("proposals")
-        .update({
-          payment_status: "paid",
-          status: "accepted",
-          accepted_at: now,
-          payment_received_at: now,
-          payment_amount: amountPaid,
-          payment_reference: razorpayPaymentId || paymentLinkId,
-        })
+        .update(proposalUpdate)
         .eq("id", proposal.id);
+
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: proposal.id,
+        action: "update",
+        performedBy: "system",
+        changes: diffChanges(proposal, proposalUpdate),
+      }).catch(() => {});
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal" });
@@ -210,24 +220,33 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a proposal security deposit
     const { data: depositProposal } = await supabase
       .from("proposals")
-      .select("id, proposal_number, deposit_payment_status")
+      .select("id, proposal_number, status, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_received_at")
       .eq("deposit_razorpay_link_id", paymentLinkId)
       .maybeSingle();
 
     if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
       const now = new Date().toISOString();
       // Mark deposit as paid AND auto-accept the proposal
+      const depositUpdate = {
+        deposit_payment_status: "paid",
+        deposit_payment_received_at: now,
+        deposit_payment_amount: amountPaid,
+        deposit_payment_reference: razorpayPaymentId || paymentLinkId,
+        status: "accepted",
+        accepted_at: now,
+      };
       await supabase
         .from("proposals")
-        .update({
-          deposit_payment_status: "paid",
-          deposit_payment_received_at: now,
-          deposit_payment_amount: amountPaid,
-          deposit_payment_reference: razorpayPaymentId || paymentLinkId,
-          status: "accepted",
-          accepted_at: now,
-        })
+        .update(depositUpdate)
         .eq("id", depositProposal.id);
+
+      logAudit(supabase, {
+        entityType: "proposal",
+        entityId: depositProposal.id,
+        action: "update",
+        performedBy: "system",
+        changes: diffChanges(depositProposal, depositUpdate),
+      }).catch(() => {});
 
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
