@@ -81,25 +81,10 @@ export async function GET(request: NextRequest) {
   const results: CustomerSuggestion[] = [];
   const seen = new Set<string>(); // dedupe by phone
 
-  // Add leads
-  for (const l of leads || []) {
-    const phone = l.mobile || l.phone || "";
-    const key = `lead-${l.id}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      results.push({
-        type: "lead",
-        id: l.id,
-        lead_id: l.id,
-        name: `${l.first_name} ${l.last_name}`,
-        phone,
-        email: l.email || undefined,
-        company: l.company || undefined,
-      });
-    }
-  }
-
-  // Add matching contracts
+  // Add matching contracts first — a contract is the strongest, most specific
+  // match for a customer and should outrank a plain lead row in the picker so
+  // staff don't accidentally book a contract holder as a walk-in because an
+  // unrelated/duplicate lead record with the same phone number sorted first.
   for (const c of matchingContracts) {
     const lead = c.lead as unknown as { id: string; first_name: string; last_name: string; company?: string; email?: string; phone?: string; mobile?: string } | null;
     if (!lead) continue;
@@ -116,6 +101,24 @@ export async function GET(request: NextRequest) {
         phone: lead.mobile || lead.phone || undefined,
         email: lead.email || undefined,
         company: lead.company || undefined,
+      });
+    }
+  }
+
+  // Add leads
+  for (const l of leads || []) {
+    const phone = l.mobile || l.phone || "";
+    const key = `lead-${l.id}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        type: "lead",
+        id: l.id,
+        lead_id: l.id,
+        name: `${l.first_name} ${l.last_name}`,
+        phone,
+        email: l.email || undefined,
+        company: l.company || undefined,
       });
     }
   }
