@@ -165,6 +165,15 @@ export async function POST(request: NextRequest) {
           waive_reason: overrides.find((o) => waivedAdHocIds.includes(o.item_id))?.reason ?? "Waived at PI dispatch",
           waived_at: nowIsoWaive,
           waived_by: dbUser.id,
+          // Zero the amount fields to match every other status:"waived"
+          // writer — this row stays linked to the statement (billing_statement_id
+          // already set by generateUsageStatements), so a stale nonzero total
+          // here would misreport the line item wherever the raw usage_charges
+          // row (rather than the recalculated line_items JSON) is read.
+          unit_price: 0,
+          total: 0,
+          gst_amount: 0,
+          total_with_gst: 0,
         }).in("id", waivedAdHocIds);
       }
 
