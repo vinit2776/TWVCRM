@@ -59,27 +59,50 @@ export async function GET(req: NextRequest) {
   //   existing month statement). We want the full picture in the row, so
   //   we include both kinds.
   //
-  //   These are two DISTINCT queries, not one range-filtered OR, because the
-  //   created_at window only makes sense for surfacing new pending charges.
-  //   A charge already linked to this month's statement is authoritatively
+  //   These are two DISTINCT queries, not one range-filtered OR, because a
+  //   charge already linked to this month's statement is authoritatively
   //   part of this period regardless of when the row was created — e.g. a
   //   correction/backfill charge created weeks later must still show up, or
   //   an operator can never review/finalize/re-send a statement that needed
   //   a post-hoc fix.
+  //
+  //   The pending query windows on charge_date, NOT created_at. A charge's
+  //   period is what charge_date says it is — created_at is just when the
+  //   row happened to be inserted, which can trail charge_date for a
+  //   backdated/corrected entry (e.g. an overtime charge backfilled weeks
+  //   after the booking it belongs to). Windowing on created_at made those
+  //   charges surface in whichever month they were TYPED, not the month
+  //   they're FOR — invisible here, and not caught by the carry-forward
+  //   check either (same bug, see pending-carryforward/route.ts).
   const stmtIds = (stmts || []).map((s) => s.id);
   const { data: pendingCharges } = await admin
     .from("usage_charges")
-    .select("id, contract_id, description, total, billing_statement_id, created_at")
+    .select("id, contract_id, description, total, quantity, unit_price, billing_statement_id, created_at, booking_id")
     .is("billing_statement_id", null)
-    .gte("created_at", `${monthStart}T00:00:00`)
-    .lte("created_at", `${monthEnd}T23:59:59.999`);
+    .gte("charge_date", monthStart)
+    .lte("charge_date", monthEnd);
   const { data: linkedCharges } = stmtIds.length > 0
     ? await admin
         .from("usage_charges")
-        .select("id, contract_id, description, total, billing_statement_id, created_at")
+        .select("id, contract_id, description, total, quantity, unit_price, billing_statement_id, created_at, booking_id")
         .in("billing_statement_id", stmtIds)
     : { data: [] };
   const charges = [...(pendingCharges || []), ...(linkedCharges || [])];
+
+  // Booking context (date/time booked vs actually checked in/out) for any
+  // charge that originated from a booking — lets the reviewing manager see
+  // at a glance whether an overage/overtime charge lines up with what
+  // actually happened, without leaving this dialog to look up the booking.
+  const bookingIds = Array.from(
+    new Set(charges.map((c) => c.booking_id).filter((id): id is string => !!id))
+  );
+  const { data: bookingRows } = bookingIds.length > 0
+    ? await admin
+        .from("bookings")
+        .select("id, booking_number, booking_date, start_time, end_time, check_in_at, check_out_at")
+        .in("id", bookingIds)
+    : { data: [] };
+  const bookingById = new Map((bookingRows || []).map((b) => [b.id as string, b]));
 
   // service_usage_records has no `used_at` or `total_amount` columns — the
   // correct period filter is period_year + period_month, and the billable
@@ -87,7 +110,7 @@ export async function GET(req: NextRequest) {
   // doesn't exist; join service_catalog for the display name.
   const { data: svc } = await admin
     .from("service_usage_records")
-    .select("id, contract_id, service_id, amount, billing_statement_id, notes, service:service_catalog(name, printer_column)")
+    .select("id, contract_id, service_id, amount, overage_quantity, overage_rate_snapshot, billing_statement_id, notes, service:service_catalog(name, printer_column, unit_label)")
     .eq("period_year", year)
     .eq("period_month", month)
     .or(
@@ -97,7 +120,29 @@ export async function GET(req: NextRequest) {
     );
 
   // ── 3. Group by contract ───────────────────────────────────────────────
-  interface LineItem { description: string; amount: number; source: "ad_hoc" | "service"; item_id: string }
+  interface BookingContext {
+    booking_number: string;
+    booking_date: string;
+    start_time: string;
+    end_time: string;
+    check_in_at: string | null;
+    check_out_at: string | null;
+  }
+  interface LineItemCalc {
+    quantity: number;
+    rate: number;
+    unit?: string | null;
+  }
+  interface LineItem {
+    description: string;
+    amount: number;
+    source: "ad_hoc" | "service";
+    item_id: string;
+    booking?: BookingContext | null;
+    /** Qty × rate breakdown so the reviewing manager can verify the amount
+     *  without cross-referencing the print log or facility rate card. */
+    calc?: LineItemCalc | null;
+  }
   interface Agg {
     contract_id: string;
     free_count: number;
@@ -118,15 +163,42 @@ export async function GET(req: NextRequest) {
     row.line_items.push(item);
   };
   for (const c of charges || []) {
-    bump(c.contract_id as string, { description: c.description || "—", amount: Number(c.total || 0), source: "ad_hoc", item_id: c.id as string });
+    const b = c.booking_id ? bookingById.get(c.booking_id as string) : undefined;
+    const qty  = Number((c as unknown as { quantity?: number }).quantity ?? 0);
+    const rate = Number((c as unknown as { unit_price?: number }).unit_price ?? 0);
+    bump(c.contract_id as string, {
+      description: c.description || "—",
+      amount: Number(c.total || 0),
+      source: "ad_hoc",
+      item_id: c.id as string,
+      booking: b
+        ? {
+            booking_number: b.booking_number,
+            booking_date: b.booking_date,
+            start_time: b.start_time,
+            end_time: b.end_time,
+            check_in_at: b.check_in_at,
+            check_out_at: b.check_out_at,
+          }
+        : null,
+      calc: qty > 0 ? { quantity: qty, rate } : null,
+    });
   }
   for (const s of svc || []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const svcInfo = (s as any).service as { name?: string; printer_column?: string | null } | null;
+    const svcInfo = (s as any).service as { name?: string; printer_column?: string | null; unit_label?: string | null } | null;
     let svcDesc = svcInfo?.name || s.notes || "Service usage";
     if (svcInfo?.printer_column === "bw")     svcDesc = "Print - B/W";
     if (svcInfo?.printer_column === "colour") svcDesc = "Print - Colour";
-    bump(s.contract_id as string, { description: svcDesc, amount: Number((s as unknown as { amount: number }).amount || 0), source: "service", item_id: s.service_id as string });
+    const overageQty = Number((s as unknown as { overage_quantity?: number }).overage_quantity ?? 0);
+    const overageRate = Number((s as unknown as { overage_rate_snapshot?: number }).overage_rate_snapshot ?? 0);
+    bump(s.contract_id as string, {
+      description: svcDesc,
+      amount: Number((s as unknown as { amount: number }).amount || 0),
+      source: "service",
+      item_id: s.service_id as string,
+      calc: overageQty > 0 ? { quantity: overageQty, rate: overageRate, unit: svcInfo?.unit_label } : null,
+    });
   }
 
   // Also surface contracts that already have a usage statement but zero raw

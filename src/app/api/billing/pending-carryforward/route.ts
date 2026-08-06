@@ -25,7 +25,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "year and month (1-12) are required" }, { status: 400 });
   }
 
-  // Anything created/recorded strictly before the first day of the billing month
+  // Anything whose charge_date falls strictly before the first day of the
+  // billing month — charge_date is what determines the period a charge
+  // belongs to, not created_at (which is just when the row was inserted,
+  // and can trail charge_date for a backdated/corrected entry — see the
+  // matching fix in usage-rollup/route.ts for the full rationale).
   const beforeDate = `${year}-${String(month).padStart(2, "0")}-01`;
 
   const admin = createAdminClient();
@@ -37,7 +41,7 @@ export async function GET(req: NextRequest) {
     .eq("contract_id", contractId)
     .eq("status", "pending")
     .is("billing_statement_id", null)
-    .lt("created_at", `${beforeDate}T00:00:00`);
+    .lt("charge_date", beforeDate);
 
   // Unbilled service usage records from before this period
   const { data: svcRaw } = await admin

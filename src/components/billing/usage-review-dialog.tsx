@@ -27,15 +27,36 @@ import {
 } from "@/components/ui/select";
 import { Loader2, Send, X, Pencil, Plus, Printer, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+interface LineItemBooking {
+  booking_number: string;
+  booking_date: string;
+  start_time: string;
+  end_time: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+}
+
+interface LineItemCalc {
+  quantity: number;
+  rate: number;
+  unit?: string | null;
+}
 
 interface LineItem {
   description: string;
   amount: number;
   source: "ad_hoc" | "service";
   item_id: string;
+  /** Present when this charge originated from a booking — lets the
+   *  reviewing manager see booked vs. actual time without leaving the dialog. */
+  booking?: LineItemBooking | null;
+  /** Qty × rate breakdown — shown under the description so the reviewing
+   *  manager can verify the amount without opening the print log or rate card. */
+  calc?: LineItemCalc | null;
 }
 
 export interface UsageReviewRow {
@@ -679,6 +700,20 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                             {isWaived   && <Badge className="bg-red-50 text-red-700 border-red-200 text-[10px]">WAIVED</Badge>}
                             {isAdjusted && <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">ADJUSTED</Badge>}
                           </div>
+                          {li.calc && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {li.calc.quantity.toLocaleString()} × {formatCurrency(li.calc.rate)}{li.calc.unit ? ` ${li.calc.unit}` : ""} = {formatCurrency(li.amount)}
+                            </p>
+                          )}
+                          {li.booking && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {li.booking.booking_number} · Booked{" "}
+                              {new Date(li.booking.booking_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                              {" "}{li.booking.start_time.slice(0, 5)}–{li.booking.end_time.slice(0, 5)}
+                              {li.booking.check_in_at && <> · In {formatDateTime(li.booking.check_in_at)}</>}
+                              {li.booking.check_out_at && <> · Out {formatDateTime(li.booking.check_out_at)}</>}
+                            </p>
+                          )}
                           {li.override && (
                             <p className="text-[11px] text-muted-foreground mt-0.5 italic">Reason: {li.override.reason}</p>
                           )}
