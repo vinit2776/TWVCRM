@@ -35,6 +35,8 @@ const CancelBookingDialog    = dynamic(() => import("@/components/bookings/cance
 const MarkComplimentaryDialog = dynamic(() => import("@/components/bookings/mark-complimentary-dialog").then(m => m.MarkComplimentaryDialog), { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
+import { OvertimeChargeBanner } from "@/components/bookings/overtime-charge-banner";
+import { TransactionSummary, type TxnAddon } from "@/components/bookings/transaction-summary";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
@@ -119,6 +121,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // Post-checkout usage charges linked to THIS booking
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [bookingCharges, setBookingCharges] = useState<any[]>([]);
+  // Add-ons, fetched up-front so the Transaction Summary can total them.
+  const [bookingAddons, setBookingAddons] = useState<TxnAddon[]>([]);
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
@@ -172,16 +176,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const fetchBooking = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
 
-    // Wave 1: booking (needed for leadId) + payments + booking charges + settings + devices + access logs — parallel
-    const [bookingRes, paymentsRes, bcRes, settingsRes, devicesRes, logsRes] = await Promise.all([
+    // Wave 1: booking (needed for leadId) + payments + booking charges + settings + devices + access logs + addons — parallel.
+    // Addons are fetched here (not only lazily by BookingAddonsSection) because
+    // the Transaction Summary needs them to compute the grand total on load.
+    const [bookingRes, paymentsRes, bcRes, settingsRes, devicesRes, logsRes, addonsRes] = await Promise.all([
       fetch(`/api/bookings/${id}`, { signal }),
       fetch(`/api/booking-payments?booking_id=${id}`, { signal }),
       fetch(`/api/usage-charges?booking_id=${id}`, { signal }),
       fetch("/api/settings/public", { signal }),
       fetch(`/api/cosec/booking-devices?booking_id=${id}`, { signal }),
       fetch(`/api/cosec/access-logs?booking_id=${id}`, { signal }),
+      fetch(`/api/bookings/${id}/addons`, { signal }),
     ]).catch((e) => {
-      if ((e as Error).name === "AbortError") return [null, null, null, null, null, null] as const;
+      if ((e as Error).name === "AbortError") return [null, null, null, null, null, null, null] as const;
       throw e;
     });
     if (signal?.aborted) return;
@@ -213,6 +220,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (logsRes?.ok) {
       const lJson = await logsRes.json();
       setAccessLogs(lJson.data || []);
+    }
+    if (addonsRes?.ok) {
+      const aJson = await addonsRes.json();
+      setBookingAddons(aJson.data || []);
     }
 
     // Wave 2: outstanding charges (needs leadId from Wave 1)
@@ -385,8 +396,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           body: JSON.stringify({ type: "cleaning" }),
         }).catch(() => {});
 
-        // Show overtime alert if applicable
-        if (resJson.overtime) {
+        // Show overtime alert if applicable. Contract-holder overtime is
+        // handled separately — the checkout API posts a real usage_charge
+        // for that case and returns overtime: null, so this ephemeral
+        // toast/dialog path only ever applies to day-pass and walk-in/guest
+        // bookings (unchanged behavior for those).
+        if (resJson.overtime && booking?.customer_type !== "contract_holder") {
           const ot = resJson.overtime;
           if (ot.is_day_pass && ot.suggested_addon) {
             // Day-pass: open the addons dialog with extended-time pre-filled.
@@ -755,6 +770,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // so the two stay in sync. Exactly one region lights up at a time.
   const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
 
+  // Pending contract-holder overtime charge, if any — derived from the
+  // already-fetched bookingCharges list so it's correct on first load and
+  // survives a hard reload, not just right after checkout.
+  const pendingOvertimeUsageCharge = bookingCharges.find(
+    (c) => c.booking_charge_kind === "overtime" && c.status === "pending"
+  ) ?? null;
+
   // Pricing is locked once any of the following is true — changing the
   // rate after a customer has paid creates a silent mismatch between the
   // receipt they were given and the booking record (and breaks the
@@ -991,6 +1013,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           to memorise the state machine. Veterans can ignore it; the
           action buttons remain. */}
       <NextActionBanner booking={booking} existingPayments={existingPayments} compRequest={compRequest} />
+
+      {/* Persistent overtime notice for contract holders — replaces the old
+          15-second toast that offered nothing collectible (contract-holder
+          bookings are always ₹0). Sourced from a real usage_charges row, so
+          it's visible on reload until an admin/manager waives it or it's
+          billed on the next statement. */}
+      <OvertimeChargeBanner
+        bookingId={booking.id}
+        overtimeCharge={pendingOvertimeUsageCharge}
+        userRole={userRole}
+        onWaived={fetchBooking}
+      />
 
       {/* Customer History — surfaced near the top so staff can calibrate
           the conversation immediately ("regular customer · 12 visits ·
@@ -1718,22 +1752,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               )}
             </div>
 
-            {/* Room subtotal — always visible so staff can verify the
-                rate × time multiplication before GST is added. */}
-            {!editingPricing && (
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {booking.pricing_model === "daily"
-                    ? `Day pass × ${Number(booking.quantity ?? 1)}`
-                    : `Room (${formatDuration(Number(booking.duration_hours))})`}
-                </span>
-                <span>
-                  {booking.pricing_model === "daily"
-                    ? formatCurrency(Number(booking.hourly_rate) * Number(booking.quantity ?? 1))
-                    : formatCurrency(Number(booking.hourly_rate) * Number(booking.duration_hours))}
-                </span>
-              </div>
-            )}
+            {/* Room subtotal / GST / total are only rendered while editing —
+                they exist to preview the recalculation before saving. The
+                Transaction Summary above is the canonical breakdown, so
+                showing a static copy here just gave staff two numbers to
+                reconcile. */}
 
             {/* Subtotal (ex-GST) — editable so staff can apply a custom
                 discount that the rate × duration formula doesn't capture
@@ -1757,33 +1780,29 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             {/* GST breakdown — recalculated live from draftTotal during edit
                 so the user sees the new GST and grand total before saving.
                 Static otherwise. */}
-            {booking.gst_rate ? (
+            {editingPricing && booking.gst_rate ? (
               <div className="flex justify-between text-sm text-muted-foreground">
                 <span>GST ({booking.gst_rate}%)</span>
                 <span>
-                  {editingPricing
-                    ? formatCurrency(((parseFloat(draftTotal) || 0) * Number(booking.gst_rate)) / 100)
-                    : formatCurrency(booking.gst_amount || 0)}
+                  {formatCurrency(((parseFloat(draftTotal) || 0) * Number(booking.gst_rate)) / 100)}
                 </span>
               </div>
             ) : null}
 
-            {/* Total Amount — during edit shows the live grand total
-                (subtotal + freshly computed GST). Server recomputes the
-                same way on save, so what you see is what gets stored. */}
-            <div className="flex justify-between items-center font-medium">
-              <span className="text-muted-foreground">Total (incl. GST)</span>
-              {editingPricing ? (
+            {/* Total Amount — live grand total during edit (subtotal +
+                freshly computed GST). Server recomputes the same way on
+                save, so what you see is what gets stored. */}
+            {editingPricing && (
+              <div className="flex justify-between items-center font-medium">
+                <span className="text-muted-foreground">Total (incl. GST)</span>
                 <span>
                   {formatCurrency(
                     (parseFloat(draftTotal) || 0) *
                       (1 + Number(booking.gst_rate || 0) / 100)
                   )}
                 </span>
-              ) : (
-                <span>{formatCurrency(Number(booking.total_amount_with_gst) || booking.total_amount)}</span>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Save / Cancel — only visible during edit */}
             {editingPricing && (
@@ -2149,62 +2168,26 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           "Add Charge" button so staff don't have to find it in the header.
           For contract holders charges flow into the next billing statement;
           for walk-ins / guests they become outstanding on the lead profile. */}
-      {(bookingCharges.length > 0 || ["checked_out", "no_show"].includes(booking.status)) && (
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-semibold">Related Charges</h3>
-              <p className="text-xs text-muted-foreground">
-                {booking.customer_type === "contract_holder"
-                  ? "Flows into next monthly billing statement"
-                  : "Outstanding until settled on next visit"}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {bookingCharges.length > 0 && (
-                <span className="text-xs font-medium text-muted-foreground tabular-nums">
-                  {bookingCharges.length} charge{bookingCharges.length !== 1 ? "s" : ""} · ₹{bookingCharges.reduce((s: number, c: { total: number }) => s + Number(c.total), 0).toLocaleString("en-IN")}
-                </span>
-              )}
-              {["checked_out", "no_show"].includes(booking.status) && (
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogChargeOpen(true)}>
-                  <Plus className="mr-1 h-3 w-3" />Add Charge
-                </Button>
-              )}
-            </div>
+      {/* Transaction Summary — the single money view for this booking.
+          Replaces the old "Related Charges" card and the Financials card's
+          static total block, so the room charge, over-use, overtime, waivers
+          and add-ons all reconcile to one grand total instead of being
+          spread across four places that each showed a different number. */}
+      <div className="space-y-2">
+        <TransactionSummary
+          booking={booking}
+          charges={bookingCharges}
+          addons={bookingAddons}
+          payments={existingPayments}
+        />
+        {["checked_out", "no_show"].includes(booking.status) && (
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogChargeOpen(true)}>
+              <Plus className="mr-1 h-3 w-3" />Add Charge
+            </Button>
           </div>
-          {bookingCharges.length > 0 ? (
-            <div className="divide-y">
-              {bookingCharges.map((charge: { id: string; description: string; total: number; quantity?: number; unit_price?: number; charge_date: string; status: string; notes?: string }) => (
-                <div key={charge.id} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium truncate">{charge.description}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(charge.charge_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                      {charge.quantity && charge.unit_price ? ` · ${charge.quantity} × ₹${Number(charge.unit_price).toLocaleString("en-IN")}` : ""}
-                      {charge.notes ? ` · ${charge.notes}` : ""}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 ml-3">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                      charge.status === "settled" ? "bg-green-100 text-green-800" :
-                      charge.status === "waived" ? "bg-gray-100 text-gray-600" :
-                      "bg-amber-100 text-amber-800"
-                    }`}>
-                      {charge.status}
-                    </span>
-                    <span className="font-semibold tabular-nums">₹{Number(charge.total).toLocaleString("en-IN")}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              No charges yet — use &ldquo;Add Charge&rdquo; for damages, overtime, or missed items discovered after checkout.
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Customer History — moved to the top of the page (rendered just
           after the header and next-action banner). This block is left
