@@ -489,7 +489,7 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       flowName: "Transfer Detail",
       step: 1,
       totalSteps: 1,
-      hint: "Review transfer items and status. The receiving location marks items as received to complete the transfer.",
+      hint: "Approving pre-fills every line at the requested quantity — only items flagged as unusual need a look before you approve. The receiving location marks items as received to complete the transfer.",
       idleMs: 12_000,
     },
   },

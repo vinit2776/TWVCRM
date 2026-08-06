@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ChevronLeft, Loader2, ArrowRight, MapPin, User, Calendar,
   FileText, Download, CheckCircle2, XCircle, Truck, PackageCheck,
-  AlertTriangle, BarChart3, TrendingUp, TrendingDown,
+  AlertTriangle, BarChart3, TrendingUp, TrendingDown, Lightbulb, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -131,6 +131,27 @@ interface ApproveLineRow {
   reviewed: boolean;
 }
 
+// First-run explainer for the redesigned approve flow — persisted in
+// localStorage (not sessionStorage) since this is a one-time "how this
+// works now" note, not a per-visit hint. Dismissed once, gone for good.
+const APPROVE_EXPLAINER_KEY = "twv_transfer_approve_explainer_dismissed";
+
+function hasSeenApproveExplainer(): boolean {
+  try {
+    return localStorage.getItem(APPROVE_EXPLAINER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissApproveExplainer(): void {
+  try {
+    localStorage.setItem(APPROVE_EXPLAINER_KEY, "1");
+  } catch {
+    // localStorage unavailable — silently skip
+  }
+}
+
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -157,6 +178,7 @@ export default function TransferDetailPage() {
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveNotes, setApproveNotes] = useState("");
   const [approveLines, setApproveLines] = useState<ApproveLineRow[]>([]);
+  const [showApproveExplainer, setShowApproveExplainer] = useState(() => !hasSeenApproveExplainer());
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [dispatchNotes, setDispatchNotes] = useState("");
   const [dispatchItems, setDispatchItems] = useState<DispatchLineItem[]>([]);
@@ -259,6 +281,11 @@ export default function TransferDetailPage() {
 
   const updateApproveLineReviewed = (transferItemId: string, reviewed: boolean) => {
     setApproveLines((prev) => prev.map((l) => (l.transfer_item_id === transferItemId ? { ...l, reviewed } : l)));
+  };
+
+  const dismissApproveExplainerBanner = () => {
+    dismissApproveExplainer();
+    setShowApproveExplainer(false);
   };
 
   const handleConfirmApprove = async () => {
@@ -1035,6 +1062,22 @@ export default function TransferDetailPage() {
           <DialogHeader>
             <DialogTitle>Approve Transfer</DialogTitle>
           </DialogHeader>
+          {showApproveExplainer && (
+            <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-xs text-blue-900">
+              <Lightbulb className="h-4 w-4 shrink-0 mt-0.5 text-blue-600" />
+              <p className="flex-1">
+                Lines are pre-approved at the requested quantity unless flagged below — only flagged items need your review.
+              </p>
+              <button
+                type="button"
+                onClick={dismissApproveExplainerBanner}
+                className="shrink-0 text-blue-500 hover:text-blue-700"
+                aria-label="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           {(() => {
             const flaggedTotal = approveLines.filter((l) => l.suspect).length;
             const flaggedPending = approveLines.filter((l) => l.suspect && !l.reviewed).length;
