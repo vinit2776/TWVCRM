@@ -4,6 +4,7 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { sendPushToProcurementRoles } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
+import { confirmFirstBillIfNeeded } from "@/lib/procurement/recurring-bill-rules-server";
 import { z } from "zod";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
@@ -503,6 +504,11 @@ export async function PATCH(
         url: `/procurement/bills/${id}`,
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] approve notification failed:", err));
+
+      // If this vendor has an active recurring rule still waiting on its first
+      // post-rule confirmation, this manual approval establishes it — every
+      // later bill against the rule becomes eligible to auto-approve.
+      await confirmFirstBillIfNeeded(supabase, id, bill.vendor_id);
 
       break;
     }

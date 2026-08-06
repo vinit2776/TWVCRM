@@ -1841,6 +1841,30 @@ export const BILL_APPROVAL_STATUS_COLORS: Record<string, string> = {
   rejected: "bg-red-100 text-red-800",
 };
 
+// Recurring Bill Rules — auto-approval of pre-vetted vendor invoices
+export const RECURRING_BILL_RULE_STATUSES = ["active", "paused"] as const;
+
+export const RECURRING_BILL_RULE_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  paused: "Paused",
+};
+
+export const RECURRING_BILL_RULE_STATUS_COLORS: Record<string, string> = {
+  active: "bg-emerald-100 text-emerald-800",
+  paused: "bg-gray-100 text-gray-600",
+};
+
+// Distinct from BILL_APPROVAL_STATUS_COLORS.approved — an auto-approved bill
+// should always be visually distinguishable from a human approval.
+export const AUTO_APPROVED_BADGE_CLASS = "bg-violet-100 text-violet-800";
+
+export const RECURRING_BILL_RULE_DEFAULT_TOLERANCE_PERCENT = 10;
+export const RECURRING_BILL_RULE_DEFAULT_MAX_AUTO_APPROVE_AMOUNT = 5000;
+
+// amc is excluded — it already has its own visit-based recurring flow via Service POs.
+// reimbursement is excluded — it's billed back to a customer, not a standing vendor expense.
+export const RECURRING_BILL_RULE_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+
 export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
   return: "Return Goods & Cancel PO",
   replacement: "Request Replacement (New PR)",

@@ -4,6 +4,7 @@ import { sendPushToProcurementRoles } from "@/lib/push";
 import { z } from "zod";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 import { createVendorBill } from "@/lib/vendor-bills";
+import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
@@ -272,13 +273,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  // Notify admins/managers that a new invoice needs approval
-  sendPushToProcurementRoles({
-    title: "Invoice Pending Payment Approval",
-    body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires payment approval`,
-    url: `/procurement/bills/${bill.id}`,
-    tag: `bill-approval-${bill.id}`,
-  }).catch((err) => console.error("[push] new bill notification failed:", err));
+  // If this vendor has an active recurring bill rule, see if it clears the
+  // guardrails to skip manual approval entirely.
+  const autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
 
-  return NextResponse.json({ data: { id: bill.id, bill_number: bill.bill_number } }, { status: 201 });
+  if (autoApproval.autoApproved) {
+    sendPushToProcurementRoles({
+      title: "Invoice Auto-Approved",
+      body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} auto-approved under a recurring bill rule`,
+      url: `/procurement/bills/${bill.id}`,
+      tag: `bill-approval-${bill.id}`,
+    }).catch((err) => console.error("[push] auto-approve notification failed:", err));
+  } else {
+    sendPushToProcurementRoles({
+      title: "Invoice Pending Payment Approval",
+      body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires payment approval`,
+      url: `/procurement/bills/${bill.id}`,
+      tag: `bill-approval-${bill.id}`,
+    }).catch((err) => console.error("[push] new bill notification failed:", err));
+  }
+
+  return NextResponse.json({
+    data: { id: bill.id, bill_number: bill.bill_number, auto_approved: autoApproval.autoApproved },
+  }, { status: 201 });
 }
