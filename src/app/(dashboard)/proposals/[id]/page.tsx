@@ -56,6 +56,7 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 import dynamic from "next/dynamic";
 
 const CreateContractDialog = dynamic(
@@ -110,6 +111,7 @@ export default function ProposalDetailPage({
   const [depositEmailPreview, setDepositEmailPreview] = useState<{
     subject: string; html: string; to: string[]; deposit_link_url: string | null; amount: number; link_already_exists: boolean;
   } | null>(null);
+  const [depositInternalNote, setDepositInternalNote] = useState("");
 
   // Booking confirmation dialog (accept flow)
   const [bookingConfirmOpen, setBookingConfirmOpen] = useState(false);
@@ -298,6 +300,7 @@ export default function ProposalDetailPage({
   const openDepositEmailDialog = async () => {
     setDepositEmailOpen(true);
     setDepositEmailPreview(null);
+    setDepositInternalNote("");
     setDepositEmailLoading(true);
     try {
       const res = await fetch(`/api/proposals/${id}/deposit-link`, {
@@ -321,9 +324,17 @@ export default function ProposalDetailPage({
   };
 
   const handleSendDepositEmail = async () => {
+    if (depositInternalNote.trim().length < 10) {
+      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      return;
+    }
     setDepositEmailSending(true);
     try {
-      const res = await fetch(`/api/proposals/${id}/deposit-link`, { method: "POST" });
+      const res = await fetch(`/api/proposals/${id}/deposit-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deposit_internal_notes: depositInternalNote.trim() }),
+      });
       const json = await res.json();
       if (res.ok) {
         toast.success(`Deposit email sent to ${json.sent_to || "customer"}`);
@@ -427,6 +438,10 @@ export default function ProposalDetailPage({
     const amt = parseFloat(manualPayAmount);
     if (isNaN(amt) || amt <= 0) {
       toast.error("Please enter a valid payment amount");
+      return;
+    }
+    if (manualPayNotes.trim().length < 10) {
+      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
       return;
     }
     const expectedAmt = Number(proposal.security_deposit_amount || 0);
@@ -1088,12 +1103,24 @@ export default function ProposalDetailPage({
                           variant="outline"
                           className="w-full border-red-300 text-red-700 hover:bg-red-50"
                           onClick={async () => {
+                            // A previously-recorded internal note carries over on a
+                            // straight regeneration (the reason for the request hasn't
+                            // changed); proposals with no note yet fall back to the
+                            // Preview & Resend dialog, which collects one.
+                            if (!proposal.deposit_internal_notes || proposal.deposit_internal_notes.trim().length < 10) {
+                              openDepositEmailDialog();
+                              return;
+                            }
                             await fetch(`/api/proposals/${proposal.id}`, {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ deposit_razorpay_link_id: null, deposit_razorpay_link_url: null }),
                             });
-                            const res = await fetch(`/api/proposals/${proposal.id}/deposit-link`, { method: "POST" });
+                            const res = await fetch(`/api/proposals/${proposal.id}/deposit-link`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ deposit_internal_notes: proposal.deposit_internal_notes }),
+                            });
                             if (res.ok) {
                               toast.success("New deposit link generated and sent");
                               fetchProposal();
@@ -1408,6 +1435,24 @@ export default function ProposalDetailPage({
                 </div>
               )}
 
+              <div className="space-y-1.5">
+                <Label htmlFor="dep-internal-note">
+                  Internal Note (for Accounts) <span className="text-destructive">*</span>
+                </Label>
+                <Textarea
+                  id="dep-internal-note"
+                  value={depositInternalNote}
+                  onChange={(e) => setDepositInternalNote(e.target.value)}
+                  placeholder="Why this deposit request exists — never shown to the customer"
+                  rows={2}
+                />
+                <CheckAccountingNoteButton
+                  note={depositInternalNote}
+                  accountingHead="Security Deposit"
+                  context={`${proposal.proposal_number} — security deposit request`}
+                />
+              </div>
+
               <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
                 <iframe
                   title="Deposit email preview"
@@ -1423,7 +1468,7 @@ export default function ProposalDetailPage({
                 </Button>
                 <Button
                   onClick={handleSendDepositEmail}
-                  disabled={depositEmailSending || !depositEmailPreview.to.length}
+                  disabled={depositEmailSending || !depositEmailPreview.to.length || depositInternalNote.trim().length < 10}
                   className="bg-primary hover:bg-primary/90"
                 >
                   {depositEmailSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1657,13 +1702,20 @@ export default function ProposalDetailPage({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="mp-notes">Notes (optional)</Label>
+              <Label htmlFor="mp-notes">
+                Internal Note (for Accounts) <span className="text-destructive">*</span>
+              </Label>
               <Textarea
                 id="mp-notes"
                 value={manualPayNotes}
                 onChange={(e) => setManualPayNotes(e.target.value)}
-                placeholder="Any additional notes about the payment"
+                placeholder="Why this deposit exists / context for booking it — never shown to the customer"
                 rows={2}
+              />
+              <CheckAccountingNoteButton
+                note={manualPayNotes}
+                accountingHead="Security Deposit"
+                context={`${proposal.proposal_number} — security deposit`}
               />
             </div>
 
@@ -1716,7 +1768,7 @@ export default function ProposalDetailPage({
               </Button>
               <Button
                 onClick={handleManualPaySubmit}
-                disabled={manualPaySubmitting || (() => {
+                disabled={manualPaySubmitting || manualPayNotes.trim().length < 10 || (() => {
                   const expectedAmt = Number(proposal.security_deposit_amount || 0);
                   const enteredAmt = parseFloat(manualPayAmount) || 0;
                   if (expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt) {

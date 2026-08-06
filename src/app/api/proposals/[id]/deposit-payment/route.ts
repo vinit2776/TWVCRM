@@ -10,7 +10,7 @@ import { logAudit, diffChanges } from "@/lib/audit";
  * Accepts multipart/form-data with:
  *   - amount       (required) numeric string
  *   - reference    (optional) UTR / transaction ID
- *   - notes        (optional) free text
+ *   - notes        (required, ≥10 chars) internal note for accounts — never shown to the customer
  *   - payment_proof (optional) image or PDF file — uploaded to crm-documents storage
  */
 export async function POST(
@@ -46,6 +46,9 @@ export async function POST(
   const amount = parseFloat(amountRaw || "");
   if (!amountRaw || isNaN(amount) || amount <= 0) {
     return NextResponse.json({ error: "Valid payment amount is required" }, { status: 400 });
+  }
+  if (!notes || notes.length < 10) {
+    return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
   }
 
   // Fetch proposal + lead
@@ -141,6 +144,7 @@ export async function POST(
     deposit_payment_medium: paymentMedium,
     deposit_payment_received_at: receivedAt,
     deposit_payment_screenshot_url: screenshotUrl,
+    deposit_internal_notes: notes,
     ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
   };
   const { error: updateError } = await supabase

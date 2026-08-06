@@ -19,9 +19,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
   INVOICE_STATUS_LABELS,
+  ACCOUNTING_HEAD_LABELS,
+  ACCOUNTING_HEAD_COLORS,
+  type AccountingHead,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
@@ -47,6 +57,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
+  const [viewInvoice, setViewInvoice] = useState<(ProformaInvoice & { lead?: Lead }) | null>(null);
 
   // Email dialog state
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
@@ -488,6 +499,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setViewInvoice(inv)}>
+                              <Eye className="mr-2 h-4 w-4" />
+                              View
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleDownloadInvoicePDF(inv)}>
                               <Download className="mr-2 h-4 w-4" />
                               Download PDF
@@ -584,6 +600,86 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
           onSuccess={handleSuccess}
         />
       )}
+
+      {/* View Invoice Dialog */}
+      <Dialog open={!!viewInvoice} onOpenChange={(open) => { if (!open) setViewInvoice(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          {viewInvoice && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {viewInvoice.invoice_number}
+                  <Badge variant="secondary" className={INVOICE_STATUS_COLORS[viewInvoice.status]}>
+                    {INVOICE_STATUS_LABELS[viewInvoice.status]}
+                  </Badge>
+                </DialogTitle>
+                <DialogDescription>{viewInvoice.title}</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="rounded-md border overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-3 py-2 text-left font-medium">Description</th>
+                        <th className="px-3 py-2 text-right font-medium">Qty</th>
+                        <th className="px-3 py-2 text-right font-medium">Unit Price</th>
+                        <th className="px-3 py-2 text-right font-medium">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewInvoice.items.map((item, idx) => (
+                        <tr key={idx} className="border-b last:border-0">
+                          <td className="px-3 py-2">{item.description}</td>
+                          <td className="px-3 py-2 text-right">{item.quantity}{item.unit ? ` ${item.unit}` : ""}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(item.unit_price)}</td>
+                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(item.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex flex-col items-end gap-1 text-sm">
+                  <div className="flex justify-between w-48"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(viewInvoice.subtotal)}</span></div>
+                  <div className="flex justify-between w-48"><span className="text-muted-foreground">Tax ({viewInvoice.tax_percentage}%)</span><span>{formatCurrency(viewInvoice.tax_amount)}</span></div>
+                  <div className="flex justify-between w-48"><span className="text-muted-foreground">Discount ({viewInvoice.discount_percentage}%)</span><span>-{formatCurrency(viewInvoice.discount_amount)}</span></div>
+                  <div className="flex justify-between w-48 font-semibold border-t pt-1"><span>Total</span><span>{formatCurrency(viewInvoice.total_amount)}</span></div>
+                </div>
+
+                {viewInvoice.due_date && (
+                  <p className="text-sm"><span className="text-muted-foreground">Due Date:</span> {formatDate(viewInvoice.due_date)}</p>
+                )}
+
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Accounting Head</p>
+                  {viewInvoice.primary_head ? (
+                    <Badge variant="outline" className={ACCOUNTING_HEAD_COLORS[viewInvoice.primary_head as AccountingHead]}>
+                      {ACCOUNTING_HEAD_LABELS[viewInvoice.primary_head as AccountingHead] || viewInvoice.primary_head}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200">Needs Review</Badge>
+                  )}
+                </div>
+
+                {viewInvoice.internal_notes && (
+                  <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-medium text-amber-800">Internal Note (for Accounts) — never shown to the customer</p>
+                    <p className="text-sm text-amber-900">{viewInvoice.internal_notes}</p>
+                  </div>
+                )}
+
+                {viewInvoice.notes && (
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">Customer-Facing Notes</p>
+                    <p className="text-sm">{viewInvoice.notes}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

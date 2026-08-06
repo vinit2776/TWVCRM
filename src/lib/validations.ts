@@ -241,12 +241,19 @@ export const createInvoiceSchema = z.object({
   // Security deposits are never billed through an ad-hoc invoice — they go
   // through the proposal deposit link instead (GST-exempt, tracked against
   // the deposit ledger). Enforced server-side in the POST handler.
-  primary_head: z.enum(ACCOUNTING_HEADS, { message: "Select what this invoice is for" }),
+  // Null means the creator picked "I don't know" — accounts follows up and
+  // fills in the real head later (see PATCH /api/invoices/[id]).
+  primary_head: z.enum(ACCOUNTING_HEADS, { message: "Select what this invoice is for" }).nullable(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
   tax_percentage: z.number().min(0).max(100),
   discount_percentage: z.number().min(0).max(100),
   due_date: z.string().optional(),
+  // Customer-facing — printed on the invoice PDF/email.
   notes: z.string().optional(),
+  // Internal-only — for accounts; never printed on the PDF or sent to the customer.
+  internal_notes: z
+    .string()
+    .min(10, "Add more context so accounts can book this correctly"),
 });
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;

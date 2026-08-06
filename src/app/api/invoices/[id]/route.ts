@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { ACCOUNTING_HEADS } from "@/lib/constants";
 
 export async function GET(
   _request: NextRequest,
@@ -38,6 +39,21 @@ export async function PATCH(
   if (body.status) allowedFields.status = body.status;
   if (body.paid_at) allowedFields.paid_at = body.paid_at;
   if (body.payment_reference) allowedFields.payment_reference = body.payment_reference;
+
+  // Lets accounts resolve an invoice created with "I don't know" (primary_head
+  // null) into a real accounting head, and/or tighten up the internal note.
+  if (body.primary_head !== undefined) {
+    if (body.primary_head !== null && !ACCOUNTING_HEADS.includes(body.primary_head)) {
+      return NextResponse.json({ error: "Invalid accounting head" }, { status: 400 });
+    }
+    allowedFields.primary_head = body.primary_head;
+  }
+  if (body.internal_notes !== undefined) {
+    if (typeof body.internal_notes !== "string" || body.internal_notes.trim().length < 10) {
+      return NextResponse.json({ error: "Internal note must be at least 10 characters" }, { status: 400 });
+    }
+    allowedFields.internal_notes = body.internal_notes.trim();
+  }
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

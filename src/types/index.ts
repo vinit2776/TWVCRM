@@ -332,6 +332,8 @@ export interface Proposal {
   deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_screenshot_url?: string;
   deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
+  // Internal-only note for accounts (why this deposit request/collection exists) — never sent to the customer.
+  deposit_internal_notes?: string | null;
   // Deposit credit — a deposit already held from a prior contract, netted
   // off the required deposit above. security_deposit_amount is never
   // changed by this; the balance to actually collect is
@@ -376,7 +378,10 @@ export interface ProformaInvoice {
   due_date?: string;
   paid_at?: string;
   payment_reference?: string;
+  // Customer-facing — printed on the invoice PDF/email.
   notes?: string;
+  // Internal-only — for accounts; never printed on the PDF or sent to the customer.
+  internal_notes?: string | null;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -717,6 +722,8 @@ export interface DepositInboxRow {
   /** When the money actually reached the bank, per Razorpay's settlement recon. */
   settled_at?: string | null;
   settlement_id?: string | null;
+  /** Internal-only accounts note — proposals.deposit_internal_notes or deposit_topups.category_note. */
+  internal_note?: string | null;
 }
 
 export const DEPOSIT_TOPUP_CATEGORY_LABELS: Record<DepositTopupCategory, string> = {

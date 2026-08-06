@@ -44,8 +44,8 @@ export async function POST(
   if (!VALID_CATEGORIES.includes(category)) {
     return NextResponse.json({ error: "A valid category is required" }, { status: 400 });
   }
-  if (category === "other" && !categoryNote) {
-    return NextResponse.json({ error: "A note is required when category is 'Other'" }, { status: 400 });
+  if (!categoryNote || categoryNote.length < 10) {
+    return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
   }
   if (!paymentMode) {
     return NextResponse.json({ error: "Payment mode is required" }, { status: 400 });
