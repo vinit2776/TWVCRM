@@ -528,12 +528,18 @@ export default function ContractDetailPage({
             </>
           )}
           {contract.status === "accepted" && (() => {
-            const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
+            // Mirrors the server-side hard gate in /api/contracts/[id] (PATCH, status=active):
+            // renewals (deposit_carried_from set) skip the proposal requirement entirely;
+            // everything else must have a linked, paid proposal — an absent proposal_id is
+            // not "nothing to check", it's a blocker.
+            const isRenewal = !!contract.deposit_carried_from;
+            const proposalMissing = !isRenewal && !contract.proposal_id;
+            const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
-            const depositPaid = !linkedProposal || !depositRequired || linkedProposal.deposit_payment_status === "paid";
+            const depositPaid = isRenewal || !depositRequired || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid");
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             const prorataRequired = !!(contract.is_renewal && contract.prorata_payment_status === "pending");
-            const canActivate = proposalPaid && depositPaid && kycComplete && !prorataRequired;
+            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataRequired;
             const hasDeferred = kycStatus.deferred > 0;
 
             return canActivate ? (
@@ -555,8 +561,9 @@ export default function ContractDetailPage({
                   </Button>
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     <p className="font-semibold mb-1">Cannot activate until:</p>
-                    {!proposalPaid && <p>• Proposal payment collected</p>}
-                    {!depositPaid && <p>• Security deposit collected</p>}
+                    {proposalMissing && <p>• A proposal is linked to this contract</p>}
+                    {!proposalMissing && !proposalPaid && <p>• Proposal payment collected</p>}
+                    {!proposalMissing && !depositPaid && <p>• Security deposit collected</p>}
                     {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
