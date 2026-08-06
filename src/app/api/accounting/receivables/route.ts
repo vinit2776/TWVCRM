@@ -48,7 +48,7 @@ export async function GET(_req: NextRequest) {
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number,
+        id, invoice_number, primary_head, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       )
     `)

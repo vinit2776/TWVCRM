@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
+import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -252,13 +253,19 @@ async function computeApprovalIntelligence(
 const patchTransferSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
   z.object({
-    action: z.literal("approve_line"),
-    transfer_item_id: z.string().uuid(),
-    quantity_approved: z.number().min(0),
-  }),
-  z.object({
     action: z.literal("approve"),
     notes: z.string().optional(),
+    // Explicit per-line decisions — required for any line the flagging
+    // heuristic considers suspect (see flagTransferLine); lines omitted
+    // here are auto-confirmed at their requested quantity.
+    lines: z
+      .array(
+        z.object({
+          transfer_item_id: z.string().uuid(),
+          quantity_approved: z.number().min(0),
+        })
+      )
+      .optional(),
   }),
   z.object({ action: z.literal("reject"), notes: z.string().min(1, "Rejection notes are required") }),
   z.object({
@@ -416,52 +423,6 @@ export async function PATCH(
   }>;
 
   switch (action) {
-    // ── APPROVE LINE ─────────────────────────────────────────────────────────
-    // Saves a single item's approval decision immediately, independent of the
-    // transfer-level approve action — lets an approver work through a long
-    // transfer item by item, closing and reopening across sessions.
-    case "approve_line": {
-      if (transfer.status !== "pending_approval") {
-        return NextResponse.json({ error: "Only pending_approval transfers can have lines approved" }, { status: 422 });
-      }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only admins and managers can approve transfer lines" }, { status: 403 });
-      }
-
-      const { transfer_item_id, quantity_approved } = parsed.data;
-      const item = transferItems.find((ti) => ti.id === transfer_item_id);
-      if (!item) {
-        return NextResponse.json({ error: "Transfer item not found" }, { status: 404 });
-      }
-      if (quantity_approved > item.quantity_requested) {
-        return NextResponse.json({
-          error: `"${item.item_name}": approved quantity (${quantity_approved}) cannot exceed requested (${item.quantity_requested})`,
-        }, { status: 422 });
-      }
-
-      const { error: itemUpdateError } = await supabase
-        .from("stock_transfer_items")
-        .update({
-          quantity_approved,
-          approval_confirmed_at: new Date().toISOString(),
-          approval_confirmed_by: dbUser.id,
-        })
-        .eq("id", item.id);
-      if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
-
-      await logAudit(supabase, {
-        entityType: "stock_transfer",
-        entityId: id,
-        action: "update",
-        performedBy: dbUser.id,
-        changes: {
-          line_approved: { old: null, new: { item: item.item_name, qty: quantity_approved } },
-        },
-      });
-
-      return NextResponse.json({ data: { id: item.id, quantity_approved } });
-    }
-
     // ── SUBMIT ──────────────────────────────────────────────────────────────
     case "submit": {
       if (transfer.status !== "draft") {
@@ -495,22 +456,56 @@ export async function PATCH(
         return NextResponse.json({ error: "Only admins and managers can approve transfers" }, { status: 403 });
       }
 
-      // Every line must already carry an explicit approve_line decision —
-      // half-reviewed transfers don't silently default to "approve as
-      // requested" for whatever's left untouched.
-      const unconfirmed = transferItems.filter((item) => !item.approval_confirmed_at);
-      if (unconfirmed.length > 0) {
+      const submittedLines = new Map((parsed.data.lines ?? []).map((l) => [l.transfer_item_id, l.quantity_approved]));
+
+      // Re-derive the same "suspect" signal the approve screen showed —
+      // enforced server-side so it can't be skipped by calling the API
+      // directly. Non-suspect lines never need to appear in `lines`.
+      const itemIds = transferItems.map((item) => item.item_id).filter(Boolean) as string[];
+      const { items: intelItems } = await computeApprovalIntelligence(supabase, itemIds, transfer.to_location_id);
+      const intelByItemId = new Map(intelItems.map((i) => [i.item_id, i]));
+
+      const missingReview = transferItems.filter((item) => {
+        if (submittedLines.has(item.id)) return false;
+        const flag = flagTransferLine(item.quantity_requested, item.item_id ? intelByItemId.get(item.item_id) : undefined);
+        return flag.suspect;
+      });
+      if (missingReview.length > 0) {
         return NextResponse.json({
-          error: `${unconfirmed.length} item${unconfirmed.length === 1 ? "" : "s"} still need a decision before this transfer can be approved: ${unconfirmed.map((i) => i.item_name).join(", ")}`,
+          error: `${missingReview.length} item${missingReview.length === 1 ? "" : "s"} flagged for review and still need a decision: ${missingReview.map((i) => i.item_name).join(", ")}`,
         }, { status: 422 });
       }
 
       // Shortfall is final, not a block — no stock check here; that happens
       // at dispatch, where the issuer confirms what's actually physically sent.
-      const resolvedApprovals = transferItems.map((item) => ({
-        item,
-        approvedQty: item.quantity_approved ?? item.quantity_requested,
-      }));
+      // Lines not explicitly submitted are bulk-confirmed at their requested
+      // quantity (only reachable here for non-suspect lines, per the gate above).
+      const resolvedApprovals = transferItems.map((item) => {
+        const submittedQty = submittedLines.get(item.id);
+        const approvedQty = submittedQty ?? item.quantity_requested;
+        const method: "manual" | "bulk" = submittedLines.has(item.id) ? "manual" : "bulk";
+        return { item, approvedQty, method };
+      });
+
+      for (const { item, approvedQty } of resolvedApprovals) {
+        if (approvedQty > item.quantity_requested) {
+          return NextResponse.json({
+            error: `"${item.item_name}": approved quantity (${approvedQty}) cannot exceed requested (${item.quantity_requested})`,
+          }, { status: 422 });
+        }
+      }
+
+      for (const { item, approvedQty } of resolvedApprovals) {
+        const { error: itemUpdateError } = await supabase
+          .from("stock_transfer_items")
+          .update({
+            quantity_approved: approvedQty,
+            approval_confirmed_at: new Date().toISOString(),
+            approval_confirmed_by: dbUser.id,
+          })
+          .eq("id", item.id);
+        if (itemUpdateError) return NextResponse.json({ error: itemUpdateError.message }, { status: 500 });
+      }
 
       const { count: transferApprovalCount } = await supabase
         .from("stock_transfers")
@@ -530,6 +525,21 @@ export async function PATCH(
         .eq("id", id);
 
       if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+      // One audit row per line, tagged by how it was approved — lets the
+      // audit trail distinguish an approver's explicit decision from a
+      // bulk auto-confirmation at the requested quantity.
+      for (const { item, approvedQty, method } of resolvedApprovals) {
+        await logAudit(supabase, {
+          entityType: "stock_transfer",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: {
+            line_approved: { old: null, new: { item: item.item_name, qty: approvedQty, method } },
+          },
+        });
+      }
 
       await logAudit(supabase, {
         entityType: "stock_transfer",

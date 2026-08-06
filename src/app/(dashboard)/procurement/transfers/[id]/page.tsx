@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -30,6 +31,7 @@ import {
   TRANSFER_ISSUE_STATUS_LABELS, TRANSFER_ISSUE_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
 import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
 import { TransferAuditTrail } from "@/components/procurement/transfer-audit-trail";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
@@ -113,6 +115,22 @@ interface DispatchLineItem {
   quantity_sent: string;
 }
 
+// ─── Approve Dialog types ───────────────────────────────────────────────────
+// One row per line item, built fresh each time the approve table is opened.
+// `suspect`/`reason` come from flagTransferLine (shared with the API's
+// server-side gate). Non-suspect rows never require `reviewed`.
+interface ApproveLineRow {
+  transfer_item_id: string;
+  item_id: string | null;
+  item_name: string;
+  unit: string;
+  quantity_requested: number;
+  quantity_approved: string;
+  suspect: boolean;
+  reason: string | null;
+  reviewed: boolean;
+}
+
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -138,19 +156,14 @@ export default function TransferDetailPage() {
   const [resolveAdjustStock, setResolveAdjustStock] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveNotes, setApproveNotes] = useState("");
+  const [approveLines, setApproveLines] = useState<ApproveLineRow[]>([]);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [dispatchNotes, setDispatchNotes] = useState("");
   const [dispatchItems, setDispatchItems] = useState<DispatchLineItem[]>([]);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsItemName, setAnalyticsItemName] = useState("");
-  // The stock_transfer_items row the analytics dialog is showing — links the
-  // dialog's approval-quantity input to the matching transfer item.
-  const [analyticsTransferItemId, setAnalyticsTransferItemId] = useState("");
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
-  // Draft input for the line currently open in the analytics dialog — saved
-  // server-side (via approve_line) only when "Submit this line" is clicked.
-  const [lineQtyInput, setLineQtyInput] = useState("");
 
   const fetchTransfer = useCallback(async () => {
     setLoading(true);
@@ -201,27 +214,63 @@ export default function TransferDetailPage() {
   };
 
   // ── Approve flow ──────────────────────────────────────────────────────────
-  // Each line is decided and saved independently via approve_line (persisted
-  // server-side, so it survives closing the dialog, reloading, or coming
-  // back in a different session). The transfer-level approve is a separate,
-  // final step that the backend blocks until every line has been confirmed.
+  // The approve table is built fresh from the transfer's items and the
+  // approval-intelligence signal each time it's opened via the "Approve"
+  // button (not when returning from the trend view — see returnToApproveDialog
+  // below — so in-progress edits survive a side-trip to "View trend").
+  // Suspect lines require an explicit "Reviewed" checkbox before the
+  // transfer can be approved; everything else defaults to the requested
+  // quantity and needs no interaction.
 
-  const openApproveDialog = () => setApproveOpen(true);
-
-  const handleSubmitLine = async () => {
-    if (!analyticsTransferItemId) return;
-    const qty = parseFloat(lineQtyInput);
-    if (isNaN(qty) || qty < 0) { toast.error("Enter a valid quantity"); return; }
-    const ok = await handleAction(
-      "approve_line",
-      { transfer_item_id: analyticsTransferItemId, quantity_approved: qty },
-      "Line decision saved"
+  const openApproveDialog = () => {
+    if (!transfer?.stock_transfer_items) return;
+    setAnalyticsOpen(false);
+    setApproveNotes("");
+    setApproveLines(
+      transfer.stock_transfer_items.map((item) => {
+        const intel = approvalIntelligence.find((a) => a.item_id === item.item_id);
+        const flag = flagTransferLine(item.quantity_requested, intel);
+        return {
+          transfer_item_id: item.id,
+          item_id: item.item_id ?? null,
+          item_name: item.item_name,
+          unit: item.unit,
+          quantity_requested: item.quantity_requested,
+          quantity_approved: String(item.quantity_approved ?? item.quantity_requested),
+          suspect: flag.suspect,
+          reason: flag.reason,
+          reviewed: false,
+        };
+      })
     );
-    return ok;
+    setApproveOpen(true);
+  };
+
+  // Reopen the approve dialog without rebuilding it — used when returning
+  // from "View trend", so edits made before the side-trip aren't lost.
+  const returnToApproveDialog = () => {
+    setAnalyticsOpen(false);
+    setApproveOpen(true);
+  };
+
+  const updateApproveLineQty = (transferItemId: string, value: string) => {
+    setApproveLines((prev) => prev.map((l) => (l.transfer_item_id === transferItemId ? { ...l, quantity_approved: value } : l)));
+  };
+
+  const updateApproveLineReviewed = (transferItemId: string, reviewed: boolean) => {
+    setApproveLines((prev) => prev.map((l) => (l.transfer_item_id === transferItemId ? { ...l, reviewed } : l)));
   };
 
   const handleConfirmApprove = async () => {
-    const ok = await handleAction("approve", { notes: approveNotes.trim() || undefined }, "Transfer approved");
+    // Flagged lines are always sent explicitly (review was required even if
+    // the quantity wasn't changed). Non-flagged lines are only sent if the
+    // approver edited the quantity away from the default — everything else
+    // is left out so the server bulk-confirms it at the requested quantity.
+    const lines = approveLines
+      .filter((l) => l.suspect || parseFloat(l.quantity_approved) !== l.quantity_requested)
+      .map((l) => ({ transfer_item_id: l.transfer_item_id, quantity_approved: parseFloat(l.quantity_approved) || 0 }));
+
+    const ok = await handleAction("approve", { notes: approveNotes.trim() || undefined, lines }, "Transfer approved");
     if (ok) { setApproveOpen(false); setApproveNotes(""); }
   };
 
@@ -410,17 +459,12 @@ export default function TransferDetailPage() {
   const isAdminOrManager = ["admin", "manager"].includes(userRole);
   const canDispatch = ["admin", "manager", "office_admin"].includes(userRole);
 
-  const openAnalytics = async (itemId: string | undefined, itemName: string, transferItemId: string) => {
+  const openAnalytics = async (itemId: string | undefined, itemName: string) => {
     if (!itemId || !transfer) return;
     setAnalyticsItemName(itemName);
-    setAnalyticsTransferItemId(transferItemId);
     setAnalyticsData(null);
     setAnalyticsOpen(true);
     setAnalyticsLoading(true);
-    const sourceItem = transfer.stock_transfer_items?.find((i) => i.id === transferItemId);
-    if (sourceItem) {
-      setLineQtyInput(String(sourceItem.quantity_approved ?? sourceItem.quantity_requested));
-    }
     try {
       const res = await fetch(
         `/api/procurement/transfers/analytics?location_id=${transfer.to_location_id}&item_id=${itemId}`
@@ -454,8 +498,10 @@ export default function TransferDetailPage() {
 
   const items: StockTransferItem[] = transfer.stock_transfer_items ?? [];
   const issues: StockTransferIssue[] = transfer.stock_transfer_issues ?? [];
-  const confirmedLineCount = items.filter((i) => i.approval_confirmed_at).length;
-  const allLinesConfirmed = items.length > 0 && confirmedLineCount === items.length;
+  const flaggedCount = items.filter((item) => {
+    const intel = approvalIntelligence.find((a) => a.item_id === item.item_id);
+    return flagTransferLine(item.quantity_requested, intel).suspect;
+  }).length;
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -501,7 +547,7 @@ export default function TransferDetailPage() {
           {transfer.status === "pending_approval" && isAdminOrManager && (
             <>
               <Button onClick={openApproveDialog} disabled={actionLoading} className="bg-green-600 hover:bg-green-700">
-                <CheckCircle2 className="h-4 w-4 mr-1" /> Approve ({confirmedLineCount}/{items.length})
+                <CheckCircle2 className="h-4 w-4 mr-1" /> Approve{flaggedCount > 0 ? ` (${flaggedCount} flagged)` : ""}
               </Button>
               <Button variant="outline" onClick={() => setRejectOpen(true)} disabled={actionLoading} className="border-red-300 text-red-600 hover:bg-red-50">
                 <XCircle className="h-4 w-4 mr-1" /> Reject
@@ -598,7 +644,7 @@ export default function TransferDetailPage() {
                           <button
                             type="button"
                             className="text-left text-blue-700 hover:underline underline-offset-2 inline-flex items-center gap-1"
-                            onClick={() => openAnalytics(item.item_id, item.item_name, item.id)}
+                            onClick={() => openAnalytics(item.item_id, item.item_name)}
                             title="See consumption, headcount, and request history behind this"
                           >
                             {item.item_name}
@@ -623,7 +669,7 @@ export default function TransferDetailPage() {
                             <button
                               type="button"
                               className="block text-[10px] text-amber-600 font-normal hover:underline"
-                              onClick={() => openAnalytics(item.item_id, item.item_name, item.id)}
+                              onClick={() => openAnalytics(item.item_id, item.item_name)}
                             >
                               usual ~{Math.round(impliedExpected!)} · see why
                             </button>
@@ -979,64 +1025,80 @@ export default function TransferDetailPage() {
       {auditTrail.length > 0 && <TransferAuditTrail entries={auditTrail} />}
 
       {/* ─── Approve Dialog ─────────────────────────────────────────────── */}
-      {/* Read-only checklist over decisions already saved per-line via
-          approve_line — this dialog only finalizes; it never edits a
-          quantity itself. Blocked until every line is confirmed. */}
+      {/* Single-screen table: every line defaults to its requested quantity
+          and needs no interaction. Only lines flagTransferLine marks
+          suspect require an explicit "Reviewed" check (and can have their
+          quantity adjusted) before the transfer can be approved — the same
+          gate is re-enforced server-side. */}
       <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
-        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Approve Transfer</DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-muted-foreground -mt-2">
-            {confirmedLineCount} of {items.length} lines confirmed.
-            {!allLinesConfirmed && " Every line needs a saved decision before you can approve."}
-          </p>
+          {(() => {
+            const flaggedTotal = approveLines.filter((l) => l.suspect).length;
+            const flaggedPending = approveLines.filter((l) => l.suspect && !l.reviewed).length;
+            return (
+              <p className="text-xs text-muted-foreground -mt-2">
+                {flaggedTotal === 0
+                  ? "No flagged items — ready to approve."
+                  : `${flaggedTotal} item${flaggedTotal === 1 ? "" : "s"} flagged for review${flaggedPending > 0 ? ` — ${flaggedPending} still need${flaggedPending === 1 ? "s" : ""} review` : " — all reviewed"}.`}
+              </p>
+            );
+          })()}
           <div className="space-y-2">
-            {items.map((item) => {
-              const isConfirmed = !!item.approval_confirmed_at;
-              const approvedQty = item.quantity_approved;
-              const isShort = isConfirmed && approvedQty !== null && approvedQty < item.quantity_requested;
-              return (
-                <div
-                  key={item.id}
-                  className={`border rounded-lg p-3 flex items-center justify-between gap-3 ${isConfirmed ? "border-green-200 bg-green-50/30" : "border-amber-200 bg-amber-50/30"}`}
-                >
+            {approveLines.map((line) => (
+              <div
+                key={line.transfer_item_id}
+                className={`border rounded-lg p-3 space-y-2 ${line.suspect ? "border-amber-300 bg-amber-50/40" : ""}`}
+              >
+                <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{item.item_name}</p>
+                    <p className="text-sm font-medium truncate">{line.item_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      Requested: {item.quantity_requested} {item.unit}
-                      {isConfirmed && (
-                        <>
-                          {" · Approved: "}
-                          <span className={isShort ? "text-amber-600 font-medium" : ""}>{approvedQty} {item.unit}</span>
-                        </>
-                      )}
+                      Requested: {line.quantity_requested} {line.unit}
                     </p>
                   </div>
-                  <div className="shrink-0 flex items-center gap-2">
-                    {isConfirmed ? (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-100 rounded px-1.5 py-0.5">
-                        <CheckCircle2 className="h-3 w-3" /> Confirmed
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-medium text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
-                        Needs a decision
-                      </span>
-                    )}
+                  {line.suspect && (
                     <button
                       type="button"
-                      className="text-xs text-blue-700 hover:underline inline-flex items-center gap-1"
+                      className="text-xs text-blue-700 hover:underline inline-flex items-center gap-1 shrink-0"
                       onClick={() => {
                         setApproveOpen(false);
-                        openAnalytics(item.item_id, item.item_name, item.id);
+                        openAnalytics(line.item_id ?? undefined, line.item_name);
                       }}
                     >
-                      <BarChart3 className="h-3 w-3" /> {isConfirmed ? "Revisit" : "Decide now"}
+                      <BarChart3 className="h-3 w-3" /> View trend
                     </button>
-                  </div>
+                  )}
                 </div>
-              );
-            })}
+                {line.suspect && (
+                  <p className="text-xs text-amber-700 font-medium">{line.reason}</p>
+                )}
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 space-y-1">
+                    <Label className="text-xs">Approved qty</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max={line.quantity_requested}
+                      step="0.01"
+                      value={line.quantity_approved}
+                      onChange={(e) => updateApproveLineQty(line.transfer_item_id, e.target.value)}
+                    />
+                  </div>
+                  {line.suspect && (
+                    <label className="flex items-center gap-1.5 text-xs shrink-0 pb-2">
+                      <Checkbox
+                        checked={line.reviewed}
+                        onCheckedChange={(checked) => updateApproveLineReviewed(line.transfer_item_id, checked === true)}
+                      />
+                      Reviewed
+                    </label>
+                  )}
+                </div>
+              </div>
+            ))}
             <div className="space-y-1.5">
               <Label>Notes to requester (optional)</Label>
               <Textarea
@@ -1051,9 +1113,9 @@ export default function TransferDetailPage() {
             <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
             <Button
               onClick={handleConfirmApprove}
-              disabled={actionLoading || !allLinesConfirmed}
+              disabled={actionLoading || approveLines.some((l) => l.suspect && !l.reviewed)}
               className="bg-green-600 hover:bg-green-700"
-              title={allLinesConfirmed ? undefined : "Every line needs a saved decision first"}
+              title={approveLines.some((l) => l.suspect && !l.reviewed) ? "Flagged items need review first" : undefined}
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
               Approve Transfer
@@ -1231,72 +1293,17 @@ export default function TransferDetailPage() {
             </div>
           )}
 
-          {/* Approval decision — set and save this item's approved quantity
-              right here, with all the context above in view. Saves
-              immediately via approve_line; independent of every other line. */}
-          {transfer.status === "pending_approval" && isAdminOrManager && (() => {
-            const item = transfer.stock_transfer_items?.find((i) => i.id === analyticsTransferItemId);
-            if (!item) return null;
-            const approvedNum = parseFloat(lineQtyInput) || 0;
-            const isShort = approvedNum < item.quantity_requested;
-            const isConfirmed = !!item.approval_confirmed_at;
-            return (
-              <div className="rounded-lg border border-green-200 bg-green-50/40 p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">Approval decision</p>
-                  <span className="text-xs text-muted-foreground">
-                    Requested: {item.quantity_requested} {item.unit}
-                  </span>
-                </div>
-                {isConfirmed && (
-                  <p className="text-xs text-green-700 inline-flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" /> Saved — {item.quantity_approved} {item.unit} approved
-                  </p>
-                )}
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 space-y-1">
-                    <Label className="text-xs">Quantity to approve</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max={item.quantity_requested}
-                      step="0.01"
-                      value={lineQtyInput}
-                      onChange={(e) => setLineQtyInput(e.target.value)}
-                      className={isShort ? "border-amber-400 focus-visible:ring-amber-300" : ""}
-                    />
-                  </div>
-                </div>
-                {isShort && (
-                  <p className="text-xs text-amber-600">
-                    Short by {item.quantity_requested - approvedNum} {item.unit} — this is final, not backordered.
-                  </p>
-                )}
-                <Button
-                  size="sm"
-                  onClick={handleSubmitLine}
-                  disabled={actionLoading}
-                  className="w-full bg-green-600 hover:bg-green-700"
-                >
-                  {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle2 className="h-4 w-4 mr-1" />}
-                  {isConfirmed ? "Update this line's decision" : "Submit this line"}
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  Saves immediately — close this and come back later if you need to. The
-                  transfer can only be approved once every line has been submitted.
-                </p>
-              </div>
-            );
-          })()}
-
+          {/* Read-only trend/history view — quantity edits and the
+              "Reviewed" checkbox happen inline in the approve table
+              (opened via "Back to approve list" below), not here. */}
           {transfer.status === "pending_approval" && isAdminOrManager && (
             <DialogFooter>
               <Button variant="outline" onClick={() => setAnalyticsOpen(false)}>Close</Button>
               <Button
                 variant="outline"
-                onClick={() => { setAnalyticsOpen(false); openApproveDialog(); }}
+                onClick={() => (approveLines.length > 0 ? returnToApproveDialog() : openApproveDialog())}
               >
-                View approval checklist
+                Back to approve list
               </Button>
             </DialogFooter>
           )}

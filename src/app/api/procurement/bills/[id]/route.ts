@@ -164,13 +164,6 @@ export async function PATCH(
   const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role);
-  if (!canAct) {
-    return NextResponse.json({ error: "Access denied" }, { status: 403 });
-  }
-  // Approval actions require admin only
-  const canApproveOrReject = dbUser.role === "admin";
-
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
     .select("*")
@@ -178,6 +171,17 @@ export async function PATCH(
     .single();
 
   if (fetchError || !bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
+
+  // The bill's own creator can always act on it (e.g. fix and resubmit a
+  // rejection) even if their role isn't in the general procurement list —
+  // mirrors the requester bypass on the Material Request PATCH route.
+  const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role)
+    || bill.created_by === dbUser.id;
+  if (!canAct) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+  // Approval actions require admin only
+  const canApproveOrReject = dbUser.role === "admin";
 
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
@@ -581,46 +585,6 @@ export async function PATCH(
           { error: "Only pending bills can be rejected" },
           { status: 422 }
         );
-      }
-
-      // Determine PO type to decide outcome handling
-      let poType: string | null = null;
-      if (bill.po_id) {
-        const { data: linkedPo } = await supabase
-          .from("purchase_orders")
-          .select("po_type, status")
-          .eq("id", bill.po_id)
-          .single();
-        poType = linkedPo?.po_type ?? null;
-
-        if (poType === "service") {
-          // Service PO: void the bill (delete it so the cycle can accept a new invoice)
-          await supabase.from("vendor_bills").delete().eq("id", id);
-
-          await logAudit(supabase, {
-            entityType: "vendor_bill",
-            entityId: id,
-            action: "delete",
-            performedBy: dbUser.id,
-            changes: {
-              approval_status: { old: "pending", new: "rejected (voided)" },
-              rejection_reason: { old: null, new: parsed.data.rejection_reason },
-            },
-          });
-
-          sendPushToProcurementRoles({
-            title: "Service Invoice Rejected",
-            body: `${bill.bill_number} voided — a new invoice can be uploaded for this cycle`,
-            url: bill.po_id ? `/procurement/orders/${bill.po_id}` : `/procurement/bills`,
-            tag: `bill-approval-${id}`,
-          }).catch((err) => console.error("[push] service rejection notification failed:", err));
-
-          return NextResponse.json({
-            data: null,
-            message: "Invoice rejected and voided. A new invoice can be uploaded for this service cycle.",
-          });
-        }
-
       }
 
       updatePayload = {

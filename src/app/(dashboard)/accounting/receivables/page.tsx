@@ -30,6 +30,7 @@ import {
 import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } from "@/lib/constants";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 
@@ -62,6 +63,8 @@ interface InvoiceRef {
   id: string;
   invoice_number: string;
   lead?: Lead;
+  primary_head?: string | null;
+  internal_notes?: string | null;
 }
 
 /** Normalizes a row's owner (contract, proposal PI, or ad-hoc lead invoice) into
@@ -638,6 +641,15 @@ export default function AccountsReceivablePage() {
                             </Link>
                           )}
                           <Badge variant="outline" className="text-[10px] mt-1 capitalize">{r.statement_type}</Badge>
+                          {r.invoice?.primary_head && (
+                            <Badge
+                              variant="outline"
+                              title={r.invoice.internal_notes ? `Internal note: ${r.invoice.internal_notes}` : undefined}
+                              className={`text-[10px] mt-1 ml-1 ${ACCOUNTING_HEAD_COLORS[r.invoice.primary_head as AccountingHead] || ""}`}
+                            >
+                              {ACCOUNTING_HEAD_LABELS[r.invoice.primary_head as AccountingHead] || r.invoice.primary_head}
+                            </Badge>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-xs whitespace-nowrap">
                           {formatDate(r.period_start)}<br />

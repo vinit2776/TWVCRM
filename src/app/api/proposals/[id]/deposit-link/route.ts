@@ -12,8 +12,10 @@ import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
  * Modes:
  *   - { preview: true } → returns { html, subject, to, ... } without creating a
  *     Razorpay link or sending any email. Safe to call multiple times.
- *   - no body / { preview: false } → creates the Razorpay link (if not already
- *     present) and emails the customer.
+ *   - { deposit_internal_notes, preview: false | omitted } → creates the
+ *     Razorpay link (if not already present) and emails the customer.
+ *     deposit_internal_notes is required (≥10 chars) in send mode — an
+ *     internal-only note for accounts, never included in the customer email.
  */
 export async function POST(
   request: NextRequest,
@@ -28,11 +30,19 @@ export async function POST(
     .from("users").select("id").eq("auth_id", user.id).single();
 
   let isPreview = false;
+  let internalNotes: string | null = null;
   try {
     const body = await request.json().catch(() => null);
     if (body && body.preview === true) isPreview = true;
+    if (body && typeof body.deposit_internal_notes === "string") {
+      internalNotes = body.deposit_internal_notes.trim();
+    }
   } catch {
     // no body — send mode
+  }
+
+  if (!isPreview && (!internalNotes || internalNotes.length < 10)) {
+    return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
   }
 
   // Fetch proposal with lead
@@ -226,6 +236,7 @@ export async function POST(
       deposit_due_date: depositDueDate,
       deposit_reminder_count: 0,
       deposit_last_reminder_sent_at: null,
+      deposit_internal_notes: internalNotes,
     })
     .eq("id", id);
 

@@ -985,11 +985,15 @@ export default function ContractDetailPage({
           {/* ── Quota sections ──────────────────────────────────────────────
                Active (and beyond) contracts: only admin can edit.
                Draft/Sent/Accepted: admin, manager, accounts can edit.
-               Terminated/Expired/Rejected: hidden (no edits needed). */}
-          {contract.status !== "terminated" && contract.status !== "expired" && contract.status !== "rejected" && (() => {
+               Terminated/Expired/Rejected: still shown (read-only) so
+               negotiated rates/quotas remain visible for reference — e.g.
+               to log a backdated booking against the rate that was in
+               effect, or for accounting to look up historical terms. */}
+          {(() => {
+            const isTerminal = ["terminated", "expired", "rejected"].includes(contract.status);
             const isLocked = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
             const hasQuotaRole = (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole || "");
-            const canEdit = hasQuotaRole && (["admin", "manager"].includes(userRole || "") || !isLocked);
+            const canEdit = !isTerminal && hasQuotaRole && (["admin", "manager"].includes(userRole || "") || !isLocked);
             const quotaReadOnly = !canEdit;
             return (
               <>
