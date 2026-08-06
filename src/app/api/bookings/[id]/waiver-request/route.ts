@@ -27,10 +27,32 @@ export async function POST(
   }
 
   const body = await request.json();
-  const { waiver_type = "overtime", waiver_amount, note } = body;
+  const { waiver_type = "overtime", waiver_amount, note, usage_charge_id } = body;
 
   if (!waiver_amount || Number(waiver_amount) <= 0) {
     return NextResponse.json({ error: "waiver_amount required" }, { status: 400 });
+  }
+
+  // Contract-holder overtime charges are now real usage_charges rows.
+  // usage_charge_id is optional (the walk-in/guest overtime flow has no
+  // real charge behind it yet — out of scope here, left exactly as-is) —
+  // but when provided, it must actually resolve so approval later knows
+  // exactly which row to waive instead of guessing.
+  let targetCharge: { id: string; status: string; booking_id: string } | null = null;
+  if (usage_charge_id) {
+    const { data } = await supabase
+      .from("usage_charges")
+      .select("id, status, booking_id")
+      .eq("id", usage_charge_id)
+      .eq("booking_id", id)
+      .maybeSingle();
+    if (!data) {
+      return NextResponse.json({ error: "Usage charge not found for this booking" }, { status: 404 });
+    }
+    if (data.status !== "pending") {
+      return NextResponse.json({ error: "Only pending charges can be waived" }, { status: 400 });
+    }
+    targetCharge = data;
   }
 
   // Fetch booking with lead info for the notification
@@ -42,12 +64,19 @@ export async function POST(
 
   if (!booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
-  // Expire any previous pending waiver for this booking
-  await supabase
+  // Expire any previous pending waiver for this booking. When a specific
+  // charge is targeted, scope to that charge — a booking can accumulate
+  // more than one charge over time and shouldn't expire an unrelated
+  // still-pending request.
+  let expireQuery = supabase
     .from("waiver_requests")
     .update({ status: "expired" })
     .eq("booking_id", id)
     .eq("status", "pending");
+  expireQuery = targetCharge
+    ? expireQuery.eq("usage_charge_id", targetCharge.id)
+    : expireQuery.is("usage_charge_id", null);
+  await expireQuery;
 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
 
@@ -55,6 +84,7 @@ export async function POST(
     .from("waiver_requests")
     .insert({
       booking_id: id,
+      usage_charge_id: targetCharge?.id ?? null,
       requester_id: dbUser.id,
       waiver_type,
       waiver_amount: Number(waiver_amount),
@@ -150,6 +180,17 @@ export async function PUT(
 
   if (!dbUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Execution is admin/manager only — possessing a valid OTP (e.g.
+  // forwarded or screenshotted) used to be sufficient on its own. OTPs are
+  // only ever emailed to admin/manager, but that's not a substitute for
+  // checking the caller's own role here.
+  if (!["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin and managers can approve waivers" },
+      { status: 403 }
+    );
+  }
+
   const body = await request.json();
   const { otp } = body;
   if (!otp) return NextResponse.json({ error: "OTP required" }, { status: 400 });
@@ -202,6 +243,45 @@ export async function PUT(
       approved_at: new Date().toISOString(),
     })
     .eq("id", waiverReq.id);
+
+  // Actually waive the linked usage_charges row — same field-set as the
+  // admin/manager waive branch in PATCH /api/usage-charges/[id].
+  // waived_by is the APPROVING manager (otpRecord.manager_id), not the
+  // floor_manager who submitted the request, since the manager is the one
+  // authorizing the write-off. Guarded on status='pending' to avoid a
+  // double-waive race with a concurrent direct waive.
+  if (waiverReq.usage_charge_id) {
+    // Snapshot the pre-waive amounts (the zeroing below is lossy) so the
+    // booking's transaction breakdown can still show the original figure
+    // alongside who approved the write-off.
+    const { data: chargeBefore } = await supabase
+      .from("usage_charges")
+      .select("unit_price, total, gst_amount, total_with_gst")
+      .eq("id", waiverReq.usage_charge_id)
+      .maybeSingle();
+
+    const { error: waiveErr } = await supabase
+      .from("usage_charges")
+      .update({
+        status: "waived",
+        waived_by: otpRecord.manager_id,
+        waived_at: new Date().toISOString(),
+        waive_reason: waiverReq.note || "Approved via OTP waiver flow",
+        original_unit_price:     Number(chargeBefore?.unit_price ?? 0),
+        original_total:          Number(chargeBefore?.total ?? 0),
+        original_gst_amount:     Number(chargeBefore?.gst_amount ?? 0),
+        original_total_with_gst: Number(chargeBefore?.total_with_gst ?? 0),
+        unit_price: 0,
+        total: 0,
+        gst_amount: 0,
+        total_with_gst: 0,
+      })
+      .eq("id", waiverReq.usage_charge_id)
+      .eq("status", "pending");
+    if (waiveErr) {
+      console.error("[waiver-approve] failed to waive usage_charge:", waiveErr);
+    }
+  }
 
   return NextResponse.json({
     data: {

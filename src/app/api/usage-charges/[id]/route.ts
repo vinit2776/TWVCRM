@@ -87,6 +87,12 @@ export async function PATCH(
     allowedFields.waived_by = dbUser.id;
     allowedFields.waived_at = new Date().toISOString();
     allowedFields.waive_reason = body.waive_reason || null;
+    // Snapshot the amounts before zeroing so a breakdown can still show
+    // "₹X — waived by Y" (the zeroing below is otherwise lossy).
+    allowedFields.original_unit_price     = Number(oldCharge.unit_price ?? 0);
+    allowedFields.original_total          = Number(oldCharge.total ?? 0);
+    allowedFields.original_gst_amount     = Number(oldCharge.gst_amount ?? 0);
+    allowedFields.original_total_with_gst = Number(oldCharge.total_with_gst ?? 0);
     // Every other writer of status:"waived" in this codebase (free-quota
     // bookings, free-quota facility charges, cancelled-booking waivers)
     // zeroes the amount fields — displays like the Billing page's Usage

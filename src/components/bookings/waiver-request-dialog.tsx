@@ -15,6 +15,13 @@ interface WaiverRequestDialogProps {
   bookingId: string;
   waiverType: "overtime" | "extension" | "other";
   waiverAmount: number;
+  /**
+   * The specific usage_charges row this request targets, if one exists
+   * (contract-holder overtime is a real, persisted charge). Omit for the
+   * walk-in/guest overtime flow, which has no real charge behind it yet —
+   * approval then behaves exactly as before (no charge gets waived).
+   */
+  usageChargeId?: string;
   /** Called when waiver is successfully approved */
   onApproved: () => void;
 }
@@ -27,6 +34,7 @@ export function WaiverRequestDialog({
   bookingId,
   waiverType,
   waiverAmount,
+  usageChargeId,
   onApproved,
 }: WaiverRequestDialogProps) {
   const [step, setStep] = useState<Step>("request");
@@ -41,7 +49,12 @@ export function WaiverRequestDialog({
       const res = await fetch(`/api/bookings/${bookingId}/waiver-request`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ waiver_type: waiverType, waiver_amount: waiverAmount, note: note.trim() || undefined }),
+        body: JSON.stringify({
+          waiver_type: waiverType,
+          waiver_amount: waiverAmount,
+          note: note.trim() || undefined,
+          usage_charge_id: usageChargeId,
+        }),
       });
       const json = await res.json();
       if (!res.ok) {

@@ -31,6 +31,7 @@ export type WidgetId =
   | "aggregator_performance"
   | "procurement_spend"
   | "quota_overuse"
+  | "pending_overtime_charges"
   | "mtd_bookings"
   | "rent_revenue"
   | "network"
@@ -69,6 +70,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
   procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
   quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
+  pending_overtime_charges: { id: "pending_overtime_charges", title: "Pending Overtime Charges" },
   mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
   network:                { id: "network",                title: "Network Status" },
@@ -100,6 +102,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "member_health",
     "aggregator_performance",
     "quota_overuse",
+    "pending_overtime_charges",
     "procurement_spend",
     "team_performance",
     "followups",
@@ -117,6 +120,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "lead_funnel",
     "revenue_pulse",
     "sla_risk",
+    "pending_overtime_charges",
     "source_roi",
     "member_health",
     "team_performance",

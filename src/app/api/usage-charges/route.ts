@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("usage_charges")
     .select(
-      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
+      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company), waived_by_user:users!usage_charges_waived_by_fkey(id, full_name, role)",
       { count: "exact" }
     );
 
@@ -36,7 +36,14 @@ export async function GET(request: NextRequest) {
   if (dateFrom) query = query.gte("charge_date", dateFrom);
   if (dateTo) query = query.lte("charge_date", dateTo);
 
-  query = query.order("charge_date", { ascending: false }).range(offset, offset + limit - 1);
+  // charge_date is a DATE (no time component), so same-day charges tie on
+  // it — Postgres gives no ordering guarantee for ties without a
+  // tiebreaker. created_at is a real timestamp, so it breaks ties
+  // chronologically instead of leaving same-day order undefined.
+  query = query
+    .order("charge_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

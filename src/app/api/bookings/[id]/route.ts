@@ -514,6 +514,111 @@ export async function PATCH(
               },
               is_day_pass: true,
             };
+          } else if (booking.customer_type === "contract_holder" && booking.contract_id) {
+            // Contract holders are billed monthly via usage_charges, not
+            // per booking (booking.total_amount is always ₹0 for them) —
+            // post a real pending charge now instead of the ephemeral
+            // `_overtime` object the other branches use below, which is
+            // stripped before the DB write and only ever reached staff as
+            // a 15s toast with nothing collectible behind it.
+            let overageRate: number | null = null;
+            let contractFacilityId: string | null = null;
+
+            // Prefer the same contract_facility that produced this
+            // booking's original quota-usage charge — the contract's
+            // negotiated overage rate, not the raw space rate.
+            if (booking.usage_charge_id) {
+              const { data: originCharge } = await supabase
+                .from("usage_charges")
+                .select("contract_facility_id")
+                .eq("id", booking.usage_charge_id)
+                .maybeSingle();
+              contractFacilityId = originCharge?.contract_facility_id ?? null;
+            }
+            if (contractFacilityId) {
+              const { data: facility } = await supabase
+                .from("contract_facilities")
+                .select("cost_per_unit")
+                .eq("id", contractFacilityId)
+                .maybeSingle();
+              overageRate = facility ? Number(facility.cost_per_unit) : null;
+            }
+
+            // Fall back to re-deriving the hour-based facility the same
+            // way POST /api/bookings does, in case the origin-charge link
+            // is missing (e.g. booking predates it, or the origin charge
+            // had no facility match).
+            if (overageRate === null) {
+              const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
+              const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
+                supabase.from("spaces").select("name").eq("id", booking.space_id).maybeSingle(),
+                supabase
+                  .from("contract_facilities")
+                  .select("id, name, cost_per_unit")
+                  .eq("contract_id", booking.contract_id)
+                  .in("unit", HOUR_UNITS),
+              ]);
+              if (facilities && facilities.length > 0) {
+                const spaceLower = (spaceRow?.name || "").toLowerCase();
+                const matched =
+                  facilities.length === 1
+                    ? facilities[0]
+                    : facilities.find(
+                        (f: { name: string }) =>
+                          spaceLower.includes(f.name.toLowerCase()) ||
+                          f.name.toLowerCase().includes(spaceLower)
+                      ) || facilities[0];
+                contractFacilityId = matched.id;
+                overageRate = Number(matched.cost_per_unit);
+              }
+            }
+
+            if (overageRate === null) {
+              overageRate = Number(booking.hourly_rate || 0);
+              if (overageRate === 0) {
+                console.error(
+                  `[checkout] no overage rate resolvable for contract-holder overtime on booking ${id} (contract ${booking.contract_id}) — posting ₹0 charge`
+                );
+              }
+            }
+
+            const { data: contractRow } = await supabase
+              .from("contracts")
+              .select("lead_id, tax_percentage")
+              .eq("id", booking.contract_id)
+              .single();
+
+            const overtimeTotal = parseFloat((overtimeHours * overageRate).toFixed(2));
+            const gstRate = Number(contractRow?.tax_percentage ?? 18);
+            const gstAmount = parseFloat((overtimeTotal * gstRate / 100).toFixed(2));
+            const totalWithGst = parseFloat((overtimeTotal + gstAmount).toFixed(2));
+
+            const { error: overtimeChargeErr } = await supabase.from("usage_charges").insert({
+              contract_id: booking.contract_id,
+              booking_id: id,
+              lead_id: contractRow?.lead_id ?? booking.lead_id ?? null,
+              contract_facility_id: contractFacilityId,
+              booking_charge_kind: "overtime",
+              description: `Overtime: ${overtimeHours}hr past booking end time (checked out ${overtimeMinutes} min late)`,
+              quantity: overtimeHours,
+              unit_price: overageRate,
+              total: overtimeTotal,
+              gst_rate: gstRate,
+              gst_amount: gstAmount,
+              total_with_gst: totalWithGst,
+              charge_date: booking.booking_date,
+              status: "pending",
+              created_by: dbUser.id,
+            });
+            if (overtimeChargeErr) {
+              // Don't fail checkout over this — log so it surfaces in
+              // Vercel logs, but the booking must still check out.
+              console.error("[checkout] overtime usage_charge insert failed:", overtimeChargeErr);
+            }
+            // Deliberately no `_overtime` here — the booking page derives
+            // the pending-overtime banner from a real usage_charges row
+            // (refetched via GET /api/usage-charges?booking_id=) rather
+            // than from this mutation's response, so it survives reload.
           } else {
             const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
             const overtimeCharge = overtimeHours * hourlyRate;
