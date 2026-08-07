@@ -16,7 +16,9 @@ import {
 import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useAggregators } from "@/hooks/use-aggregators";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import {
   AGGREGATOR_STATUSES,
   AGGREGATOR_STATUS_LABELS,
@@ -43,6 +45,7 @@ export default function AggregatorsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Aggregators" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -122,7 +125,10 @@ export default function AggregatorsPage() {
                 <tr
                   key={agg.id}
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
-                  onClick={() => router.push(`/aggregators/${agg.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/aggregators/${agg.id}`, label: agg.name });
+                    router.push(`/aggregators/${agg.id}`);
+                  }}
                 >
                   <td className="px-4 py-3">
                     <span className="font-mono text-xs text-muted-foreground">{agg.code}</span>
@@ -131,7 +137,10 @@ export default function AggregatorsPage() {
                     <Link
                       href={`/aggregators/${agg.id}`}
                       className="font-medium text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/aggregators/${agg.id}`, label: agg.name });
+                      }}
                     >
                       {agg.name}
                     </Link>

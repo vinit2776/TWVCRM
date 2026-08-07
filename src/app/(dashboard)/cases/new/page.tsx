@@ -4,8 +4,10 @@ import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CaseForm } from "@/components/cases/case-form";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import type { CreateCaseInput } from "@/lib/validations";
 import type { VoCase } from "@/types";
 
@@ -45,6 +47,7 @@ function NewCaseContent() {
 
     const { data: newCase } = await res.json();
     toast.success(renewFrom ? "Renewal case created" : "Case created successfully");
+    pushTrailEntry({ href: `/cases/${newCase.id}`, label: newCase.client_name });
     router.push(`/cases/${newCase.id}`);
   };
 
@@ -58,6 +61,10 @@ function NewCaseContent() {
 
   return (
     <div className="max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: "New Case" }}
+        fallbackParent={{ href: "/cases", label: "Cases" }}
+      />
       <h1 className="text-2xl font-bold mb-2">
         {renewFrom ? "Create Renewal Case" : "Create New Case"}
       </h1>
