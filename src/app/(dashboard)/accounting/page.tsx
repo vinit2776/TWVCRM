@@ -52,6 +52,8 @@ import {
   PROCUREMENT_DEPARTMENTS,
   PARTIAL_APPROVAL_REASON_LABELS,
 } from "@/lib/constants";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 type VendorBillItem = {
   id: string;
@@ -549,6 +551,7 @@ export default function AccountingPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Acc Payables" }} />
 
       {/* Header */}
       <div className="flex items-center gap-3">
@@ -697,7 +700,11 @@ export default function AccountingPage() {
                         {pendingAdvances.map((adv) => (
                           <tr key={adv.id} className="border-t border-purple-100 hover:bg-purple-50">
                             <td className="px-4 py-2.5 font-mono text-xs">
-                              <Link href={`/procurement/orders/${adv.id}`} className="text-purple-800 hover:underline">
+                              <Link
+                                href={`/procurement/orders/${adv.id}`}
+                                className="text-purple-800 hover:underline"
+                                onClick={() => pushTrailEntry({ href: `/procurement/orders/${adv.id}`, label: adv.po_number })}
+                              >
                                 {adv.po_number}
                               </Link>
                               <div className="text-[10px] text-purple-600">
@@ -1012,7 +1019,10 @@ export default function AccountingPage() {
                                 "border-b last:border-0 hover:bg-muted/40 cursor-pointer",
                                 isSelected && "bg-emerald-50/60"
                               )}
-                              onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                              onClick={() => {
+                                pushTrailEntry({ href: `/accounting/vendor-payments/${bill.id}`, label: bill.bill_number });
+                                router.push(`/accounting/vendor-payments/${bill.id}`);
+                              }}
                             >
                               {canRecordPayment && (
                                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1259,7 +1269,10 @@ export default function AccountingPage() {
                               <tr
                                 key={bill.id}
                                 className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
-                                onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                                onClick={() => {
+                                  pushTrailEntry({ href: `/accounting/vendor-payments/${bill.id}`, label: bill.bill_number });
+                                  router.push(`/accounting/vendor-payments/${bill.id}`);
+                                }}
                               >
                                 <td className="px-4 py-2.5 font-mono text-xs font-medium">
                                   {bill.bill_number}

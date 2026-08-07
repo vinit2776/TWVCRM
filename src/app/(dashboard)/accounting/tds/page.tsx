@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── TDS Receivable types ──────────────────────────────────────
 type TdsReceivableRow = {
@@ -1033,6 +1034,7 @@ export default function TdsPayablePage() {
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+      <PageBreadcrumb resetTo={{ label: "TDS" }} />
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
