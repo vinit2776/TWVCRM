@@ -26,6 +26,7 @@ import {
   BookingSummarySection,
 } from "@/components/bookings/new-booking";
 import type { CustomerSuggestion, ContractOption, AvailableSlot, OutstandingCharge, AppliedCredit } from "@/components/bookings/new-booking";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 function NewBookingForm() {
   const router = useRouter();
@@ -685,6 +686,10 @@ function NewBookingForm() {
   return (
     <BookingFormProvider value={contextValue}>
       <div className="space-y-6 max-w-4xl">
+        <PageBreadcrumb
+          current={{ label: "New Booking" }}
+          fallbackParent={{ href: "/bookings", label: "Bookings" }}
+        />
         {/* Header */}
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/bookings")}>

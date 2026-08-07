@@ -26,6 +26,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { toast } from "sonner";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import dynamic from "next/dynamic";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const VisitorsChart = dynamic(
   () => import("@/components/network/network-charts").then((m) => ({ default: m.VisitorsChart })),
@@ -232,6 +233,7 @@ export default function NetworkPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Network" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <h1 className="text-2xl font-bold flex items-center gap-2">

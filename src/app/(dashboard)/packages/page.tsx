@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner";
 import type { PrepaidPackage, PrepaidPurchase, Space } from "@/types";
 import { useLocations } from "@/hooks/use-locations";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const WORKSPACE_TYPE_LABELS: Record<string, string> = {
   hot_desk: "Hot Desk",
@@ -438,6 +439,7 @@ export default function PackagesPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Packages" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

@@ -35,6 +35,8 @@ import { BookingCountdown } from "@/components/bookings/booking-countdown";
 import { BulkActionsBar } from "@/components/bookings/bulk-actions-bar";
 import dynamic from "next/dynamic";
 import { CustomerSegments } from "@/components/bookings/customer-segments";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // Recharts is ~200 KB gzipped. Lazy-load the two chart-heavy components so the
 // Analytics tab only pulls them in when the user actually opens it.
@@ -241,7 +243,10 @@ function BookingTable({
                     className={`border-b hover:bg-muted/30 transition-colors cursor-pointer ${
                       shouldBlink ? "animate-pulse bg-amber-50" : ""
                     } ${selectedIds.has(b.id) ? "bg-blue-50/50" : ""}`}
-                    onClick={() => router.push(`/bookings/${b.id}`)}
+                    onClick={() => {
+                      pushTrailEntry({ href: `/bookings/${b.id}`, label: b.booking_number });
+                      router.push(`/bookings/${b.id}`);
+                    }}
                   >
                     <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -500,6 +505,7 @@ export default function BookingsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Bookings" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -737,7 +743,10 @@ export default function BookingsPage() {
                           <tr
                             key={b.id}
                             className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                            onClick={() => router.push(`/bookings/${b.id}`)}
+                            onClick={() => {
+                              pushTrailEntry({ href: `/bookings/${b.id}`, label: b.booking_number });
+                              router.push(`/bookings/${b.id}`);
+                            }}
                           >
                             <td className="px-4 py-3 font-mono text-xs">{b.booking_number}</td>
                             <td className="px-4 py-3 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>

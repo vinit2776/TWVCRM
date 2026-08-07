@@ -15,6 +15,8 @@ import { SpaceFormDialog } from "@/components/spaces/space-form-dialog";
 import { useLocations } from "@/hooks/use-locations";
 import { formatCurrency } from "@/lib/utils";
 import type { Space } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface Pagination {
   page: number;
@@ -77,6 +79,7 @@ export default function SpacesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Spaces" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Spaces</h1>
@@ -147,7 +150,10 @@ export default function SpacesPage() {
               <tr
                 key={space.id}
                 className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                onClick={() => router.push(`/spaces/${space.id}`)}
+                onClick={() => {
+                  pushTrailEntry({ href: `/spaces/${space.id}`, label: space.name });
+                  router.push(`/spaces/${space.id}`);
+                }}
               >
                 <td className="px-4 py-3 font-medium">{space.name}</td>
                 <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">{space.location?.name || "—"}</td>
