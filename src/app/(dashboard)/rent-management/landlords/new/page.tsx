@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function NewLandlordPage() {
   const router = useRouter();
@@ -61,6 +62,10 @@ export default function NewLandlordPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <PageBreadcrumb
+        current={{ label: "New Landlord" }}
+        fallbackParent={{ href: "/rent-management/landlords", label: "Landlords" }}
+      />
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href="/rent-management/landlords"><ArrowLeft className="h-4 w-4" /></Link>

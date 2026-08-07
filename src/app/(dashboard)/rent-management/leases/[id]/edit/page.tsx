@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function EditLeasePage() {
   const { id } = useParams<{ id: string }>();
@@ -122,6 +123,10 @@ export default function EditLeasePage() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <PageBreadcrumb
+        current={{ label: "Edit" }}
+        fallbackParent={{ href: "/rent-management/leases", label: "Leases" }}
+      />
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href={`/rent-management/leases/${id}`}><ArrowLeft className="h-4 w-4" /></Link>
