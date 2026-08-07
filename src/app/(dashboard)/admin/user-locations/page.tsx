@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Plus, Trash2, Loader2, Search } from "lucide-react";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface UserLocationRow {
   id: string;
@@ -131,6 +132,7 @@ export default function UserLocationsPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "User Locations" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Location Access Assignments</h1>

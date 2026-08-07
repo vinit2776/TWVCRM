@@ -27,6 +27,7 @@ import { LocationFormDialog } from "@/components/locations/location-form-dialog"
 import { ElectricityConfigTab } from "@/components/locations/electricity-config-tab";
 import { LocationServicesTab } from "@/components/locations/location-services-tab";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
 
 type Tab = "overview" | "spaces" | "analytics" | "electricity" | "services";
@@ -194,6 +195,10 @@ export default function LocationDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: location.name }}
+        fallbackParent={{ href: "/locations", label: "Locations" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">

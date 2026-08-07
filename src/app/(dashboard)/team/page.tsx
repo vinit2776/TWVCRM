@@ -56,6 +56,8 @@ import { getInitials, formatDate } from "@/lib/utils";
 import type { User as UserType } from "@/types";
 import { toast } from "sonner";
 import { UserActivityLogDialog } from "@/components/team/user-activity-log";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: ShieldCheck,
@@ -590,6 +592,7 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Team" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Team Management</h1>
@@ -874,7 +877,10 @@ export default function TeamPage() {
                               <Link
                                 href={`/team/${member.id}/activity`}
                                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-                                onClick={() => setOpenMenuId(null)}
+                                onClick={() => {
+                                  pushTrailEntry({ href: `/team/${member.id}/activity`, label: member.full_name });
+                                  setOpenMenuId(null);
+                                }}
                               >
                                 <BarChart3 className="h-4 w-4" />
                                 Activity Storyboard

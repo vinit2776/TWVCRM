@@ -28,6 +28,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { formatDateTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface AuditEntry {
   id: string;
@@ -213,6 +214,10 @@ export default function UserActivityStoryboardPage({
 
   return (
     <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-4">
+      <PageBreadcrumb
+        current={{ label: isSelf ? "My Activity" : targetUser ? `${targetUser.full_name}'s Activity` : "Activity" }}
+        fallbackParent={{ href: "/team", label: "Team" }}
+      />
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" asChild>
           <Link href="/team"><ArrowLeft className="h-4 w-4" /></Link>

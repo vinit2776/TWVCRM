@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Plus, Pencil, Loader2, Power } from "lucide-react";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface ProfileRow {
   id: string;
@@ -172,6 +173,7 @@ export default function ElectricityBillingProfilesPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Electricity Billing Profiles" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Electricity Billing Profiles</h1>

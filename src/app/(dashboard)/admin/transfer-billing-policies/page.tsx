@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { Plus, Pencil, Loader2, Info } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface PolicyRow {
   id: string;
@@ -153,6 +154,7 @@ export default function TransferBillingPoliciesPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Transfer Billing Policies" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Transfer Billing Policies</h1>

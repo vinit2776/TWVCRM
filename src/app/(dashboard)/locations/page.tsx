@@ -10,6 +10,8 @@ import { useLocations } from "@/hooks/use-locations";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import type { Location } from "@/types";
 
 export default function LocationsPage() {
@@ -31,6 +33,7 @@ export default function LocationsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Locations" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Locations</h1>
@@ -69,13 +72,19 @@ export default function LocationsPage() {
                 <tr
                   key={loc.id}
                   className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => router.push(`/locations/${loc.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/locations/${loc.id}`, label: loc.name });
+                    router.push(`/locations/${loc.id}`);
+                  }}
                 >
                   <td className="px-4 py-3 font-medium">
                     <Link
                       href={`/locations/${loc.id}`}
                       className="hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/locations/${loc.id}`, label: loc.name });
+                      }}
                     >
                       {loc.name}
                     </Link>

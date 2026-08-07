@@ -21,6 +21,7 @@ import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
 import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -93,6 +94,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Settings" }} />
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">Manage your account and preferences</p>
