@@ -47,6 +47,8 @@ export async function GET(request: NextRequest) {
     .from("proposals")
     .select(`
       id, proposal_number, security_deposit_amount,
+      deposit_credit_amount, deposit_credit_reason,
+      deposit_exception_amount, deposit_exception_reason,
       deposit_payment_amount, deposit_payment_reference,
       deposit_payment_medium, deposit_payment_received_at,
       deposit_payment_screenshot_url, deposit_razorpay_link_id, deposit_razorpay_link_url,
@@ -105,7 +107,12 @@ export async function GET(request: NextRequest) {
         contract_number: contract?.contract_number ?? null,
         proposal_number: d.proposal_number,
         amount: d.deposit_payment_amount == null ? null : Number(d.deposit_payment_amount),
-        expected_amount: d.security_deposit_amount == null ? null : Number(d.security_deposit_amount),
+        expected_amount: d.security_deposit_amount == null ? null : Math.max(0,
+          Number(d.security_deposit_amount || 0) + Number(d.deposit_exception_amount || 0) - Number(d.deposit_credit_amount || 0)),
+        credit_amount: Number(d.deposit_credit_amount || 0) > 0 ? Number(d.deposit_credit_amount) : null,
+        credit_reason: d.deposit_credit_reason,
+        exception_amount: Number(d.deposit_exception_amount || 0) !== 0 ? Number(d.deposit_exception_amount) : null,
+        exception_reason: d.deposit_exception_reason,
         payment_reference: d.deposit_payment_reference,
         payment_medium: d.deposit_payment_medium,
         paid_at: d.deposit_payment_received_at,

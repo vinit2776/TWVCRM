@@ -343,6 +343,17 @@ export interface Proposal {
   deposit_credit_proof_url?: string;
   deposit_credit_applied_by?: string;
   deposit_credit_applied_at?: string;
+  // Deposit exception — a signed override of the required deposit itself,
+  // for one-off exceptions (positive raises it, negative lowers it).
+  // security_deposit_amount is never changed by this; the effective
+  // required deposit is security_deposit_amount + deposit_exception_amount.
+  // Not to be confused with the unrelated deposit_adjustments table, which
+  // draws the deposit down against a billing statement at settlement time.
+  deposit_exception_amount?: number;
+  deposit_exception_reason?: string;
+  deposit_exception_proof_url?: string;
+  deposit_exception_applied_by?: string;
+  deposit_exception_applied_at?: string;
   // Accounting
   deposit_accounted?: boolean;
   deposit_accounted_at?: string;
@@ -704,6 +715,12 @@ export interface DepositInboxRow {
   amount: number | null;
   /** The deposit the contract called for. Used as a labelled fallback when `amount` was never recorded. */
   expected_amount?: number | null;
+  /** A credit already held from a prior contract, netted off the required deposit. */
+  credit_amount?: number | null;
+  credit_reason?: string | null;
+  /** A signed exception override of the required deposit (positive raises it, negative lowers it). */
+  exception_amount?: number | null;
+  exception_reason?: string | null;
   payment_reference?: string | null;
   payment_medium?: string | null;
   /** Null for legacy proposals where the received date was never recorded. */
