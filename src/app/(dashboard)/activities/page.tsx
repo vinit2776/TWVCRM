@@ -31,6 +31,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDuration } from "@/lib/utils";
 import type { Activity } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const ACTIVITY_ICONS: Record<
   string,
@@ -121,6 +122,7 @@ export default function ActivitiesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Activities" }} />
       {/* Header + Filters */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
