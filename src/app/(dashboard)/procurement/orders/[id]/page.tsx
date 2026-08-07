@@ -36,6 +36,7 @@ import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStat
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -898,6 +899,10 @@ export default function PurchaseOrderDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: po.po_number }}
+        fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+      />
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">

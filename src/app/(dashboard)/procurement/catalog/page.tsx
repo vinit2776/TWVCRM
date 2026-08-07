@@ -31,6 +31,8 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -290,6 +292,7 @@ export default function CatalogPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Catalog" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -526,7 +529,10 @@ export default function CatalogPage() {
                             {deptItems.map((item) => {
                               const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
                               return (
-                                <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => router.push(`/procurement/catalog/${item.id}`)}>
+                                <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => {
+                                  pushTrailEntry({ href: `/procurement/catalog/${item.id}`, label: item.name });
+                                  router.push(`/procurement/catalog/${item.id}`);
+                                }}>
                                   <td className="px-4 py-2.5">
                                     <div className="flex items-center gap-2">
                                       <span className={item.is_active ? "" : "text-muted-foreground line-through"}>

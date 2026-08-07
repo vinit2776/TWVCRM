@@ -34,6 +34,7 @@ import { formatDate } from "@/lib/utils";
 import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
 import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
 import { TransferAuditTrail } from "@/components/procurement/transfer-audit-trail";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { TransferPhotoUpload, type UploadedTransferPhoto } from "@/components/procurement/transfer-photo-upload";
 
@@ -505,6 +506,10 @@ export default function TransferDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: transfer.transfer_number }}
+        fallbackParent={{ href: "/procurement/transfers", label: "Transfers" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

@@ -35,6 +35,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 type ActionType = "approve" | "reject" | "cancel" | "submit" | "resubmit";
 
@@ -341,6 +342,10 @@ export default function PurchaseRequestDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: pr.pr_number }}
+        fallbackParent={{ href: "/procurement/requests", label: "Material Requests" }}
+      />
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">

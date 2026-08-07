@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface LineItem {
   id: string;
@@ -77,6 +78,10 @@ function NewPurchaseOrderForm() {
   if (!prId) {
     return (
       <div className="space-y-6 max-w-2xl mx-auto">
+        <PageBreadcrumb
+          current={{ label: "New Purchase Order" }}
+          fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+        />
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.back()}>
             <ChevronLeft className="h-5 w-5" />
@@ -415,6 +420,10 @@ function NewPurchaseOrderFormWithPr({
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: "New Purchase Order" }}
+        fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
+      />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>

@@ -27,6 +27,8 @@ import { VendorRecurringBillsTab } from "@/components/procurement/vendor-recurri
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ProcurementVendor, VendorCategory } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const CATEGORY_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
@@ -490,6 +492,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb
+        current={{ label: vendor.name }}
+        fallbackParent={{ href: "/procurement/vendors", label: "Vendors" }}
+      />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/procurement/vendors">
@@ -1079,6 +1085,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                               <a
                                 href={`/procurement/orders/${p.last_po_id}`}
                                 className="text-primary hover:underline text-xs font-mono flex items-center gap-1"
+                                onClick={() => pushTrailEntry({ href: `/procurement/orders/${p.last_po_id}`, label: p.last_po_number! })}
                               >
                                 {p.last_po_number}
                                 <ExternalLink className="h-3 w-3" />
@@ -1240,7 +1247,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                               <tr
                                 key={po.id}
                                 className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
-                                onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                                onClick={() => {
+                                  pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                                  router.push(`/procurement/orders/${po.id}`);
+                                }}
                               >
                                 <td className="px-4 py-2.5">
                                   <div className="flex items-center gap-1.5">
@@ -1339,7 +1349,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                         <div
                           key={po.id}
                           className="border rounded-lg p-3 hover:bg-muted/40 cursor-pointer transition-colors"
-                          onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                          onClick={() => {
+                            pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                            router.push(`/procurement/orders/${po.id}`);
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -1587,7 +1600,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                           <tr
                             key={po.id}
                             className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
-                            onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                            onClick={() => {
+                              pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                              router.push(`/procurement/orders/${po.id}`);
+                            }}
                           >
                             <td className="px-4 py-2.5 font-mono text-xs">{po.po_number}</td>
                             <td className="px-4 py-2.5 text-muted-foreground hidden sm:table-cell">{formatDate(po.created_at)}</td>

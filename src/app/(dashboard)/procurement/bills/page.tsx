@@ -17,6 +17,8 @@ import { formatDate, formatCurrency, cn } from "@/lib/utils";
 import { poValidity, PO_VALIDITY_CLASS } from "@/lib/approval-display";
 import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } from "@/components/procurement/bill-search-bar";
 import type { VendorBill } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const today = new Date().toISOString().split("T")[0];
 
@@ -82,6 +84,7 @@ function VendorBillsPageInner() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Vendor Bills" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Vendor Bills</h1>
@@ -159,13 +162,19 @@ function VendorBillsPageInner() {
                     "border-b hover:bg-muted/30 transition-colors cursor-pointer",
                     isOverdue(bill) && "bg-amber-50/60"
                   )}
-                  onClick={() => router.push(`/procurement/bills/${bill.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/procurement/bills/${bill.id}`, label: bill.bill_number });
+                    router.push(`/procurement/bills/${bill.id}`);
+                  }}
                 >
                   <td className="px-4 py-3 font-mono text-xs font-medium">
                     <Link
                       href={`/procurement/bills/${bill.id}`}
                       className="text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/procurement/bills/${bill.id}`, label: bill.bill_number });
+                      }}
                     >
                       {bill.bill_number}
                     </Link>

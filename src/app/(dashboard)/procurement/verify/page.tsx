@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const TYPE_LABELS: Record<string, string> = {
   purchase_request: "Material Request Approval",
@@ -57,6 +58,7 @@ export default function VerifyApprovalPage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Verify" }} />
       <div>
         <h1 className="text-2xl font-bold">Verify Approval</h1>
         <p className="text-sm text-muted-foreground mt-1">

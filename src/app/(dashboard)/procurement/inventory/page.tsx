@@ -22,6 +22,7 @@ import {
 } from "@/lib/constants";
 import { ageInDays } from "@/lib/procurement/stock-aging";
 import type { LocationStock } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // Only physical-stock departments are shown in Inventory.
 const DEPARTMENT_TABS = ["all", ...STOCK_DEPARTMENTS] as const;
@@ -87,6 +88,7 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Inventory" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Inventory</h1>
