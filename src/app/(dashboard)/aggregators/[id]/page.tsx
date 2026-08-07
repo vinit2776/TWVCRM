@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useAggregator } from "@/hooks/use-aggregators";
 import { AggregatorContactsTab } from "@/components/aggregators/aggregator-contacts-tab";
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
@@ -106,6 +107,10 @@ export default function AggregatorDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: aggregator.name }}
+        fallbackParent={{ href: "/aggregators", label: "Aggregators" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

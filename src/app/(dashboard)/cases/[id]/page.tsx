@@ -29,6 +29,7 @@ import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-hi
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCase } from "@/hooks/use-cases";
 import { toast } from "sonner";
 import {
@@ -102,6 +103,10 @@ export default function CaseDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: caseData.client_name }}
+        fallbackParent={{ href: "/cases", label: "Cases" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

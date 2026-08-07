@@ -25,8 +25,10 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { CaseKanbanBoard } from "@/components/cases/case-kanban-board";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCases } from "@/hooks/use-cases";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import {
   CASE_STATUSES,
   CASE_STATUS_LABELS,
@@ -61,6 +63,7 @@ export default function CasesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Cases" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -194,7 +197,10 @@ export default function CasesPage() {
                 <tr
                   key={c.id}
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
-                  onClick={() => router.push(`/cases/${c.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/cases/${c.id}`, label: c.client_name });
+                    router.push(`/cases/${c.id}`);
+                  }}
                 >
                   <td className="px-4 py-3">
                     <span className="font-mono text-xs">{c.case_number}</span>
@@ -203,7 +209,10 @@ export default function CasesPage() {
                     <Link
                       href={`/cases/${c.id}`}
                       className="font-medium text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/cases/${c.id}`, label: c.client_name });
+                      }}
                     >
                       {c.client_name}
                     </Link>
