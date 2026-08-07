@@ -33,6 +33,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } from "@/lib/constants";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Lead {
   id: string;
@@ -417,6 +418,7 @@ export default function AccountsReceivablePage() {
 
   return (
     <div className="space-y-6 p-6">
+      <PageBreadcrumb resetTo={{ label: "Receivables" }} />
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Accounts Receivable</h1>
         <p className="text-muted-foreground">Track outstanding payments, record offline receipts, and follow up on overdue invoices.</p>

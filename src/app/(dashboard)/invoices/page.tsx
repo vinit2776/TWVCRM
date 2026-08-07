@@ -17,6 +17,7 @@ import {
 import { formatDate, formatCurrency, isOverdue } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { ProformaInvoice } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800", sent: "bg-blue-100 text-blue-800",
@@ -44,6 +45,7 @@ export default function InvoicesPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Proforma Invoices" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Proforma Invoices</h1>

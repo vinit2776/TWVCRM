@@ -36,6 +36,7 @@ import {
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -761,6 +762,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: bill.bill_number }}
+        fallbackParent={{ href: "/accounting", label: "Acc Payables" }}
+      />
 
       {/* Partial-approval banner — top of page so Accounts knows the ceiling
           + the reason BEFORE they open the payment dialog. */}

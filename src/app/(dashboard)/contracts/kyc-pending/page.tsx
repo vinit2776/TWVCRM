@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface KycDoc {
   id: string;
@@ -160,6 +161,7 @@ export default function KycPendingPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "KYC Pending" }} />
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">KYC Pending</h1>

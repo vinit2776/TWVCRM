@@ -36,6 +36,7 @@ import { Separator } from "@/components/ui/separator";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -570,6 +571,7 @@ export default function GatewayActivityPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px]">
+      <PageBreadcrumb resetTo={{ label: "Gateway Activity" }} />
       {linkRow && (
         <LinkDrawer
           row={linkRow}
