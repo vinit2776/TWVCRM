@@ -12,6 +12,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import type { Landlord } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const KYC_COLORS: Record<string, string> = {
   verified: "bg-green-100 text-green-800",
@@ -60,6 +62,7 @@ export default function LandlordsListPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Landlords" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Landlords</h1>
@@ -115,7 +118,11 @@ export default function LandlordsListPage() {
                     return (
                       <tr key={ll.id} className="border-b hover:bg-muted/20 transition-colors">
                         <td className="px-4 py-3">
-                          <Link href={`/rent-management/landlords/${ll.id}`} className="font-medium hover:underline text-primary">
+                          <Link
+                            href={`/rent-management/landlords/${ll.id}`}
+                            className="font-medium hover:underline text-primary"
+                            onClick={() => pushTrailEntry({ href: `/rent-management/landlords/${ll.id}`, label: ll.name })}
+                          >
                             {ll.name}
                           </Link>
                           {ll.email && <p className="text-xs text-muted-foreground">{ll.email}</p>}

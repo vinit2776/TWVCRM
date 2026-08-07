@@ -23,6 +23,8 @@ import {
 } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Landlord, LandlordBankAccount, PropertyLease } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const DOC_TYPE_LABELS: Record<string, string> = {
   pan_card: "PAN Card",
@@ -226,6 +228,10 @@ export default function LandlordDetailPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <PageBreadcrumb
+        current={{ label: landlord.name }}
+        fallbackParent={{ href: "/rent-management/landlords", label: "Landlords" }}
+      />
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-3">
           <Button variant="ghost" size="sm" asChild className="mt-1">
@@ -399,7 +405,11 @@ export default function LandlordDetailPage() {
                 {leases.map((l) => (
                   <tr key={l.id} className="border-b hover:bg-muted/20">
                     <td className="px-4 py-3">
-                      <Link href={`/rent-management/leases/${l.id}`} className="font-medium hover:underline text-primary">
+                      <Link
+                        href={`/rent-management/leases/${l.id}`}
+                        className="font-medium hover:underline text-primary"
+                        onClick={() => pushTrailEntry({ href: `/rent-management/leases/${l.id}`, label: l.location?.name ?? "Lease" })}
+                      >
                         {l.location?.name ?? "—"}
                       </Link>
                     </td>
