@@ -20,6 +20,8 @@ import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -355,6 +357,7 @@ export default function ProcurementDashboard() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Procurement" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -652,6 +655,7 @@ export default function ProcurementDashboard() {
                       key={mr.id}
                       href={`/procurement/requests/${mr.id}`}
                       className="flex items-start justify-between px-4 py-3 hover:bg-muted/30 transition-colors group"
+                      onClick={() => pushTrailEntry({ href: `/procurement/requests/${mr.id}`, label: mr.pr_number })}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -966,7 +970,10 @@ export default function ProcurementDashboard() {
                     <tr
                       key={mr.id}
                       className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                      onClick={() => router.push(`/procurement/requests/${mr.id}`)}
+                      onClick={() => {
+                        pushTrailEntry({ href: `/procurement/requests/${mr.id}`, label: mr.pr_number });
+                        router.push(`/procurement/requests/${mr.id}`);
+                      }}
                     >
                       <td className="px-4 py-2.5">
                         <span className="font-mono text-xs font-medium text-primary">{mr.pr_number}</span>
@@ -1013,7 +1020,10 @@ export default function ProcurementDashboard() {
                     <tr
                       key={po.id}
                       className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                      onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                      onClick={() => {
+                        pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                        router.push(`/procurement/orders/${po.id}`);
+                      }}
                     >
                       <td className="px-4 py-2.5">
                         <span className="font-mono text-xs font-medium text-primary">{po.po_number}</span>
@@ -1060,7 +1070,10 @@ export default function ProcurementDashboard() {
                     <div
                       key={v.id}
                       className="flex items-center gap-3 cursor-pointer group rounded px-1 -mx-1 py-0.5 hover:bg-muted/50 transition-colors"
-                      onClick={() => router.push(`/procurement/vendors/${v.id}`)}
+                      onClick={() => {
+                        pushTrailEntry({ href: `/procurement/vendors/${v.id}`, label: v.name });
+                        router.push(`/procurement/vendors/${v.id}`);
+                      }}
                     >
                       <span className="text-xs text-muted-foreground w-4 shrink-0">{idx + 1}</span>
                       <span className="text-sm font-medium w-44 truncate shrink-0 group-hover:text-primary transition-colors">{v.name}</span>

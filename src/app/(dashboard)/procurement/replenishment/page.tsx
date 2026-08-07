@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Suggestion {
   location_id: string;
@@ -91,6 +92,7 @@ export default function ReplenishmentPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Replenishment" }} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">

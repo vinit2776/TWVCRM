@@ -18,6 +18,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseOrder } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 // ── Month helpers ──────────────────────────────────────────────────────────────
 
@@ -94,6 +96,7 @@ export default function PurchaseOrdersPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Purchase Orders" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Purchase Orders</h1>
@@ -297,13 +300,19 @@ export default function PurchaseOrdersPage() {
                   <tr
                     key={po.id}
                     className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                    onClick={() => {
+                      pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                      router.push(`/procurement/orders/${po.id}`);
+                    }}
                   >
                     <td className="px-4 py-3 font-mono text-xs font-medium">
                       <Link
                         href={`/procurement/orders/${po.id}`}
                         className="text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          pushTrailEntry({ href: `/procurement/orders/${po.id}`, label: po.po_number });
+                        }}
                       >
                         {po.po_number}
                       </Link>

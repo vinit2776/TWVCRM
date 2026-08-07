@@ -33,6 +33,7 @@ import { BEVERAGE_TYPE_LABELS } from "@/lib/constants";
 import { ConsumptionCorrectionDialog } from "@/components/procurement/consumption-correction-dialog";
 import { ConsumptionLifecycleStatus } from "@/components/procurement/consumption-lifecycle-status";
 import Link from "next/link";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Location {
   id: string;
@@ -144,6 +145,7 @@ export default function ConsumptionHistoryPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Consumption History" }} />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/procurement/consumption">

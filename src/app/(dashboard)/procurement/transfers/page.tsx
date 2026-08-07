@@ -23,6 +23,8 @@ import {
 import { formatDate } from "@/lib/utils";
 import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import type { StockTransfer } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const FILTER_TABS = [
   { key: "", label: "All" },
@@ -108,6 +110,7 @@ export default function TransfersPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Transfers" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Stock Transfers</h1>
@@ -238,13 +241,19 @@ export default function TransfersPage() {
               <Card key={t.id} className="overflow-hidden py-0">
                 <div
                   className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b cursor-pointer"
-                  onClick={() => router.push(`/procurement/transfers/${t.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/procurement/transfers/${t.id}`, label: t.transfer_number });
+                    router.push(`/procurement/transfers/${t.id}`);
+                  }}
                 >
                   <div className="flex items-center gap-2.5">
                     <Link
                       href={`/procurement/transfers/${t.id}`}
                       className="font-medium text-sm text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/procurement/transfers/${t.id}`, label: t.transfer_number });
+                      }}
                     >
                       {t.transfer_number}
                     </Link>
@@ -307,13 +316,19 @@ export default function TransfersPage() {
                 <tr
                   key={t.id}
                   className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => router.push(`/procurement/transfers/${t.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/procurement/transfers/${t.id}`, label: t.transfer_number });
+                    router.push(`/procurement/transfers/${t.id}`);
+                  }}
                 >
                   <td className="px-4 py-3 font-mono text-xs font-medium">
                     <Link
                       href={`/procurement/transfers/${t.id}`}
                       className="text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pushTrailEntry({ href: `/procurement/transfers/${t.id}`, label: t.transfer_number });
+                      }}
                     >
                       {t.transfer_number}
                     </Link>

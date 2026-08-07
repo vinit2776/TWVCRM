@@ -27,6 +27,7 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit, FacilityAsset } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface LineItem {
   id: string; // local draft id
@@ -580,6 +581,10 @@ function NewPurchaseRequestForm() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: "New Material Request" }}
+        fallbackParent={{ href: "/procurement/requests", label: "Material Requests" }}
+      />
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>

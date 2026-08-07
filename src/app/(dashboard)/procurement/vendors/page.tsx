@@ -21,6 +21,8 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VENDOR_CATEGORIES, VENDOR_CATEGORY_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 import type { ProcurementVendor, VendorCategory } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const CATEGORY_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
@@ -281,6 +283,7 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Vendors" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -349,7 +352,11 @@ export default function VendorsPage() {
                   {vendors.map((v) => (
                     <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30">
                       <td className="px-4 py-3">
-                        <Link href={`/procurement/vendors/${v.id}`} className="hover:underline">
+                        <Link
+                          href={`/procurement/vendors/${v.id}`}
+                          className="hover:underline"
+                          onClick={() => pushTrailEntry({ href: `/procurement/vendors/${v.id}`, label: v.name })}
+                        >
                           <p className="font-medium">{v.name}</p>
                         </Link>
                         {v.gstin && <p className="text-xs text-muted-foreground">GST: {v.gstin}</p>}

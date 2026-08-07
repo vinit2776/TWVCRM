@@ -20,6 +20,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency, getMonthDateRange } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface LocationGroup {
   locationName: string;
@@ -244,6 +246,7 @@ function PurchaseRequestsContent() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Material Requests" }} />
       {isBudgetView && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
           <PieChart className="h-4 w-4 shrink-0 text-blue-600" />
@@ -390,13 +393,19 @@ function PurchaseRequestsContent() {
                   <tr
                     key={pr.id}
                     className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => router.push(`/procurement/requests/${pr.id}`)}
+                    onClick={() => {
+                      pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
+                      router.push(`/procurement/requests/${pr.id}`);
+                    }}
                   >
                     <td className="px-4 py-3 font-mono text-xs font-medium">
                       <Link
                         href={`/procurement/requests/${pr.id}`}
                         className="text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
+                        }}
                       >
                         {pr.pr_number}
                       </Link>
@@ -536,13 +545,19 @@ function PurchaseRequestsContent() {
                     <tr
                       key={pr.id}
                       className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                      onClick={() => router.push(`/procurement/requests/${pr.id}`)}
+                      onClick={() => {
+                        pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
+                        router.push(`/procurement/requests/${pr.id}`);
+                      }}
                     >
                       <td className="px-4 py-3 font-mono text-xs font-medium">
                         <Link
                           href={`/procurement/requests/${pr.id}`}
                           className="text-primary hover:underline"
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
+                          }}
                         >
                           {pr.pr_number}
                         </Link>

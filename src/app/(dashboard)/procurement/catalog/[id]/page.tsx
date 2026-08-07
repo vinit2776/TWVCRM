@@ -16,6 +16,7 @@ import {
   ITEM_TYPE_LABELS, PO_STATUS_LABELS, PO_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,10 @@ export default function ItemInsightsPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: item.name }}
+        fallbackParent={{ href: "/procurement/catalog", label: "Catalog" }}
+      />
       {/* Back */}
       <div className="flex items-center gap-3">
         <Link href="/procurement/catalog">

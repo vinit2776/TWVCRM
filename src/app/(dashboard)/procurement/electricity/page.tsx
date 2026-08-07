@@ -30,6 +30,7 @@ import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface EbLine {
   line_type: "utility" | "generator" | "other";
@@ -696,6 +697,7 @@ export default function ElectricityBillsPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Electricity" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">

@@ -38,6 +38,7 @@ import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-di
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import type { VendorBill, PaymentBatchType } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -581,6 +582,10 @@ export default function VendorBillDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      <PageBreadcrumb
+        current={{ label: bill.bill_number }}
+        fallbackParent={{ href: "/procurement/bills", label: "Vendor Bills" }}
+      />
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
