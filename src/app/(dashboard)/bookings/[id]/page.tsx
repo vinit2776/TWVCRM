@@ -59,6 +59,8 @@ import type { BookingFeedback, BookingPayment } from "@/types";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
 import { createClient } from "@/lib/supabase/client";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 function formatTime12(timeStr: string): string {
   const [h, m] = timeStr.slice(0, 5).split(":").map(Number);
@@ -796,6 +798,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: booking.booking_number }}
+        fallbackParent={{ href: "/bookings", label: "Bookings" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -1314,7 +1320,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Space</span>
-              <Link href={`/spaces/${booking.space_id}`} className="text-primary hover:underline">
+              <Link
+                href={`/spaces/${booking.space_id}`}
+                className="text-primary hover:underline"
+                onClick={() =>
+                  pushTrailEntry({
+                    href: `/spaces/${booking.space_id}`,
+                    label: booking.space?.name || "Space",
+                  })
+                }
+              >
                 {booking.space?.name || "—"}
               </Link>
             </div>

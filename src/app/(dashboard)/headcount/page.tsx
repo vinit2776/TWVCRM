@@ -20,6 +20,7 @@ import { useLocations } from "@/hooks/use-locations";
 import { toast } from "sonner";
 import { cn, formatDate } from "@/lib/utils";
 import type { SpaceHeadcount, LocationCapacityConfig } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -314,6 +315,7 @@ export default function HeadcountPage() {
 
   return (
     <div className="space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Headcount" }} />
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Headcount</h1>
