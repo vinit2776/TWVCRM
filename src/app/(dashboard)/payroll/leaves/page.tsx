@@ -27,6 +27,7 @@ import { Search, Plus, CheckCircle2, XCircle, Loader2, CalendarDays, Clock } fro
 import { formatDate } from "@/lib/utils";
 import { LEAVE_TYPE_LABELS, LEAVE_STATUS_COLORS, LEAVE_STATUS_LABELS } from "@/lib/constants";
 import type { LeaveRequest, Employee } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function LeavesPage() {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
@@ -127,6 +128,7 @@ export default function LeavesPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Leaves" }} />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
