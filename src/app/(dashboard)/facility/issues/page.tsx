@@ -33,6 +33,8 @@ import {
 import type {
   FacilityIssue, FacilityIssuePriority, FacilityIssueStatus,
 } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface Location { id: string; name: string; code: string }
 
@@ -235,6 +237,7 @@ function FacilityIssuesPageInner() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Issues" }} />
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
@@ -571,6 +574,7 @@ function ActivityFeed() {
                     "block px-3 py-2 hover:bg-muted/20 transition-colors",
                     isTask && "bg-teal-50/60",
                   )}
+                  onClick={() => pushTrailEntry({ href: `/facility/issues/${e.issue_id}`, label: e.issue?.title ?? e.issue?.issue_number ?? "Issue" })}
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
@@ -677,6 +681,7 @@ function IssueCard({ issue }: { issue: FacilityIssue }) {
         breached && (isTask ? "border-red-500" : "bg-red-50 border-red-300"),
         claimOverdue && !isTask && !breached && "border-amber-300",
       )}
+      onClick={() => pushTrailEntry({ href: `/facility/issues/${issue.id}`, label: issue.title })}
     >
       {tatBar && (
         <div className={cn("h-[3px] w-full", TAT_BAR_TRACK[tatBar.status])}>

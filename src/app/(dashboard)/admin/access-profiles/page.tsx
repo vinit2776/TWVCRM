@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Plus, Pencil, Trash2, Loader2, Calendar, Clock, Shield, Info, AlertTriangle } from "lucide-react";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -153,6 +154,7 @@ export default function AccessProfilesPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Access Profiles" }} />
 
       {/* Header */}
       <div className="flex items-center justify-between">

@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import Link from "next/link";
 import { ArrowLeft, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { FacilityAsset } from "@/types";
 
 type Layout = "avery" | "9up" | "single";
@@ -65,6 +66,12 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
 
   return (
     <>
+      <div data-print-hide className="px-4 pt-3">
+        <PageBreadcrumb
+          current={{ label: "Print" }}
+          fallbackParent={{ href: "/facility/assets", label: "Assets" }}
+        />
+      </div>
       {/* Controls bar */}
       <div data-print-hide className="flex items-center gap-2 px-4 h-14 border-b bg-background flex-wrap">
         <Link href={`/facility/assets/${id}`}>

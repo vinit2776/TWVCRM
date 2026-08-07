@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { SCOPE_LABEL } from "@/lib/facility-ui";
 import { FACILITY_ROLES, hasRole } from "@/lib/facility";
 import type { FacilityAssetCategory, FacilityDepartment } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Assignee { id: string; full_name: string; email: string; role: string }
 interface CurrentUser { id: string; role: string }
@@ -183,6 +184,7 @@ export default function FacilitySettingsPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-8">
+      <PageBreadcrumb resetTo={{ label: "Facility Settings" }} />
       <div>
         <h1 className="text-xl md:text-2xl font-semibold">Facility Settings</h1>
         <p className="text-xs md:text-sm text-muted-foreground">

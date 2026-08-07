@@ -31,6 +31,8 @@ import {
 import { toast } from "sonner";
 import { Wifi, WifiOff, Plus, Pencil, Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface Location {
   id: string;
@@ -241,6 +243,7 @@ export default function CosecDevicesPage() {
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Cosec Devices" }} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">COSEC Biometric Devices</h1>
@@ -291,7 +294,10 @@ export default function CosecDevicesPage() {
                       const lastSuccess = result ? result.ok : device.last_ping_success;
 
                       return (
-                        <Card key={device.id} className={`${!device.is_enabled ? "opacity-60" : ""} cursor-pointer hover:shadow-md transition-shadow`} onClick={() => router.push(`/admin/cosec-devices/${device.id}`)}>
+                        <Card key={device.id} className={`${!device.is_enabled ? "opacity-60" : ""} cursor-pointer hover:shadow-md transition-shadow`} onClick={() => {
+                          pushTrailEntry({ href: `/admin/cosec-devices/${device.id}`, label: `${device.device_code} — ${device.label}` });
+                          router.push(`/admin/cosec-devices/${device.id}`);
+                        }}>
                           <CardHeader className="pb-3">
                             <div className="flex items-start justify-between gap-4">
                               <div>
