@@ -42,6 +42,7 @@ import {
 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { TicketDetailDialog } from "@/components/support/ticket-detail-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Ticket {
   id: string;
@@ -139,6 +140,7 @@ export default function SupportPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Support" }} />
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Support Tickets</h1>
