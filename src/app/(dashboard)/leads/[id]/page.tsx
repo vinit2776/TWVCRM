@@ -62,6 +62,7 @@ import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function LeadDetailPage({
   params,
@@ -182,6 +183,10 @@ export default function LeadDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: `${lead.first_name} ${lead.last_name}` }}
+        fallbackParent={{ href: "/leads", label: "Leads" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

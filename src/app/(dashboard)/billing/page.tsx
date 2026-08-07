@@ -57,6 +57,7 @@ import { computeSettlement } from "@/lib/settlement";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
 import { AgingBuckets } from "@/components/accounting/aging-buckets";
 import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
@@ -763,6 +764,7 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "Billing" }} />
 
       {/* Header */}
       <div className="flex items-center justify-between">

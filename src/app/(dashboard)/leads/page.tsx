@@ -34,6 +34,8 @@ const ImportLeadsDialog = dynamic(
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
 import { OverdueFollowupBanner } from "@/components/leads/overdue-followup-banner";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -108,6 +110,7 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Leads" }} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -315,7 +318,10 @@ export default function LeadsPage() {
                           ? "bg-amber-50/40 hover:bg-amber-50 dark:bg-amber-950/10"
                           : "hover:bg-muted/30"
                       }${lead.archived_at ? " opacity-60" : ""}`}
-                    onClick={() => router.push(`/leads/${lead.id}`)}
+                    onClick={() => {
+                      pushTrailEntry({ href: `/leads/${lead.id}`, label: `${lead.first_name} ${lead.last_name}` });
+                      router.push(`/leads/${lead.id}`);
+                    }}
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -334,7 +340,10 @@ export default function LeadsPage() {
                         <Link
                           href={`/leads/${lead.id}`}
                           className={`font-medium hover:underline ${isFormLead ? "text-emerald-700" : isReEnquiry ? "text-amber-700" : "text-primary"}`}
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            pushTrailEntry({ href: `/leads/${lead.id}`, label: `${lead.first_name} ${lead.last_name}` });
+                          }}
                         >
                           {lead.first_name} {lead.last_name}
                         </Link>

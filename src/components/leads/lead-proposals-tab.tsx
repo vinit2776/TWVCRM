@@ -36,6 +36,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 const INVOICE_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
@@ -315,7 +316,14 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                 </thead>
                 <tbody>
                   {proposals.map((p) => (
-                    <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/proposals/${p.id}`)}>
+                    <tr
+                      key={p.id}
+                      className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => {
+                        pushTrailEntry({ href: `/proposals/${p.id}`, label: p.proposal_number });
+                        router.push(`/proposals/${p.id}`);
+                      }}
+                    >
                       <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                       <td className="px-4 py-3 font-medium">{p.title}</td>
                       <td className="px-4 py-3">
@@ -349,7 +357,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => router.push(`/proposals/${p.id}`)}>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                pushTrailEntry({ href: `/proposals/${p.id}`, label: p.proposal_number });
+                                router.push(`/proposals/${p.id}`);
+                              }}
+                            >
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </DropdownMenuItem>

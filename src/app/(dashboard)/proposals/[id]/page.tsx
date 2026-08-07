@@ -65,6 +65,7 @@ const CreateContractDialog = dynamic(
 );
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function ProposalDetailPage({
   params,
@@ -523,6 +524,10 @@ export default function ProposalDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: proposal.proposal_number }}
+        fallbackParent={{ href: "/proposals", label: "Proposals" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">

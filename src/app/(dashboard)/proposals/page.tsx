@@ -15,6 +15,8 @@ import { PROPOSAL_STATUSES, PROPOSAL_STATUS_LABELS, PROPOSAL_STATUS_COLORS } fro
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, bucketFor, type HandoffState } from "@/lib/tally-handoff";
 import type { Proposal } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 type LatestBillingStatement = { handoff_state: HandoffState | null; payment_status: string } | null;
 
@@ -52,6 +54,7 @@ export default function ProposalsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Proposals" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Proposals</h1>
@@ -82,7 +85,14 @@ export default function ProposalsPage() {
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Created</th>
             </tr></thead>
             <tbody>{proposals.map((p) => (
-              <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/proposals/${p.id}`)}>
+              <tr
+                key={p.id}
+                className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                onClick={() => {
+                  pushTrailEntry({ href: `/proposals/${p.id}`, label: p.proposal_number });
+                  router.push(`/proposals/${p.id}`);
+                }}
+              >
                 <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                 <td className="px-4 py-3 font-medium">{p.title}</td>
                 <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>

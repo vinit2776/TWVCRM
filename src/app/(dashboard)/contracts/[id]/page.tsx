@@ -84,6 +84,7 @@ import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import type { Contract, ContractSpaceAllocation } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 export default function ContractDetailPage({
   params,
@@ -457,6 +458,10 @@ export default function ContractDetailPage({
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb
+        current={{ label: contract.contract_number }}
+        fallbackParent={{ href: "/contracts", label: "Contracts" }}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
