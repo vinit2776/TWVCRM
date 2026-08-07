@@ -44,6 +44,7 @@ export async function fetchDunnableReceivables(
       .from("proposals")
       .select(`
         id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
+        deposit_exception_amount,
         deposit_due_date, deposit_razorpay_link_url,
         deposit_reminder_count, deposit_last_reminder_sent_at,
         lead:leads!proposals_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
@@ -56,7 +57,7 @@ export async function fetchDunnableReceivables(
     for (const d of data || []) {
       // Never chase a deposit on a proposal the customer hasn't accepted.
       if (!depositIsChaseable(d.status as string)) continue;
-      const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+      const owed = Number(d.security_deposit_amount || 0) + Number(d.deposit_exception_amount || 0) - Number(d.deposit_credit_amount || 0);
       if (owed <= 0) continue;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = d.lead as any;

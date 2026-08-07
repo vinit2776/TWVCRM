@@ -244,6 +244,28 @@ function VerificationPanel({ row }: { row: DepositInboxRow }) {
         {row.expected_amount != null && (
           <Field label="Deposit required" value={formatCurrency(row.expected_amount)} />
         )}
+        {row.credit_amount != null && (
+          <Field
+            label="Credit applied"
+            value={
+              <>
+                − {formatCurrency(row.credit_amount)}
+                {row.credit_reason && <span className="block text-muted-foreground italic mt-0.5">{row.credit_reason}</span>}
+              </>
+            }
+          />
+        )}
+        {row.exception_amount != null && (
+          <Field
+            label="Exception"
+            value={
+              <>
+                {row.exception_amount > 0 ? "+" : "−"} {formatCurrency(Math.abs(row.exception_amount))}
+                {row.exception_reason && <span className="block text-muted-foreground italic mt-0.5">{row.exception_reason}</span>}
+              </>
+            }
+          />
+        )}
         <Field label="Payment date" value={row.paid_at ? formatDate(row.paid_at) : notOnFile} />
         <Field label="Mode" value={row.payment_medium || notOnFile} />
         <Field label="Reference / UTR" value={row.payment_reference || notOnFile} />
