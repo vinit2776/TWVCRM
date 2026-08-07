@@ -7,6 +7,7 @@ import { ArrowLeft, CheckCircle2, XCircle, ScanLine, MapPin, Tag, ChevronRight, 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import type { FacilityAsset } from "@/types";
 
 type StepStatus = "pending" | "confirmed" | "skipped";
@@ -101,6 +102,7 @@ function ApplyStickersContent() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
+        <PageBreadcrumb resetTo={{ label: "Apply Stickers" }} />
         <p className="text-sm text-muted-foreground">Loading assets…</p>
       </div>
     );
@@ -109,6 +111,7 @@ function ApplyStickersContent() {
   if (steps.length === 0) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
+        <PageBreadcrumb resetTo={{ label: "Apply Stickers" }} />
         <p className="text-sm text-muted-foreground">No assets to apply stickers for.</p>
         <Link href="/facility/assets"><Button variant="outline" size="sm"><ArrowLeft className="h-4 w-4 mr-1" /> Back</Button></Link>
       </div>
@@ -119,6 +122,7 @@ function ApplyStickersContent() {
   if (done) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-6 p-6">
+        <PageBreadcrumb resetTo={{ label: "Apply Stickers" }} />
         <CheckCircle2 className="h-16 w-16 text-emerald-500" />
         <div className="text-center space-y-1">
           <h1 className="text-2xl font-bold">All done!</h1>
@@ -156,6 +160,7 @@ function ApplyStickersContent() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      <PageBreadcrumb resetTo={{ label: "Apply Stickers" }} />
       {/* Header */}
       <div className="bg-white border-b px-4 py-3 flex items-center gap-3">
         <Link href="/facility/assets">

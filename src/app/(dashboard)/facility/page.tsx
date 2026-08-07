@@ -17,6 +17,8 @@ import type {
   FacilityDashboardSummary, FacilityHotSpot, FacilityCategoryBreakdownRow,
   FacilityTrendPoint, FacilityRecurringIssue, FacilityIssue,
 } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface DashboardData {
   summary: FacilityDashboardSummary;
@@ -61,6 +63,7 @@ export default function FacilityDashboardPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Facility" }} />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Facility Dashboard</h1>
@@ -246,7 +249,12 @@ export default function FacilityDashboardPage() {
           ) : (
             <div className="space-y-1.5">
               {data.idle_or_breached.map((i) => (
-                <Link key={i.id} href={`/facility/issues/${i.id}`} className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/30 text-sm">
+                <Link
+                  key={i.id}
+                  href={`/facility/issues/${i.id}`}
+                  className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/30 text-sm"
+                  onClick={() => pushTrailEntry({ href: `/facility/issues/${i.id}`, label: i.title })}
+                >
                   <span className={cn("h-2 w-2 rounded-full shrink-0", PRIORITY_STYLES[i.priority].dot)} />
                   <code className="text-[11px] font-mono text-muted-foreground">{i.issue_number}</code>
                   <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[i.status].chip)}>

@@ -16,6 +16,7 @@ import {
   Phone, Clock, Fingerprint, ShieldCheck, Flame,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -149,6 +150,7 @@ export default function LiveHeadcountPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
+      <PageBreadcrumb resetTo={{ label: "Live Headcount" }} />
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

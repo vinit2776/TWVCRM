@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 import type { FacilityAsset } from "@/types";
 
 interface Location { id: string; name: string }
@@ -87,6 +89,7 @@ export default function FacilityAssetsPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Assets" }} />
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Facility Assets</h1>
@@ -218,12 +221,28 @@ export default function FacilityAssetsPage() {
                         <td className="px-3 py-2">
                           {selectMode
                             ? <span className="font-mono text-xs">{a.asset_code}</span>
-                            : <Link className="font-mono text-xs hover:underline" href={`/facility/assets/${a.id}`}>{a.asset_code}</Link>}
+                            : (
+                              <Link
+                                className="font-mono text-xs hover:underline"
+                                href={`/facility/assets/${a.id}`}
+                                onClick={() => pushTrailEntry({ href: `/facility/assets/${a.id}`, label: a.name })}
+                              >
+                                {a.asset_code}
+                              </Link>
+                            )}
                         </td>
                         <td className="px-3 py-2">
                           {selectMode
                             ? <span>{a.name}</span>
-                            : <Link className="hover:underline" href={`/facility/assets/${a.id}`}>{a.name}</Link>}
+                            : (
+                              <Link
+                                className="hover:underline"
+                                href={`/facility/assets/${a.id}`}
+                                onClick={() => pushTrailEntry({ href: `/facility/assets/${a.id}`, label: a.name })}
+                              >
+                                {a.name}
+                              </Link>
+                            )}
                         </td>
                         <td className="px-3 py-2 hidden sm:table-cell text-xs">{a.category?.name ?? "—"}</td>
                         <td className="px-3 py-2 hidden md:table-cell text-xs">{[a.make, a.model].filter(Boolean).join(" ") || "—"}</td>

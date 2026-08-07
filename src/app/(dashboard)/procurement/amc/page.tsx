@@ -17,6 +17,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { AmcStatus } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface ServiceEvent {
   id: string;
@@ -211,6 +213,7 @@ export default function AmcRegisterPage() {
 
   return (
     <div className="space-y-6">
+      <PageBreadcrumb resetTo={{ label: "AMC Contracts" }} />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -364,7 +367,10 @@ export default function AmcRegisterPage() {
               <div
                 key={row.id}
                 className="border rounded-lg bg-card hover:bg-accent/30 cursor-pointer transition-colors"
-                onClick={() => router.push(`/procurement/orders/${row.id}`)}
+                onClick={() => {
+                  pushTrailEntry({ href: `/procurement/orders/${row.id}`, label: row.po_number });
+                  router.push(`/procurement/orders/${row.id}`);
+                }}
               >
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-4">
@@ -515,7 +521,10 @@ export default function AmcRegisterPage() {
                   <Link
                     href={`/procurement/orders/${row.id}`}
                     className="flex items-center gap-1 text-primary font-medium hover:underline"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pushTrailEntry({ href: `/procurement/orders/${row.id}`, label: row.po_number });
+                    }}
                   >
                     View & Log Events <ChevronRight className="h-3.5 w-3.5" />
                   </Link>

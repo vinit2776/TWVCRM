@@ -49,6 +49,8 @@ import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
 } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 interface AssigneeOption { id: string; full_name: string; role: string }
 interface Collaborator { id: string; user_id: string; user: { id: string; full_name: string; email: string; role: string } }
@@ -554,6 +556,10 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
+      <PageBreadcrumb
+        current={{ label: issue.title }}
+        fallbackParent={{ href: "/facility/issues", label: "Issues" }}
+      />
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
@@ -1070,6 +1076,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {assetDetail.recent_issues.map((ri) => (
                     <Link key={ri.id} href={`/facility/issues/${ri.id}`}
                       className="block text-xs hover:underline text-muted-foreground truncate"
+                      onClick={() => pushTrailEntry({ href: `/facility/issues/${ri.id}`, label: ri.title })}
                     >
                       <code className="font-mono">{ri.issue_number}</code> — {ri.title}
                       <span className="ml-1 opacity-60">({timeAgo(ri.created_at)})</span>
