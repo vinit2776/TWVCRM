@@ -29,6 +29,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { Contract } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 type ContractWithQuotaCount = Contract & {
   lead?: { id: string; first_name: string; last_name: string; company?: string };
@@ -142,6 +144,7 @@ export default function ContractsPage() {
 
   return (
     <div className="space-y-4">
+      <PageBreadcrumb resetTo={{ label: "Contracts" }} />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Contracts</h1>
@@ -254,7 +257,10 @@ export default function ContractsPage() {
                 <tr
                   key={c.id}
                   className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => router.push(`/contracts/${c.id}`)}
+                  onClick={() => {
+                    pushTrailEntry({ href: `/contracts/${c.id}`, label: c.contract_number });
+                    router.push(`/contracts/${c.id}`);
+                  }}
                 >
                   <td className="px-4 py-3 font-mono text-xs">{c.contract_number}</td>
                   <td className="px-4 py-3 hidden md:table-cell">
