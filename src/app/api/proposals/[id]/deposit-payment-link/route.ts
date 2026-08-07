@@ -44,7 +44,8 @@ export async function POST(
 
   const requiredDeposit = Number(proposal.security_deposit_amount || 0);
   const creditApplied = Number(proposal.deposit_credit_amount || 0);
-  const depositAmount = Math.max(0, requiredDeposit - creditApplied);
+  const exceptionApplied = Number(proposal.deposit_exception_amount || 0);
+  const depositAmount = Math.max(0, requiredDeposit + exceptionApplied - creditApplied);
   if (depositAmount <= 0) {
     return NextResponse.json({ error: "Deposit amount is zero" }, { status: 400 });
   }

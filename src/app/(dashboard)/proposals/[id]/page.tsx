@@ -23,6 +23,7 @@ import {
   ReceiptText,
   ScrollText,
   Pencil,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -103,6 +104,15 @@ export default function ProposalDetailPage({
   const [depositCreditProofFile, setDepositCreditProofFile] = useState<File | null>(null);
   const [depositCreditSubmitting, setDepositCreditSubmitting] = useState(false);
   const creditFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Deposit exception dialog (override the required deposit itself, for exceptions)
+  const [depositExceptionOpen, setDepositExceptionOpen] = useState(false);
+  const [depositExceptionDirection, setDepositExceptionDirection] = useState<"increase" | "decrease">("increase");
+  const [depositExceptionAmount, setDepositExceptionAmount] = useState("");
+  const [depositExceptionReason, setDepositExceptionReason] = useState("");
+  const [depositExceptionProofFile, setDepositExceptionProofFile] = useState<File | null>(null);
+  const [depositExceptionSubmitting, setDepositExceptionSubmitting] = useState(false);
+  const exceptionFileInputRef = useRef<HTMLInputElement>(null);
 
   // Deposit email preview dialog
   const [depositEmailOpen, setDepositEmailOpen] = useState(false);
@@ -239,7 +249,8 @@ export default function ProposalDetailPage({
   };
 
   const openManualPayDialog = () => {
-    setManualPayAmount(String(proposal?.security_deposit_amount || ""));
+    const expected = Math.max(0, Number(proposal?.security_deposit_amount || 0) + Number(proposal?.deposit_exception_amount || 0) - Number(proposal?.deposit_credit_amount || 0));
+    setManualPayAmount(String(expected || ""));
     setManualPayRef("");
     setManualPayMedium("");
     setManualPayNotes("");
@@ -293,6 +304,59 @@ export default function ProposalDetailPage({
       toast.error("Unexpected error applying deposit credit");
     } finally {
       setDepositCreditSubmitting(false);
+    }
+  };
+
+  const openDepositExceptionDialog = () => {
+    const existing = Number(proposal?.deposit_exception_amount || 0);
+    setDepositExceptionDirection(existing < 0 ? "decrease" : "increase");
+    setDepositExceptionAmount(existing ? String(Math.abs(existing)) : "");
+    setDepositExceptionReason(proposal?.deposit_exception_reason || "");
+    setDepositExceptionProofFile(null);
+    if (exceptionFileInputRef.current) exceptionFileInputRef.current.value = "";
+    setDepositExceptionOpen(true);
+  };
+
+  const canReduceDeposit = ["admin", "manager"].includes(currentUser?.role || "");
+
+  const submitDepositException = async () => {
+    const magnitude = parseFloat(depositExceptionAmount);
+    if (isNaN(magnitude) || magnitude <= 0) {
+      toast.error("Enter a valid exception amount");
+      return;
+    }
+    if (depositExceptionDirection === "decrease" && !canReduceDeposit) {
+      toast.error("Only an admin or manager can reduce the required deposit");
+      return;
+    }
+    if (!depositExceptionReason.trim()) {
+      toast.error("A reason is required — this is kept for audit");
+      return;
+    }
+    const signedAmount = depositExceptionDirection === "decrease" ? -magnitude : magnitude;
+    setDepositExceptionSubmitting(true);
+    try {
+      const formData = new FormData();
+      formData.append("amount", String(signedAmount));
+      formData.append("reason", depositExceptionReason.trim());
+      if (depositExceptionProofFile) formData.append("proof", depositExceptionProofFile);
+
+      const res = await fetch(`/api/proposals/${id}/deposit-exception`, {
+        method: "POST",
+        body: formData,
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Deposit exception applied");
+        setDepositExceptionOpen(false);
+        fetchProposal();
+      } else {
+        toast.error(json?.error || "Failed to apply deposit exception");
+      }
+    } catch {
+      toast.error("Unexpected error applying deposit exception");
+    } finally {
+      setDepositExceptionSubmitting(false);
     }
   };
 
@@ -444,7 +508,7 @@ export default function ProposalDetailPage({
       toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
       return;
     }
-    const expectedAmt = Number(proposal.security_deposit_amount || 0);
+    const expectedAmt = Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0) - Number(proposal.deposit_credit_amount || 0));
     if (expectedAmt > 0 && amt < expectedAmt) {
       const shortfallPct = (expectedAmt - amt) / expectedAmt;
       if (shortfallPct > 0.10) {
@@ -958,10 +1022,39 @@ export default function ProposalDetailPage({
               <CardContent className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>
-                    {Number(proposal.deposit_credit_amount || 0) > 0 ? "Required Deposit (pre-GST)" : "Amount (pre-GST)"}
+                    {(Number(proposal.deposit_credit_amount || 0) > 0 || Number(proposal.deposit_exception_amount || 0) !== 0) ? "Required Deposit (pre-GST)" : "Amount (pre-GST)"}
                   </span>
                   <span className="font-semibold">₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}</span>
                 </div>
+
+                {Number(proposal.deposit_exception_amount || 0) !== 0 && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>Exception</span>
+                      <span className="font-semibold">
+                        {Number(proposal.deposit_exception_amount) > 0 ? "+" : "−"} ₹{Math.abs(Number(proposal.deposit_exception_amount)).toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                    {proposal.deposit_exception_reason && (
+                      <p className="text-xs text-muted-foreground italic">{proposal.deposit_exception_reason}</p>
+                    )}
+                    {proposal.deposit_exception_proof_url && (
+                      <a
+                        href={proposal.deposit_exception_proof_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex items-center gap-1.5 text-xs underline ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}
+                      >
+                        <Upload className="h-3 w-3" />
+                        View exception proof
+                      </a>
+                    )}
+                    <div className={`flex justify-between pt-1.5 mt-1 border-t ${proposal.deposit_payment_status === "paid" ? "border-green-200" : "border-amber-200"}`}>
+                      <span className={`font-medium ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>Adjusted Required Deposit</span>
+                      <span className="font-bold">₹{Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0)).toLocaleString("en-IN")}</span>
+                    </div>
+                  </>
+                )}
 
                 {Number(proposal.deposit_credit_amount || 0) > 0 && (
                   <>
@@ -983,22 +1076,39 @@ export default function ProposalDetailPage({
                         View credit proof
                       </a>
                     )}
-                    <div className={`flex justify-between pt-1.5 mt-1 border-t ${proposal.deposit_payment_status === "paid" ? "border-green-200" : "border-amber-200"}`}>
-                      <span className={`font-medium ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>Balance to Collect</span>
-                      <span className="font-bold">₹{Math.max(0, Number(proposal.security_deposit_amount || 0) - Number(proposal.deposit_credit_amount || 0)).toLocaleString("en-IN")}</span>
-                    </div>
                   </>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && ["admin", "manager"].includes(currentUser?.role || "") && (
-                  <button
-                    type="button"
-                    onClick={openDepositCreditDialog}
-                    className="text-xs text-amber-700 hover:text-amber-900 underline flex items-center gap-1"
-                  >
-                    <Pencil className="h-3 w-3" />
-                    {Number(proposal.deposit_credit_amount || 0) > 0 ? "Edit deposit credit" : "Apply a held deposit credit"}
-                  </button>
+                {(Number(proposal.deposit_credit_amount || 0) > 0 || Number(proposal.deposit_exception_amount || 0) !== 0) && (
+                  <div className={`flex justify-between pt-1.5 mt-1 border-t ${proposal.deposit_payment_status === "paid" ? "border-green-200" : "border-amber-200"}`}>
+                    <span className={`font-medium ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>Balance to Collect</span>
+                    <span className="font-bold">₹{Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0) - Number(proposal.deposit_credit_amount || 0)).toLocaleString("en-IN")}</span>
+                  </div>
+                )}
+
+                {proposal.deposit_payment_status === "pending" && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {["admin", "manager", "sales_rep"].includes(currentUser?.role || "") && (
+                      <button
+                        type="button"
+                        onClick={openDepositCreditDialog}
+                        className="text-xs text-amber-700 hover:text-amber-900 underline flex items-center gap-1"
+                      >
+                        <Pencil className="h-3 w-3" />
+                        {Number(proposal.deposit_credit_amount || 0) > 0 ? "Edit deposit credit" : "Apply a held deposit credit"}
+                      </button>
+                    )}
+                    {["admin", "manager", "sales_rep"].includes(currentUser?.role || "") && (
+                      <button
+                        type="button"
+                        onClick={openDepositExceptionDialog}
+                        className="text-xs text-amber-700 hover:text-amber-900 underline flex items-center gap-1"
+                      >
+                        <Pencil className="h-3 w-3" />
+                        {Number(proposal.deposit_exception_amount || 0) !== 0 ? "Edit deposit exception" : "Apply a deposit exception"}
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 {proposal.deposit_payment_status === "paid" && (
@@ -1618,7 +1728,7 @@ export default function ProposalDetailPage({
 
           <div className="space-y-4">
             {(() => {
-              const expectedAmt = Number(proposal.security_deposit_amount || 0);
+              const expectedAmt = Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0) - Number(proposal.deposit_credit_amount || 0));
               const enteredAmt = parseFloat(manualPayAmount) || 0;
               const shortfall = expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt
                 ? (expectedAmt - enteredAmt) / expectedAmt
@@ -1769,7 +1879,7 @@ export default function ProposalDetailPage({
               <Button
                 onClick={handleManualPaySubmit}
                 disabled={manualPaySubmitting || manualPayNotes.trim().length < 10 || (() => {
-                  const expectedAmt = Number(proposal.security_deposit_amount || 0);
+                  const expectedAmt = Math.max(0, Number(proposal.security_deposit_amount || 0) + Number(proposal.deposit_exception_amount || 0) - Number(proposal.deposit_credit_amount || 0));
                   const enteredAmt = parseFloat(manualPayAmount) || 0;
                   if (expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt) {
                     const shortfall = (expectedAmt - enteredAmt) / expectedAmt;
@@ -1889,6 +1999,138 @@ export default function ProposalDetailPage({
               >
                 {depositCreditSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {depositCreditSubmitting ? "Saving…" : "Apply Credit"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Deposit Exception Dialog */}
+      <Dialog open={depositExceptionOpen} onOpenChange={setDepositExceptionOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="h-5 w-5 text-amber-600" />
+              Deposit Exception
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — required deposit ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex rounded-md border overflow-hidden">
+              <button
+                type="button"
+                disabled={!canReduceDeposit}
+                title={!canReduceDeposit ? "Reducing the deposit needs an admin or manager" : undefined}
+                onClick={() => setDepositExceptionDirection("decrease")}
+                className={`flex-1 py-2 text-sm flex items-center justify-center gap-1.5 ${
+                  !canReduceDeposit
+                    ? "bg-muted text-muted-foreground cursor-not-allowed"
+                    : depositExceptionDirection === "decrease"
+                      ? "bg-amber-600 text-white font-medium"
+                      : "hover:bg-muted"
+                }`}
+              >
+                {!canReduceDeposit && <Lock className="h-3.5 w-3.5" />}
+                Reduce
+              </button>
+              <button
+                type="button"
+                onClick={() => setDepositExceptionDirection("increase")}
+                className={`flex-1 py-2 text-sm border-l ${
+                  depositExceptionDirection === "increase" ? "bg-amber-600 text-white font-medium" : "hover:bg-muted"
+                }`}
+              >
+                Increase
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="de-amount">Amount (₹) <span className="text-destructive">*</span></Label>
+              <Input
+                id="de-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={depositExceptionAmount}
+                onChange={(e) => setDepositExceptionAmount(e.target.value)}
+                placeholder="e.g. 5000"
+              />
+              {(() => {
+                const magnitude = parseFloat(depositExceptionAmount) || 0;
+                const signed = depositExceptionDirection === "decrease" ? -magnitude : magnitude;
+                const newRequired = Math.max(0, Number(proposal.security_deposit_amount || 0) + signed);
+                return (
+                  <p className="text-xs font-medium text-amber-800">
+                    New required deposit: ₹{newRequired.toLocaleString("en-IN")}
+                  </p>
+                );
+              })()}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="de-reason">Reason <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="de-reason"
+                value={depositExceptionReason}
+                onChange={(e) => setDepositExceptionReason(e.target.value)}
+                placeholder="e.g. Long-standing tenant, one month waived on manager approval"
+                rows={2}
+              />
+              <p className="text-xs text-muted-foreground">Kept on record for audit — explains why the required deposit was overridden.</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Proof <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <input
+                ref={exceptionFileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setDepositExceptionProofFile(e.target.files?.[0] || null)}
+              />
+              {depositExceptionProofFile ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="truncate text-muted-foreground">{depositExceptionProofFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => { setDepositExceptionProofFile(null); if (exceptionFileInputRef.current) exceptionFileInputRef.current.value = ""; }}
+                    className="ml-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => exceptionFileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload proof
+                </Button>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setDepositExceptionOpen(false)}
+                disabled={depositExceptionSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={submitDepositException}
+                disabled={depositExceptionSubmitting || (depositExceptionDirection === "decrease" && !canReduceDeposit)}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {depositExceptionSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {depositExceptionSubmitting ? "Saving…" : "Apply Exception"}
               </Button>
             </div>
           </div>

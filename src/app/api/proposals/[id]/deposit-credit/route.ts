@@ -35,8 +35,8 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
-  if (!actor || !["admin", "manager"].includes(actor.role)) {
-    return NextResponse.json({ error: "Only an admin or manager can apply a deposit credit" }, { status: 403 });
+  if (!actor || !["admin", "manager", "sales_rep"].includes(actor.role)) {
+    return NextResponse.json({ error: "Only an admin, manager, or sales rep can apply a deposit credit" }, { status: 403 });
   }
 
   const formData = await request.formData();
