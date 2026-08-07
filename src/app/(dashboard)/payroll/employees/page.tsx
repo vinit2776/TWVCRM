@@ -19,6 +19,7 @@ import { Search, Plus, Pencil, Loader2, IndianRupee, Info } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { monthlyGross, calculatePT } from "@/lib/payroll";
 import type { Employee, SalaryDefinition } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,7 @@ export default function PayrollEmployeesPage() {
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb resetTo={{ label: "Payroll Employees" }} />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

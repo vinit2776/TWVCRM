@@ -20,6 +20,7 @@ import Link from "next/link";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PAYROLL_RUN_STATUS_COLORS, PAYROLL_RUN_STATUS_LABELS } from "@/lib/constants";
 import type { PayrollRun, PayrollSlip } from "@/types";
+import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -145,6 +146,10 @@ export default function PayrollRunDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="p-6 space-y-5">
+      <PageBreadcrumb
+        current={{ label: monthLabel }}
+        fallbackParent={{ href: "/payroll/runs", label: "Payroll Runs" }}
+      />
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <Button variant="ghost" size="sm" asChild>
