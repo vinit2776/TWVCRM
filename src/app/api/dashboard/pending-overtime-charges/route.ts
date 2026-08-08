@@ -3,9 +3,14 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 /**
  * GET /api/dashboard/pending-overtime-charges
- * Surfaces contract-holder conference-room overtime charges (posted at
- * checkout when a member stays past the booked end time) that are still
- * pending — i.e. not yet waived or billed.
+ * Surfaces contract-holder conference-room pooled-usage charges (Model B —
+ * posted at checkout from actual check-in/check-out time, pooled monthly
+ * against the facility's free quota) that are still pending — i.e. not yet
+ * waived or billed. Route path/id kept as "pending-overtime-charges" for
+ * continuity with the existing dashboard widget registry entry, even
+ * though the underlying charge is no longer specifically "overtime" — see
+ * `booking_charge_kind: 'pooled_usage'` (formerly a separate 'overtime'
+ * charge type, retired — see the Model B redesign plan).
  *
  * Access: admin, manager. This is a waive/review queue, not a general
  * billing report — staff who can create charges (floor_manager, etc.)
@@ -35,7 +40,7 @@ export async function GET() {
       "lead:leads!usage_charges_lead_id_fkey(first_name, last_name, company), " +
       "booking:bookings!usage_charges_booking_id_fkey(booking_number)"
     )
-    .eq("booking_charge_kind", "overtime")
+    .eq("booking_charge_kind", "pooled_usage")
     .eq("status", "pending")
     .order("charge_date", { ascending: false });
 

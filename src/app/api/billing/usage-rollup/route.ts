@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { isContractOperational } from "@/lib/constants";
 
+/** Wall-clock time in IST for display — mirrors formatIstTime in
+ *  bookings/[id]/route.ts (kept local rather than shared, matching this
+ *  codebase's existing convention of small route-local time helpers). */
+function formatIstTime(d: Date): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d).toUpperCase();
+}
+
 /**
  * GET /api/billing/usage-rollup?year=YYYY&month=M
  *
@@ -67,19 +79,78 @@ export async function GET(req: NextRequest) {
   //   an operator can never review/finalize/re-send a statement that needed
   //   a post-hoc fix.
   const stmtIds = (stmts || []).map((s) => s.id);
+  const CHARGE_COLS = "id, contract_id, description, total, billing_statement_id, created_at, booking_charge_kind, quantity, unit_price, booking_id, contract_facility_id";
   const { data: pendingCharges } = await admin
     .from("usage_charges")
-    .select("id, contract_id, description, total, billing_statement_id, created_at")
+    .select(CHARGE_COLS)
     .is("billing_statement_id", null)
     .gte("created_at", `${monthStart}T00:00:00`)
     .lte("created_at", `${monthEnd}T23:59:59.999`);
   const { data: linkedCharges } = stmtIds.length > 0
     ? await admin
         .from("usage_charges")
-        .select("id, contract_id, description, total, billing_statement_id, created_at")
+        .select(CHARGE_COLS)
         .in("billing_statement_id", stmtIds)
     : { data: [] };
   const charges = [...(pendingCharges || []), ...(linkedCharges || [])];
+
+  // ── 2b. Structured usage detail for pooled_usage charges — powers the
+  //   Usage/Extra pill breakdown in the review dialog instead of parsing
+  //   the free-text description. Batch-fetch linked bookings + facility
+  //   names for just the charges that need them.
+  const pooledCharges = charges.filter((c) => c.booking_charge_kind === "pooled_usage" && c.booking_id);
+  const bookingIds = Array.from(new Set(pooledCharges.map((c) => c.booking_id as string)));
+  const facilityIds = Array.from(new Set(pooledCharges.map((c) => c.contract_facility_id).filter(Boolean) as string[]));
+  const [{ data: pooledBookings }, { data: pooledFacilities }] = await Promise.all([
+    bookingIds.length > 0
+      ? admin.from("bookings").select("id, check_in_at, check_out_at, duration_hours").in("id", bookingIds)
+      : Promise.resolve({ data: [] }),
+    facilityIds.length > 0
+      ? admin.from("contract_facilities").select("id, name").in("id", facilityIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const bookingById = new Map((pooledBookings || []).map((b) => [b.id as string, b]));
+  const facilityById = new Map((pooledFacilities || []).map((f) => [f.id as string, f]));
+
+  interface UsageDetail {
+    facility_name: string;
+    time_range: string;
+    actual_hours: number;
+    booked_hours: number;
+    usage_hours: number;
+    extra_hours: number;
+    usage_amount: number;
+    extra_amount: number;
+  }
+
+  function buildUsageDetail(c: (typeof charges)[number]): UsageDetail | null {
+    if (c.booking_charge_kind !== "pooled_usage" || !c.booking_id) return null;
+    const booking = bookingById.get(c.booking_id as string);
+    if (!booking?.check_in_at || !booking?.check_out_at) return null;
+    const checkIn = new Date(booking.check_in_at as string);
+    const checkOut = new Date(booking.check_out_at as string);
+    const actualHours = Math.ceil(Math.max(0, checkOut.getTime() - checkIn.getTime()) / 3600000);
+    const bookedHours = Number(booking.duration_hours || 0);
+    const unitPrice = Number(c.unit_price || 0);
+    const total = Number(c.total || 0);
+    const billedHours = unitPrice > 0 ? Math.round(total / unitPrice) : 0;
+    const extraHoursNeeded = Math.max(0, actualHours - bookedHours);
+    const extraHours = Math.min(billedHours, extraHoursNeeded);
+    const usageHours = billedHours - extraHours;
+    const extraAmount = billedHours > 0 ? Math.round((total * extraHours) / billedHours) : 0;
+    const usageAmount = total - extraAmount;
+    const facility = c.contract_facility_id ? facilityById.get(c.contract_facility_id as string) : null;
+    return {
+      facility_name: facility?.name || "Facility",
+      time_range: `${formatIstTime(checkIn)} – ${formatIstTime(checkOut)}`,
+      actual_hours: actualHours,
+      booked_hours: bookedHours,
+      usage_hours: usageHours,
+      extra_hours: extraHours,
+      usage_amount: usageAmount,
+      extra_amount: extraAmount,
+    };
+  }
 
   // service_usage_records has no `used_at` or `total_amount` columns — the
   // correct period filter is period_year + period_month, and the billable
@@ -97,7 +168,13 @@ export async function GET(req: NextRequest) {
     );
 
   // ── 3. Group by contract ───────────────────────────────────────────────
-  interface LineItem { description: string; amount: number; source: "ad_hoc" | "service"; item_id: string }
+  interface LineItem {
+    description: string;
+    amount: number;
+    source: "ad_hoc" | "service";
+    item_id: string;
+    usage_detail?: UsageDetail | null;
+  }
   interface Agg {
     contract_id: string;
     free_count: number;
@@ -118,7 +195,13 @@ export async function GET(req: NextRequest) {
     row.line_items.push(item);
   };
   for (const c of charges || []) {
-    bump(c.contract_id as string, { description: c.description || "—", amount: Number(c.total || 0), source: "ad_hoc", item_id: c.id as string });
+    bump(c.contract_id as string, {
+      description: c.description || "—",
+      amount: Number(c.total || 0),
+      source: "ad_hoc",
+      item_id: c.id as string,
+      usage_detail: buildUsageDetail(c),
+    });
   }
   for (const s of svc || []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

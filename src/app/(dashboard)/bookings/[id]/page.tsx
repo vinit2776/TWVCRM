@@ -770,11 +770,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // so the two stay in sync. Exactly one region lights up at a time.
   const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
 
-  // Pending contract-holder overtime charge, if any — derived from the
-  // already-fetched bookingCharges list so it's correct on first load and
-  // survives a hard reload, not just right after checkout.
+  // Pending contract-holder pooled-usage charge, if any (Model B — posted
+  // at checkout from actual check-in/check-out time, no longer a separate
+  // "overtime" charge type) — derived from the already-fetched
+  // bookingCharges list so it's correct on first load and survives a hard
+  // reload, not just right after checkout.
   const pendingOvertimeUsageCharge = bookingCharges.find(
-    (c) => c.booking_charge_kind === "overtime" && c.status === "pending"
+    (c) => c.booking_charge_kind === "pooled_usage" && c.status === "pending"
   ) ?? null;
 
   // Pricing is locked once any of the following is true — changing the

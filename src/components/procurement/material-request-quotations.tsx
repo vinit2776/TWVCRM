@@ -15,6 +15,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { MaterialRequestQuotation } from "@/types";
 
@@ -78,18 +80,47 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
     }
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("vendor_name", vendorName.trim());
-      fd.append("amount", amount);
-      if (notes.trim()) fd.append("notes", notes.trim());
+      // Normalize client-side, then upload directly to storage via a signed
+      // URL — proxying the raw file through our API route would hit
+      // Vercel's 4.5MB serverless request body limit.
+      const prepared = await prepareUpload(file);
+      if (!prepared) return;
+
+      const urlRes = await fetch("/api/documents/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: prepared.name,
+          mimeType: prepared.type,
+          path: `material-requests/${prId}`,
+        }),
+      });
+      if (!urlRes.ok) throw new Error("Failed to get upload URL");
+      const { token, path: filePath } = await urlRes.json();
+
+      const supabase = createBrowserClient();
+      const { error: storageError } = await supabase.storage
+        .from("crm-documents")
+        .uploadToSignedUrl(filePath, token, prepared, {
+          contentType: prepared.type || "application/octet-stream",
+        });
+      if (storageError) throw new Error(storageError.message);
+
       const res = await fetch(`/api/procurement/requests/${prId}/quotations`, {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filePath,
+          fileName: prepared.name,
+          mimeType: prepared.type,
+          vendor_name: vendorName.trim(),
+          amount,
+          notes: notes.trim() || undefined,
+        }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        toast.error(json.error ?? "Failed to upload quotation");
+        toast.error(json?.error ?? "Failed to upload quotation");
         return;
       }
       toast.success("Quotation uploaded");
@@ -97,6 +128,12 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
       resetForm();
       await fetchQuotations();
       onChange?.();
+    } catch (e) {
+      if (e instanceof UploadTooLargeError) {
+        toast.error(e.message);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Failed to upload quotation");
+      }
     } finally {
       setUploading(false);
     }

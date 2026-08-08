@@ -103,11 +103,8 @@ function formatDuration(hours: number): string {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  // Historical rows only — both retired in favor of 'pooled_usage' (Model
-  // B), kept mapped forever so old bookings still render a label.
   quota_overage: "Over-use",
   overtime: "Overtime",
-  pooled_usage: "Usage",
 };
 
 export function TransactionSummary({ booking, charges, addons, payments }: Props) {

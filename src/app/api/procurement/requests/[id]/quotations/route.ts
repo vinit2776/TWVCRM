@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import {
-  normalizeUploadServer,
-  UploadValidationError,
-  IMAGE_MIME_TYPES,
-  PDF_MIME_TYPE,
-} from "@/lib/uploads/normalize-upload-server";
+import { IMAGE_MIME_TYPES, PDF_MIME_TYPE } from "@/lib/uploads/normalize-upload-server";
 
 // GET — list quotations for an MR with signed URLs for each file.
 export async function GET(
@@ -45,7 +40,9 @@ export async function GET(
   return NextResponse.json({ data: withUrls });
 }
 
-// POST — upload a new quotation. multipart/form-data: file, vendor_name, amount, notes?
+// POST — persist a quotation record. Body (JSON): filePath, fileName, mimeType
+// (from a prior direct-to-storage upload via /api/documents/upload-url),
+// vendor_name, amount, notes?
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -75,48 +72,33 @@ export async function POST(
     );
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const vendorName = (formData.get("vendor_name") as string | null)?.trim();
-  const amountRaw = formData.get("amount") as string | null;
-  const notes = (formData.get("notes") as string | null)?.trim() || null;
+  // File is already uploaded directly to storage by the client via a signed
+  // upload URL (see /api/documents/upload-url) — this route only persists
+  // the metadata. Proxying the raw file through this route would hit
+  // Vercel's 4.5MB serverless request body limit.
+  const body = await request.json();
+  const filePath = (body.filePath as string | null)?.trim();
+  const fileName = (body.fileName as string | null)?.trim();
+  const mimeType = (body.mimeType as string | null)?.trim();
+  const vendorName = (body.vendor_name as string | null)?.trim();
+  const amountRaw = body.amount;
+  const notes = (body.notes as string | null)?.trim() || null;
 
-  if (!file) return NextResponse.json({ error: "File is required" }, { status: 400 });
+  if (!filePath || !fileName) return NextResponse.json({ error: "File is required" }, { status: 400 });
   if (!vendorName) return NextResponse.json({ error: "Vendor name is required" }, { status: 400 });
   const amount = amountRaw != null ? parseFloat(amountRaw) : NaN;
   if (isNaN(amount) || amount < 0) {
     return NextResponse.json({ error: "A valid quoted amount is required" }, { status: 400 });
   }
 
-  if (!IMAGE_MIME_TYPES.has(file.type) && file.type !== PDF_MIME_TYPE) {
+  if (!mimeType || (!IMAGE_MIME_TYPES.has(mimeType) && mimeType !== PDF_MIME_TYPE)) {
     return NextResponse.json(
       { error: "Only JPEG, PNG, WEBP, HEIC, and PDF files are accepted" },
       { status: 400 }
     );
   }
 
-  let normalized;
-  try {
-    normalized = await normalizeUploadServer(file);
-  } catch (err) {
-    if (err instanceof UploadValidationError) {
-      return NextResponse.json({ error: err.message }, { status: err.status });
-    }
-    throw err;
-  }
-
   const adminSupabase = await createAdminClient();
-  const filePath = `material-requests/${id}/quotation-${Date.now()}.${normalized.ext}`;
-
-  const { error: uploadError } = await adminSupabase.storage
-    .from("crm-documents")
-    .upload(filePath, normalized.buffer, {
-      contentType: normalized.mimeType,
-      upsert: false,
-    });
-  if (uploadError) {
-    return NextResponse.json({ error: uploadError.message }, { status: 500 });
-  }
 
   const { data: inserted, error: insertError } = await adminSupabase
     .from("material_request_quotations")
@@ -125,8 +107,8 @@ export async function POST(
       vendor_name: vendorName,
       amount,
       file_path: filePath,
-      file_name: file.name,
-      file_mime_type: normalized.mimeType,
+      file_name: fileName,
+      file_mime_type: mimeType,
       notes,
       uploaded_by: dbUser.id,
     })

@@ -2,20 +2,17 @@
 
 /**
  * OvertimeChargeBanner — persistent (reload-surviving) notice for a
- * pending contract-holder pooled-usage charge on this booking (Model B —
- * posted at checkout from actual check-in/check-out time, pooled monthly
- * against the facility's free quota; no longer a separate "overtime"
- * charge type, though the component/file name is kept for continuity).
+ * pending contract-holder overtime usage_charge on this booking.
  *
- * Originally replaced a 15-second toast + auto-opened CollectPaymentDialog,
+ * Replaces the old 15-second toast + auto-opened CollectPaymentDialog,
  * which was wired to booking.total_amount_with_gst — always ₹0 for
- * contract holders, so it had nothing collectible behind it and any
+ * contract holders, so it had nothing collectible behind it and the
  * overrun was simply lost once the toast disappeared.
  *
  * Visibility is derived by the parent from the booking's already-fetched
- * usage charges (booking_charge_kind "pooled_usage", status "pending"),
- * not from any fetch of its own — so it's correct on first load and after
- * a hard reload, not just right after checkout.
+ * usage charges (charge_type "overtime", status "pending"), not from any
+ * fetch of its own — so it's correct on first load and after a hard
+ * reload, not just right after checkout.
  */
 
 import { useState } from "react";
@@ -75,7 +72,7 @@ export function OvertimeChargeBanner({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to waive charge");
-      toast.success("Usage charge waived");
+      toast.success("Overtime charge waived");
       setShowReasonField(false);
       setWaiveReason("");
       onWaived();
@@ -92,7 +89,7 @@ export function OvertimeChargeBanner({
         <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">
-            Usage charge posted: {formatCurrency(overtimeCharge.total_with_gst)}
+            Overtime charge posted: {formatCurrency(overtimeCharge.total_with_gst)}
           </p>
           <p className="text-xs text-amber-700 mt-0.5">{overtimeCharge.description}</p>
           <p className="text-xs text-amber-700 mt-0.5">

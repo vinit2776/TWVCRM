@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Shield,
@@ -28,7 +27,6 @@ import {
   Copy,
   CheckCheck,
   Share2,
-  BarChart3,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -871,14 +869,6 @@ export default function TeamPage() {
                                 <Eye className="h-4 w-4" />
                                 Activity Log
                               </button>
-                              <Link
-                                href={`/team/${member.id}/activity`}
-                                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-                                onClick={() => setOpenMenuId(null)}
-                              >
-                                <BarChart3 className="h-4 w-4" />
-                                Activity Storyboard
-                              </Link>
                               <div className="my-1 h-px bg-border" />
                               <button
                                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
