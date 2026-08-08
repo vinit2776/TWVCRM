@@ -59,8 +59,6 @@ import type { BookingFeedback, BookingPayment } from "@/types";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
 import { createClient } from "@/lib/supabase/client";
-import { PageBreadcrumb } from "@/components/page-breadcrumb";
-import { pushTrailEntry } from "@/lib/nav-trail";
 
 function formatTime12(timeStr: string): string {
   const [h, m] = timeStr.slice(0, 5).split(":").map(Number);
@@ -772,11 +770,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // so the two stay in sync. Exactly one region lights up at a time.
   const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
 
-  // Pending contract-holder overtime charge, if any — derived from the
-  // already-fetched bookingCharges list so it's correct on first load and
-  // survives a hard reload, not just right after checkout.
+  // Pending contract-holder pooled-usage charge, if any (Model B — posted
+  // at checkout from actual check-in/check-out time, no longer a separate
+  // "overtime" charge type) — derived from the already-fetched
+  // bookingCharges list so it's correct on first load and survives a hard
+  // reload, not just right after checkout.
   const pendingOvertimeUsageCharge = bookingCharges.find(
-    (c) => c.booking_charge_kind === "overtime" && c.status === "pending"
+    (c) => c.booking_charge_kind === "pooled_usage" && c.status === "pending"
   ) ?? null;
 
   // Pricing is locked once any of the following is true — changing the
@@ -798,10 +798,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="space-y-6">
-      <PageBreadcrumb
-        current={{ label: booking.booking_number }}
-        fallbackParent={{ href: "/bookings", label: "Bookings" }}
-      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -1320,16 +1316,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Space</span>
-              <Link
-                href={`/spaces/${booking.space_id}`}
-                className="text-primary hover:underline"
-                onClick={() =>
-                  pushTrailEntry({
-                    href: `/spaces/${booking.space_id}`,
-                    label: booking.space?.name || "Space",
-                  })
-                }
-              >
+              <Link href={`/spaces/${booking.space_id}`} className="text-primary hover:underline">
                 {booking.space?.name || "—"}
               </Link>
             </div>

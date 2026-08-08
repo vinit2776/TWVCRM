@@ -31,11 +31,23 @@ import { formatCurrency } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface UsageDetail {
+  facility_name: string;
+  time_range: string;
+  actual_hours: number;
+  booked_hours: number;
+  usage_hours: number;
+  extra_hours: number;
+  usage_amount: number;
+  extra_amount: number;
+}
+
 interface LineItem {
   description: string;
   amount: number;
   source: "ad_hoc" | "service";
   item_id: string;
+  usage_detail?: UsageDetail | null;
 }
 
 export interface UsageReviewRow {
@@ -673,12 +685,41 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                     <div key={key} className="px-3 py-2.5 space-y-1.5">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={isWaived ? "line-through text-muted-foreground" : ""}>{li.description}</span>
-                            <span className="text-[10px] text-muted-foreground border rounded px-1 py-0.5">{SOURCE_LABELS[li.source] ?? li.source}</span>
-                            {isWaived   && <Badge className="bg-red-50 text-red-700 border-red-200 text-[10px]">WAIVED</Badge>}
-                            {isAdjusted && <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">ADJUSTED</Badge>}
-                          </div>
+                          {li.usage_detail ? (
+                            <>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={isWaived ? "line-through text-muted-foreground" : "font-medium"}>
+                                  {li.usage_detail.facility_name} usage
+                                </span>
+                                <span className="text-[10px] text-muted-foreground border rounded px-1 py-0.5">{SOURCE_LABELS[li.source] ?? li.source}</span>
+                                {isWaived   && <Badge className="bg-red-50 text-red-700 border-red-200 text-[10px]">WAIVED</Badge>}
+                                {isAdjusted && <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">ADJUSTED</Badge>}
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                {li.usage_detail.time_range} · {li.usage_detail.actual_hours}hr actual
+                                {li.usage_detail.booked_hours > 0 ? `, ${li.usage_detail.booked_hours}hr booked` : ""}
+                              </p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {li.usage_detail.usage_hours > 0 && (
+                                  <Badge className="text-[10px] bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200">
+                                    Usage {li.usage_detail.usage_hours}hr · {formatCurrency(li.usage_detail.usage_amount)}
+                                  </Badge>
+                                )}
+                                {li.usage_detail.extra_hours > 0 && (
+                                  <Badge className="text-[10px] bg-orange-100 text-orange-700 hover:bg-orange-100 border border-orange-200">
+                                    Extra {li.usage_detail.extra_hours}hr · {formatCurrency(li.usage_detail.extra_amount)}
+                                  </Badge>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={isWaived ? "line-through text-muted-foreground" : ""}>{li.description}</span>
+                              <span className="text-[10px] text-muted-foreground border rounded px-1 py-0.5">{SOURCE_LABELS[li.source] ?? li.source}</span>
+                              {isWaived   && <Badge className="bg-red-50 text-red-700 border-red-200 text-[10px]">WAIVED</Badge>}
+                              {isAdjusted && <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">ADJUSTED</Badge>}
+                            </div>
+                          )}
                           {li.override && (
                             <p className="text-[11px] text-muted-foreground mt-0.5 italic">Reason: {li.override.reason}</p>
                           )}
