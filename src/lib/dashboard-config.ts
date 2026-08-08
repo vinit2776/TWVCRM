@@ -70,7 +70,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
   procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
   quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
-  pending_overtime_charges: { id: "pending_overtime_charges", title: "Pending Overtime Charges" },
+  pending_overtime_charges: { id: "pending_overtime_charges", title: "Pending Usage Charges" },
   mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
   network:                { id: "network",                title: "Network Status" },

@@ -39,7 +39,7 @@ export function PendingOvertimeChargesWidget() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
             <AlarmClock className="h-4 w-4 text-muted-foreground" />
-            Pending Overtime Charges
+            Pending Usage Charges
           </CardTitle>
         </div>
       </CardHeader>
@@ -51,13 +51,13 @@ export function PendingOvertimeChargesWidget() {
         ) : !data || data.items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-6 text-center">
             <Inbox className="h-8 w-8 mb-2 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">No pending overtime charges</p>
+            <p className="text-sm text-muted-foreground">No pending usage charges</p>
           </div>
         ) : (
           <div className="space-y-3">
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
               <p className="text-[11px] text-amber-700 uppercase tracking-wide">
-                Pending Overtime Value
+                Pending Usage Charge Value
               </p>
               <p className="text-2xl font-bold text-amber-700 mt-1">
                 {formatCurrency(data.total_pending_value)}

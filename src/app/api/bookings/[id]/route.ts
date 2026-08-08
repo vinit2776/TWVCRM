@@ -11,6 +11,177 @@ export const maxDuration = 30;
 
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
+/** Actual duration in hours between two real timestamps, rounded UP to the
+ *  next whole hour. Both check_in_at/check_out_at are proper UTC
+ *  timestamptz values, so plain Date arithmetic is correct here — unlike
+ *  the booking.end_time comparison above (a bare "HH:MM" wall-clock
+ *  string with no timezone, implicitly IST), this never needs the
+ *  Intl/Asia-Kolkata dance. */
+function roundedActualHours(checkInIso: string, checkOutAt: Date): number {
+  const checkIn = new Date(checkInIso);
+  const minutes = (checkOutAt.getTime() - checkIn.getTime()) / 60000;
+  return Math.ceil(Math.max(0, minutes) / 60);
+}
+
+/** Wall-clock time in IST for display in charge descriptions — check_in_at
+ *  and check_out_at are proper UTC timestamptz values, so this just needs
+ *  an explicit timeZone, not the bare-string IST dance used elsewhere. */
+function formatIstTime(d: Date): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d).toUpperCase();
+}
+
+/**
+ * Model B (pooled monthly usage). See docs plan "Pooled Monthly Usage
+ * Billing (Model B)".
+ *
+ * Computes and posts this booking's contribution to its contract_facility's
+ * monthly pooled-usage charge: actual duration (check_in_at → check_out_at,
+ * rounded up to the next whole hour), pooled sequentially against every
+ * other already-checked-out booking this calendar month for the same
+ * contract + facility (ordered by true checkout chronology — created_at,
+ * not booking_date), charged only for hours beyond the facility's
+ * free_quota.
+ *
+ * This is now the ONLY mechanism that charges a contract-holder booking
+ * against an hour-based facility — no charge is created at booking time
+ * (see bookings/route.ts), and the old checkout-time "overtime" charge
+ * (time past the booked slot, charged separately from quota/overage) has
+ * been retired in favor of this single unified charge. A shadow-gated
+ * rollout (allowlisted test contracts only, both mechanisms running in
+ * parallel) preceded this cutover — no gate remains; this runs for every
+ * contract now.
+ */
+async function maybePostPooledUsageCharge(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  params: {
+    bookingId: string;
+    contractId: string;
+    spaceId: string;
+    bookingDate: string;
+    checkInAt: string;
+    checkOutAt: Date;
+    createdBy: string;
+    bookedHours: number;
+  }
+): Promise<void> {
+  const { bookingId, contractId, spaceId, bookingDate, checkInAt, checkOutAt, createdBy, bookedHours } = params;
+
+  // Resolve the hour-based contract_facility for this space — the same
+  // name-match heuristic used at booking creation, promoted here to the
+  // only path since Model B never links a booking to a charge at
+  // creation time (there's no booking.usage_charge_id to originate from).
+  const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
+  const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
+    supabase.from("spaces").select("name").eq("id", spaceId).maybeSingle(),
+    supabase
+      .from("contract_facilities")
+      .select("id, name, free_quota, cost_per_unit")
+      .eq("contract_id", contractId)
+      .in("unit", HOUR_UNITS),
+  ]);
+  if (!facilities || facilities.length === 0) return; // no hour-based quota on this contract — nothing to pool
+
+  const spaceLower = (spaceRow?.name || "").toLowerCase();
+  const facility =
+    facilities.length === 1
+      ? facilities[0]
+      : facilities.find(
+          (f: { name: string }) =>
+            spaceLower.includes(f.name.toLowerCase()) || f.name.toLowerCase().includes(spaceLower)
+        ) || facilities[0];
+
+  const actualHours = roundedActualHours(checkInAt, checkOutAt);
+  if (actualHours <= 0) return;
+
+  // Pool against every other already-checked-out booking this calendar
+  // month for this contract + facility. Summing `quantity` on prior
+  // pooled_usage charges gives hours consumed so far directly — each
+  // charge's quantity IS that booking's full rounded actual duration
+  // (see insert below), regardless of how much of it was free vs. paid,
+  // so this sum is exactly the running pool total the next booking needs.
+  const [year, month] = bookingDate.split("-").map(Number);
+  const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const { data: priorCharges } = await supabase
+    .from("usage_charges")
+    .select("quantity")
+    .eq("contract_id", contractId)
+    .eq("contract_facility_id", facility.id)
+    .eq("booking_charge_kind", "pooled_usage")
+    .gte("charge_date", monthStart)
+    .lte("charge_date", monthEnd)
+    .order("created_at", { ascending: true });
+  const hoursConsumedSoFar = (priorCharges || []).reduce(
+    (sum: number, c: { quantity: number }) => sum + Number(c.quantity || 0),
+    0
+  );
+
+  const freeQuota = Number(facility.free_quota);
+  const freeRemaining = Math.max(0, freeQuota - hoursConsumedSoFar);
+  const overageHours = Math.max(0, actualHours - freeRemaining);
+  const rate = Number(facility.cost_per_unit);
+  const total = parseFloat((overageHours * rate).toFixed(2));
+
+  const { data: contractRow } = await supabase
+    .from("contracts")
+    .select("lead_id, tax_percentage")
+    .eq("id", contractId)
+    .single();
+  const gstRate = Number(contractRow?.tax_percentage ?? 18);
+  const gstAmount = parseFloat((total * gstRate / 100).toFixed(2));
+  const totalWithGst = parseFloat((total + gstAmount).toFixed(2));
+
+  // Split the charged (overage) hours into "usage" (within the booked
+  // slot) vs. "extra" (checkout ran past the booked end time) — purely
+  // descriptive, doesn't change quantity/total/gst below. Mirrors the
+  // display-only split in contract-bookings-section.tsx so both places
+  // read consistently.
+  const extraHoursNeeded = Math.max(0, actualHours - bookedHours);
+  const extraBilled = Math.min(overageHours, extraHoursNeeded);
+  const usageBilled = overageHours - extraBilled;
+  const bookedNote = extraHoursNeeded > 0 ? `, ${bookedHours}hr booked` : "";
+  const timeRange = `${formatIstTime(new Date(checkInAt))} – ${formatIstTime(checkOutAt)}`;
+
+  const chargedParts = [
+    ...(usageBilled > 0 ? [`${usageBilled}hr usage`] : []),
+    ...(extraBilled > 0 ? [`${extraBilled}hr extra`] : []),
+  ];
+  const chargedSegment = `${chargedParts.join(" + ")} charged`;
+
+  const description = overageHours > 0
+    ? `Pooled usage: ${facility.name} — ${timeRange} (${actualHours}hr actual${bookedNote}) — ${hoursConsumedSoFar}hr already used this month, ${freeQuota}hr/mo free — ${chargedSegment}`
+    : `Pooled usage: ${facility.name} — ${timeRange} (${actualHours}hr actual${bookedNote}, within ${freeQuota}hr/mo quota, ${hoursConsumedSoFar + actualHours}hr used total)`;
+
+  const { error } = await supabase.from("usage_charges").insert({
+    contract_id: contractId,
+    booking_id: bookingId,
+    lead_id: contractRow?.lead_id ?? null,
+    contract_facility_id: facility.id,
+    booking_charge_kind: "pooled_usage",
+    description,
+    quantity: actualHours,
+    unit_price: rate,
+    total,
+    gst_rate: gstRate,
+    gst_amount: gstAmount,
+    total_with_gst: totalWithGst,
+    charge_date: bookingDate,
+    status: overageHours > 0 ? "pending" : "waived",
+    created_by: createdBy,
+  });
+  if (error) {
+    console.error("[checkout] pooled_usage charge insert failed (shadow contract):", error);
+  }
+}
+
 /**
  * Recompute the booking's GST + grand-total fields from a new ex-GST
  * subtotal. Crucially, this includes the sum of any add-on charges
@@ -515,110 +686,14 @@ export async function PATCH(
               is_day_pass: true,
             };
           } else if (booking.customer_type === "contract_holder" && booking.contract_id) {
-            // Contract holders are billed monthly via usage_charges, not
-            // per booking (booking.total_amount is always ₹0 for them) —
-            // post a real pending charge now instead of the ephemeral
-            // `_overtime` object the other branches use below, which is
-            // stripped before the DB write and only ever reached staff as
-            // a 15s toast with nothing collectible behind it.
-            let overageRate: number | null = null;
-            let contractFacilityId: string | null = null;
-
-            // Prefer the same contract_facility that produced this
-            // booking's original quota-usage charge — the contract's
-            // negotiated overage rate, not the raw space rate.
-            if (booking.usage_charge_id) {
-              const { data: originCharge } = await supabase
-                .from("usage_charges")
-                .select("contract_facility_id")
-                .eq("id", booking.usage_charge_id)
-                .maybeSingle();
-              contractFacilityId = originCharge?.contract_facility_id ?? null;
-            }
-            if (contractFacilityId) {
-              const { data: facility } = await supabase
-                .from("contract_facilities")
-                .select("cost_per_unit")
-                .eq("id", contractFacilityId)
-                .maybeSingle();
-              overageRate = facility ? Number(facility.cost_per_unit) : null;
-            }
-
-            // Fall back to re-deriving the hour-based facility the same
-            // way POST /api/bookings does, in case the origin-charge link
-            // is missing (e.g. booking predates it, or the origin charge
-            // had no facility match).
-            if (overageRate === null) {
-              const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
-              const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
-                supabase.from("spaces").select("name").eq("id", booking.space_id).maybeSingle(),
-                supabase
-                  .from("contract_facilities")
-                  .select("id, name, cost_per_unit")
-                  .eq("contract_id", booking.contract_id)
-                  .in("unit", HOUR_UNITS),
-              ]);
-              if (facilities && facilities.length > 0) {
-                const spaceLower = (spaceRow?.name || "").toLowerCase();
-                const matched =
-                  facilities.length === 1
-                    ? facilities[0]
-                    : facilities.find(
-                        (f: { name: string }) =>
-                          spaceLower.includes(f.name.toLowerCase()) ||
-                          f.name.toLowerCase().includes(spaceLower)
-                      ) || facilities[0];
-                contractFacilityId = matched.id;
-                overageRate = Number(matched.cost_per_unit);
-              }
-            }
-
-            if (overageRate === null) {
-              overageRate = Number(booking.hourly_rate || 0);
-              if (overageRate === 0) {
-                console.error(
-                  `[checkout] no overage rate resolvable for contract-holder overtime on booking ${id} (contract ${booking.contract_id}) — posting ₹0 charge`
-                );
-              }
-            }
-
-            const { data: contractRow } = await supabase
-              .from("contracts")
-              .select("lead_id, tax_percentage")
-              .eq("id", booking.contract_id)
-              .single();
-
-            const overtimeTotal = parseFloat((overtimeHours * overageRate).toFixed(2));
-            const gstRate = Number(contractRow?.tax_percentage ?? 18);
-            const gstAmount = parseFloat((overtimeTotal * gstRate / 100).toFixed(2));
-            const totalWithGst = parseFloat((overtimeTotal + gstAmount).toFixed(2));
-
-            const { error: overtimeChargeErr } = await supabase.from("usage_charges").insert({
-              contract_id: booking.contract_id,
-              booking_id: id,
-              lead_id: contractRow?.lead_id ?? booking.lead_id ?? null,
-              contract_facility_id: contractFacilityId,
-              booking_charge_kind: "overtime",
-              description: `Overtime: ${overtimeHours}hr past booking end time (checked out ${overtimeMinutes} min late)`,
-              quantity: overtimeHours,
-              unit_price: overageRate,
-              total: overtimeTotal,
-              gst_rate: gstRate,
-              gst_amount: gstAmount,
-              total_with_gst: totalWithGst,
-              charge_date: booking.booking_date,
-              status: "pending",
-              created_by: dbUser.id,
-            });
-            if (overtimeChargeErr) {
-              // Don't fail checkout over this — log so it surfaces in
-              // Vercel logs, but the booking must still check out.
-              console.error("[checkout] overtime usage_charge insert failed:", overtimeChargeErr);
-            }
-            // Deliberately no `_overtime` here — the booking page derives
-            // the pending-overtime banner from a real usage_charges row
-            // (refetched via GET /api/usage-charges?booking_id=) rather
-            // than from this mutation's response, so it survives reload.
+            // Intentionally a no-op. Contract-holder charging against an
+            // hour-based facility is now handled unconditionally below by
+            // maybePostPooledUsageCharge (Model B — pooled monthly usage),
+            // regardless of whether checkout ran past the booked end time.
+            // This branch exists only so a contract-holder late checkout
+            // doesn't fall through to the walk-in/guest `else` below and
+            // get a spurious ephemeral `_overtime` suggestion in the
+            // response — it was never a real charge for them anyway.
           } else {
             const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
             const overtimeCharge = overtimeHours * hourlyRate;
@@ -631,6 +706,23 @@ export async function PATCH(
               is_day_pass: false,
             };
           }
+        }
+
+        // Model B — pooled monthly usage. Runs regardless of overtimeMinutes:
+        // every checked-out hour-facility booking contributes to the monthly
+        // pool, not just late ones. No-ops instantly if the contract has no
+        // hour-based facility configured. See maybePostPooledUsageCharge.
+        if (booking.customer_type === "contract_holder" && booking.contract_id && booking.check_in_at) {
+          await maybePostPooledUsageCharge(supabase, {
+            bookingId: id,
+            contractId: booking.contract_id,
+            spaceId: booking.space_id,
+            bookingDate: booking.booking_date,
+            checkInAt: booking.check_in_at,
+            checkOutAt: now,
+            createdBy: dbUser.id,
+            bookedHours: Number(booking.duration_hours),
+          });
         }
 
         // Revoke any active WiFi vouchers on checkout (fire-and-forget, non-fatal).

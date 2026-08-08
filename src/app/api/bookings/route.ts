@@ -494,45 +494,33 @@ export async function POST(request: NextRequest) {
     leadId = contract.lead_id;
 
     // ── Quota-aware usage charge ───────────────────────────────────────────
-    // For hourly bookings: look up contract_facilities with an hour-based unit.
-    // If a matching facility exists we check how many hours have already been
-    // consumed this calendar month and only charge the overage beyond the
-    // negotiated free quota.  Daily-space bookings bypass quota logic entirely
+    // For hourly bookings: look up contract_facilities with an hour-based
+    // unit, so we know whether this space is under conference-room-style
+    // monthly quota billing. Daily-space bookings bypass this entirely
     // (they're day-pass hot-desks, not conference hours).
+    //
+    // Pooled Monthly Usage (Model B): when a matching hour-based facility
+    // exists, NO charge is created here at booking time — actual usage
+    // isn't known yet. The checkout handler (maybePostPooledUsageCharge in
+    // bookings/[id]/route.ts) computes and posts the real charge once
+    // check_in_at/check_out_at are known, pooled against every other
+    // checked-out booking this month for the same contract+facility. A
+    // booking that's cancelled or never checked in correctly consumes no
+    // quota and generates no charge, which the old booked-duration-based
+    // model couldn't do (it charged/reserved quota the moment a booking was
+    // made, regardless of whether it ever happened).
     const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
     let contractFacilityForQuota: {
       id: string; name: string; unit: string;
       free_quota: number; cost_per_unit: number;
     } | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let quotaBookingsData: any[] | null = null;
 
     if (!isDaily) {
-      // Fetch contract facilities and existing bookings in parallel
-      // (both only need contract.id — no dependency between them).
-      // If no hour-based facility exists, the bookings data is unused
-      // but the speculative fetch saves a round-trip when it IS needed.
-      const bDate = new Date(input.booking_date + "T00:00:00");
-      const yr = bDate.getFullYear();
-      const mo = bDate.getMonth(); // 0-based
-      const monthStart = new Date(yr, mo, 1).toISOString().split("T")[0];
-      const monthEnd   = new Date(yr, mo + 1, 0).toISOString().split("T")[0];
-
-      const [{ data: contractFacilities }, { data: ebData }] = await Promise.all([
-        supabase
-          .from("contract_facilities")
-          .select("id, name, unit, free_quota, cost_per_unit")
-          .eq("contract_id", contract.id)
-          .in("unit", HOUR_UNITS),
-        supabase
-          .from("bookings")
-          .select("duration_hours")
-          .eq("contract_id", contract.id)
-          .gte("booking_date", monthStart)
-          .lte("booking_date", monthEnd)
-          .in("status", ["confirmed", "checked_in", "checked_out"]),
-      ]);
-      quotaBookingsData = ebData;
+      const { data: contractFacilities } = await supabase
+        .from("contract_facilities")
+        .select("id, name, unit, free_quota, cost_per_unit")
+        .eq("contract_id", contract.id)
+        .in("unit", HOUR_UNITS);
 
       if (contractFacilities && contractFacilities.length > 0) {
         if (contractFacilities.length === 1) {
@@ -550,80 +538,48 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    let chargeDescription: string;
-    let chargeQty: number;
-    let chargeUnitPrice: number;
-    let chargeTotal: number;
-    let chargeStatus: string;
-
     if (contractFacilityForQuota) {
-      // Use the existing bookings fetched above (parallel with contract_facilities)
-      const hoursUsedSoFar = (quotaBookingsData || []).reduce(
-        (sum: number, b: { duration_hours: number | null }) =>
-          sum + Number(b.duration_hours || 0),
-        0
-      );
-
-      const freeQuota    = Number(contractFacilityForQuota.free_quota);
-      const freeRemaining = Math.max(0, freeQuota - hoursUsedSoFar);
-      const overageHours  = Math.max(0, durationHours - freeRemaining);
-      const overageRate   = Number(contractFacilityForQuota.cost_per_unit);
-      const facilityName  = contractFacilityForQuota.name;
-
-      if (overageHours > 0) {
-        chargeQty       = overageHours;
-        chargeUnitPrice = overageRate;
-        chargeTotal     = parseFloat((overageHours * overageRate).toFixed(2));
-        chargeStatus    = "pending";
-        chargeDescription =
-          `${facilityName} Overage: ${space.name} — ${overageHours}hr charged ` +
-          `(prior usage: ${hoursUsedSoFar}hr, quota: ${freeQuota}hr/mo)`;
-      } else {
-        chargeQty       = durationHours;
-        chargeUnitPrice = 0;
-        chargeTotal     = 0;
-        chargeStatus    = "waived";
-        chargeDescription =
-          `${facilityName}: ${space.name} — ${durationHours}hr ` +
-          `(within ${freeQuota}hr/mo quota, used ${hoursUsedSoFar + durationHours}hr total)`;
-      }
+      // Model B: settles at checkout, not here. See comment above.
+      paymentStatus = "pending";
     } else {
-      // No hour-based contract facility configured — charge the full booking rate
-      chargeDescription = `Conference Room: ${space.name} (${input.start_time}–${input.end_time}, ${input.booking_date})`;
-      chargeQty         = isDaily ? quantity : durationHours;
-      chargeUnitPrice   = effectiveRate;
-      chargeTotal       = totalAmount;
-      chargeStatus      = "pending";
+      // No hour-based contract facility configured — charge the full
+      // booking rate immediately, exactly as before. This path is
+      // unrelated to the conference-room quota/pooling system: day-pass
+      // bookings, or an hourly booking on a contract with no configured
+      // quota, were never part of that story and are untouched by the
+      // pooled-usage redesign.
+      const chargeDescription = `Conference Room: ${space.name} (${input.start_time}–${input.end_time}, ${input.booking_date})`;
+      const chargeQty         = isDaily ? quantity : durationHours;
+
+      // Note: booking_id is set AFTER the booking row is inserted further
+      // below (we only have the contract here). We'll patch booking_id
+      // onto this charge row once the booking has been created. Without
+      // that link, /billing can't trace from a booking back to its posted
+      // charge — which was confusing finance.
+      const { data: charge, error: chargeErr } = await supabase
+        .from("usage_charges")
+        .insert({
+          contract_id:          contract.id,
+          lead_id:              contract.lead_id,
+          description:          chargeDescription,
+          quantity:             chargeQty,
+          unit_price:           effectiveRate,
+          total:                totalAmount,
+          charge_date:          input.booking_date,
+          status:               "pending",
+          created_by:           dbUser.id,
+          contract_facility_id: null,
+        })
+        .select("id")
+        .single();
+
+      if (chargeErr) {
+        return NextResponse.json({ error: "Failed to create usage charge: " + chargeErr.message }, { status: 500 });
+      }
+
+      usageChargeId = charge?.id;
+      paymentStatus = "posted_to_bill";
     }
-
-    // Note: booking_id is set AFTER the booking row is inserted further below
-    // (we only have the contract here). We'll patch booking_id onto this
-    // charge row once the booking has been created. Without that link,
-    // /billing can't trace from a booking back to its posted charge — which
-    // was confusing finance.
-    const { data: charge, error: chargeErr } = await supabase
-      .from("usage_charges")
-      .insert({
-        contract_id:          contract.id,
-        lead_id:              contract.lead_id,
-        description:          chargeDescription,
-        quantity:             chargeQty,
-        unit_price:           chargeUnitPrice,
-        total:                chargeTotal,
-        charge_date:          input.booking_date,
-        status:               chargeStatus,
-        created_by:           dbUser.id,
-        contract_facility_id: contractFacilityForQuota?.id ?? null,
-      })
-      .select("id")
-      .single();
-
-    if (chargeErr) {
-      return NextResponse.json({ error: "Failed to create usage charge: " + chargeErr.message }, { status: 500 });
-    }
-
-    usageChargeId = charge?.id;
-    paymentStatus = "posted_to_bill";
   }
 
   if (input.customer_type === "walk_in") {
