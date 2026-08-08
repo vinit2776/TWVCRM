@@ -4,7 +4,7 @@
     {
       "name": "twv-crm",
       "runtimeExecutable": "/bin/sh",
-      "runtimeArgs": ["-c", "cd ~/Projects/twv-crm-local && PATH=/opt/homebrew/bin:$PATH npm run dev"],
+      "runtimeArgs": ["-c", "cd \"/Users/vinitchordia/Dev Projects/twv-crm\" && PATH=/opt/homebrew/bin:$PATH npm run dev"],
       "port": 3000,
       "autoPort": true
     }
