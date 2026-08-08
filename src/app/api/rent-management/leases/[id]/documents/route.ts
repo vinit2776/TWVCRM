@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createDocSchema = z.object({
   document_type: z.enum(["lease_deed", "floor_plan", "electrical_drawing", "noc", "amendment", "correspondence", "other"]),
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const parsed = createDocSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data, error } = await supabase
     .from("lease_documents")

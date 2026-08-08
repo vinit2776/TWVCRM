@@ -149,6 +149,39 @@ export async function POST(
     }
   }
 
+  // Resolve the stock location BEFORE creating the receipt so it can be
+  // stored on the receipt row — the rejection path reverses stock using the
+  // stored value, so it must match exactly what gets credited below.
+  // Use PO's location_id; if absent, fall back to the Purchase Request's
+  // location_id (common when location wasn't selected on the PO).
+  let stockLocationId: string | null = po.location_id ?? null;
+  if (!stockLocationId && po.pr_id) {
+    const { data: prRow } = await supabase
+      .from("purchase_requests")
+      .select("location_id")
+      .eq("id", po.pr_id)
+      .maybeSingle();
+    stockLocationId = prRow?.location_id ?? null;
+  }
+
+  // Resolve the stock item per received line: prefer item_id on the PO item,
+  // fall back to the linked PR item's item_id. Stored on the receipt item so
+  // rejection reverses against the same procurement item.
+  const receivedItems = items
+    .filter((i) => i.qty_received > 0)
+    .map((i) => {
+      const poItem = poItemMap[i.po_item_id] as {
+        item_id: string | null;
+        purchase_request_items?: { item_id: string | null } | null;
+        [key: string]: unknown;
+      };
+      const stockItemId: string | null =
+        poItem?.item_id ??
+        (poItem?.purchase_request_items as { item_id: string | null } | null)?.item_id ??
+        null;
+      return { ...i, stock_item_id: stockItemId };
+    });
+
   // Insert delivery receipt header
   const { data: receipt, error: receiptErr } = await supabase
     .from("po_delivery_receipts")
@@ -159,6 +192,7 @@ export async function POST(
       file_url,
       notes: notes ?? null,
       received_by: dbUser.id,
+      stock_location_id: stockLocationId,
     })
     .select("id, received_at")
     .single();
@@ -170,14 +204,14 @@ export async function POST(
     );
   }
 
-  // Insert per-item records (only items with qty > 0)
-  const itemRows = items
-    .filter((i) => i.qty_received > 0)
-    .map((i) => ({
-      delivery_receipt_id: receipt.id,
-      po_item_id: i.po_item_id,
-      qty_received: i.qty_received,
-    }));
+  // Insert per-item records (only items with qty > 0), storing the resolved
+  // stock_item_id so rejection can reverse against the exact same item.
+  const itemRows = receivedItems.map((i) => ({
+    delivery_receipt_id: receipt.id,
+    po_item_id: i.po_item_id,
+    qty_received: i.qty_received,
+    stock_item_id: i.stock_item_id,
+  }));
 
   if (itemRows.length > 0) {
     const { error: itemsErr } = await supabase
@@ -188,55 +222,46 @@ export async function POST(
     }
   }
 
-  // Increment quantity_received on each purchase_order_item
-  for (const item of items.filter((i) => i.qty_received > 0)) {
-    await supabase
-      .from("purchase_order_items")
-      .update({
-        quantity_received: Number(poItemMap[item.po_item_id].quantity_received) + item.qty_received,
-      })
-      .eq("id", item.po_item_id)
-      .eq("po_id", id);
+  // Increment quantity_received on each purchase_order_item (atomic RPC —
+  // concurrent deliveries must not lose updates via read-then-write)
+  for (const item of receivedItems) {
+    const { error: incErr } = await supabase.rpc("increment_po_item_received", {
+      p_po_item_id: item.po_item_id,
+      p_po_id: id,
+      p_delta: item.qty_received,
+    });
+    if (incErr) {
+      console.error("[delivery] increment_po_item_received failed:", incErr.message, {
+        po_item: item.po_item_id,
+        qty: item.qty_received,
+      });
+    }
   }
 
   // ── Update location_stock for each received item ──────────────────────────
-  // Resolve the location: use PO's location_id; if absent, fall back to the
-  // Purchase Request's location_id (common when location wasn't selected on PO).
-  let stockLocationId: string | null = po.location_id ?? null;
-  if (!stockLocationId && po.pr_id) {
-    const { data: prRow } = await supabase
-      .from("purchase_requests")
-      .select("location_id")
-      .eq("id", po.pr_id)
-      .maybeSingle();
-    stockLocationId = prRow?.location_id ?? null;
-  }
-
+  // Services (AMC, rentals, one-off labor charges) don't carry location stock —
+  // skip the location_stock write for anything catalogued as a service.
   if (stockLocationId) {
-    for (const item of items.filter((i) => i.qty_received > 0)) {
-      const poItem = poItemMap[item.po_item_id] as {
-        item_id: string | null;
-        purchase_request_items?: { item_id: string | null } | null;
-        [key: string]: unknown;
-      };
+    const stockItemIds = receivedItems
+      .map((i) => i.stock_item_id)
+      .filter((v): v is string => v != null);
+    const { data: catalogRows } = stockItemIds.length
+      ? await supabase.from("procurement_items").select("id, item_type").in("id", stockItemIds)
+      : { data: [] as { id: string; item_type: string }[] };
+    const itemTypeMap = new Map((catalogRows ?? []).map((r) => [r.id, r.item_type]));
 
-      // Prefer item_id on the PO item; fall back to the linked PR item's item_id.
-      const resolvedItemId: string | null =
-        poItem?.item_id ??
-        (poItem?.purchase_request_items as { item_id: string | null } | null)?.item_id ??
-        null;
-
-      if (resolvedItemId) {
+    for (const item of receivedItems) {
+      if (item.stock_item_id && itemTypeMap.get(item.stock_item_id) !== "service") {
         const { error: rpcErr } = await supabase.rpc("upsert_location_stock", {
           p_location_id: stockLocationId,
-          p_item_id: resolvedItemId,
+          p_item_id: item.stock_item_id,
           p_quantity_delta: item.qty_received,
         });
         if (rpcErr) {
           // Log but don't fail the request — delivery is still recorded
           console.error("[delivery] upsert_location_stock failed:", rpcErr.message, {
             location: stockLocationId,
-            item: resolvedItemId,
+            item: item.stock_item_id,
             qty: item.qty_received,
           });
         }
@@ -316,10 +341,11 @@ export async function DELETE(
     return NextResponse.json({ error: "Deliveries can only be rejected on partially received or received POs" }, { status: 422 });
   }
 
-  // Fetch delivery receipt + items
+  // Fetch delivery receipt + items (including the stock location/item
+  // resolved and stored at creation time)
   const { data: receipt, error: receiptErr } = await supabase
     .from("po_delivery_receipts")
-    .select("*, po_delivery_receipt_items(id, po_item_id, qty_received)")
+    .select("*, po_delivery_receipt_items(id, po_item_id, qty_received, stock_item_id)")
     .eq("id", deliveryId)
     .eq("po_id", poId)
     .single();
@@ -328,28 +354,57 @@ export async function DELETE(
     return NextResponse.json({ error: "Delivery receipt not found" }, { status: 404 });
   }
 
+  // Resolve the location to reverse stock at. Prefer the value stored on the
+  // receipt when it was recorded; for legacy receipts (before it was stored)
+  // re-derive with the SAME fallback chain the POST path uses: PO's
+  // location_id, else the linked Purchase Request's location_id.
+  let stockLocationId: string | null = receipt.stock_location_id ?? po.location_id ?? null;
+  if (!stockLocationId && po.pr_id) {
+    const { data: prRow } = await supabase
+      .from("purchase_requests")
+      .select("location_id")
+      .eq("id", po.pr_id)
+      .maybeSingle();
+    stockLocationId = prRow?.location_id ?? null;
+  }
+
   // Reverse quantity_received on each PO item + reverse location_stock
   for (const item of receipt.po_delivery_receipt_items ?? []) {
     const { data: poItem } = await supabase
       .from("purchase_order_items")
-      .select("item_id, quantity_received")
+      .select("item_id, quantity_received, purchase_request_items(item_id)")
       .eq("id", item.po_item_id)
       .eq("po_id", poId)
       .single();
     if (poItem) {
-      const newQty = Math.max(0, Number(poItem.quantity_received) - Number(item.qty_received));
-      await supabase
-        .from("purchase_order_items")
-        .update({ quantity_received: newQty })
-        .eq("id", item.po_item_id)
-        .eq("po_id", poId);
-      // Reverse location_stock
-      if (po.location_id && poItem.item_id) {
-        await supabase.rpc("upsert_location_stock", {
-          p_location_id: po.location_id,
-          p_item_id: poItem.item_id,
-          p_quantity_delta: -Number(item.qty_received),
-        });
+      // Atomic decrement (floors at 0) — mirrors the POST-path increment
+      await supabase.rpc("increment_po_item_received", {
+        p_po_item_id: item.po_item_id,
+        p_po_id: poId,
+        p_delta: -Number(item.qty_received),
+      });
+      // Reverse location_stock against the item stock was credited to:
+      // stored stock_item_id, else re-derive via the POST path's fallback
+      // (PO item's item_id, else the linked PR item's item_id).
+      const stockItemId: string | null =
+        item.stock_item_id ??
+        poItem.item_id ??
+        (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id ??
+        null;
+      if (stockLocationId && stockItemId) {
+        // Services never had a location_stock write in the first place — skip the reversal too.
+        const { data: catalogRow } = await supabase
+          .from("procurement_items")
+          .select("item_type")
+          .eq("id", stockItemId)
+          .maybeSingle();
+        if (catalogRow?.item_type !== "service") {
+          await supabase.rpc("upsert_location_stock", {
+            p_location_id: stockLocationId,
+            p_item_id: stockItemId,
+            p_quantity_delta: -Number(item.qty_received),
+          });
+        }
       }
     }
   }

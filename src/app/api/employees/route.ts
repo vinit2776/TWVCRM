@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { uuidToRefId } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createSchema = z.object({
   full_name:   z.string().min(1),
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
   }
 
   const parsed = createSchema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data: emp, error } = await admin
     .from("employees")

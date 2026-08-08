@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createHandoverSchema = z.object({
   handover_type: z.enum(["takeover", "return", "mid_term_addition"]),
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const parsed = createHandoverSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data, error } = await supabase
     .from("lease_asset_handovers")

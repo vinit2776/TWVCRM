@@ -6,6 +6,7 @@ import { getCachedSetting } from "@/lib/app-settings-cache";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { handleRenewalPayment } from "@/lib/vo-renewal";
+import { computeSettlement } from "@/lib/settlement";
 
 export const dynamic = "force-dynamic";
 
@@ -272,14 +273,17 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Check if fully paid
+      // Check if fully paid. TDS counts toward settlement (a prior manual
+      // payment may carry a TDS deduction), and the statement settles on the
+      // whole-rupee amount — same definition as the manual payment route.
       const { data: allPayments } = await supabase
         .from("billing_payments")
-        .select("amount")
+        .select("amount, tds_amount")
         .eq("billing_statement_id", billingStatement.id);
 
-      const totalPaid = (allPayments || []).reduce((s: number, p: { amount: number }) => s + Number(p.amount), 0);
-      const newStatus = totalPaid >= Number(billingStatement.total_amount) ? "paid" : "partially_paid";
+      const settlement = computeSettlement(billingStatement.total_amount, allPayments);
+      // A payment just landed, so anything short of "paid" is "partially_paid".
+      const newStatus = settlement.paymentStatus === "paid" ? "paid" : "partially_paid";
 
       await supabase
         .from("billing_statements")

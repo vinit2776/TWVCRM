@@ -22,6 +22,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createUnifiVoucher } from "@/lib/unifi";
 import { logAudit } from "@/lib/audit";
+import { zodErrorResponse } from "@/lib/validations";
 
 const bodySchema = z.object({
   location_id:      z.string().uuid(),
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
   // Any staff can request — but only admin/manager bypass approval
   const parsed = bodySchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
   const body = parsed.data;
 

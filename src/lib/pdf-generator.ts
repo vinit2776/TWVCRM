@@ -1190,7 +1190,9 @@ export function generateMembershipAgreementPDF(
   const ifrsd = monthlyFee * securityDepositMonths;
   const escalation = contract.escalation_percentage || 10;
   const noticePeriod = contract.notice_period_months || 2;
-  const commitmentTerm = Math.max(0, contract.tenure_months - noticePeriod);
+  // Fallback for contracts predating the lock_in_months column (migration 00222):
+  // lock-in was previously implied as tenure minus notice period.
+  const lockInMonths = contract.lock_in_months ?? Math.max(0, contract.tenure_months - noticePeriod);
   const locationName = location?.name || "The WorkVilla";
   const locationAddress = [location?.address, location?.city, location?.state].filter(Boolean).join(", ") || "Chennai";
 
@@ -1352,9 +1354,9 @@ export function generateMembershipAgreementPDF(
     ["8", "Monthly Membership Fees (MMF)", `${formatCurrencyPDF(monthlyFee)} + GST per month\n(${amountInWords(monthlyFee)})`],
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
-    ["11", "Commitment Term",
-      `The Member & the Company shall not be entitled to terminate this Agreement or reduce the number of Work Space for a period of ${commitmentTerm}.0 Months and Notice for Termination (defined below) commencing from the Commencement Date.\n\n` +
-      `Member shall be liable to pay the Monthly Membership Fees for the unexpired Commitment Term along with the period for Notice for Termination, if in case this Agreement is terminated by the Member prior to the expiry of Commitment Term.`],
+    ["11", "Lock-in Period",
+      `The Member & the Company shall not be entitled to terminate this Agreement or reduce the number of Work Space during the Lock-in Period of ${lockInMonths}.0 Months commencing from the Commencement Date. After expiry of the Lock-in Period, either party may terminate this Agreement by delivering a Notice for Termination (defined below) of at least ${noticePeriod} month(s).\n\n` +
+      `Member shall be liable to pay the Monthly Membership Fees for the unexpired Lock-in Period along with the period for Notice for Termination, if in case this Agreement is terminated by the Member prior to the expiry of the Lock-in Period.`],
     ["12", "Centre Timings",
       "9 A.M. to 9 P.M from Monday to Saturday except public/national holidays.\n" +
       "Support staff available between 9am to 6pm Monday to Saturday, except public/national holidays."],
@@ -1414,7 +1416,7 @@ export function generateMembershipAgreementPDF(
   // Continue schedule rows 17-19
   const scheduleData2: [string, string, string][] = [
     ["17", "Changes/Modifications\nbefore move-in date\n(to be charged on actuals)", "The layout, highlighting the changes/Modification is annexed as Annexure-A to this Agreement (If applicable)."],
-    ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Commitment Term with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
+    ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Lock-in Period with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
     ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${contract.tenure_months}.0 months commencing from the Commencement Date.`],
   ];
 
@@ -1471,10 +1473,10 @@ export function generateMembershipAgreementPDF(
       "Member hereby indemnifies the Company from and against any and all claims, including third party claims, liabilities, and expenses including reasonable attorneys' fees, resulting from any breach or alleged breach of this Agreement by the Member or its employee, agent guests, invitees or their actions or omissions, except to the extent a claim results from the gross negligence, willful misconduct or fraud of the Company. Member is also responsible and make good the loss resulting in the damage to the Premises/Work Spaces caused by it or their guests, employees etc. Member shall not make any settlement that requires a materially adverse act or admission by the Company or imposes any obligation upon any of the Company Parties unless Member has first obtained our or the relevant Company Party's written consent. None of the Company Parties shall be liable for any obligations arising out of a settlement made without its prior written consent."],
 
     ["23", "Termination by the\nMember",
-      `Member may terminate this Agreement by delivering to the Company, a written notice of at least ${noticePeriod} month(s) ("Notice for Termination") after expiry of the Commitment Term.`],
+      `Member may terminate this Agreement by delivering to the Company, a written notice of at least ${noticePeriod} month(s) ("Notice for Termination") after expiry of the Lock-in Period.`],
 
     ["24", "Termination or\nsuspension by the\nCompany",
-      "Company may terminate this Agreement by delivering to the Member, Notice for Termination after expiry of the Commitment Term to terminate this Agreement. Notwithstanding the Commitment Term, Company may withhold Services or immediately terminate this Agreement:\n" +
+      "Company may terminate this Agreement by delivering to the Member, Notice for Termination after expiry of the Lock-in Period to terminate this Agreement. Notwithstanding the Lock-in Period, Company may withhold Services or immediately terminate this Agreement:\n" +
       "\u2022 Upon default in monthly payment beyond 20th (Twenty) of English calendar month.\n" +
       "\u2022 Upon breach of this Agreement;\n" +
       "\u2022 loss of our rights in the Premises;\n" +

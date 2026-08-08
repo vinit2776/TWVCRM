@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
+  const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>;
+  const message = Object.entries(fieldErrors)
+    .map(([field, errs]) => `${field}: ${(errs ?? []).join(", ")}`)
+    .join("; ") || "Invalid request";
+  return { error: message, details: fieldErrors };
+}
+
 // ==========================================
 // Lead Validations
 // ==========================================

@@ -51,7 +51,8 @@ const ViewStatementDialog = dynamic(
 );
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
+import { computeSettlement } from "@/lib/settlement";
+import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
@@ -431,20 +432,10 @@ export default function BillingPage() {
 
   const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
-  // ── Record Payment dialog ─────────────────────────────────────────────────
+  // ── Record Payment dialog (form lives in RecordPaymentDialog) ────────────
   const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);
   const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
   const [recordPaymentBalance, setRecordPaymentBalance]         = useState<number | null>(null);
-  const [rpAmount, setRpAmount]       = useState("");
-  const [rpDate, setRpDate]           = useState(now.toISOString().slice(0, 10));
-  const [rpMode, setRpMode]           = useState("neft");
-  const [rpReference, setRpReference] = useState("");
-  const [rpNotes, setRpNotes]         = useState("");
-  const [rpSubmitting, setRpSubmitting] = useState(false);
-  // TDS deduction on this payment (declared explicitly, never inferred).
-  const [rpTdsEnabled, setRpTdsEnabled]   = useState(false);
-  const [rpTdsSection, setRpTdsSection]   = useState("194I");
-  const [rpTdsAmount, setRpTdsAmount]     = useState("");
 
   // ── Void Statement dialog ────────────────────────────────────────────────
   const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
@@ -611,53 +602,6 @@ export default function BillingPage() {
       toast.error("Network error");
     } finally {
       setIsLocking(false);
-    }
-  };
-
-  const handleRecordPayment = async () => {
-    if (!recordPaymentStatementId || !rpAmount || Number(rpAmount) <= 0) {
-      toast.error("Amount must be positive");
-      return;
-    }
-    const tdsAmt = rpTdsEnabled ? Math.max(0, Number(rpTdsAmount) || 0) : 0;
-    if (rpTdsEnabled && tdsAmt <= 0) {
-      toast.error("Enter the TDS amount deducted by the client");
-      return;
-    }
-    if (rpTdsEnabled && !rpTdsSection) {
-      toast.error("Select the TDS section");
-      return;
-    }
-    setRpSubmitting(true);
-    const res = await fetch(`/api/billing-statements/${recordPaymentStatementId}/payment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: Number(rpAmount),
-        payment_date: rpDate,
-        payment_mode: rpMode,
-        payment_reference: rpReference.trim() || undefined,
-        notes: rpNotes.trim() || undefined,
-        tds_amount:   tdsAmt,
-        tds_section:  rpTdsEnabled ? rpTdsSection : null,
-      }),
-    });
-    setRpSubmitting(false);
-    if (res.ok) {
-      const json = await res.json();
-      toast.success(
-        `Payment recorded. ${json.payment_status === "paid"
-          ? "Invoice fully paid!"
-          : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`
-      );
-      setRecordPaymentDialogOpen(false);
-      setRpAmount(""); setRpReference(""); setRpNotes("");
-      setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I");
-      fetchStatements();
-      fetchData();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to record payment");
     }
   };
 
@@ -990,9 +934,7 @@ export default function BillingPage() {
                   onRecordStatementPayment={(statementId) => {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const stmtData = (cs as any).billing_statement;
-                    const pmts: Array<{ amount: number; tds_amount?: number }> = stmtData?.billing_payments || [];
-                    const paid = pmts.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
-                    const balance = Math.max(0, Number(stmtData?.total_amount || 0) - paid);
+                    const balance = computeSettlement(stmtData?.total_amount, stmtData?.billing_payments).balanceDue;
                     setRecordPaymentStatementId(statementId);
                     setRecordPaymentBalance(balance);
                     setRecordPaymentDialogOpen(true);
@@ -1302,130 +1244,13 @@ export default function BillingPage() {
         }}
       />
 
-      <Dialog open={recordPaymentDialogOpen} onOpenChange={(open) => {
-        setRecordPaymentDialogOpen(open);
-        if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I"); }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-            {recordPaymentBalance !== null && recordPaymentBalance > 0 && (
-              <p className="text-sm text-amber-700 font-medium mt-1">
-                Balance due: {formatCurrency(recordPaymentBalance)}
-              </p>
-            )}
-          </DialogHeader>
-          <div className="space-y-4 mt-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Amount received (₹)</Label>
-                <Input type="number" value={rpAmount} onChange={(e) => setRpAmount(e.target.value)} placeholder="e.g. 15000" />
-              </div>
-              <div className="space-y-2">
-                <Label>Payment Date</Label>
-                <Input type="date" value={rpDate} onChange={(e) => setRpDate(e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Payment Mode</Label>
-                <Select value={rpMode} onValueChange={setRpMode}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="neft">NEFT</SelectItem>
-                    <SelectItem value="rtgs">RTGS</SelectItem>
-                    <SelectItem value="upi">UPI</SelectItem>
-                    <SelectItem value="cheque">Cheque</SelectItem>
-                    <SelectItem value="cash">Cash</SelectItem>
-                    <SelectItem value="razorpay">Razorpay</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Reference / UTR No.</Label>
-                <Input value={rpReference} onChange={(e) => setRpReference(e.target.value)} placeholder="UTR or cheque number" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Notes (optional)</Label>
-              <Textarea value={rpNotes} onChange={(e) => setRpNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
-            </div>
-
-            {/* ── TDS deduction block ──────────────────────────────────── */}
-            <div className="rounded-lg border border-border">
-              <button
-                type="button"
-                className="w-full flex items-center justify-between px-3 py-2.5 text-sm hover:bg-muted/30 rounded-lg transition-colors"
-                onClick={() => { setRpTdsEnabled((v) => !v); if (!rpTdsEnabled) setRpTdsAmount(""); }}
-              >
-                <span className="flex items-center gap-2 font-medium">
-                  <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${rpTdsEnabled ? "bg-teal-600 border-teal-600 text-white" : "border-gray-400"}`}>
-                    {rpTdsEnabled ? "✓" : ""}
-                  </span>
-                  Client deducted TDS on this payment
-                </span>
-                <span className="text-xs text-muted-foreground">TDS on income</span>
-              </button>
-
-              {rpTdsEnabled && (
-                <div className="px-3 pb-3 pt-1 space-y-3 border-t">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <Label className="text-xs">TDS section *</Label>
-                      <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
-                        <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {TDS_CLIENT_SECTIONS.map((s) => (
-                            <SelectItem key={s.code} value={s.code} className="text-xs">
-                              <span className="font-mono font-medium">{s.label}</span>
-                              <span className="text-muted-foreground ml-1.5">— {s.description}</span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">TDS amount (₹) *</Label>
-                      <Input
-                        type="number"
-                        min={0.01}
-                        step="any"
-                        value={rpTdsAmount}
-                        onChange={(e) => setRpTdsAmount(e.target.value)}
-                        placeholder="e.g. 1500"
-                        className="h-9 text-xs"
-                      />
-                    </div>
-                  </div>
-                  {/* Live settlement preview */}
-                  {parseFloat(rpTdsAmount || "0") > 0 && (
-                    <div className={`rounded px-2.5 py-1.5 text-xs font-medium ${
-                      recordPaymentBalance !== null &&
-                      Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
-                        ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                        : "bg-blue-50 text-blue-800 border border-blue-200"
-                    }`}>
-                      Cash {formatCurrency(parseFloat(rpAmount || "0"))} + TDS {formatCurrency(parseFloat(rpTdsAmount || "0"))}
-                      {" = "}{formatCurrency(parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0"))}
-                      {recordPaymentBalance !== null &&
-                        Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
-                        ? " ✓ settles invoice"
-                        : ""}
-                    </div>
-                  )}
-                  <p className="text-[11px] text-muted-foreground">
-                    Invoice settles as: cash received + TDS deducted = invoice total. Tally receipt splits bank + TDS ledger + party.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <Button onClick={handleRecordPayment} disabled={rpSubmitting} className="w-full">
-              {rpSubmitting ? "Recording…" : "Record Payment"}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <RecordPaymentDialog
+        open={recordPaymentDialogOpen}
+        onOpenChange={setRecordPaymentDialogOpen}
+        statementId={recordPaymentStatementId}
+        balanceDue={recordPaymentBalance}
+        onSuccess={() => { fetchStatements(); fetchData(); }}
+      />
 
       {/* Void Statement Dialog */}
       <Dialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>

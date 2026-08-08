@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const holdSchema = z.object({
   reason: z.string().min(1, "Reason required"),
@@ -22,7 +23,7 @@ export async function POST(
 
   const body = await request.json();
   const parsed = holdSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data, error } = await supabase
     .from("lease_payments")

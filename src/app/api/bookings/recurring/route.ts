@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createRecurringSeriesSchema } from "@/lib/validations";
+import { createRecurringSeriesSchema, zodErrorResponse } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const parsed = createRecurringSeriesSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const input = parsed.data;
 

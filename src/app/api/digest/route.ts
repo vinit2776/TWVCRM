@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
+import { paymentCredit, balanceDue } from "@/lib/settlement";
 
 export const maxDuration = 60;
 
@@ -469,6 +470,24 @@ async function fetchReceivablesAging(supabase: any, date: string): Promise<Recei
     .in("status", ["draft", "finalized"])
     .neq("payment_status", "paid");
 
+  // Aging measures the outstanding balance, not the full invoice total —
+  // partial payments (including TDS deductions) reduce what's owed. Same
+  // settlement definition as the payment route and the AR view. Drafts
+  // can't carry payments, so only finalized rows need the lookup.
+  const finalizedIds = (rows || [])
+    .filter((r: { status: string }) => r.status === "finalized")
+    .map((r: { id: string }) => r.id);
+  const paidByStmt = new Map<string, number>();
+  if (finalizedIds.length > 0) {
+    const { data: pays } = await supabase
+      .from("billing_payments")
+      .select("billing_statement_id, amount, tds_amount")
+      .in("billing_statement_id", finalizedIds);
+    for (const p of pays || []) {
+      paidByStmt.set(p.billing_statement_id, (paidByStmt.get(p.billing_statement_id) || 0) + paymentCredit(p));
+    }
+  }
+
   const now = new Date(date + "T23:59:59Z").getTime();
 
   const aging: ReceivablesAging = {
@@ -480,8 +499,10 @@ async function fetchReceivablesAging(supabase: any, date: string): Promise<Recei
     pendingFinalization: { count: 0, amount: 0 },
   };
 
-  for (const row of (rows || []) as { total_amount: number; period_end: string; status: string; payment_status: string }[]) {
-    const amount = Number(row.total_amount || 0);
+  for (const row of (rows || []) as { id: string; total_amount: number; period_end: string; status: string; payment_status: string }[]) {
+    const amount = row.status === "draft"
+      ? Number(row.total_amount || 0)
+      : balanceDue(row.total_amount, paidByStmt.get(row.id) || 0);
 
     if (row.status === "draft") {
       // Draft statements haven't been sent to the client yet — not overdue, just pending work.

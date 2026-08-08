@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { setUserActive } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const schema = z.object({
   device_id: z.string().uuid(),
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   const parsed = schema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { device_id, cosec_user_id, active } = parsed.data;
 

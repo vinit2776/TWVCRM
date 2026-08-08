@@ -61,6 +61,11 @@ export function CollectPaymentDialog({
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [qrZoomed, setQrZoomed] = useState(false);
 
+  // Payment-proof screenshot lightbox (payment history "View" + verify dialog thumbnail)
+  const [screenshotZoomUrl, setScreenshotZoomUrl] = useState<string | null>(null);
+  const [loadingHistoryScreenshotId, setLoadingHistoryScreenshotId] = useState<string | null>(null);
+  const [verifyScreenshotUrl, setVerifyScreenshotUrl] = useState<string | null>(null);
+
   // Verification dialog state
   const [verifyingPayment, setVerifyingPayment] = useState<BookingPayment | null>(null);
   const [verifyNotes, setVerifyNotes] = useState("");
@@ -106,6 +111,40 @@ export function CollectPaymentDialog({
     };
     fetchQrUrl();
   }, [open, upiQrCodePath]);
+
+  // Fetch signed URL for the payment-proof screenshot shown in the verify dialog
+  useEffect(() => {
+    if (!verifyingPayment?.screenshot_path) {
+      setVerifyScreenshotUrl(null);
+      return;
+    }
+    const path = verifyingPayment.screenshot_path;
+    const fetchUrl = async () => {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase.storage
+          .from("crm-documents")
+          .createSignedUrl(path, 3600);
+        if (data?.signedUrl) setVerifyScreenshotUrl(data.signedUrl);
+      } catch {
+        console.error("Failed to load payment screenshot");
+      }
+    };
+    fetchUrl();
+  }, [verifyingPayment]);
+
+  const handleViewHistoryScreenshot = useCallback(async (paymentId: string, screenshotPath: string) => {
+    setLoadingHistoryScreenshotId(paymentId);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(screenshotPath, 3600);
+      if (data?.signedUrl) setScreenshotZoomUrl(data.signedUrl);
+    } finally {
+      setLoadingHistoryScreenshotId(null);
+    }
+  }, []);
 
   const verifiedTotal = payments
     .filter((p) => p.status === "verified")
@@ -328,6 +367,22 @@ export function CollectPaymentDialog({
                       <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
                         {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
                       </Badge>
+                      {p.screenshot_path && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs px-2"
+                          disabled={loadingHistoryScreenshotId === p.id}
+                          onClick={() => handleViewHistoryScreenshot(p.id, p.screenshot_path!)}
+                        >
+                          {loadingHistoryScreenshotId === p.id ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : (
+                            <ImageIcon className="mr-1 h-3 w-3" />
+                          )}
+                          View
+                        </Button>
+                      )}
                       {p.status === "pending" && p.payment_mode === "upi" && (
                         <Button
                           variant="ghost"
@@ -645,12 +700,27 @@ export function CollectPaymentDialog({
               </div>
 
               {verifyingPayment.screenshot_path ? (
-                <div className="text-center text-sm text-muted-foreground">
-                  <p className="mb-2">Payment screenshot uploaded</p>
-                  <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-                    <ImageIcon className="mr-1 h-3 w-3" />Screenshot available
-                  </Badge>
-                </div>
+                verifyScreenshotUrl ? (
+                  <button
+                    type="button"
+                    className="block w-full rounded-md border overflow-hidden hover:opacity-90 transition-opacity"
+                    onClick={() => setScreenshotZoomUrl(verifyScreenshotUrl)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={verifyScreenshotUrl}
+                      alt="Customer's UPI payment confirmation screenshot"
+                      className="w-full max-h-64 object-contain bg-muted/30"
+                    />
+                    <span className="flex items-center justify-center gap-1 text-[11px] text-muted-foreground py-1">
+                      <Maximize2 className="h-3 w-3" />Tap to zoom
+                    </span>
+                  </button>
+                ) : (
+                  <div className="flex justify-center py-4">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                )
               ) : (
                 <div className="text-center text-sm text-amber-600">
                   No screenshot uploaded for this payment
@@ -691,6 +761,30 @@ export function CollectPaymentDialog({
             </div>
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* Payment screenshot lightbox — shared by Payment History "View" and the verify thumbnail */}
+      {screenshotZoomUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setScreenshotZoomUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setScreenshotZoomUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={screenshotZoomUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
       )}
     </>
   );

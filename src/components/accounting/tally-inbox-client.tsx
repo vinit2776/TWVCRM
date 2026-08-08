@@ -14,13 +14,15 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
 import {
   AGING_ESCALATE_HOURS,
   HANDOFF_STATE_LABELS,
@@ -149,6 +151,11 @@ export function TallyInboxClient() {
   const [payRef, setPayRef] = useState("");
   const [payNotes, setPayNotes] = useState("");
   const [paySubmitting, setPaySubmitting] = useState(false);
+  // TDS deduction on this payment (declared explicitly, never inferred) —
+  // mirrors the AR Receivables Record Payment dialog (billing/page.tsx).
+  const [payTdsEnabled, setPayTdsEnabled] = useState(false);
+  const [payTdsSection, setPayTdsSection] = useState("194I");
+  const [payTdsAmount, setPayTdsAmount] = useState("");
 
   // Auto-expand the first pi_paid_awaiting_gst row on initial load so accounts
   // can see the upload form without an extra click.
@@ -369,19 +376,33 @@ export function TallyInboxClient() {
     setPayMode("bank_transfer");
     setPayRef("");
     setPayNotes("");
+    setPayTdsEnabled(false);
+    setPayTdsSection("194I");
+    setPayTdsAmount("");
   }, []);
 
   const submitPayment = useCallback(async () => {
     if (!payRow) return;
     const amt = parseFloat(payAmount);
     if (!amt || amt <= 0) { setActionError("Enter a valid amount"); return; }
+    const tdsAmt = payTdsEnabled ? Math.max(0, Number(payTdsAmount) || 0) : 0;
+    if (payTdsEnabled && tdsAmt <= 0) { setActionError("Enter the TDS amount deducted by the client"); return; }
+    if (payTdsEnabled && !payTdsSection) { setActionError("Select the TDS section"); return; }
     setPaySubmitting(true);
     setActionError(null);
     try {
       const res = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amt, payment_date: payDate, payment_mode: payMode, payment_reference: payRef || null, notes: payNotes || null }),
+        body: JSON.stringify({
+          amount: amt,
+          payment_date: payDate,
+          payment_mode: payMode,
+          payment_reference: payRef || null,
+          notes: payNotes || null,
+          tds_amount: tdsAmt,
+          tds_section: payTdsEnabled ? payTdsSection : null,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
@@ -392,7 +413,7 @@ export function TallyInboxClient() {
     } finally {
       setPaySubmitting(false);
     }
-  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, load]);
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, load]);
 
   const handleAccounted = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -748,7 +769,14 @@ export function TallyInboxClient() {
       )}
 
       {/* ── Record Payment dialog ── */}
-      <Dialog open={!!payRow} onOpenChange={(o) => !o && setPayRow(null)}>
+      <Dialog open={!!payRow} onOpenChange={(o) => {
+        if (!o) {
+          setPayRow(null);
+          setPayTdsEnabled(false);
+          setPayTdsSection("194I");
+          setPayTdsAmount("");
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Record Payment — {payRow?.statement_number}</DialogTitle>
@@ -789,6 +817,73 @@ export function TallyInboxClient() {
               <div>
                 <Label>Notes</Label>
                 <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
+              </div>
+
+              {/* ── TDS deduction block (mirrors AR Receivables Record Payment) ── */}
+              <div className="rounded-lg border border-border">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between px-3 py-2.5 text-sm hover:bg-muted/30 rounded-lg transition-colors"
+                  onClick={() => { setPayTdsEnabled((v) => !v); if (!payTdsEnabled) setPayTdsAmount(""); }}
+                >
+                  <span className="flex items-center gap-2 font-medium">
+                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${payTdsEnabled ? "bg-teal-600 border-teal-600 text-white" : "border-gray-400"}`}>
+                      {payTdsEnabled ? "✓" : ""}
+                    </span>
+                    Client deducted TDS on this payment
+                  </span>
+                  <span className="text-xs text-muted-foreground">TDS on income</span>
+                </button>
+
+                {payTdsEnabled && (
+                  <div className="px-3 pb-3 pt-1 space-y-3 border-t">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">TDS section *</Label>
+                        <Select value={payTdsSection} onValueChange={setPayTdsSection}>
+                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {TDS_CLIENT_SECTIONS.map((s) => (
+                              <SelectItem key={s.code} value={s.code} className="text-xs">
+                                <span className="font-mono font-medium">{s.label}</span>
+                                <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">TDS amount (₹) *</Label>
+                        <Input
+                          type="number"
+                          min={0.01}
+                          step="any"
+                          value={payTdsAmount}
+                          onChange={(e) => setPayTdsAmount(e.target.value)}
+                          placeholder="e.g. 1500"
+                          className="h-9 text-xs"
+                        />
+                      </div>
+                    </div>
+                    {/* Live settlement preview */}
+                    {parseFloat(payTdsAmount || "0") > 0 && (
+                      <div className={`rounded px-2.5 py-1.5 text-xs font-medium ${
+                        Math.abs((parseFloat(payAmount || "0") + parseFloat(payTdsAmount || "0")) - payRow.balance_due) < 1
+                          ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                          : "bg-blue-50 text-blue-800 border border-blue-200"
+                      }`}>
+                        Cash {formatCurrency(parseFloat(payAmount || "0"))} + TDS {formatCurrency(parseFloat(payTdsAmount || "0"))}
+                        {" = "}{formatCurrency(parseFloat(payAmount || "0") + parseFloat(payTdsAmount || "0"))}
+                        {Math.abs((parseFloat(payAmount || "0") + parseFloat(payTdsAmount || "0")) - payRow.balance_due) < 1
+                          ? " ✓ settles invoice"
+                          : ""}
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">
+                      Invoice settles as: cash received + TDS deducted = invoice total. Tally receipt splits bank + TDS ledger + party.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1509,6 +1604,9 @@ function paymentModeLabel(mode: string): string {
 }
 
 function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
+  const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   if (confirmations.length === 0) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 flex-shrink-0">
@@ -1518,11 +1616,61 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
   }
   const latest = confirmations[0];
   const ref = latest.razorpay_payment_id ?? latest.payment_reference;
+
+  const handleViewScreenshot = async () => {
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(latest.screenshot_path!, 3600);
+      if (data?.signedUrl) setZoomedUrl(data.signedUrl);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
-      <CheckCircle2 className="h-2.5 w-2.5" />
-      Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
-    </span>
+    <>
+      <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
+        <CheckCircle2 className="h-2.5 w-2.5" />
+        Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
+        {latest.screenshot_path && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleViewScreenshot(); }}
+            disabled={loading}
+            title="View payment screenshot"
+            className="ml-0.5 hover:text-green-950"
+          >
+            {loading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <ImageIcon className="h-2.5 w-2.5" />}
+          </button>
+        )}
+      </span>
+
+      {zoomedUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setZoomedUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setZoomedUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zoomedUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1535,6 +1683,21 @@ function BookingPaymentPanel({
 }) {
   const totalConfirmed = confirmations.reduce((s, p) => s + p.amount, 0);
   const isFullyPaid = Math.abs(totalConfirmed - totalAmount) < 0.5;
+  const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
+  const [loadingScreenshotId, setLoadingScreenshotId] = useState<string | null>(null);
+
+  const handleViewScreenshot = useCallback(async (paymentId: string, screenshotPath: string) => {
+    setLoadingScreenshotId(paymentId);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(screenshotPath, 3600);
+      if (data?.signedUrl) setZoomedUrl(data.signedUrl);
+    } finally {
+      setLoadingScreenshotId(null);
+    }
+  }, []);
 
   if (confirmations.length === 0) {
     return (
@@ -1632,10 +1795,48 @@ function BookingPaymentPanel({
                   )}
                 </div>
               )}
+              {p.screenshot_path && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] text-green-700 hover:text-green-900 underline underline-offset-2"
+                  onClick={() => handleViewScreenshot(p.id, p.screenshot_path!)}
+                  disabled={loadingScreenshotId === p.id}
+                >
+                  {loadingScreenshotId === p.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ImageIcon className="h-3 w-3" />
+                  )}
+                  View payment screenshot
+                </button>
+              )}
             </div>
           );
         })}
       </div>
+
+      {zoomedUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setZoomedUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setZoomedUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zoomedUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -35,6 +35,7 @@ import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audi
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
+import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import type { VendorBill, PaymentBatchType } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -978,6 +979,8 @@ export default function VendorBillDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {bill.electricity_bill && <ElectricityBillBreakupCard bill={bill.electricity_bill} />}
 
       {/* Transaction Lifecycle */}
       <Card>

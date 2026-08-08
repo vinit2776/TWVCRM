@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil } from "lucide-react";
+import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -88,6 +88,26 @@ interface CustomerBillInfo {
   } | null;
 }
 
+// Read-only dry run of approve_electricity_landlord_bill() — see
+// GET /api/electricity-bills/[id]/approval-preview. Same shape as the
+// customer-side numbers a real customer bill would carry, minus the
+// row id/status that only exist once one is actually generated.
+interface ApprovalPreviewItem {
+  contract_id: string;
+  contract_number: string;
+  billing_mode: string | null;
+  customer_name: string;
+  customer_utility_units: number;
+  customer_generator_units: number;
+  customer_utility_rate: number;
+  customer_generator_rate: number;
+  customer_subtotal: number;
+  customer_cgst: number;
+  customer_sgst: number;
+  customer_total: number;
+  gst_rate: number;
+}
+
 interface EbBill {
   id: string;
   location_id: string;
@@ -121,6 +141,8 @@ interface LocationConfig {
 
 interface Location { id: string; name: string; code: string }
 
+interface MappedContract { contract_id: string; contract_number: string; customer_name: string }
+
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const STATUS_COLORS: Record<string, string> = {
   draft:    "bg-amber-100 text-amber-800",
@@ -137,15 +159,25 @@ export default function ElectricityBillsPage() {
   const [activeTab, setActiveTab] = useState<"open" | "completed">("open");
   const [listLocationFilter, setListLocationFilter] = useState("");
   const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Draft bills (awaiting approval) default to expanded — the full line-item
+  // breakdown, lifecycle, and inward/outward preview should be visible to an
+  // approver without an extra click. Everything else defaults to collapsed.
+  // Two override sets track manual toggles away from each default.
+  const [collapsedDraftIds, setCollapsedDraftIds] = useState<Set<string>>(new Set());
+  const [expandedOtherIds, setExpandedOtherIds] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
+  const [revising, setRevising] = useState<string | null>(null);
+  const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; billSide: "landlord" | "customer"; label: string } | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
+  const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
 
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
   const [locCfg, setLocCfg] = useState<LocationConfig | null>(null);
+  const [mappedContracts, setMappedContracts] = useState<MappedContract[] | null>(null);
   const [form, setForm] = useState({
     location_id: "",
     bill_month: new Date().getMonth() + 1,
@@ -189,14 +221,56 @@ export default function ElectricityBillsPage() {
 
   useEffect(() => { fetchBills(); fetchLocations(); fetchTallyHandoffSetting(); }, [fetchBills, fetchLocations, fetchTallyHandoffSetting]);
 
+  const fetchApprovalPreview = useCallback(async (billId: string) => {
+    setPreviewsByBillId((prev) => ({ ...prev, [billId]: "loading" }));
+    const res = await fetch(`/api/electricity-bills/${billId}/approval-preview`);
+    const json = await res.json();
+    setPreviewsByBillId((prev) => ({ ...prev, [billId]: res.ok ? (json.data ?? []) : [] }));
+  }, []);
+
+  // Fetch the customer-bill preview for every draft bill currently expanded
+  // (drafts default to expanded — see collapsedDraftIds) — cached per bill id
+  // so re-collapsing/re-expanding doesn't refetch.
+  useEffect(() => {
+    for (const bill of bills) {
+      if (bill.status !== "draft") continue;
+      if (collapsedDraftIds.has(bill.id)) continue;
+      if ((bill.customer_bills?.length ?? 0) > 0) continue;
+      if (previewsByBillId[bill.id] !== undefined) continue;
+      fetchApprovalPreview(bill.id);
+    }
+  }, [bills, collapsedDraftIds, previewsByBillId, fetchApprovalPreview]);
+
+  const isExpanded = useCallback(
+    (bill: EbBill) => (bill.status === "draft" ? !collapsedDraftIds.has(bill.id) : expandedOtherIds.has(bill.id)),
+    [collapsedDraftIds, expandedOtherIds],
+  );
+
+  const toggleExpanded = (bill: EbBill) => {
+    if (bill.status === "draft") {
+      setCollapsedDraftIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(bill.id)) next.delete(bill.id); else next.add(bill.id);
+        return next;
+      });
+    } else {
+      setExpandedOtherIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(bill.id)) next.delete(bill.id); else next.add(bill.id);
+        return next;
+      });
+    }
+  };
+
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
-    if (!locId) { setLocCfg(null); return; }
+    if (!locId) { setLocCfg(null); setMappedContracts(null); return; }
     const res = await fetch(`/api/locations/${locId}/electricity-config`);
     if (res.ok) {
       const json = await res.json();
       const cfg = json.data as LocationConfig | null;
       setLocCfg(cfg);
+      setMappedContracts((json.mapped_contracts as MappedContract[] | undefined) ?? []);
       // Pre-fill line rates from location config
       if (cfg) {
         setLines([
@@ -343,6 +417,52 @@ export default function ElectricityBillsPage() {
     setApproving(null);
   };
 
+  const handleRevise = async (billId: string) => {
+    if (
+      !window.confirm(
+        "No customer bills were generated when this was approved (the contract wasn't enabled for electricity billing yet). " +
+          "Revising will mark this landlord bill as revised and create a fresh draft with the same numbers, which you can then re-approve. Continue?",
+      )
+    ) {
+      return;
+    }
+    setRevising(billId);
+    const res = await fetch(`/api/electricity-bills/${billId}/revise`, { method: "POST" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success("Revised — a new draft was created. Approve it to regenerate the customer bill(s).");
+      fetchBills();
+    } else {
+      toast.error(json.error || "Failed to revise");
+    }
+    setRevising(null);
+  };
+
+  // Delete is destructive and irreversible, so it goes through an explicit
+  // in-app confirmation dialog (deleteTarget) rather than a native
+  // window.confirm — a modal the user has to deliberately click a red
+  // "Delete" button on is much harder to trigger by accident (a stray Enter
+  // keypress, a fast double-click) than a browser-native confirm() popup.
+  const requestDeleteBill = (billId: string, billSide: "landlord" | "customer", label: string) => {
+    setDeleteTarget({ id: billId, billSide, label });
+  };
+
+  const handleDeleteBill = async () => {
+    if (!deleteTarget) return;
+    const { id: billId } = deleteTarget;
+    setDeletingBillId(billId);
+    const res = await fetch(`/api/electricity-bills/${billId}`, { method: "DELETE" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success("Deleted");
+      fetchBills();
+      setDeleteTarget(null);
+    } else {
+      toast.error(json.error || "Failed to delete");
+    }
+    setDeletingBillId(null);
+  };
+
   const handleConfirmCustomerBill = async (id: string) => {
     setActingOnCustomerBill(id);
     const res = await fetch(`/api/electricity-bills/${id}/confirm`, { method: "PATCH" });
@@ -481,6 +601,11 @@ export default function ElectricityBillsPage() {
     if (bill.status === "draft") {
       return { stepIndex: 1, complete: false, voided: false, subLabel: "Awaiting approval" };
     }
+    if (bill.status === "revised") {
+      // Superseded by the draft it was cloned into on Revise — dead-end record,
+      // shouldn't linger in the Open worklist even though it has no customer bills.
+      return { stepIndex: 4, complete: true, voided: false, subLabel: "Superseded by a revised bill" };
+    }
 
     const cbs = bill.customer_bills ?? [];
     if (cbs.length === 0) {
@@ -524,9 +649,7 @@ export default function ElectricityBillsPage() {
   // issue by hand).
   const customerBillNextStepHint = (cb: CustomerBillInfo): string => {
     if (cb.status === "draft") {
-      return cb.created_by === user?.id
-        ? "Waiting for another admin, manager, or accounts user to confirm — you captured this one, so you can't also confirm it."
-        : "Confirming will lock this amount in and enable Bill & Send.";
+      return "Confirming will lock this amount in and enable Bill & Send.";
     }
     if (cb.status === "invoiced") {
       const isGstDirect = cb.contract?.billing_mode === "gst_direct";
@@ -566,6 +689,10 @@ export default function ElectricityBillsPage() {
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
+  // Edit/Delete are corrections tools for mis-entered data — admin only,
+  // stricter than who's allowed to capture a bill in the first place.
+  const canEditBills = user?.role === "admin";
+  const canDeleteBills = user?.role === "admin";
 
   return (
     <div className="space-y-6">
@@ -634,9 +761,9 @@ export default function ElectricityBillsPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       className="text-left"
-                      onClick={() => setExpanded(expanded === bill.id ? null : bill.id)}
+                      onClick={() => toggleExpanded(bill)}
                     >
-                      {expanded === bill.id
+                      {isExpanded(bill)
                         ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </button>
@@ -654,7 +781,7 @@ export default function ElectricityBillsPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge className={overallStage(bill).className}>{overallStage(bill).label}</Badge>
-                    {canCapture && bill.status === "draft" && (
+                    {canEditBills && bill.status === "draft" && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -674,10 +801,37 @@ export default function ElectricityBillsPage() {
                         {approving === bill.id ? "Approving…" : "Approve & Generate"}
                       </Button>
                     )}
+                    {canApprove && bill.status === "invoiced" && (bill.customer_bills ?? []).length === 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRevise(bill.id)}
+                        disabled={revising === bill.id}
+                      >
+                        <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                        {revising === bill.id ? "Revising…" : "Revise"}
+                      </Button>
+                    )}
+                    {canDeleteBills && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => requestDeleteBill(
+                          bill.id,
+                          "landlord",
+                          `${bill.locations?.name ?? bill.location_id} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}`,
+                        )}
+                        disabled={deletingBillId === bill.id}
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        {deletingBillId === bill.id ? "Deleting…" : "Delete"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
-              {expanded === bill.id && (
+              {isExpanded(bill) && (
                 <CardContent className="pt-0 pb-4 px-4">
                   <Separator className="mb-3" />
                   <table className="w-full text-sm">
@@ -757,8 +911,12 @@ export default function ElectricityBillsPage() {
                     );
                   })()}
 
-                  {/* Reconciliation: inward payable + outward receivable, same view */}
-                  {bill.status !== "draft" && (() => {
+                  {/* Reconciliation: inward payable + outward receivable, same view —
+                      shown even while still draft: the vendor bill (if any) is
+                      auto-created at capture time already, and the Outward panel
+                      below renders an approval preview in place of real customer
+                      bills until Approve actually generates them. */}
+                  {(() => {
                     const vb = bill.vendor_bill;
                     const dueInDays = daysUntil(vb?.due_date ?? null);
                     const landlordUnpaid = !!vb && vb.payment_status !== "paid";
@@ -817,7 +975,61 @@ export default function ElectricityBillsPage() {
                           {/* Outward — receivable */}
                           <div className="bg-blue-50/50 border border-blue-200 rounded-lg p-3 text-xs space-y-1.5">
                             <p className="font-semibold text-blue-800 uppercase tracking-wide">Outward — Bill to Customer</p>
-                            {customerBills.length === 0 ? (
+                            {customerBills.length === 0 && bill.status === "draft" ? (() => {
+                              const preview = previewsByBillId[bill.id];
+                              if (preview === undefined || preview === "loading") {
+                                return <p className="text-muted-foreground">Loading preview…</p>;
+                              }
+                              if (preview.length === 0) {
+                                return (
+                                  <p className="text-muted-foreground">
+                                    No contracts are enabled for electricity billing at this location — nothing will be generated on approve.
+                                  </p>
+                                );
+                              }
+                              return (
+                                <>
+                                  <p className="text-muted-foreground text-[10px] italic">Preview — nothing is created until you approve.</p>
+                                  {preview.map((p) => (
+                                    <div key={p.contract_id} className="py-1 space-y-1">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="font-medium truncate">{p.customer_name}</span>
+                                          <BillingModeTag mode={p.billing_mode} />
+                                        </div>
+                                        <span className="font-medium shrink-0">{formatCurrency(p.customer_total)}</span>
+                                      </div>
+                                      <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        {p.customer_utility_units > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>Utility/Grid: {p.customer_utility_units} units × {formatCurrency(p.customer_utility_rate)}</span>
+                                            <span>{formatCurrency(p.customer_utility_units * p.customer_utility_rate)}</span>
+                                          </div>
+                                        )}
+                                        {p.customer_generator_units > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>DG/Generator: {p.customer_generator_units} units × {formatCurrency(p.customer_generator_rate)}</span>
+                                            <span>{formatCurrency(p.customer_generator_units * p.customer_generator_rate)}</span>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-between text-muted-foreground border-t border-dashed pt-0.5 mt-0.5">
+                                          <span>Subtotal</span>
+                                          <span>{formatCurrency(p.customer_subtotal)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>GST ({p.gst_rate}%): CGST {formatCurrency(p.customer_cgst)} + SGST {formatCurrency(p.customer_sgst)}</span>
+                                          <span>{formatCurrency(p.customer_cgst + p.customer_sgst)}</span>
+                                        </div>
+                                        <div className="flex justify-between font-medium pt-0.5 border-t">
+                                          <span>Total</span>
+                                          <span>{formatCurrency(p.customer_total)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </>
+                              );
+                            })() : customerBills.length === 0 ? (
                               <p className="text-muted-foreground">No customer bills generated for this bill.</p>
                             ) : (
                               customerBills.map((cb) => (
@@ -889,7 +1101,7 @@ export default function ElectricityBillsPage() {
                                         Preview
                                       </Button>
                                     )}
-                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by !== user?.id && (
+                                    {canManageCustomerBill && cb.status === "draft" && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -901,9 +1113,6 @@ export default function ElectricityBillsPage() {
                                         Confirm
                                       </Button>
                                     )}
-                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by === user?.id && (
-                                      <span className="text-muted-foreground text-[11px]">Needs another admin/manager/accounts</span>
-                                    )}
                                     {canManageCustomerBill && cb.status === "invoiced" && (
                                       <Button
                                         size="sm"
@@ -913,6 +1122,22 @@ export default function ElectricityBillsPage() {
                                       >
                                         <Send className="mr-1 h-3 w-3" />
                                         {actingOnCustomerBill === cb.id ? "Sending…" : "Bill & Send"}
+                                      </Button>
+                                    )}
+                                    {canDeleteBills && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                                        disabled={deletingBillId === cb.id}
+                                        onClick={() => requestDeleteBill(
+                                          cb.id,
+                                          "customer",
+                                          `${customerName(cb)} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}`,
+                                        )}
+                                      >
+                                        <Trash2 className="mr-1 h-3 w-3" />
+                                        {deletingBillId === cb.id ? "Deleting…" : "Delete"}
                                       </Button>
                                     )}
                                   </div>
@@ -964,6 +1189,14 @@ export default function ElectricityBillsPage() {
                 )}
                 {locCfg && !locCfg.enabled && (
                   <p className="text-xs text-destructive">Electricity billing is not enabled for this location.</p>
+                )}
+                {mappedContracts && mappedContracts.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Bills: {mappedContracts.map((c) => `${c.contract_number} — ${c.customer_name}`).join(", ")}
+                  </p>
+                )}
+                {mappedContracts && mappedContracts.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No contract mapped — will route to Accounts Payable on approval.</p>
                 )}
                 {editingBillId && (
                   <p className="text-xs text-muted-foreground">Location, month, and year can&apos;t be changed once captured.</p>
@@ -1173,6 +1406,37 @@ export default function ElectricityBillsPage() {
             <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Saving…" : editingBillId ? "Save Changes" : "Save as Draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation — a dedicated dialog rather than window.confirm()
+          so an accidental click can't cascade a real financial-record delete;
+          the destructive button has to be deliberately clicked. */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete {deleteTarget?.billSide === "landlord" ? "landlord" : "customer"} bill?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="font-medium">{deleteTarget?.label}</p>
+            <p className="text-muted-foreground">
+              {deleteTarget?.billSide === "landlord"
+                ? "This permanently deletes this landlord bill AND its linked customer bill(s), billing statement(s), and vendor bill."
+                : "This permanently deletes this customer bill and its billing statement."}
+              {" "}Blocked if any payment has been recorded anywhere in the chain. This cannot be undone.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteBill}
+              disabled={!!deletingBillId}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {deletingBillId ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

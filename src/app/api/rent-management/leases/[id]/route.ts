@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const updateLeaseSchema = z.object({
   landlord_id: z.string().uuid().nullish(),
@@ -88,7 +89,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "Only admin can change approval settings" }, { status: 403 });
 
   const parsed = updateLeaseSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data, error } = await supabase
     .from("property_leases")

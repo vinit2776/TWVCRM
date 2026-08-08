@@ -164,3 +164,23 @@ describe("computeElectricityBill — GST on landlord bill", () => {
     expect(result.landlord_net_payable).toBe(1080);
   });
 });
+
+describe("computeElectricityBill — customer_gst_rate override", () => {
+  it("defaults to 18% when omitted", () => {
+    const result = computeElectricityBill(BASE_CONFIG, [
+      { line_type: "utility", units: 500, landlord_rate: 8 },
+    ]);
+    expect(result.customer_gst.cgst).toBeCloseTo(450, 2);
+    expect(result.customer_gst.sgst).toBeCloseTo(450, 2);
+  });
+
+  it("respects a non-18% profile rate (e.g. 12%)", () => {
+    const result = computeElectricityBill(
+      { ...BASE_CONFIG, customer_gst_rate: 12 },
+      [{ line_type: "utility", units: 500, landlord_rate: 8 }],
+    );
+    expect(result.customer_subtotal).toBe(5000);
+    expect(result.customer_gst.cgst).toBeCloseTo(300, 2);
+    expect(result.customer_gst.sgst).toBeCloseTo(300, 2);
+  });
+});
