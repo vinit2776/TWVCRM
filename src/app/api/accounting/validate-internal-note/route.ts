@@ -12,11 +12,15 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 const SYSTEM_PROMPT = `You review short internal accounting notes written by coworking-space staff when creating an ad-hoc invoice or a security deposit request/collection. These notes are read only by the accounts team — never by the customer — and exist so accounts can book the money to the correct ledger head and understand why it exists.
 
-Judge whether the note clearly explains WHY this charge/deposit exists and gives enough context to book it correctly (e.g. references the accounting head, the reason, or specific context — not just a restatement of the amount or a generic filler word like "misc", "n/a", "asdf", "test").
+A note passes ONLY if a stranger on the accounts team, reading nothing else, could tell (a) the specific cause or trigger of this charge and (b) enough detail to pick the right ledger head without asking the creator a follow-up question. Merely naming the category of charge (which duplicates the accounting-head dropdown or the invoice title) is NOT enough — the note must add information beyond that category label.
+
+Reject notes that are generic filler, a bare restatement of the accounting head/category, or a restatement of the amount, even if grammatically complete. Examples that must be rejected as too vague: "misc", "n/a", "asdf", "test", "extra charges", "additional charges", "other charges", "miscellaneous fee", "as discussed", "per agreement".
+
+Examples that should pass: "Late checkout fee — customer used the meeting room 2 hrs past the booked slot on 12 Jan", "Recovering courier cost paid on customer's behalf for their signed agreement copy, ref DHL#4471", "Broken chair (asset #114) in Cabin 3, customer acknowledged in walkthrough on 5 Feb".
 
 Respond with ONLY a JSON object, no other text: {"ok": boolean, "reason": string}
-- "ok": true if the note gives real, specific context an accountant could act on.
-- "reason": if ok is false, a single short sentence (under 15 words) on what's missing. If ok is true, an empty string.`;
+- "ok": true only if the note meets the bar above.
+- "reason": if ok is false, a single short sentence (under 15 words) on what specific detail is missing. If ok is true, an empty string.`;
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();

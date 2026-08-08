@@ -67,14 +67,14 @@ export async function POST(request: NextRequest) {
   const discountAmount = subtotal * (result.data.discount_percentage / 100);
   const totalAmount = subtotal + taxAmount - discountAmount;
 
-  const { count } = await supabase.from("proforma_invoices").select("*", { count: "exact", head: true });
-  const invoiceNumber = `INV-${String((count || 0) + 1).padStart(4, "0")}`;
-
+  // invoice_number is left unset so the generate_invoice_number() DB trigger
+  // assigns it atomically within the INSERT — computing it here via a separate
+  // SELECT COUNT(*) round trip was racy under concurrent invoice creation and
+  // could violate the invoice_number UNIQUE constraint.
   const { data, error } = await supabase
     .from("proforma_invoices")
     .insert({
       ...result.data,
-      invoice_number: invoiceNumber,
       status: "draft",
       subtotal,
       tax_amount: taxAmount,
@@ -86,6 +86,8 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const invoiceNumber: string = data.invoice_number;
 
   if (data && dbUser?.id) {
     logAudit(supabase, {
@@ -133,13 +135,16 @@ export async function POST(request: NextRequest) {
           process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app"
         ).trim();
 
-        // Expire at due date (if set) or 30 days from now
-        const defaultExpiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+        // Expire at the due date if set, else 30 days from now. Due dates under
+        // a day away (or already past) are clamped to a 1-day minimum so the
+        // link isn't created already-expired — but a due date further out than
+        // that is honored as-is; it must NOT be pushed further out to 30 days
+        // (that previously let the link stay payable well past the due date).
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const defaultExpiry = nowSeconds + 30 * 24 * 60 * 60;
+        const minExpiry = nowSeconds + 24 * 60 * 60;
         const expireBy = result.data.due_date
-          ? Math.max(
-              Math.floor(new Date(result.data.due_date).getTime() / 1000),
-              defaultExpiry
-            )
+          ? Math.max(Math.floor(new Date(result.data.due_date).getTime() / 1000), minExpiry)
           : defaultExpiry;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
