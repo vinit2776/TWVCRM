@@ -168,6 +168,9 @@ function NewPurchaseRequestForm() {
   // Acks (per session) that the user has read it; after first confirm, suppress for repeat submits.
   const [showPreGstConfirm, setShowPreGstConfirm] = useState(false);
   const [preGstAcked, setPreGstAcked] = useState(false);
+  // Soft gate — appears on submit when no quotation is attached (e.g. repeat / pre-approved orders).
+  // Submitting without one is allowed; approval then requires an admin override.
+  const [showQuotationWarning, setShowQuotationWarning] = useState(false);
   const userRole = user?.role ?? "";
   const canSeePrices = ["admin", "manager"].includes(userRole);
 
@@ -431,10 +434,6 @@ function NewPurchaseRequestForm() {
   const handleSaveDraft = async () => {
     const err = validate();
     if (err) { toast.error(err); return; }
-    if (validQuotations.length < 1) {
-      toast.error("At least one vendor quotation / estimate must be attached before saving");
-      return;
-    }
     setSavingDraft(true);
     try {
       // Always create as draft first so we can attach quotations against the new id.
@@ -457,10 +456,6 @@ function NewPurchaseRequestForm() {
   };
 
   const doSubmit = async () => {
-    if (validQuotations.length < 1) {
-      toast.error("At least one quotation / estimate must be attached before submitting");
-      return;
-    }
     setSubmitting(true);
     try {
       // 1. Create the MR as draft so we have an id to attach quotations to.
@@ -473,15 +468,19 @@ function NewPurchaseRequestForm() {
       if (!res.ok) { toast.error(json.error || "Failed to create request"); return; }
       const prId: string = json.data.id;
 
-      // 2. Upload quotations.
-      const uploaded = await uploadQuotationsFor(prId);
-      if (uploaded < 1) {
-        toast.error(
-          "Could not upload any quotations — MR saved as draft. Open it and upload supporting files before submitting."
-        );
-        submitCatalogSuggestions(items);
-        router.push(`/procurement/requests/${prId}`);
-        return;
+      // 2. Upload quotations, if any were staged. No quotations attached at all is a
+      // valid path now (repeat / pre-approved orders) — only a genuine upload failure
+      // (staged quotations that all failed to upload) should block submission here.
+      if (validQuotations.length > 0) {
+        const uploaded = await uploadQuotationsFor(prId);
+        if (uploaded < 1) {
+          toast.error(
+            "Could not upload any quotations — MR saved as draft. Open it and upload supporting files before submitting."
+          );
+          submitCatalogSuggestions(items);
+          router.push(`/procurement/requests/${prId}`);
+          return;
+        }
       }
 
       // 3. Now flip status → submitted.
@@ -508,9 +507,9 @@ function NewPurchaseRequestForm() {
     }
   };
 
-  const handleSubmit = () => {
-    const err = validate();
-    if (err) { toast.error(err); return; }
+  // Runs the remaining submit gates (AMC bypass, missing-price, pre-GST) once the
+  // quotation check has passed or been explicitly acknowledged.
+  const continueSubmitAfterQuotationCheck = () => {
     // AMC skips the goods-specific missing-price + pre-GST gates — annual amount
     // is captured directly in the AMC block and validate() already required it.
     if (department === "amc") {
@@ -534,6 +533,18 @@ function NewPurchaseRequestForm() {
       return;
     }
     doSubmit();
+  };
+
+  const handleSubmit = () => {
+    const err = validate();
+    if (err) { toast.error(err); return; }
+    // Soft gate: warn (don't block) when no quotation is attached — repeat / pre-approved
+    // orders can still be submitted; approval will then require an admin override.
+    if (validQuotations.length < 1) {
+      setShowQuotationWarning(true);
+      return;
+    }
+    continueSubmitAfterQuotationCheck();
   };
 
   return (
@@ -1096,16 +1107,17 @@ function NewPurchaseRequestForm() {
       </Card>
       )}
 
-      {/* Quotations / Estimates — mandatory before submit */}
+      {/* Quotations / Estimates — strongly recommended before submit */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <div>
             <CardTitle className="text-base">
-              Vendor Quotations / Estimates <span className="text-red-500">*</span>
+              Vendor Quotations / Estimates
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              Required — attach at least one vendor quotation, estimate, or bill so the approver
-              has context. PDF / JPG / PNG / WEBP / HEIC (max 50 MB each).
+              Recommended — attach at least one vendor quotation, estimate, or bill so the approver
+              has context. PDF / JPG / PNG / WEBP / HEIC (max 50 MB each). Repeat / pre-approved
+              orders can be submitted without one — approval will then need an admin override.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={addQuotation}>
@@ -1120,7 +1132,8 @@ function NewPurchaseRequestForm() {
                 No quotations attached yet
               </p>
               <p className="text-xs text-amber-700 mt-1">
-                You can&apos;t save or submit this request until at least one estimate is uploaded.
+                Recommended for new or unusual purchases. Repeat / pre-approved orders can skip
+                this — an admin will need to override at approval.
               </p>
               <Button
                 variant="outline"
@@ -1242,23 +1255,13 @@ function NewPurchaseRequestForm() {
             <Button
               variant="outline"
               onClick={handleSaveDraft}
-              disabled={savingDraft || submitting || validQuotations.length < 1}
-              title={
-                validQuotations.length < 1
-                  ? "Attach at least one quotation / estimate before saving"
-                  : undefined
-              }
+              disabled={savingDraft || submitting}
             >
               {savingDraft ? "Saving..." : "Save as Draft"}
             </Button>
             <Button
               onClick={handleSubmit}
-              disabled={submitting || savingDraft || validQuotations.length < 1}
-              title={
-                validQuotations.length < 1
-                  ? "Attach at least one quotation / estimate before submitting"
-                  : undefined
-              }
+              disabled={submitting || savingDraft}
             >
               {submitting ? "Submitting..." : "Submit for Approval"}
             </Button>
@@ -1323,6 +1326,39 @@ function NewPurchaseRequestForm() {
               ))
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quotation warning — shown when submitting without a vendor quotation attached */}
+      <Dialog open={showQuotationWarning} onOpenChange={setShowQuotationWarning}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              No vendor quotation attached
+            </DialogTitle>
+            <DialogDescription>
+              This request has no vendor quotation or estimate attached. You can still submit it —
+              for repeat or pre-approved orders, an admin can approve without one by providing an
+              override reason. New or unusual purchases should have a quotation attached.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => setShowQuotationWarning(false)}
+            >
+              Go back and attach one
+            </Button>
+            <Button
+              variant="destructive"
+              className="w-full sm:w-auto"
+              onClick={() => { setShowQuotationWarning(false); continueSubmitAfterQuotationCheck(); }}
+            >
+              Submit without a quotation
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

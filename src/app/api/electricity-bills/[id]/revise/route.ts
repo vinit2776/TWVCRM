@@ -5,11 +5,14 @@ import { logAudit } from "@/lib/audit";
 interface EbBillRow {
   id: string;
   status: string;
+  bill_side: string;
   location_id: string;
   bill_month: number;
   bill_year: number;
   reimbursement_enabled: boolean;
   contract_id: string | null;
+  landlord_utility_pct: number;
+  landlord_generator_pct: number;
   landlord_bill_number: string | null;
   landlord_bill_date: string | null;
   landlord_subtotal: number;
@@ -139,10 +142,13 @@ export async function POST(
     .from("electricity_bills")
     .insert({
       location_id: bill.location_id,
+      bill_side: bill.bill_side,
       bill_month: bill.bill_month,
       bill_year: bill.bill_year,
       reimbursement_enabled: bill.reimbursement_enabled,
       contract_id: bill.contract_id,
+      landlord_utility_pct: bill.landlord_utility_pct,
+      landlord_generator_pct: bill.landlord_generator_pct,
       landlord_bill_number: bill.landlord_bill_number,
       landlord_bill_date: bill.landlord_bill_date,
       landlord_subtotal: bill.landlord_subtotal,

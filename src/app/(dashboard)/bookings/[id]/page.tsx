@@ -11,7 +11,7 @@ import {
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
   StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send, DoorOpen, Building2,
-  Activity, ShieldAlert,
+  Activity, ShieldAlert, ImageIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +56,7 @@ import {
 import type { BookingFeedback, BookingPayment } from "@/types";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
+import { createClient } from "@/lib/supabase/client";
 
 function formatTime12(timeStr: string): string {
   const [h, m] = timeStr.slice(0, 5).split(":").map(Number);
@@ -149,9 +150,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
   const [upiId, setUpiId] = useState("");
   const [upiQrCodePath, setUpiQrCodePath] = useState("");
+  const [zoomedScreenshotUrl, setZoomedScreenshotUrl] = useState<string | null>(null);
+  const [loadingScreenshotId, setLoadingScreenshotId] = useState<string | null>(null);
 
   // AbortController ref — cancels in-flight requests on unmount / re-fetch
   const fetchControllerRef = useRef<AbortController | null>(null);
+
+  const handleViewPaymentScreenshot = useCallback(async (paymentId: string, screenshotPath: string) => {
+    setLoadingScreenshotId(paymentId);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(screenshotPath, 3600);
+      if (data?.signedUrl) setZoomedScreenshotUrl(data.signedUrl);
+    } finally {
+      setLoadingScreenshotId(null);
+    }
+  }, []);
 
   const fetchBooking = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -991,7 +1007,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           with a finance-friendly banner that names the contract, the
           target invoice month, the method (when paid), free-quota math
           (when applicable), or the prepaid pack source. */}
-      <BookingPaymentSummary booking={booking} variant="full" />
+      <BookingPaymentSummary
+        booking={booking}
+        variant="full"
+        payments={existingPayments}
+        onViewScreenshot={handleViewPaymentScreenshot}
+        loadingScreenshotId={loadingScreenshotId}
+      />
 
       {/* Outstanding charges from previous bookings */}
       {outstandingCharges.length > 0 && (
@@ -1931,6 +1953,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                           )}
                         </div>
                       )}
+                      {p.payment_mode === "upi" && p.screenshot_path && (
+                        <div className="mt-1.5 pt-1.5 border-t border-muted/50">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline underline-offset-2"
+                            onClick={() => handleViewPaymentScreenshot(p.id, p.screenshot_path!)}
+                            disabled={loadingScreenshotId === p.id}
+                          >
+                            {loadingScreenshotId === p.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <ImageIcon className="h-3 w-3" />
+                            )}
+                            View payment screenshot
+                          </button>
+                        </div>
+                      )}
                       <div className="mt-1 text-[10px] text-muted-foreground/70">
                         {formatDateTime(p.created_at)}
                       </div>
@@ -2340,6 +2379,29 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             fetchBooking();
           }}
         />
+      )}
+
+      {zoomedScreenshotUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setZoomedScreenshotUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setZoomedScreenshotUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zoomedScreenshotUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
       )}
     </div>
   );

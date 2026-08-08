@@ -10,6 +10,7 @@ import {
   detectAmountAnomaly,
   logSuggestion,
 } from "@/lib/finance-intelligence";
+import { zodErrorResponse } from "@/lib/validations";
 
 /**
  * POST /api/finance-intelligence/bill-hints
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
 
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
   const input = parsed.data;
 

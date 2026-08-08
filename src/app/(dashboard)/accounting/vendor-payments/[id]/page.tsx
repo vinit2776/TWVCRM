@@ -35,6 +35,7 @@ import {
 } from "@/lib/constants";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
+import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -103,6 +104,22 @@ type ChainData = {
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
+    electricity_bill?: {
+      bill_month: number;
+      bill_year: number;
+      landlord_total_amount: number;
+      landlord_gst_applicable: boolean;
+      landlord_gst_rate: number | null;
+      landlord_gst_amount: number | null;
+      electricity_bill_lines: {
+        line_type: string;
+        meter_label: string | null;
+        label: string | null;
+        units: number | null;
+        rate: number | null;
+        amount: number | null;
+      }[];
+    } | null;
     vendor_bill_payments?: Array<{
       id: string; amount: number; payment_mode: string;
       payment_reference: string | null; payment_date: string;
@@ -1029,6 +1046,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       )}
+
+      {bill.electricity_bill && <ElectricityBillBreakupCard bill={bill.electricity_bill} />}
 
       {/* Document Chain */}
       <Card>
