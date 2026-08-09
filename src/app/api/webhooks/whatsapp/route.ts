@@ -223,7 +223,16 @@ export async function POST(request: NextRequest) {
 
   for (const event of events) {
     const requestId = event.requestId as string | undefined;
-    const rawStatus = event.status as string | undefined;
+    // WhatsApp delivery reports put the real status string in `status`
+    // ("DELIVERED"/"read"/...). The SMS custom-webhook template instead sends
+    // a numeric code in `status` (e.g. "1") and puts the actual event name in
+    // `upperCaseEventName`/`eventName`/`event` — checking those first (and
+    // falling back to `status` for WhatsApp) covers both shapes.
+    const rawStatus =
+      (event.upperCaseEventName as string | undefined) ??
+      (event.eventName as string | undefined) ??
+      (event.event as string | undefined) ??
+      (event.status as string | undefined);
     // Inbound events populate both `from` and `customerNumber`; prefer whichever
     // is present so a payload that only carries one is still attributed.
     const senderNumber =
