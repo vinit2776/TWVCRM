@@ -26,7 +26,10 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "sales_rep"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or sales_rep can cancel invoices" }, { status: 403 });
+  }
 
   const body = await request.json().catch(() => ({}));
   const reason = (body.reason as string | undefined)?.trim() || null;

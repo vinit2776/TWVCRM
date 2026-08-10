@@ -28,6 +28,12 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: dbUser } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or accounts can record payments" }, { status: 403 });
+  }
+
   const body = await request.json();
   const amount = parseFloat(body.amount);
   const reference = (body.reference as string | undefined)?.trim() || null;

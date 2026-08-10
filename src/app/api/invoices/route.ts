@@ -38,13 +38,17 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: dbUser } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "sales_rep"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or sales_rep can create invoices" }, { status: 403 });
+  }
+
   const body = await request.json();
   const result = createInvoiceSchema.safeParse(body);
   if (!result.success) {
     return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
   }
-
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
   const items = result.data.items;
   const subtotal = items.reduce((sum, item) => sum + item.total, 0);

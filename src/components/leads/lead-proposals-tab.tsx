@@ -63,6 +63,23 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
 
+  // Role gates — mirror the API-side checks so users don't see buttons that 403.
+  const [canManageInvoices, setCanManageInvoices] = useState(false);
+  const [canRecordPayment, setCanRecordPayment] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((res) => res.json())
+      .then((me) => {
+        setCanManageInvoices(["admin", "manager", "sales_rep"].includes(me.role));
+        setCanRecordPayment(["admin", "manager", "accounts"].includes(me.role));
+      })
+      .catch(() => {
+        setCanManageInvoices(false);
+        setCanRecordPayment(false);
+      });
+  }, []);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     const [proposalsRes, invoicesRes, leadRes] = await Promise.all([
@@ -407,10 +424,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
               charges paid on the customer&apos;s behalf. Not for security deposit or monthly rentals.
             </p>
           </div>
-          <Button size="sm" onClick={() => setInvoiceFormOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Invoice
-          </Button>
+          {canManageInvoices && (
+            <Button size="sm" onClick={() => setInvoiceFormOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Invoice
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {invoices.length === 0 ? (
@@ -418,8 +437,8 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
               icon={Receipt}
               title="No invoices yet"
               description="Create an invoice for this lead."
-              actionLabel="Create Invoice"
-              onAction={() => setInvoiceFormOpen(true)}
+              actionLabel={canManageInvoices ? "Create Invoice" : undefined}
+              onAction={canManageInvoices ? () => setInvoiceFormOpen(true) : undefined}
             />
           ) : (
             <div className="rounded-md border overflow-x-auto">
@@ -486,24 +505,26 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <Download className="mr-2 h-4 w-4" />
                               Download PDF
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEmailInvoice(inv)}>
-                              <Mail className="mr-2 h-4 w-4" />
-                              Email to Lead
-                            </DropdownMenuItem>
+                            {canManageInvoices && (
+                              <DropdownMenuItem onClick={() => handleEmailInvoice(inv)}>
+                                <Mail className="mr-2 h-4 w-4" />
+                                Email to Lead
+                              </DropdownMenuItem>
+                            )}
                             {inv.razorpay_link_url && inv.status !== "paid" && (
                               <DropdownMenuItem onClick={() => { navigator.clipboard.writeText(inv.razorpay_link_url!); toast.success("Payment link copied"); }}>
                                 <CreditCard className="mr-2 h-4 w-4" />
                                 Copy Payment Link
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuSeparator />
-                            {inv.status === "draft" && (
+                            {(canManageInvoices || canRecordPayment) && <DropdownMenuSeparator />}
+                            {canManageInvoices && inv.status === "draft" && (
                               <DropdownMenuItem onClick={() => handleUpdateInvoiceStatus(inv.id, "sent", "Sent")}>
                                 <Send className="mr-2 h-4 w-4" />
                                 Mark as Sent
                               </DropdownMenuItem>
                             )}
-                            {(inv.status === "sent" || inv.status === "overdue") && (
+                            {canRecordPayment && (inv.status === "sent" || inv.status === "overdue") && (
                               <DropdownMenuItem
                                 onClick={() => handleMarkInvoicePaid(inv)}
                                 className="text-green-600"
@@ -512,7 +533,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark Paid
                               </DropdownMenuItem>
                             )}
-                            {inv.status === "sent" && (
+                            {canManageInvoices && inv.status === "sent" && (
                               <DropdownMenuItem
                                 onClick={() => handleUpdateInvoiceStatus(inv.id, "overdue", "Overdue")}
                                 className="text-red-600"
@@ -521,7 +542,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Overdue
                               </DropdownMenuItem>
                             )}
-                            {["draft", "sent", "overdue"].includes(inv.status) && (
+                            {canManageInvoices && ["draft", "sent", "overdue"].includes(inv.status) && (
                               <DropdownMenuItem
                                 onClick={() => handleCancelInvoice(inv)}
                                 className="text-red-600"

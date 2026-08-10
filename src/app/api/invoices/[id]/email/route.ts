@@ -17,6 +17,12 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: requester } = await supabase
+    .from("users").select("role").eq("auth_id", user.id).single();
+  if (!requester || !["admin", "manager", "sales_rep"].includes(requester.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or sales_rep can email invoices" }, { status: 403 });
+  }
+
   let recipients: string[];
   let pdfBuffer: Buffer;
 
