@@ -113,6 +113,23 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
 
   const addTotal = Math.round(addQty * addUnitPrice);
 
+  // Default date for a new ad-hoc charge — must fall inside the (year, month)
+  // period this review dialog is for, not the real-world "today". Wave 2
+  // (Usage Charges) is commonly reviewed after the period has closed — e.g.
+  // reviewing July while today is in August — and /api/usage-charges derives
+  // the billing period from charge_date alone. Defaulting to today's actual
+  // date would silently point the charge at next month's (possibly already
+  // finalized) statement instead of the period being reviewed.
+  const defaultAddChargeDate = () => {
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const today = new Date();
+    const periodStart = new Date(year, month - 1, 1);
+    const periodEnd = new Date(year, month, 0);
+    if (today < periodStart) return fmt(periodStart);
+    if (today > periodEnd) return fmt(periodEnd);
+    return fmt(today);
+  };
+
   // ── Contract facilities (e.g. Manpower/OT) — picker for the New charge form ──
   interface ContractFacility {
     id: string; name: string; unit: string;
@@ -958,7 +975,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                 <button
                   className="flex items-center gap-1.5 text-xs text-teal-700 hover:text-teal-900 font-medium"
                   onClick={() => {
-                    setAddDate(new Date().toISOString().split("T")[0]);
+                    setAddDate(defaultAddChargeDate());
                     setShowAddCharge(true);
                   }}
                 >
