@@ -5,6 +5,9 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logWhatsAppActivity } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
+import { escapeHtml } from "@/lib/html";
+
+const CUSTOMER_MESSAGE_MAX_LENGTH = 500;
 
 /**
  * POST /api/proposals/[id]/deposit-link
@@ -16,6 +19,10 @@ import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
  *     Razorpay link (if not already present) and emails the customer.
  *     deposit_internal_notes is required (≥10 chars) in send mode — an
  *     internal-only note for accounts, never included in the customer email.
+ *
+ * Both modes accept an optional `deposit_customer_message` — free text shown
+ * to the customer inside the email itself (e.g. "this covers the extra seat
+ * added on 24 Jun"), distinct from deposit_internal_notes which is never sent.
  */
 export async function POST(
   request: NextRequest,
@@ -31,11 +38,15 @@ export async function POST(
 
   let isPreview = false;
   let internalNotes: string | null = null;
+  let customerMessage = "";
   try {
     const body = await request.json().catch(() => null);
     if (body && body.preview === true) isPreview = true;
     if (body && typeof body.deposit_internal_notes === "string") {
       internalNotes = body.deposit_internal_notes.trim();
+    }
+    if (body && typeof body.deposit_customer_message === "string") {
+      customerMessage = body.deposit_customer_message.trim().slice(0, CUSTOMER_MESSAGE_MAX_LENGTH);
     }
   } catch {
     // no body — send mode
@@ -156,6 +167,12 @@ export async function POST(
          <p style="color:#015E65;font-size:13px;margin:0;font-style:italic;">A secure Razorpay payment link will be generated and inserted here when you click <strong>Send Now</strong>.</p>
        </div>`;
 
+  const customerMessageBlock = customerMessage
+    ? `<div style="background:#f0faf5;border-left:3px solid #015E65;border-radius:0 6px 6px 0;padding:10px 14px;margin:0 0 16px;">
+         <p style="color:#0f6e56;font-size:13px;margin:0;font-style:italic;">${escapeHtml(customerMessage).replace(/\n/g, "<br/>")}</p>
+       </div>`
+    : "";
+
   const subject = `Security Deposit — ${proposal.proposal_number} — The WorkVilla`;
   const html = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -166,20 +183,10 @@ export async function POST(
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
         <p style="color:#333;font-size:14px;">Thank you for accepting our proposal <strong>${proposal.proposal_number}</strong>. To proceed with the contract, please pay the refundable security deposit of <strong>${proposal.security_deposit_months} month(s)</strong>.</p>
+        ${customerMessageBlock}
         <table style="border-collapse:collapse;margin:20px 0;width:100%;background:#f0faf5;border-radius:6px;">
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Proposal</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${proposal.proposal_number}</td></tr>
-          ${(creditApplied > 0 || exceptionApplied !== 0) ? `
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Required Deposit</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">₹${requiredDeposit.toLocaleString("en-IN")}</td></tr>
-          ${exceptionApplied !== 0 ? `
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Exception</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${exceptionApplied > 0 ? "+" : "−"} ₹${Math.abs(exceptionApplied).toLocaleString("en-IN")}</td></tr>
-          ` : ``}
-          ${creditApplied > 0 ? `
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Credit Applied</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">− ₹${creditApplied.toLocaleString("en-IN")}</td></tr>
-          ` : ``}
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Balance Due</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;font-size:18px;">₹${depositAmount.toLocaleString("en-IN")}</td></tr>
-          ` : `
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Deposit Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;font-size:18px;">₹${depositAmount.toLocaleString("en-IN")}</td></tr>
-          `}
           <tr><td style="padding:10px 16px;color:#666;">Type</td><td style="padding:10px 16px;color:#333;">Refundable (${proposal.security_deposit_months} month${proposal.security_deposit_months > 1 ? "s" : ""})</td></tr>
         </table>
         ${payButton}

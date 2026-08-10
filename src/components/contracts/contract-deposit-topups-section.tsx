@@ -74,6 +74,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<DepositTopupCategory>("customer_requested");
   const [categoryNote, setCategoryNote] = useState("");
+  const [customerMessage, setCustomerMessage] = useState("");
   const [appliesToShortfall, setAppliesToShortfall] = useState(false);
   const [paymentMode, setPaymentMode] = useState("bank_transfer");
   const [paymentReference, setPaymentReference] = useState("");
@@ -103,6 +104,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
     setAmount(prefillShortfall ? String(depositShortfall ?? "") : "");
     setCategory(prefillShortfall ? "renewal_escalation" : "customer_requested");
     setCategoryNote("");
+    setCustomerMessage("");
     setAppliesToShortfall(prefillShortfall);
     setPaymentMode("bank_transfer");
     setPaymentReference("");
@@ -127,6 +129,7 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
           body: JSON.stringify({
             amount: amt, category, category_note: categoryNote.trim() || undefined,
             applies_to_shortfall: appliesToShortfall,
+            customer_message: customerMessage.trim() || undefined,
           }),
         });
         const data = await res.json();
@@ -387,9 +390,24 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
             )}
 
             {method === "razorpay_link" && (
-              <p className="text-xs text-muted-foreground">
-                A secure Razorpay payment link will be emailed to the customer immediately.
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground">
+                  A secure Razorpay payment link will be emailed to the customer immediately.
+                </p>
+                <div className="space-y-1.5 rounded-md border border-primary/40 bg-primary/5 p-2.5">
+                  <Label className="text-primary">
+                    Message to Customer <span className="font-normal text-muted-foreground">(optional)</span>
+                  </Label>
+                  <Textarea
+                    value={customerMessage}
+                    onChange={(e) => setCustomerMessage(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    placeholder="e.g. This covers the extra seat added from 24 Jun"
+                  />
+                  <p className="text-xs text-muted-foreground">Shown to the customer in the email, right below the greeting.</p>
+                </div>
+              </>
             )}
           </div>
           <DialogFooter>
