@@ -52,13 +52,14 @@ export async function GET(request: NextRequest) {
   // Two-state model, same as AMC below: committed (approved and beyond) counts
   // as real spend; submitted-but-not-yet-approved is provisional/pipeline only.
   // Draft and rejected/cancelled requests are excluded from both.
-  const { data: mrCommitted } = await supabase
+  const { data: mrCommitted, error: mrCommittedError } = await supabase
     .from("purchase_requests")
     .select("department, total_estimated_amount")
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
-    .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+    .in("status", ["approved", "partially_ordered", "po_created"]);
+  if (mrCommittedError) console.error("[budget] operational committed spend query failed:", mrCommittedError.message);
 
   const { data: mrProvisional } = await supabase
     .from("purchase_requests")
@@ -70,13 +71,14 @@ export async function GET(request: NextRequest) {
 
   // ── AMC MR spend for current FY — two-state model ────────────────────────
   // Committed: approved and beyond
-  const { data: amcCommitted } = await supabase
+  const { data: amcCommitted, error: amcCommittedError } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
     .eq("expenditure_type", "amc")
     .gte("created_at", fyStart)
     .lte("created_at", fyEnd)
-    .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+    .in("status", ["approved", "partially_ordered", "po_created"]);
+  if (amcCommittedError) console.error("[budget] AMC committed spend query failed:", amcCommittedError.message);
 
   // Provisional: submitted, pending approval
   const { data: amcProvisional } = await supabase

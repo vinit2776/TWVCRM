@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     const currentFY = getCurrentFY();
     const { fyStart, fyEnd } = getFYWindow(currentFY);
 
-    const [{ data: budgetRow }, { data: committed }, { data: provisional }] = await Promise.all([
+    const [{ data: budgetRow }, { data: committed, error: committedError }, { data: provisional }] = await Promise.all([
       supabase
         .from("department_budgets")
         .select("monthly_budget, is_active, notes")
@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
         .eq("expenditure_type", "amc")
         .gte("created_at", fyStart)
         .lte("created_at", fyEnd)
-        .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]),
+        .in("status", ["approved", "partially_ordered", "po_created"]),
       supabase
         .from("purchase_requests")
         .select("total_estimated_amount")
@@ -121,6 +121,7 @@ export async function GET(request: NextRequest) {
         .lte("created_at", fyEnd)
         .eq("status", "submitted"),
     ]);
+    if (committedError) console.error("[amc] committed spend query failed:", committedError.message);
 
     const annualBudget = budgetRow?.monthly_budget ? Number(budgetRow.monthly_budget) : null;
     const committedTotal = (committed ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
