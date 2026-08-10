@@ -2192,11 +2192,29 @@ export interface VendorBill {
   // Manual accounting classification (used when po_id is null — direct expense)
   manual_department?: string | null;
   manual_expenditure_type?: string | null;
+  // Set when this vendor bill was auto-created from a landlord electricity bill
+  electricity_bill_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  electricity_bill?: {
+    bill_month: number;
+    bill_year: number;
+    landlord_total_amount: number;
+    landlord_gst_applicable: boolean;
+    landlord_gst_rate: number | null;
+    landlord_gst_amount: number | null;
+    electricity_bill_lines: {
+      line_type: string;
+      meter_label: string | null;
+      label: string | null;
+      units: number | null;
+      rate: number | null;
+      amount: number | null;
+    }[];
+  } | null;
   purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type" | "expected_delivery_date"> & {
     purchase_requests?: { department: string; expenditure_type: string } | null;
   }) | null;
@@ -2407,7 +2425,7 @@ export interface LocationStock {
   reorder_level: number;
   last_updated: string;
   locations?: { id: string; name: string; code: string } | null;
-  procurement_items?: { id: string; name: string; department: string; unit: string; item_type: string } | null;
+  procurement_items?: { id: string; name: string; department: string; unit: string; item_type: string; is_active?: boolean } | null;
 }
 
 export interface StockTransferItem {

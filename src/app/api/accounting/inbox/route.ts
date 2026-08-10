@@ -639,7 +639,7 @@ export async function GET(req: NextRequest) {
   if (bookingIds.length > 0) {
     const { data: bpRows } = await supabase
       .from("booking_payments")
-      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes")
+      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes, screenshot_path")
       .in("booking_id", bookingIds)
       .in("status", ["confirmed", "captured", "verified"])
       .order("created_at", { ascending: false });
@@ -678,6 +678,7 @@ export async function GET(req: NextRequest) {
         created_at: bp.created_at as string,
         status: bp.status as string,
         verification_notes: (bp.verification_notes as string | null) ?? null,
+        screenshot_path: (bp.screenshot_path as string | null) ?? null,
         settled: settlement?.settled ?? null,
         settled_at: settlement?.settled_at ?? null,
         settlement_utr: settlement?.settlement_utr ?? null,
@@ -787,6 +788,7 @@ export async function GET(req: NextRequest) {
             created_at: t.updated_at,
             status: "paid",
             verification_notes: null,
+            screenshot_path: null,
             settled: null,
             settled_at: null,
             settlement_utr: null,

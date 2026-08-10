@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { provisionUser, memberCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const addSchema = z.object({
   name:  z.string().min(1).max(80),
@@ -60,7 +61,7 @@ export async function POST(
 
   const body = await request.json();
   const parsed = addSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const admin = createAdminClient();
 

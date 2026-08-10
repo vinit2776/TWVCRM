@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
+import { computeSettlement } from "@/lib/settlement";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -112,22 +113,8 @@ export async function POST(
     .select("amount, tds_amount")
     .eq("billing_statement_id", id);
 
-  const totalPaid = (allPayments || []).reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
-  const invoiceAmount = Number(statement.total_amount);
-  // Settle against the whole-rupee amount, not the raw (possibly paisa-bearing)
-  // total. Tally GST invoices are always rounded to the nearest rupee, so the
-  // customer only ever pays the rounded figure — comparing against the raw
-  // total would leave the statement permanently short by a few paise and
-  // never flip to "paid". Mirrors the tolerance used in the Tally inbox
-  // discrepancy check and the GST invoice upload validation.
-  const settlementAmount = Math.round(invoiceAmount);
-
-  let newPaymentStatus = "unpaid";
-  if (totalPaid >= settlementAmount) {
-    newPaymentStatus = "paid";
-  } else if (totalPaid > 0) {
-    newPaymentStatus = "partially_paid";
-  }
+  const settlement = computeSettlement(statement.total_amount, allPayments);
+  const newPaymentStatus = settlement.paymentStatus;
 
   if (newPaymentStatus !== statement.payment_status) {
     await supabase
@@ -173,7 +160,7 @@ export async function POST(
   return NextResponse.json({
     data: payment,
     payment_status: newPaymentStatus,
-    total_paid: totalPaid,
-    balance_due: Math.max(0, settlementAmount - totalPaid),
+    total_paid: settlement.totalPaid,
+    balance_due: settlement.balanceDue,
   });
 }

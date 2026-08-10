@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createEscalationSchema = z.object({
   effective_date: z.string().min(1),
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const parsed = createEscalationSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const { data, error } = await supabase
     .from("lease_escalations")

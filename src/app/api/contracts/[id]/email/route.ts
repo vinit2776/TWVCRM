@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
+import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
 
 export async function POST(
   request: NextRequest,
@@ -55,6 +56,9 @@ export async function POST(
 
   const senderName = sender?.full_name || "TWV Team";
 
+  // Renewal contracts also need their addendum attached alongside the base agreement.
+  const addendumBuffer = await buildAddendumPdfBuffer(supabase, id);
+
   try {
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
@@ -70,7 +74,7 @@ export async function POST(
           </div>
           <div style="padding: 32px;">
             <p style="color: #1a1b1e; font-size: 15px;">Dear ${contract.lead?.first_name || "Client"},</p>
-            <p style="color: #333; font-size: 14px;">We are pleased to share your Membership Agreement for The WorkVilla. Please find the agreement <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong> attached to this email.</p>
+            <p style="color: #333; font-size: 14px;">We are pleased to share your Membership Agreement for The WorkVilla. Please find the agreement <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong>${addendumBuffer ? ", along with the renewal addendum," : ""} attached to this email.</p>
             <p style="color: #333; font-size: 14px;">Here is a summary of your membership details:</p>
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Agreement:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${contract.contract_number}</td></tr>
@@ -105,6 +109,15 @@ export async function POST(
           content: pdfBuffer,
           contentType: "application/pdf",
         },
+        ...(addendumBuffer
+          ? [
+              {
+                filename: `Addendum-${contract.contract_number}.pdf`,
+                content: addendumBuffer,
+                contentType: "application/pdf",
+              },
+            ]
+          : []),
       ],
     });
 

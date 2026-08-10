@@ -27,13 +27,11 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 
 interface Lead {
   id: string;
@@ -189,14 +187,8 @@ export default function AccountsReceivablePage() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("detail");
 
-  // Record-payment dialog state
+  // Record-payment dialog state (form lives in RecordPaymentDialog)
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
-  const [payAmount, setPayAmount] = useState("");
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
-  const [payMode, setPayMode] = useState("bank_transfer");
-  const [payRef, setPayRef] = useState("");
-  const [payNotes, setPayNotes] = useState("");
-  const [paySubmitting, setPaySubmitting] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
 
@@ -297,43 +289,7 @@ export default function AccountsReceivablePage() {
     });
   }, [filtered]);
 
-  const openPayDialog = (row: ReceivableRow) => {
-    setPayRow(row);
-    setPayAmount(String(row.balance_due));
-    setPayDate(new Date().toISOString().slice(0, 10));
-    setPayMode("bank_transfer");
-    setPayRef("");
-    setPayNotes("");
-  };
-
-  const submitPayment = async () => {
-    if (!payRow) return;
-    const amt = parseFloat(payAmount);
-    if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
-    setPaySubmitting(true);
-    try {
-      const res = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: amt,
-          payment_date: payDate,
-          payment_mode: payMode,
-          payment_reference: payRef || null,
-          notes: payNotes || null,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-      toast.success(`Payment recorded — ${json.payment_status === "paid" ? "fully paid" : `balance ₹${json.balance_due}`}`);
-      setPayRow(null);
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to record payment");
-    } finally {
-      setPaySubmitting(false);
-    }
-  };
+  const openPayDialog = (row: ReceivableRow) => setPayRow(row);
 
   const sendReminder = async (row: ReceivableRow) => {
     setRemindingId(row.id);
@@ -879,57 +835,15 @@ export default function AccountsReceivablePage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!payRow} onOpenChange={(o) => !o && setPayRow(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Record Payment — {payRow?.statement_number}</DialogTitle></DialogHeader>
-          {payRow && (
-            <div className="space-y-3">
-              <div className="text-sm text-muted-foreground">
-                {partyOf(payRow).number} · {customerName(partyOf(payRow).lead)}<br />
-                Balance due: <strong className="text-teal-700">{formatCurrency(payRow.balance_due)}</strong>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>Amount (₹)</Label>
-                  <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
-                </div>
-                <div>
-                  <Label>Payment date</Label>
-                  <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <Label>Payment mode</Label>
-                <Select value={payMode} onValueChange={setPayMode}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="bank_transfer">Bank transfer / NEFT / RTGS</SelectItem>
-                    <SelectItem value="upi">UPI</SelectItem>
-                    <SelectItem value="cheque">Cheque</SelectItem>
-                    <SelectItem value="cash">Cash</SelectItem>
-                    <SelectItem value="razorpay">Razorpay (manually reconciled)</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Reference (UTR / cheque # / txn id)</Label>
-                <Input value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="optional" />
-              </div>
-              <div>
-                <Label>Notes</Label>
-                <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setPayRow(null)} disabled={paySubmitting}>Cancel</Button>
-            <Button onClick={submitPayment} disabled={paySubmitting}>
-              {paySubmitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording…</> : "Record payment"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <RecordPaymentDialog
+        open={!!payRow}
+        onOpenChange={(o) => !o && setPayRow(null)}
+        statementId={payRow?.id ?? null}
+        statementNumber={payRow?.statement_number}
+        partyLabel={payRow ? `${partyOf(payRow).number} · ${customerName(partyOf(payRow).lead)}` : null}
+        balanceDue={payRow?.balance_due ?? null}
+        onSuccess={load}
+      />
     </div>
   );
 }

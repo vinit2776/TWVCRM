@@ -178,6 +178,26 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // ── Idempotency: block duplicate landlord bill number at this location ────
+  // Real-world trigger: the same physical bill captured twice under different
+  // months by mistake, spawning a duplicate vendor bill + customer bill.
+  if (landlord_bill_number) {
+    const { count: dupeNumber } = await supabase
+      .from("electricity_bills")
+      .select("*", { count: "exact", head: true })
+      .eq("location_id", location_id)
+      .eq("bill_side", "landlord")
+      .eq("landlord_bill_number", landlord_bill_number)
+      .neq("status", "revised");
+
+    if (dupeNumber && dupeNumber > 0) {
+      return NextResponse.json(
+        { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { status: 409 },
+      );
+    }
+  }
+
   // ── Compute landlord total from bill lines ────────────────────────────────
   const landlordTotal = lines.reduce((s, l) => {
     if (l.line_type === "other") return s + (l.amount ?? 0);

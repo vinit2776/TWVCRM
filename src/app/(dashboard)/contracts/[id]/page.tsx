@@ -269,6 +269,16 @@ export default function ContractDetailPage({
     return btoa(binary);
   };
 
+  const handleOpenEmailDialog = () => {
+    if (contract?.is_renewal && contract?.parent_contract_id) {
+      const confirmed = window.confirm(
+        "This is a renewal contract — both the Membership Agreement and the Addendum will be sent to the customer. Continue?"
+      );
+      if (!confirmed) return;
+    }
+    setEmailDialogOpen(true);
+  };
+
   const handleSignedDocUpload = async (raw: File) => {
     if (!contract) return;
     setUploadingSignedDoc(true);
@@ -481,7 +491,7 @@ export default function ContractDetailPage({
             )}
 
           {contract.status === "draft" && (
-            <Button variant="outline" onClick={() => setEmailDialogOpen(true)} disabled={statusUpdating}>
+            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
             </Button>

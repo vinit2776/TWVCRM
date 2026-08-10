@@ -115,7 +115,7 @@ const TABLE_LABELS: Record<string, string> = {
   locations: "Locations",
   spaces: "Spaces",
   invoices: "Invoices",
-  audit_logs: "Audit Logs",
+  audit_trail: "Audit Trail",
   voucher_issuances: "Voucher Issuances",
   booking_facilities: "Booking Facilities",
   usage_charges: "Usage Charges",

@@ -26,16 +26,13 @@ export async function PATCH(
 
   const { data: bill } = await supabase
     .from("electricity_bills")
-    .select("id, status, created_by")
+    .select("id, status")
     .eq("id", id)
     .single();
 
   if (!bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
   if (bill.status !== "draft") {
     return NextResponse.json({ error: `Bill is already ${bill.status} — only draft bills can be confirmed` }, { status: 422 });
-  }
-  if (bill.created_by === dbUser.id) {
-    return NextResponse.json({ error: "Maker-checker: you cannot confirm a bill you created" }, { status: 422 });
   }
 
   const now = new Date().toISOString();

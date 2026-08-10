@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { paymentCredit, balanceDue } from "@/lib/settlement";
 
 export const maxDuration = 30;
 
@@ -211,11 +212,11 @@ export async function GET(request: NextRequest) {
 
   // ── Fetch billing_payments for prior statements (needs their IDs) ─────
   const priorStatementIds = (priorBillingStatements || []).map((s) => s.id as string);
-  let priorBillingPmts: { billing_statement_id: string; amount: number }[] = [];
+  let priorBillingPmts: { billing_statement_id: string; amount: number; tds_amount: number | null }[] = [];
   if (priorStatementIds.length > 0) {
     const { data } = await adminSupabase
       .from("billing_payments")
-      .select("billing_statement_id, amount")
+      .select("billing_statement_id, amount, tds_amount")
       .in("billing_statement_id", priorStatementIds);
     priorBillingPmts = data || [];
   }
@@ -249,10 +250,11 @@ export async function GET(request: NextRequest) {
       priorStmtsByContract[s.contract_id].push({ id: s.id as string, total: Number(s.total_amount) });
     });
 
-    // Index billing_payments by statement id
+    // Index billing_payments by statement id. Paid includes TDS — same
+    // settlement definition as the payment route and the AR view.
     const priorBillingPmtsByStmt: Record<string, number> = {};
     priorBillingPmts.forEach((p) => {
-      priorBillingPmtsByStmt[p.billing_statement_id] = (priorBillingPmtsByStmt[p.billing_statement_id] || 0) + Number(p.amount);
+      priorBillingPmtsByStmt[p.billing_statement_id] = (priorBillingPmtsByStmt[p.billing_statement_id] || 0) + paymentCredit(p);
     });
 
     // contract_payments from prior periods (legacy payment path)
@@ -300,7 +302,7 @@ export async function GET(request: NextRequest) {
         // Matches the AR view exactly; no risk of double-counting usage.
         const statementBalance = stmts.reduce((sum, s) => {
           const paid = priorBillingPmtsByStmt[s.id] || 0;
-          return sum + Math.max(0, s.total - paid);
+          return sum + balanceDue(s.total, paid);
         }, 0);
         // Subtract any direct contract_payments not tied to a statement
         const directPaid = priorPaymentsByContract[contract.id] || 0;

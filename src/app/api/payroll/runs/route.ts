@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generatePayrollRun } from "@/lib/payroll";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const generateSchema = z.object({
   year:  z.number().int().min(2020).max(2100),
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
   }
 
   const parsed = generateSchema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const admin = createAdminClient();
   // Convert to 0-indexed month for the engine

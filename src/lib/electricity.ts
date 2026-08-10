@@ -15,6 +15,8 @@ export interface ElectricityComputeConfig {
   generator_markup_value: number;
   landlord_gst_rate: number;
   landlord_tds_rate: number;
+  /** GST rate on the customer invoice — defaults to 18 (intra-state) when omitted. */
+  customer_gst_rate?: number;
 }
 
 export interface ElectricityComputeLine {
@@ -68,7 +70,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * matching the approve_electricity_landlord_bill RPC (see 00322 migration).
  *
  * All intermediate arithmetic uses integer paise to eliminate float drift.
- * Customer GST is always 18% intra-state via computeGstAndRounding.
+ * Customer GST defaults to 18% intra-state via computeGstAndRounding, overridable
+ * per config.customer_gst_rate (e.g. a billing profile's own rate).
  * Landlord GST/TDS rates come from config (per-location negotiated rates).
  */
 export function computeElectricityBill(
@@ -110,7 +113,7 @@ export function computeElectricityBill(
       Math.round(customerGeneratorUnits * customerGeneratorRate * 100)
     : 0;
 
-  const customerGst = computeGstAndRounding(customerSubtotalPaise / 100, 18);
+  const customerGst = computeGstAndRounding(customerSubtotalPaise / 100, config.customer_gst_rate ?? 18);
 
   return {
     landlord_subtotal: landlordSubtotalPaise / 100,

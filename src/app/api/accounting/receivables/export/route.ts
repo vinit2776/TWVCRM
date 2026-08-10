@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { paymentCredit, balanceDue } from "@/lib/settlement";
 
 /**
  * GET /api/accounting/receivables/export
@@ -44,12 +45,13 @@ export async function GET(_req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const ids = (statements || []).map((s) => s.id as string);
+  // Paid-to-date includes TDS — same settlement definition as the payment route.
   let paidByStmt = new Map<string, number>();
   if (ids.length > 0) {
     const { data: pays } = await supabase
-      .from("billing_payments").select("billing_statement_id, amount").in("billing_statement_id", ids);
-    paidByStmt = (pays || []).reduce((m, p: { billing_statement_id: string; amount: number }) => {
-      m.set(p.billing_statement_id, (m.get(p.billing_statement_id) || 0) + Number(p.amount));
+      .from("billing_payments").select("billing_statement_id, amount, tds_amount").in("billing_statement_id", ids);
+    paidByStmt = (pays || []).reduce((m, p: { billing_statement_id: string; amount: number; tds_amount: number | null }) => {
+      m.set(p.billing_statement_id, (m.get(p.billing_statement_id) || 0) + paymentCredit(p));
       return m;
     }, new Map<string, number>());
   }
@@ -80,7 +82,7 @@ export async function GET(_req: NextRequest) {
     const lead = contract?.lead;
     const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "—";
     const paid = paidByStmt.get(s.id as string) || 0;
-    const balance = Math.max(0, Number(s.total_amount) - paid);
+    const balance = balanceDue(s.total_amount as number, paid);
     let daysOverdue: number | null = null;
     if (s.due_date) {
       const dueMs = Date.parse((s.due_date as string) + "T00:00:00Z");

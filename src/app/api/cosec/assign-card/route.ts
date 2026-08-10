@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { readCardFromDevice, setCardNumber, refreshUserValidity } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 // Allow up to 30 seconds — the card read polls the device for 20s
 export const maxDuration = 30;
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const parsed = schema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const admin = createAdminClient();
 

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createPaymentSchema = z.object({
   payment_month: z.string().regex(/^\d{4}-\d{2}$/, "Format: YYYY-MM"),
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const body = await request.json();
   const parsed = createPaymentSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   // Fetch lease for auto-approval check
   const { data: lease } = await supabase

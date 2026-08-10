@@ -239,9 +239,19 @@ export async function POST(
   }
 
   // ── Update location_stock for each received item ──────────────────────────
+  // Services (AMC, rentals, one-off labor charges) don't carry location stock —
+  // skip the location_stock write for anything catalogued as a service.
   if (stockLocationId) {
+    const stockItemIds = receivedItems
+      .map((i) => i.stock_item_id)
+      .filter((v): v is string => v != null);
+    const { data: catalogRows } = stockItemIds.length
+      ? await supabase.from("procurement_items").select("id, item_type").in("id", stockItemIds)
+      : { data: [] as { id: string; item_type: string }[] };
+    const itemTypeMap = new Map((catalogRows ?? []).map((r) => [r.id, r.item_type]));
+
     for (const item of receivedItems) {
-      if (item.stock_item_id) {
+      if (item.stock_item_id && itemTypeMap.get(item.stock_item_id) !== "service") {
         const { error: rpcErr } = await supabase.rpc("upsert_location_stock", {
           p_location_id: stockLocationId,
           p_item_id: item.stock_item_id,
@@ -382,11 +392,19 @@ export async function DELETE(
         (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id ??
         null;
       if (stockLocationId && stockItemId) {
-        await supabase.rpc("upsert_location_stock", {
-          p_location_id: stockLocationId,
-          p_item_id: stockItemId,
-          p_quantity_delta: -Number(item.qty_received),
-        });
+        // Services never had a location_stock write in the first place — skip the reversal too.
+        const { data: catalogRow } = await supabase
+          .from("procurement_items")
+          .select("item_type")
+          .eq("id", stockItemId)
+          .maybeSingle();
+        if (catalogRow?.item_type !== "service") {
+          await supabase.rpc("upsert_location_stock", {
+            p_location_id: stockLocationId,
+            p_item_id: stockItemId,
+            p_quantity_delta: -Number(item.qty_received),
+          });
+        }
       }
     }
   }

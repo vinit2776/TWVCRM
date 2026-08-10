@@ -19,10 +19,10 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import {
   Banknote, ScrollText, ExternalLink, IndianRupee, CalendarClock,
-  CheckCircle2, AlertCircle, Wallet, Sparkles,
+  CheckCircle2, AlertCircle, Wallet, Sparkles, ImageIcon, Loader2,
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { Booking } from "@/types";
+import type { Booking, BookingPayment } from "@/types";
 
 const MONTH_LABELS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
@@ -40,10 +40,18 @@ interface Props {
   /** When true (booking detail), render the full multi-line banner.
    *  When false (list rows), render a single-line inline summary. */
   variant?: "full" | "inline";
+  /** Payment records for this booking — used to surface a "View screenshot"
+   *  action for the UPI proof-of-payment, without another fetch. */
+  payments?: BookingPayment[];
+  onViewScreenshot?: (paymentId: string, screenshotPath: string) => void;
+  loadingScreenshotId?: string | null;
 }
 
-export function BookingPaymentSummary({ booking, variant = "full" }: Props) {
+export function BookingPaymentSummary({ booking, variant = "full", payments, onViewScreenshot, loadingScreenshotId }: Props) {
   const total = Number(booking.total_amount_with_gst || booking.total_amount || 0);
+  const screenshotPayment = payments
+    ?.filter((p) => p.payment_mode === "upi" && p.screenshot_path)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null;
 
   // Derive a single, finance-readable shape from the booking row.
   const summary = (() => {
@@ -192,6 +200,22 @@ export function BookingPaymentSummary({ booking, variant = "full" }: Props) {
             </Badge>
           </div>
           <div className="text-xs text-muted-foreground mt-1">{summary.sub}</div>
+
+          {summary.kind === "paid" && screenshotPayment && onViewScreenshot && (
+            <button
+              type="button"
+              className={cn("inline-flex items-center gap-1 text-xs font-medium mt-2 hover:underline underline-offset-2", tone.text)}
+              onClick={() => onViewScreenshot(screenshotPayment.id, screenshotPayment.screenshot_path!)}
+              disabled={loadingScreenshotId === screenshotPayment.id}
+            >
+              {loadingScreenshotId === screenshotPayment.id ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <ImageIcon className="h-3 w-3" />
+              )}
+              View payment screenshot
+            </button>
+          )}
 
           {/* Deep links — when the booking is post-paid, show the contract
               link so finance can jump straight to its monthly statement. */}

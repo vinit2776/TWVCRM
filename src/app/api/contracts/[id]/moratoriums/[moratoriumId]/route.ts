@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const ActionSchema = z.object({
   action: z.enum(["approve", "reject"]),
@@ -38,7 +39,7 @@ export async function PATCH(
   const body = await req.json();
   const parsed = ActionSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
   const { action, authorization_note } = parsed.data;
 
