@@ -3,9 +3,11 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
+import { escapeHtml } from "@/lib/html";
 
 const ALLOWED_ROLES = ["admin", "manager", "accounts"];
 const VALID_CATEGORIES = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
+const CUSTOMER_MESSAGE_MAX_LENGTH = 500;
 
 /**
  * POST /api/contracts/[id]/deposit-topup/link — generate a Razorpay payment
@@ -38,6 +40,9 @@ export async function POST(
   const category = String(body.category || "");
   const categoryNote = typeof body.category_note === "string" ? body.category_note.trim() : null;
   const appliesToShortfall = body.applies_to_shortfall === true;
+  const customerMessage = typeof body.customer_message === "string"
+    ? body.customer_message.trim().slice(0, CUSTOMER_MESSAGE_MAX_LENGTH)
+    : "";
 
   if (!amount || amount <= 0) {
     return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
@@ -141,6 +146,12 @@ export async function POST(
     })
     .eq("id", result.topup_id);
 
+  const customerMessageBlock = customerMessage
+    ? `<div style="background:#f0faf5;border-left:3px solid #015E65;border-radius:0 6px 6px 0;padding:10px 14px;margin:0 0 16px;">
+         <p style="color:#0f6e56;font-size:13px;margin:0;font-style:italic;">${escapeHtml(customerMessage).replace(/\n/g, "<br/>")}</p>
+       </div>`
+    : "";
+
   const subject = `Additional Security Deposit — ${contract.contract_number} — The WorkVilla`;
   const html = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -151,6 +162,7 @@ export async function POST(
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
         <p style="color:#333;font-size:14px;">Please pay the additional refundable security deposit below for contract <strong>${contract.contract_number}</strong>.</p>
+        ${customerMessageBlock}
         <table style="border-collapse:collapse;margin:20px 0;width:100%;background:#f0faf5;border-radius:6px;">
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Contract</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${contract.contract_number}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;font-size:18px;">₹${amount.toLocaleString("en-IN")}</td></tr>

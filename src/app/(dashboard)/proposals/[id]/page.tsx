@@ -123,6 +123,8 @@ export default function ProposalDetailPage({
     subject: string; html: string; to: string[]; deposit_link_url: string | null; amount: number; link_already_exists: boolean;
   } | null>(null);
   const [depositInternalNote, setDepositInternalNote] = useState("");
+  const [depositCustomerMessage, setDepositCustomerMessage] = useState("");
+  const depositPreviewRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Booking confirmation dialog (accept flow)
   const [bookingConfirmOpen, setBookingConfirmOpen] = useState(false);
@@ -366,6 +368,7 @@ export default function ProposalDetailPage({
     setDepositEmailOpen(true);
     setDepositEmailPreview(null);
     setDepositInternalNote("");
+    setDepositCustomerMessage("");
     setDepositEmailLoading(true);
     try {
       const res = await fetch(`/api/proposals/${id}/deposit-link`, {
@@ -388,6 +391,32 @@ export default function ProposalDetailPage({
     }
   };
 
+  // Re-renders the email HTML as the customer message is edited, so the
+  // preview iframe reflects what will actually be sent. Debounced since it
+  // fires on every keystroke; internal note is excluded on purpose — it's
+  // never part of the email body, so it doesn't affect the preview.
+  useEffect(() => {
+    if (!depositEmailOpen || !depositEmailPreview) return;
+    if (depositPreviewRefreshTimer.current) clearTimeout(depositPreviewRefreshTimer.current);
+    depositPreviewRefreshTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/proposals/${id}/deposit-link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preview: true, deposit_customer_message: depositCustomerMessage }),
+        });
+        const json = await res.json();
+        if (res.ok) setDepositEmailPreview(json);
+      } catch {
+        // Preview refresh is best-effort — leave the last good preview showing.
+      }
+    }, 400);
+    return () => {
+      if (depositPreviewRefreshTimer.current) clearTimeout(depositPreviewRefreshTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depositCustomerMessage, depositEmailOpen]);
+
   const handleSendDepositEmail = async () => {
     if (depositInternalNote.trim().length < 10) {
       toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
@@ -398,7 +427,10 @@ export default function ProposalDetailPage({
       const res = await fetch(`/api/proposals/${id}/deposit-link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deposit_internal_notes: depositInternalNote.trim() }),
+        body: JSON.stringify({
+          deposit_internal_notes: depositInternalNote.trim(),
+          deposit_customer_message: depositCustomerMessage.trim(),
+        }),
       });
       const json = await res.json();
       if (res.ok) {
@@ -1566,6 +1598,21 @@ export default function ProposalDetailPage({
                   accountingHead="Security Deposit"
                   context={`${proposal.proposal_number} — security deposit request`}
                 />
+              </div>
+
+              <div className="space-y-1.5 rounded-md border border-primary/40 bg-primary/5 p-2.5">
+                <Label htmlFor="dep-customer-message" className="text-primary">
+                  Message to Customer <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Textarea
+                  id="dep-customer-message"
+                  value={depositCustomerMessage}
+                  onChange={(e) => setDepositCustomerMessage(e.target.value)}
+                  placeholder="e.g. This covers the extra seat added from 24 Jun"
+                  rows={2}
+                  maxLength={500}
+                />
+                <p className="text-xs text-muted-foreground">Shown to the customer in the email, right below the greeting.</p>
               </div>
 
               <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
