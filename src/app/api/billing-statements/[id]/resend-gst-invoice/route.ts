@@ -183,9 +183,21 @@ export async function POST(
     );
   }
 
+  // Record the full recipient list, not just the primary — otherwise a later
+  // audit (or the reconcile backfill) can't tell CC'd contacts already got it
+  // and re-sends a duplicate.
   await adminClient.from("billing_statements")
-    .update({ gst_invoice_sent_at: nowIso, gst_invoice_sent_to: recipientEmail })
+    .update({ gst_invoice_sent_at: nowIso, gst_invoice_sent_to: toList.join(", ") })
     .eq("id", id);
+
+  // Also stamp the same delivery-bookkeeping fields dispatchTallyInvoice /
+  // upload-gst-invoice use so a manual resend counts as "delivered" for the
+  // payment-reminder cron's gate too — but only if nothing has claimed
+  // delivery yet, so a later resend doesn't reset the original delivered_at.
+  await adminClient.from("billing_statements")
+    .update({ tally_delivered_at: nowIso, lifecycle_stage: "sent", emailed_at: nowIso, emailed_to: recipientEmail })
+    .eq("id", id)
+    .is("tally_delivered_at", null);
 
   await adminClient.from("audit_trail").insert({
     entity_type: "billing_statement",
