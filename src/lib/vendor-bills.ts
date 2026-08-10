@@ -29,7 +29,7 @@ export async function createVendorBill(
   input: CreateVendorBillInput
 ): Promise<CreateVendorBillResult> {
   // bill_number is generated atomically by the trg_generate_vendor_bill_number
-  // DB trigger (00384_fix_vendor_bill_number_race.sql) — computing it here
+  // DB trigger (00397_fix_vendor_bill_number_race.sql) — computing it here
   // via SELECT COUNT(*) raced under concurrent/double-submitted requests.
   const gstAmount = Math.round((input.gst_amount ?? 0) * 100) / 100;
 
