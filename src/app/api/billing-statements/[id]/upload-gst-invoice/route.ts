@@ -498,6 +498,20 @@ export async function POST(
           emailed_to: customerEmail,
         }).eq("id", id);
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
+        // Log every recipient to billing_send_log — this is what actually feeds
+        // the "Communications" timeline on the lead page (GET
+        // /api/leads/[id]/billing-communications). Without this, the auto-send
+        // that just happened is invisible there even though it succeeded.
+        await adminSupabase.from("billing_send_log").insert(
+          [customerEmail, ...ccEmails].map((recipient) => ({
+            billing_statement_id: id,
+            send_type: "gst_invoice" as const,
+            recipient,
+            status: "sent" as const,
+            triggered_by: "manual" as const,
+            triggered_by_user_id: dbUser.id,
+          })),
+        );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         emailWarning = `Email delivery failed: ${errMsg}. Invoice uploaded — use Save & send from the inbox to retry.`;
@@ -508,6 +522,17 @@ export async function POST(
           performed_by: null,
           changes: { error: errMsg, recipient: customerEmail, trigger: "upload_gst_invoice" },
         });
+        await adminSupabase.from("billing_send_log").insert(
+          [customerEmail, ...ccEmails].map((recipient) => ({
+            billing_statement_id: id,
+            send_type: "gst_invoice" as const,
+            recipient,
+            status: "failed" as const,
+            error: errMsg,
+            triggered_by: "manual" as const,
+            triggered_by_user_id: dbUser.id,
+          })),
+        );
       }
 
       return NextResponse.json({
