@@ -14,15 +14,21 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   let recipients: string[];
-  let pdfBuffer: Buffer;
+  let pdfBuffer: Buffer | null = null;
+  // Renewal contracts can send the agreement, the addendum, or both — both
+  // default to true so non-renewal callers (which never send these fields)
+  // keep the original "always attach the agreement" behavior.
+  let sendAgreement = true;
+  let sendAddendum = true;
 
   const contentType = request.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     recipients = JSON.parse(formData.get("recipients") as string || "[]");
-    const pdfFile = formData.get("pdf") as File;
-    if (!pdfFile) return NextResponse.json({ error: "PDF file is required" }, { status: 400 });
-    pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+    if (formData.has("send_agreement")) sendAgreement = formData.get("send_agreement") === "true";
+    if (formData.has("send_addendum")) sendAddendum = formData.get("send_addendum") === "true";
+    const pdfFile = formData.get("pdf") as File | null;
+    if (pdfFile) pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
   } else {
     const body = await request.json();
     recipients = body.recipients;
@@ -32,8 +38,11 @@ export async function POST(
   if (!recipients || recipients.length === 0) {
     return NextResponse.json({ error: "At least one recipient email is required" }, { status: 400 });
   }
-  if (!pdfBuffer || pdfBuffer.length === 0) {
+  if (sendAgreement && (!pdfBuffer || pdfBuffer.length === 0)) {
     return NextResponse.json({ error: "PDF data is required" }, { status: 400 });
+  }
+  if (!sendAgreement && !sendAddendum) {
+    return NextResponse.json({ error: "Select at least one document to send" }, { status: 400 });
   }
 
   // Fetch contract with lead info
@@ -56,8 +65,14 @@ export async function POST(
 
   const senderName = sender?.full_name || "TWV Team";
 
-  // Renewal contracts also need their addendum attached alongside the base agreement.
-  const addendumBuffer = await buildAddendumPdfBuffer(supabase, id);
+  // Renewal contracts can attach the addendum alongside (or instead of) the
+  // base agreement — buildAddendumPdfBuffer itself returns null for non-renewals.
+  const addendumBuffer = sendAddendum ? await buildAddendumPdfBuffer(supabase, id) : null;
+  const agreementBuffer = sendAgreement ? pdfBuffer : null;
+
+  if (!agreementBuffer && !addendumBuffer) {
+    return NextResponse.json({ error: "No document available to send" }, { status: 400 });
+  }
 
   try {
     const { data: emailResult, error: emailError } = await resend.emails.send({
@@ -65,7 +80,9 @@ export async function POST(
       replyTo: EMAIL_REPLY_TO,
       to: [recipients[0]],
       ...(recipients.length > 1 ? { cc: recipients.slice(1) } : {}),
-      subject: `Membership Agreement ${contract.contract_number} - ${contract.title}`,
+      subject: agreementBuffer
+        ? `Membership Agreement ${contract.contract_number} - ${contract.title}`
+        : `Renewal Addendum ${contract.contract_number} - ${contract.title}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
           <div style="background-color: #015E65; padding: 24px 32px;">
@@ -74,7 +91,7 @@ export async function POST(
           </div>
           <div style="padding: 32px;">
             <p style="color: #1a1b1e; font-size: 15px;">Dear ${contract.lead?.first_name || "Client"},</p>
-            <p style="color: #333; font-size: 14px;">We are pleased to share your Membership Agreement for The WorkVilla. Please find the agreement <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong>${addendumBuffer ? ", along with the renewal addendum," : ""} attached to this email.</p>
+            <p style="color: #333; font-size: 14px;">We are pleased to share your ${agreementBuffer && addendumBuffer ? "Membership Agreement and Renewal Addendum" : agreementBuffer ? "Membership Agreement" : "Renewal Addendum"} for The WorkVilla. Please find the ${agreementBuffer && addendumBuffer ? "agreement and addendum" : agreementBuffer ? "agreement" : "addendum"} <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong> attached to this email.</p>
             <p style="color: #333; font-size: 14px;">Here is a summary of your membership details:</p>
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Agreement:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${contract.contract_number}</td></tr>
@@ -82,7 +99,7 @@ export async function POST(
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Start Date:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${new Date(contract.start_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" })}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666;">Tenure:</td><td style="padding: 10px 16px; color: #333;">${contract.tenure_months} months</td></tr>
             </table>
-            <p style="color: #333; font-size: 14px;">Please review the attached agreement carefully. Upon your acceptance, we will proceed with activation of your workspace membership.</p>
+            <p style="color: #333; font-size: 14px;">Please review the attached ${agreementBuffer && addendumBuffer ? "documents" : agreementBuffer ? "agreement" : "addendum"} carefully. Upon your acceptance, we will proceed with activation of your workspace membership.</p>
             <p style="color: #015E65; font-size: 13px; font-weight: bold; margin: 20px 0 8px;">Bank Details</p>
             <table style="border-collapse: collapse; width: 100%; background: #f0faf5; border-radius: 6px; margin-bottom: 20px;">
               <tr><td style="padding: 8px 16px; color: #666; border-bottom: 1px solid #e5e7eb; width: 40%;">Account Name</td><td style="padding: 8px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">Sree Design Infrastructure Private Limited</td></tr>
@@ -104,11 +121,15 @@ export async function POST(
         </div>
       `,
       attachments: [
-        {
-          filename: `${contract.contract_number}.pdf`,
-          content: pdfBuffer,
-          contentType: "application/pdf",
-        },
+        ...(agreementBuffer
+          ? [
+              {
+                filename: `${contract.contract_number}.pdf`,
+                content: agreementBuffer,
+                contentType: "application/pdf",
+              },
+            ]
+          : []),
         ...(addendumBuffer
           ? [
               {
@@ -140,10 +161,15 @@ export async function POST(
 
     // Log email activity for the lead
     if (contract.lead_id && sender?.id) {
+      const sentLabel = agreementBuffer && addendumBuffer
+        ? "Membership Agreement and Renewal Addendum"
+        : agreementBuffer
+          ? "Membership Agreement"
+          : "Renewal Addendum";
       logEmailActivity(supabase, {
         leadId: contract.lead_id,
-        subject: `Agreement ${contract.contract_number} sent`,
-        description: `Membership Agreement "${contract.title}" (${contract.contract_number}) emailed to ${recipients.join(", ")}`,
+        subject: `${sentLabel} ${contract.contract_number} sent`,
+        description: `${sentLabel} "${contract.title}" (${contract.contract_number}) emailed to ${recipients.join(", ")}`,
         createdBy: sender.id,
       });
     }
