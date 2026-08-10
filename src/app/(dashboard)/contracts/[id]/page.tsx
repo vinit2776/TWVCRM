@@ -273,12 +273,6 @@ export default function ContractDetailPage({
   };
 
   const handleOpenEmailDialog = () => {
-    if (contract?.is_renewal && contract?.parent_contract_id) {
-      const confirmed = window.confirm(
-        "This is a renewal contract — both the Membership Agreement and the Addendum will be sent to the customer. Continue?"
-      );
-      if (!confirmed) return;
-    }
     setEmailDialogOpen(true);
   };
 
@@ -1792,6 +1786,7 @@ export default function ContractDetailPage({
         documentId={id}
         documentNumber={contract.contract_number}
         leadEmail={contract.lead?.email}
+        contractIsRenewal={!!(contract.is_renewal && contract.parent_contract_id)}
         onGeneratePDF={handleGeneratePDFBase64}
         onSuccess={fetchContract}
       />
