@@ -106,15 +106,15 @@ export async function POST(
       statement_number, period_start, period_end,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
-        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
         id, proposal_number,
-        lead:leads!proposals_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+        lead:leads!proposals_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
-        lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+        lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
       )
     `)
     .eq("id", id)
@@ -144,6 +144,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
@@ -158,6 +159,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
@@ -172,6 +174,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
         mobile: string | null;
         phone: string | null;
       } | null;
@@ -457,6 +460,14 @@ export async function POST(
         </div>
       `;
 
+      // CC every additional billing contact on file — the primary "email" field
+      // is only one of potentially several finance-team recipients the customer
+      // registered (leads.billing_emails). Missing these silently drops the
+      // invoice for everyone but the primary contact.
+      const ccEmails = Array.from(
+        new Set((lead?.billing_emails ?? []).filter((e) => e && e !== customerEmail)),
+      );
+
       let emailWarning: string | null = null;
       try {
         const safeFilename = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
@@ -464,6 +475,7 @@ export async function POST(
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
+          cc: ccEmails.length > 0 ? ccEmails : undefined,
           bcc: [EMAIL_REPLY_TO],
           subject: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
           html: emailHtml,
@@ -474,7 +486,16 @@ export async function POST(
         if (sendResult.error) throw new Error(sendResult.error.message);
         await adminSupabase.from("billing_statements").update({
           gst_invoice_sent_at: nowIso,
-          gst_invoice_sent_to: customerEmail,
+          gst_invoice_sent_to: [customerEmail, ...ccEmails].join(", "),
+          // Stamp the same delivery-bookkeeping fields dispatchTallyInvoice uses
+          // (tally_delivered_at, lifecycle_stage). Without this, the payment-reminder
+          // cron's "never dun an undelivered Tally invoice" gate treats this
+          // statement as permanently undelivered even though it was just emailed —
+          // see docs/tally-integration-status.md for the incident this fixed.
+          tally_delivered_at: nowIso,
+          lifecycle_stage: "sent",
+          emailed_at: nowIso,
+          emailed_to: customerEmail,
         }).eq("id", id);
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
       } catch (err) {

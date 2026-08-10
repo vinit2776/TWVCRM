@@ -45,7 +45,13 @@ export async function GET(request: NextRequest) {
     .eq("issuance_channel", "tally")
     .not("tally_invoice_number", "is", null)
     .is("tally_delivered_at", null)
-    .neq("lifecycle_stage", "awaiting_irn")   // B2B IRN pending → not our job
+    // B2B IRN pending → not our job. NOTE: lifecycle_stage is NULL for the
+    // vast majority of rows (only the ack-driven auto-dispatch path ever sets
+    // it), and Postgres's NULL <> 'x' evaluates to NULL/false — a plain
+    // .neq() here silently drops every NULL row instead of including it, which
+    // let dozens of "issued but never delivered" statements go unnoticed
+    // indefinitely. Use .or() so NULL rows are explicitly kept.
+    .or("lifecycle_stage.is.null,lifecycle_stage.neq.awaiting_irn")
     .order("tally_synced_at", { ascending: true })
     .limit(50);
 
