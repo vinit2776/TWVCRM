@@ -137,7 +137,7 @@ function LifecycleView({ data }: { data: LifecycleData }) {
   const submitted = audit_trail.find((e) => e.entity_id === mr.id && e.action === "submit");
   milestones.push({
     label: "Submitted for Approval",
-    done: !!submitted || ["approved","partially_ordered","po_created","fully_ordered","closed"].includes(mr.status),
+    done: !!submitted || ["approved","partially_ordered","po_created"].includes(mr.status),
     date: submitted?.created_at,
     actor: submitted?.performer?.full_name,
     color: "bg-indigo-500",
@@ -416,7 +416,7 @@ function DeptDrilldownSheet({
 
   if (!dept) return null;
 
-  const COMMITTED_STATUSES = ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"];
+  const COMMITTED_STATUSES = ["approved", "partially_ordered", "po_created"];
   const operationalMrs = mrs.filter((m) => m.expenditure_type !== "amc");
   const amcMrs = mrs.filter((m) => m.expenditure_type === "amc");
   // Only committed (approved+) requests count as real spend — matches the budget

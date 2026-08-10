@@ -49,13 +49,14 @@ export async function GET(request: NextRequest) {
     const annualBudget = Number(budget.monthly_budget);
 
     // Committed: approved and beyond
-    const { data: committed } = await supabase
+    const { data: committed, error: committedError } = await supabase
       .from("purchase_requests")
       .select("total_estimated_amount")
       .eq("expenditure_type", "amc")
       .gte("created_at", fyStart)
       .lte("created_at", fyEnd)
-      .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+      .in("status", ["approved", "partially_ordered", "po_created"]);
+    if (committedError) console.error("[budget check] AMC committed spend query failed:", committedError.message);
 
     // Provisional: submitted pending approval
     const { data: provisional } = await supabase
@@ -111,14 +112,15 @@ export async function GET(request: NextRequest) {
   // Same committed/provisional split as the AMC check above and the dashboard
   // budget route: only approved-and-beyond requests count as real spend.
   // Draft/submitted requests haven't actually been committed yet.
-  const { data: committed } = await supabase
+  const { data: committed, error: committedError } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
-    .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+    .in("status", ["approved", "partially_ordered", "po_created"]);
+  if (committedError) console.error("[budget check] operational committed spend query failed:", committedError.message);
 
   const { data: provisional } = await supabase
     .from("purchase_requests")

@@ -97,7 +97,7 @@ function computeStageStatuses(lc: LifecycleData): StageStatus[] {
     // 2. Submitted for Approval
     mr.status !== "draft",
     // 3. Approved
-    ["approved", "partially_ordered", "po_created", "fully_ordered"].includes(mr.status) && !!mr.approved_at,
+    ["approved", "partially_ordered", "po_created"].includes(mr.status) && !!mr.approved_at,
     // 4. PO Created
     linked_pos.length > 0,
     // 5. Order Dispatched

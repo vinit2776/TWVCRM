@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
   if (status === "active") {
     query = query.not("status", "in", '("cancelled","rejected")');
   } else if (status === "committed") {
-    query = query.in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+    query = query.in("status", ["approved", "partially_ordered", "po_created"]);
   } else if (status) {
     query = query.eq("status", status);
   }

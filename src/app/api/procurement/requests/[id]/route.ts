@@ -234,14 +234,15 @@ export async function PATCH(
           if (amcBudget?.is_active && amcBudget.monthly_budget) {
             const annualBudget = Number(amcBudget.monthly_budget);
 
-            const { data: committedMrs } = await supabase
+            const { data: committedMrs, error: committedMrsError } = await supabase
               .from("purchase_requests")
               .select("total_estimated_amount")
               .eq("expenditure_type", "amc")
               .gte("created_at", fyStart)
               .lte("created_at", fyEnd)
-              .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"])
+              .in("status", ["approved", "partially_ordered", "po_created"])
               .neq("id", id);
+            if (committedMrsError) console.error("[procurement approve] AMC committed spend query failed:", committedMrsError.message);
 
             const committedSoFar = (committedMrs ?? []).reduce(
               (sum, mr) => sum + Number(mr.total_estimated_amount ?? 0), 0
@@ -284,15 +285,16 @@ export async function PATCH(
           if (budget?.is_active && budget.monthly_budget) {
             const monthlyBudget = Number(budget.monthly_budget);
 
-            const { data: existingMrs } = await supabase
+            const { data: existingMrs, error: existingMrsError } = await supabase
               .from("purchase_requests")
               .select("total_estimated_amount")
               .eq("department", pr.department)
               .eq("expenditure_type", "operational")
               .gte("created_at", monthStart)
               .lte("created_at", monthEnd)
-              .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"])
+              .in("status", ["approved", "partially_ordered", "po_created"])
               .neq("id", id);
+            if (existingMrsError) console.error("[procurement approve] operational committed spend query failed:", existingMrsError.message);
 
             const spentSoFar = (existingMrs ?? []).reduce(
               (sum, mr) => sum + Number(mr.total_estimated_amount ?? 0), 0

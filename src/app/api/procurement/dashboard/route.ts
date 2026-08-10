@@ -69,7 +69,7 @@ export async function GET() {
     supabase
       .from("purchase_requests")
       .select("total_estimated_amount")
-      .in("status", ["approved", "partially_ordered", "fully_ordered"])
+      .in("status", ["approved", "partially_ordered", "po_created"])
       .gte("approved_at", monthStart),
 
     // POs by status
@@ -152,6 +152,7 @@ export async function GET() {
     (sum: number, r: { total_ordered_amount?: number | null }) => sum + (r.total_ordered_amount ?? 0), 0
   );
 
+  if (poThisMonthRes.error) console.error("[procurement dashboard] spend-this-month query failed:", poThisMonthRes.error.message);
   const spendThisMonth = (poThisMonthRes.data ?? []).reduce(
     (sum: number, r: { total_estimated_amount?: number | null }) => sum + (r.total_estimated_amount ?? 0), 0
   );
