@@ -47,4 +47,18 @@ jobs:
           NEW_VERSION=$(node -p "require('./package.json').version")
           git add package.json
           git commit -m "chore: bump version to ${NEW_VERSION}"
-          git push origin main
+
+          # main can move between the earlier "pull" step and this push (e.g. two
+          # PRs merged within seconds of each other), so retry with a rebase
+          # instead of failing outright on a rejected push.
+          for attempt in 1 2 3 4 5; do
+            if git push origin main; then
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}/5) — rebasing onto latest main and retrying..."
+            git pull --rebase origin main
+            sleep $((attempt * 5))
+          done
+
+          echo "Failed to push version bump after 5 attempts"
+          exit 1
