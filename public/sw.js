@@ -9,8 +9,18 @@
 const CACHE_NAME = "twv-crm-v3";
 const OFFLINE_URL = "/offline";
 
+// Dev (Turbopack) serves chunk URLs that aren't content-hashed across rebuilds,
+// so cache-first/stale-while-revalidate here would keep serving pre-rebuild JS
+// and produce "X is not a function" errors for newly-added exports. Skip all
+// caching on localhost — push notifications (below) are unaffected either way.
+const IS_DEV = self.location.hostname === "localhost" || self.location.hostname === "127.0.0.1";
+
 // ─── Install: precache app shell ───────────────────────────────────────────────
 self.addEventListener("install", (event) => {
+  if (IS_DEV) {
+    self.skipWaiting();
+    return;
+  }
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) =>
       cache.addAll(["/", OFFLINE_URL])
@@ -21,6 +31,15 @@ self.addEventListener("install", (event) => {
 
 // ─── Activate: clean old caches, take control ──────────────────────────────────
 self.addEventListener("activate", (event) => {
+  if (IS_DEV) {
+    // Also wipe any caches left over from before this dev guard existed, so
+    // machines that already hit the stale-chunk bug self-heal automatically.
+    event.waitUntil(
+      caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+    );
+    self.clients.claim();
+    return;
+  }
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
@@ -35,6 +54,8 @@ self.addEventListener("activate", (event) => {
 
 // ─── Fetch: route-based caching strategy ───────────────────────────────────────
 self.addEventListener("fetch", (event) => {
+  if (IS_DEV) return; // no-op — let the browser hit the network directly
+
   const { request } = event;
   const url = new URL(request.url);
 
