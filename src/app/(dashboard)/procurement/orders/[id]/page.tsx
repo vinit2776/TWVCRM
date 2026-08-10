@@ -691,6 +691,7 @@ export default function PurchaseOrderDetailPage() {
 
   // ── Add Invoice (inline) ───────────────────────────────────────────────────
   const submitInvoice = async () => {
+    if (invUploading) return;
     if (!invDate) { toast.error("Invoice date is required"); return; }
     if (invDate < today) { toast.error("Invoice date cannot be in the past. Please select today or a future date."); return; }
     const amount = parseFloat(invAmount);

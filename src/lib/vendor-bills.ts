@@ -24,24 +24,13 @@ export interface CreateVendorBillResult {
   bill_number: string;
 }
 
-function generateBillNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `BILL-${yy}${mm}-${seq}`;
-}
-
 export async function createVendorBill(
   supabase: SupabaseClient,
   input: CreateVendorBillInput
 ): Promise<CreateVendorBillResult> {
-  const { count: existingCount } = await supabase
-    .from("vendor_bills")
-    .select("*", { count: "exact", head: true });
-
-  const billNumber = generateBillNumber(existingCount ?? 0);
-
+  // bill_number is generated atomically by the trg_generate_vendor_bill_number
+  // DB trigger (00384_fix_vendor_bill_number_race.sql) — computing it here
+  // via SELECT COUNT(*) raced under concurrent/double-submitted requests.
   const gstAmount = Math.round((input.gst_amount ?? 0) * 100) / 100;
 
   const { data: bill, error: billError } = await supabase
@@ -60,7 +49,6 @@ export async function createVendorBill(
       invoice_file_url: input.invoice_file_url ?? null,
       service_report_id: input.service_report_id ?? null,
       electricity_bill_id: input.electricity_bill_id ?? null,
-      bill_number: billNumber,
       amount_paid: input.amount_paid ?? 0,
       payment_status: input.payment_status ?? "unpaid",
       approval_status: "pending",
