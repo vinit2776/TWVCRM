@@ -20,6 +20,7 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
+import { drawCompanyStampInBox } from "@/lib/company-stamp";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -242,7 +243,8 @@ const LL_LESSOR_REG_OFFICE =
  * Content matches the authoritative DOCX template exactly.
  */
 export function generateLeaveLicensePdf(
-  variables: LeaveLicenseVariables
+  variables: LeaveLicenseVariables,
+  options?: { applyCompanyStamp?: boolean; stampRef?: string }
 ): jsPDF {
   const doc = new jsPDF();
   const startY = addBrandHeader(doc);
@@ -716,6 +718,8 @@ export function generateLeaveLicensePdf(
 
   ctx.checkPageBreak(45);
 
+  let lessorSignatureCell: { x: number; y: number; width: number; height: number } | null = null;
+
   autoTable(doc, {
     startY: ctx.y,
     head: [["For Lessor", "For Lessee"]],
@@ -741,7 +745,21 @@ export function generateLeaveLicensePdf(
     headStyles: { fillColor: BRAND_TEAL, fontSize: 9, fontStyle: "bold" },
     bodyStyles: { fontSize: 8.5, cellPadding: 4, minCellHeight: 12 },
     margin: { left: ctx.marginLeft, right: ctx.marginRight },
+    didParseCell: (data) => {
+      if (options?.applyCompanyStamp && data.section === "body" && data.row.index === 0) {
+        data.cell.styles.minCellHeight = 26;
+      }
+    },
+    didDrawCell: (data) => {
+      if (options?.applyCompanyStamp && data.section === "body" && data.row.index === 0 && data.column.index === 0) {
+        lessorSignatureCell = { x: data.cell.x, y: data.cell.y, width: data.cell.width, height: data.cell.height };
+      }
+    },
   });
+
+  if (lessorSignatureCell) {
+    drawCompanyStampInBox(doc, lessorSignatureCell, options?.stampRef);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx.y = (doc as any).lastAutoTable.finalY + 10;
