@@ -67,7 +67,15 @@ export async function checkInternalNote({
       .join("")
       .trim();
 
-    const parsed = JSON.parse(raw) as { ok?: boolean; reason?: string };
+    // The model is asked to respond with only a JSON object, but sometimes wraps it
+    // in a ```json ... ``` fence anyway — strip that (or any other surrounding text)
+    // by pulling out the first {...} block rather than parsing raw verbatim.
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { status: "error" };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as { ok?: boolean; reason?: string };
     if (typeof parsed.ok !== "boolean") {
       return { status: "error" };
     }
