@@ -33,6 +33,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } from "@/lib/constants";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Lead {
@@ -128,7 +129,7 @@ interface Summary {
   oldest_days: number;
 }
 
-type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial";
+type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "paid";
 type ViewMode = "detail" | "ageing";
 
 /** One row in the Ageing view — aggregates all statements for a contract. */
@@ -152,6 +153,7 @@ const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "overdue",    label: "Overdue",        hint: "Due date is in the past" },
   { key: "overdue_30", label: "Overdue 30+",    hint: "More than a month past due" },
   { key: "partial",    label: "Partially paid", hint: "Some money in, balance pending" },
+  { key: "paid",       label: "Paid",           hint: "Finalized statements settled in full" },
 ];
 
 function customerName(lead?: Lead): string {
@@ -210,8 +212,9 @@ export default function AccountsReceivablePage() {
   // checked; user can uncheck one-off for a specific send.
   const [resendRecipients, setResendRecipients] = useState<Set<string>>(new Set());
 
-  // History drawer state
-  const [historyRow, setHistoryRow] = useState<ReceivableRow | null>(null);
+  // History drawer state — also opened from the Paid tab (PaidStatementsPanel),
+  // so the shape is the minimal subset both callers can supply.
+  const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string } | null>(null);
   const [historyItems, setHistoryItems] = useState<Array<{
     id: string;
     stage_index: number;
@@ -329,7 +332,7 @@ export default function AccountsReceivablePage() {
     }
   };
 
-  const openHistory = async (row: ReceivableRow) => {
+  const openHistory = async (row: { id: string; statement_number: string }) => {
     setHistoryRow(row);
     setHistoryItems([]);
     setHistoryLoading(true);
@@ -474,31 +477,37 @@ export default function AccountsReceivablePage() {
               className="pl-8 w-72"
             />
           </div>
-          <div className="flex items-center border rounded-md overflow-hidden">
-            <button
-              onClick={() => setViewMode("detail")}
-              title="Detailed statement view"
-              className={`px-2.5 py-1.5 text-xs flex items-center gap-1 transition ${viewMode === "detail" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
-            >
-              <LayoutList className="h-3.5 w-3.5" /> Detail
-            </button>
-            <button
-              onClick={() => setViewMode("ageing")}
-              title="Ageing bucket view — grouped by contract"
-              className={`px-2.5 py-1.5 text-xs flex items-center gap-1 border-l transition ${viewMode === "ageing" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
-            >
-              <BarChart2 className="h-3.5 w-3.5" /> Ageing
-            </button>
-          </div>
-          <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
-            <Download className="h-4 w-4 mr-1" /> Export CSV
-          </Button>
+          {filter !== "paid" && (
+            <div className="flex items-center border rounded-md overflow-hidden">
+              <button
+                onClick={() => setViewMode("detail")}
+                title="Detailed statement view"
+                className={`px-2.5 py-1.5 text-xs flex items-center gap-1 transition ${viewMode === "detail" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+              >
+                <LayoutList className="h-3.5 w-3.5" /> Detail
+              </button>
+              <button
+                onClick={() => setViewMode("ageing")}
+                title="Ageing bucket view — grouped by contract"
+                className={`px-2.5 py-1.5 text-xs flex items-center gap-1 border-l transition ${viewMode === "ageing" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+              >
+                <BarChart2 className="h-3.5 w-3.5" /> Ageing
+              </button>
+            </div>
+          )}
+          {filter !== "paid" && (
+            <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
+              <Download className="h-4 w-4 mr-1" /> Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {filter === "paid" ? (
+            <PaidStatementsPanel search={search} onOpenHistory={openHistory} />
+          ) : loading ? (
             <div className="p-8 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
           ) : filtered.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
