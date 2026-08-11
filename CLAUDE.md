@@ -14,6 +14,7 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 - Ask clarifying questions before writing code if the request touches auth, payments, customer data, migrations, or third-party integrations.
 - Sync with main and create a feature branch before starting: `git checkout main && git pull && git checkout -b feat/<short-description>`.
+- If more than one Claude Code session may be working in this repo at the same time, each session must use its own `git worktree` (e.g. `git worktree add ../twv-crm-<slug> feat/<short-description>`) instead of checking out branches in the shared working directory. Two sessions sharing one working directory can interleave checkouts/commits on the same HEAD — this has already caused an in-progress uncommitted change to jump branches and land a commit directly on `main` by accident (see PR #355's investigation for the incident). Worktrees give each session an isolated working directory and index, so this can't happen.
 - Match existing patterns in the codebase before introducing new ones. Check how similar features are built first.
 - Test locally end-to-end before committing. Run the full flow, not just the changed function.
 - Update documentation in the same PR if you change an API contract, env var, schema, or public function signature.
@@ -253,6 +254,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 ### Before starting
 
 - Read the relevant ticket / spec. If unclear, ask.
+- If another Claude Code session might be active in this repo right now, use a worktree instead of the shared working directory — see "Critical Rules → ALWAYS".
 - `git checkout main && git pull`
 - `git checkout -b <type>/<short-description>` (types: `feat`, `fix`, `chore`, `refactor`, `docs`)
 - Run `npm install` if `package.json` or lockfile changed.
