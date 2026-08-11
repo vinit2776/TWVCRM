@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { ACCOUNTING_HEAD_LABELS } from "@/lib/constants";
+import { checkInternalNote } from "@/lib/validate-internal-note";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -59,6 +61,18 @@ export async function POST(request: NextRequest) {
       { error: "Security deposits can't be collected via an ad-hoc invoice. Use the deposit link on the proposal instead." },
       { status: 400 }
     );
+  }
+
+  // The client already runs this check before submit (see invoice-form.tsx) for
+  // fast inline feedback, but that's only a UX nicety — a direct API call could
+  // skip it entirely. Re-run it here so the note requirement can't be bypassed.
+  const noteCheck = await checkInternalNote({
+    note: result.data.internal_notes,
+    accountingHead: result.data.primary_head ? ACCOUNTING_HEAD_LABELS[result.data.primary_head] : undefined,
+    context: result.data.title,
+  });
+  if (noteCheck.status === "rejected") {
+    return NextResponse.json({ error: noteCheck.reason }, { status: 400 });
   }
 
   const items = result.data.items;
