@@ -2037,7 +2037,7 @@ export interface AggregatorInvoiceLineItem {
 
 export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc" | "reimbursement";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
-export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton";
+export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton" | "hr";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
 export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";

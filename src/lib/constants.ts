@@ -1717,7 +1717,7 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"] as const;
+export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
 
 /** Vending machine drink types tracked on the Consumption > Beverages tab. A pure usage tally — not linked to ingredient stock. */

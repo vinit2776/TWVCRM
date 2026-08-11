@@ -9,7 +9,7 @@ const createPoItemSchema = z.object({
   item_id: z.string().uuid().nullish(),
   item_name: z.string().min(1),
   quantity_ordered: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
   unit_price: z.number().min(0).nullish(),
   gst_rate: z.number().min(0).max(28).default(0),
   notes: z.string().nullish(),
