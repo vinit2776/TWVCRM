@@ -13,7 +13,7 @@
 
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import type { InboxRow, ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
 
 interface Props {
@@ -204,7 +204,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t bg-muted/30 p-4 space-y-3">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="border-t bg-muted/30 p-4 space-y-3">
       <div className="text-sm">
         <div className="font-medium">Upload Tally GST invoice</div>
         <div className="text-xs text-muted-foreground mt-0.5">

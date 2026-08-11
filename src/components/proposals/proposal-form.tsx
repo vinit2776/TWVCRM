@@ -17,7 +17,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import type { ServiceCatalogItem } from "@/types";
 
 interface ServiceQuotaRow {
@@ -200,7 +200,7 @@ export function ProposalForm({
         <DialogHeader>
           <DialogTitle>Create Proposal</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="proposal-title">

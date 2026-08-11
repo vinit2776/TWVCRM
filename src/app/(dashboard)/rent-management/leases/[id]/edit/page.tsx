@@ -14,6 +14,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { preventEnterSubmit } from "@/lib/utils";
 
 export default function EditLeasePage() {
   const { id } = useParams<{ id: string }>();
@@ -137,7 +138,7 @@ export default function EditLeasePage() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
         {/* Term */}
         <Card>
           <CardHeader><CardTitle className="text-base">Lease Term</CardTitle></CardHeader>

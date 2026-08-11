@@ -1,9 +1,23 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { format, formatDistanceToNow, isAfter, isBefore, isToday, isValid } from "date-fns";
+import type { KeyboardEvent } from "react";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+// Browsers submit a <form> when Enter is pressed in any single-line input,
+// even ones that are just one field among many (e.g. a line-item's quantity
+// box). That silently saves and closes create/edit dialogs before the user
+// meant to submit. Textareas and buttons are left alone — a textarea's Enter
+// never auto-submits, and a focused button (e.g. the real Save button) should
+// still respond to Enter.
+export function preventEnterSubmit(e: KeyboardEvent<HTMLFormElement>) {
+  const target = e.target as HTMLElement;
+  if (e.key === "Enter" && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
+    e.preventDefault();
+  }
 }
 
 export function formatDate(date: string | Date): string {

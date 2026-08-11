@@ -17,7 +17,7 @@ import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, BILLING_CYCLE_MONTHS,
   PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import type { ProcurementVendor, FacilityAsset } from "@/types";
 
 function addMonths(dateStr: string, months: number): string {
@@ -303,7 +303,7 @@ function NewServicePOForm() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
 
         {/* ── Mode switcher — declare intent first ── */}
         <div className="grid grid-cols-2 gap-3">
