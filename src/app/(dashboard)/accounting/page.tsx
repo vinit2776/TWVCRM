@@ -336,6 +336,9 @@ export default function AccountingPage() {
   // Batch bucket filter (cash-flow planning strip)
   const [activeBatchFilter, setActiveBatchFilter] = useState<"immediate" | "15th" | "25th" | "unscheduled" | null>(null);
 
+  // Aging filter (days past due, based on bill due_date)
+  const [activeAgingFilter, setActiveAgingFilter] = useState<"current" | "1-30" | "31-60" | "61-90" | "90+" | null>(null);
+
   // Bill search (replaces the old simple textbox)
   const [filters, setFilters] = useState<BillFilters>({
     ...EMPTY_FILTERS,
@@ -442,9 +445,41 @@ export default function AccountingPage() {
     };
   }, [allPendingBills]);
 
-  const pendingBills = activeBatchFilter
-    ? batchBuckets[activeBatchFilter].bills
-    : allPendingBills;
+  // Aging buckets (days past due, based on bill due_date) — independent of the batch strip.
+  const agingBuckets = useMemo(() => {
+    const outstanding = (b: VendorBillItem) =>
+      Math.max(0, Number(b.approved_amount ?? b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0));
+
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    const daysPastDue = (b: VendorBillItem): number => {
+      if (!b.due_date) return 0;
+      const dueMs = new Date(b.due_date).setHours(0, 0, 0, 0);
+      return Math.floor((todayMs - dueMs) / 86400000);
+    };
+
+    const current  = allPendingBills.filter((b) => daysPastDue(b) <= 0);
+    const d1to30   = allPendingBills.filter((b) => daysPastDue(b) >= 1 && daysPastDue(b) <= 30);
+    const d31to60  = allPendingBills.filter((b) => daysPastDue(b) >= 31 && daysPastDue(b) <= 60);
+    const d61to90  = allPendingBills.filter((b) => daysPastDue(b) >= 61 && daysPastDue(b) <= 90);
+    const d90plus  = allPendingBills.filter((b) => daysPastDue(b) > 90);
+
+    return {
+      current: { bills: current, total: current.reduce((s, b) => s + outstanding(b), 0) },
+      "1-30":  { bills: d1to30,  total: d1to30.reduce((s, b) => s + outstanding(b), 0) },
+      "31-60": { bills: d31to60, total: d31to60.reduce((s, b) => s + outstanding(b), 0) },
+      "61-90": { bills: d61to90, total: d61to90.reduce((s, b) => s + outstanding(b), 0) },
+      "90+":   { bills: d90plus, total: d90plus.reduce((s, b) => s + outstanding(b), 0) },
+    };
+  }, [allPendingBills]);
+
+  const pendingBills = (() => {
+    let result = activeBatchFilter ? batchBuckets[activeBatchFilter].bills : allPendingBills;
+    if (activeAgingFilter) {
+      const agingIds = new Set(agingBuckets[activeAgingFilter].bills.map((b) => b.id));
+      result = result.filter((b) => agingIds.has(b.id));
+    }
+    return result;
+  })();
 
   const pendingTotalPages   = Math.ceil(pendingBills.length / PENDING_PAGE_SIZE);
   const visiblePendingBills = pendingBills.slice((pendingPage - 1) * PENDING_PAGE_SIZE, pendingPage * PENDING_PAGE_SIZE);
@@ -849,6 +884,94 @@ export default function AccountingPage() {
                 );
               })()}
 
+              {/* Aging filter (days past due) */}
+              {allPendingBills.length > 0 && (() => {
+                type AgingKey = "current" | "1-30" | "31-60" | "61-90" | "90+";
+                const agingConfig: Array<{
+                  key: AgingKey;
+                  label: string;
+                  activeClass: string;
+                  inactiveClass: string;
+                  dotClass: string;
+                }> = [
+                  {
+                    key: "current",
+                    label: "Current",
+                    activeClass: "border-green-400 bg-green-50 ring-2 ring-green-300",
+                    inactiveClass: "border-green-200 bg-green-50/40 hover:bg-green-50 hover:border-green-300",
+                    dotClass: "bg-green-500",
+                  },
+                  {
+                    key: "1-30",
+                    label: "1–30 Days",
+                    activeClass: "border-yellow-400 bg-yellow-50 ring-2 ring-yellow-300",
+                    inactiveClass: "border-yellow-200 bg-yellow-50/40 hover:bg-yellow-50 hover:border-yellow-300",
+                    dotClass: "bg-yellow-500",
+                  },
+                  {
+                    key: "31-60",
+                    label: "31–60 Days",
+                    activeClass: "border-orange-400 bg-orange-50 ring-2 ring-orange-300",
+                    inactiveClass: "border-orange-200 bg-orange-50/40 hover:bg-orange-50 hover:border-orange-300",
+                    dotClass: "bg-orange-500",
+                  },
+                  {
+                    key: "61-90",
+                    label: "61–90 Days",
+                    activeClass: "border-red-400 bg-red-50 ring-2 ring-red-300",
+                    inactiveClass: "border-red-200 bg-red-50/40 hover:bg-red-50 hover:border-red-300",
+                    dotClass: "bg-red-500",
+                  },
+                  {
+                    key: "90+",
+                    label: "90+ Days",
+                    activeClass: "border-red-600 bg-red-100 ring-2 ring-red-400",
+                    inactiveClass: "border-red-300 bg-red-50/60 hover:bg-red-100 hover:border-red-400",
+                    dotClass: "bg-red-700",
+                  },
+                ];
+                return (
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Aging</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                      {agingConfig.map(({ key, label, activeClass, inactiveClass, dotClass }) => {
+                        const bucket = agingBuckets[key];
+                        const isActive = activeAgingFilter === key;
+                        const isEmpty = bucket.bills.length === 0;
+                        return (
+                          <button
+                            key={key}
+                            onClick={() => {
+                              setActiveAgingFilter(isActive ? null : key);
+                              setPendingPage(1);
+                            }}
+                            className={cn(
+                              "rounded-lg border p-3 text-left transition-colors",
+                              isActive ? activeClass : inactiveClass,
+                              isEmpty && "opacity-50"
+                            )}
+                          >
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className={cn("h-2 w-2 rounded-full shrink-0", dotClass)} />
+                              <span className="text-xs font-semibold text-foreground truncate">{label}</span>
+                              {isActive && (
+                                <span className="ml-auto text-[10px] font-medium text-muted-foreground">✕ clear</span>
+                              )}
+                            </div>
+                            <p className="text-base font-bold text-foreground leading-tight">
+                              {formatCurrency(bucket.total)}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {bucket.bills.length} bill{bucket.bills.length !== 1 ? "s" : ""}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Vendor-email audit widget (touch point C — dashboard) */}
               {emailAuditCount !== null && emailAuditCount > 0 && (
                 <Link
@@ -954,6 +1077,17 @@ export default function AccountingPage() {
                   <button
                     className="ml-auto text-blue-600 hover:text-blue-800 font-medium"
                     onClick={() => { setActiveBatchFilter(null); setPendingPage(1); }}
+                  >
+                    Show all
+                  </button>
+                </div>
+              )}
+              {activeAgingFilter && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-1.5">
+                  <span>Showing <strong>{activeAgingFilter === "current" ? "current (not yet due)" : `${activeAgingFilter} days overdue`}</strong> bills only</span>
+                  <button
+                    className="ml-auto text-blue-600 hover:text-blue-800 font-medium"
+                    onClick={() => { setActiveAgingFilter(null); setPendingPage(1); }}
                   >
                     Show all
                   </button>

@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 import {
   type BillFilters, EMPTY_FILTERS, filtersToParams, parseBillFilters,
   countActiveFilters, describeFilterChips, CHIP_RESET_GROUPS, hasAnyFilter,
@@ -60,6 +61,28 @@ export function BillSearchBar({
   const [draft, setDraft] = useState<BillFilters>(filters);
   const [expanded, setExpanded] = useState(false);
   const fired = useRef(false);
+
+  // Vendor list for the Vendor filter — fetched once, lazily, when the panel first opens.
+  const [vendorOptions, setVendorOptions] = useState<SearchableSelectOption[]>([]);
+  const vendorsFetched = useRef(false);
+  useEffect(() => {
+    if ((!expanded && !filters.vendor_id) || vendorsFetched.current) return;
+    vendorsFetched.current = true;
+    fetch("/api/procurement/vendors")
+      .then((r) => r.json())
+      .then((j) => {
+        const opts: SearchableSelectOption[] = (j.data ?? []).map((v: { id: string; name: string }) => ({
+          value: v.id,
+          label: v.name,
+        }));
+        setVendorOptions(opts);
+      })
+      .catch(() => { /* non-fatal — vendor filter just stays empty */ });
+  }, [expanded]);
+  const vendorLookup = useMemo(
+    () => Object.fromEntries(vendorOptions.map((v) => [v.value, v.label])),
+    [vendorOptions]
+  );
 
   // Debounce the search text for the always-on input.
   // 500ms gives comfortable buffer for moderate typists.
@@ -114,7 +137,10 @@ export function BillSearchBar({
     });
   }, []);
 
-  const chips = useMemo(() => describeFilterChips(filters), [filters]);
+  const chips = useMemo(
+    () => describeFilterChips(filters, { vendors: vendorLookup }),
+    [filters, vendorLookup]
+  );
   const activeCount = countActiveFilters(filters);
 
   const handleExport = useCallback(() => {
@@ -214,7 +240,7 @@ export function BillSearchBar({
       {/* Expanded filter panel */}
       {expanded && (
         <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             {/* Status filters */}
             {!baseFilters?.approval_status && (
               <div className="space-y-1">
@@ -269,6 +295,20 @@ export function BillSearchBar({
                 </SelectContent>
               </Select>
             </div>
+            {!baseFilters?.vendor_id && (
+              <div className="space-y-1">
+                <Label className="text-xs">Vendor</Label>
+                <SearchableSelect
+                  options={vendorOptions}
+                  value={draft.vendor_id}
+                  onValueChange={(v) => setDraft((p) => ({ ...p, vendor_id: v }))}
+                  placeholder="Any vendor"
+                  searchPlaceholder="Search vendors…"
+                  emptyMessage="No vendors found."
+                  className="h-8 text-xs"
+                />
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs">Has IRN</Label>
               <Select
