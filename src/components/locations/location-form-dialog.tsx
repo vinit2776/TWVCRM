@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check, UserCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { Location, LocationCapacityConfig, LocationPrintTemplate, User } from "@/types";
 import {
   Select,
@@ -281,7 +282,7 @@ export function LocationFormDialog({
           <DialogTitle>{isEdit ? "Edit Location" : "Add Location"}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-5">
           {/* Name + Code */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

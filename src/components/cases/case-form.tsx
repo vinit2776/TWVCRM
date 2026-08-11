@@ -25,6 +25,7 @@ import {
 import type { Aggregator, VoCase } from "@/types";
 import { Loader2 } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface CaseFormProps {
   caseData?: VoCase;
@@ -103,7 +104,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Aggregator + Purpose */}
       <Card>
         <CardHeader>

@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
 
 interface EditableCharge {
@@ -128,7 +128,7 @@ export function EditUsageChargeDialog({
           <DialogTitle>Edit Charge</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="edit-charge-description">
               Description <span className="text-destructive">*</span>

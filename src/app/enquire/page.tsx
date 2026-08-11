@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { preventEnterSubmit } from "@/lib/utils";
 
 export default function EnquirePage() {
   // Form state — only fields shown on this form
@@ -102,7 +103,7 @@ export default function EnquirePage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} noValidate>
+            <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} noValidate>
               {/* Honeypot — hidden from real users */}
               <div className="hidden" aria-hidden="true">
                 <input

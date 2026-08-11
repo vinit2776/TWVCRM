@@ -24,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { ChevronRight, Minus, Plus, Check, Loader2 } from "lucide-react";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { SpaceUnit, SpaceUnitType, LocationFloor } from "@/types";
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -523,7 +524,7 @@ export function SpaceUnitFormDialog({
 
   // ── Edit mode render ──────────────────────────────────────────────────────
   const EditForm = () => (
-    <form onSubmit={handleEditSubmit} className="space-y-4">
+    <form onSubmit={handleEditSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label>Name *</Label>

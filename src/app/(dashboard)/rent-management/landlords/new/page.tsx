@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { preventEnterSubmit } from "@/lib/utils";
 
 export default function NewLandlordPage() {
   const router = useRouter();
@@ -76,7 +77,7 @@ export default function NewLandlordPage() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
         <Card>
           <CardHeader><CardTitle className="text-base">Basic Details</CardTitle></CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">

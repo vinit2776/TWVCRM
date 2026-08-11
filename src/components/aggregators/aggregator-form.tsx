@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { createAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { Aggregator } from "@/types";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
@@ -92,7 +93,7 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Basic Info */}
       <Card>
         <CardHeader>

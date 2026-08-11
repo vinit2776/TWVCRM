@@ -32,6 +32,7 @@ import {
   SYSTEM_LEAD_STATUSES,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
+import { preventEnterSubmit } from "@/lib/utils";
 import { useState } from "react";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
@@ -119,7 +120,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit, onFormError)} className="space-y-8">
+    <form onSubmit={handleSubmit(onFormSubmit, onFormError)} onKeyDown={preventEnterSubmit} className="space-y-8">
       {/* Action buttons */}
       <div className="flex items-center justify-end gap-2 sticky top-0 bg-background z-10 pb-4 border-b">
         <Button type="button" variant="outline" onClick={onCancel}>

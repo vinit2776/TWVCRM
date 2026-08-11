@@ -31,6 +31,7 @@ import {
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { ActivityType } from "@/types";
 
 interface ActivityFormProps {
@@ -151,7 +152,7 @@ export function ActivityForm({
         <DialogHeader>
           <DialogTitle>Log Activity</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>Activity Type</Label>
             <Select

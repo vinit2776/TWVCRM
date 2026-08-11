@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { preventEnterSubmit } from "@/lib/utils";
 
 const WORKSPACE_TYPES = [
   { value: "hot_desk",        label: "Hot Desk" },
@@ -143,7 +144,7 @@ export default function WalkInEnquirePage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} noValidate>
+            <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} noValidate>
               {/* Honeypot — hidden from real users */}
               <div className="hidden" aria-hidden="true">
                 <input

@@ -52,7 +52,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { USER_ROLE_LABELS } from "@/lib/constants";
-import { getInitials, formatDate } from "@/lib/utils";
+import { getInitials, formatDate, preventEnterSubmit } from "@/lib/utils";
 import type { User as UserType } from "@/types";
 import { toast } from "sonner";
 import { UserActivityLogDialog } from "@/components/team/user-activity-log";
@@ -966,7 +966,7 @@ export default function TeamPage() {
               <DialogHeader>
                 <DialogTitle>Add Team Member</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleCreateUser} className="space-y-4">
+              <form onSubmit={handleCreateUser} onKeyDown={preventEnterSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="create-name">
                     Full Name <span className="text-destructive">*</span>
@@ -1129,7 +1129,7 @@ export default function TeamPage() {
                   )}
                 </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleChangePassword} className="space-y-4">
+              <form onSubmit={handleChangePassword} onKeyDown={preventEnterSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="new-password">
                     New Password <span className="text-destructive">*</span>
@@ -1186,7 +1186,7 @@ export default function TeamPage() {
               Edit User
             </DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleEditUser} className="space-y-4">
+          <form onSubmit={handleEditUser} onKeyDown={preventEnterSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="edit-name">
                 Full Name <span className="text-destructive">*</span>

@@ -21,7 +21,7 @@ import {
 import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-selector";
 import type { Proposal, Lead } from "@/types";
@@ -463,7 +463,7 @@ export function CreateContractDialog({
         <DialogHeader>
           <DialogTitle>Create Membership Agreement</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           {/* Section 1: Linked Proposal (mandatory) */}
           <div className="space-y-3">
             <Label className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
