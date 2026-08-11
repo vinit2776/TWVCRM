@@ -122,6 +122,27 @@ export interface InboxInvoice {
   lead: InboxLead | null;
 }
 
+export interface InboxAggregator {
+  id: string;
+  name: string;
+  primary_email: string | null;
+  primary_phone: string | null;
+  gst_number: string | null;
+}
+
+/** Owner of a per-case Virtual Office statement (prepaid aggregator or direct
+ *  client) — no contract or proposal exists, always gst_direct (no PI). */
+export interface InboxCase {
+  id: string;
+  case_number: string;
+  client_name: string;
+  client_company_name: string | null;
+  client_email: string | null;
+  client_phone: string | null;
+  client_gst_number: string | null;
+  aggregator: InboxAggregator | null;
+}
+
 export interface InboxPayment {
   id: string;
   amount: number;
@@ -215,6 +236,10 @@ export interface InboxRow {
   contract: InboxContract | null;
   proposal: InboxProposal | null;
   invoice: InboxInvoice | null;
+  /** Per-case VO statement (prepaid aggregator / direct client). */
+  case: InboxCase | null;
+  /** Postpaid aggregator consolidated statement (many cases bundled). */
+  aggregator: InboxAggregator | null;
   latest_upload: InboxUpload | null;
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;

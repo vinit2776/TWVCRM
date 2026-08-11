@@ -104,7 +104,12 @@ export async function GET(req: NextRequest) {
         lead:leads!proforma_invoices_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number, billing_emails
         )
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
     `);
 
   if (singleId) {
@@ -204,6 +209,17 @@ export async function GET(req: NextRequest) {
         gst_number: string | null;
       } | null;
     } | null;
+    case: {
+      id: string;
+      case_number: string;
+      client_name: string;
+      client_company_name: string | null;
+      client_email: string | null;
+      client_phone: string | null;
+      client_gst_number: string | null;
+      aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
+    } | null;
+    aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
   }>;
 
   // JS post-filter for search. The result set is already capped (closed=200,
@@ -236,6 +252,14 @@ export async function GET(req: NextRequest) {
           s.invoice?.lead?.first_name ?? "",
           s.invoice?.lead?.last_name ?? "",
           s.invoice?.lead?.email ?? "",
+          s.case?.case_number ?? "",
+          s.case?.client_name ?? "",
+          s.case?.client_company_name ?? "",
+          s.case?.client_email ?? "",
+          s.case?.client_gst_number ?? "",
+          s.case?.aggregator?.name ?? "",
+          s.aggregator?.name ?? "",
+          s.aggregator?.gst_number ?? "",
         ];
         return haystack.some((h) => h.toLowerCase().includes(lc));
       })
@@ -398,7 +422,10 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(stateChangedAt)) / 3_600_000));
     const bucket = bucketFor(s.handoff_state, hasDiscrepancy) ?? "in_flight";
 
-    const customerHasGstin = !!(s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number);
+    const customerHasGstin = !!(
+      s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number ??
+      s.case?.aggregator?.gst_number ?? s.case?.client_gst_number ?? s.aggregator?.gst_number
+    );
     const payments = paymentsByStatement.get(s.id) ?? [];
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const isVoided = !!s.voided_at;
@@ -465,6 +492,8 @@ export async function GET(req: NextRequest) {
             lead: s.invoice.lead,
           }
         : null,
+      case: s.case,
+      aggregator: s.aggregator,
       latest_upload: upload,
       latest_snapshot: snapshot,
       has_discrepancy: hasDiscrepancy,
