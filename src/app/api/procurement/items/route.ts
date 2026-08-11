@@ -6,7 +6,7 @@ import { z } from "zod";
 const createItemSchema = z.object({
   name: z.string().min(1, "Item name is required"),
   department: z.enum(["pantry", "maintenance", "administration", "asset"]),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
   item_type: z.enum(["goods", "service"]).default("goods"),
   standard_price: z.number().min(0).optional(),
   gst_rate: z.number().min(0).max(28).default(0),

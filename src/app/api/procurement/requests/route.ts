@@ -8,7 +8,7 @@ const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
   item_name: z.string().min(1),
   quantity: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
 });
