@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
-import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
+import { checkInternalNote } from "@/lib/validate-internal-note";
 
 export async function GET(
   _request: NextRequest,
@@ -36,6 +37,10 @@ export async function PATCH(
   const body = await request.json();
   const allowedFields: Record<string, unknown> = {};
 
+  // Fetched up front (rather than just before the update) because the internal-note
+  // re-check below needs the invoice's current accounting head/title for context.
+  const { data: oldInvoice } = await supabase.from("proforma_invoices").select("*").eq("id", id).single();
+
   if (body.status) allowedFields.status = body.status;
   if (body.paid_at) allowedFields.paid_at = body.paid_at;
   if (body.payment_reference) allowedFields.payment_reference = body.payment_reference;
@@ -52,14 +57,27 @@ export async function PATCH(
     if (typeof body.internal_notes !== "string" || body.internal_notes.trim().length < 10) {
       return NextResponse.json({ error: "Internal note must be at least 10 characters" }, { status: 400 });
     }
-    allowedFields.internal_notes = body.internal_notes.trim();
+    const trimmedNote = body.internal_notes.trim();
+    // Same AI grading as invoice creation — re-run on every edit so a note can't be
+    // tightened down to something vague post-creation with no pushback.
+    const effectiveHead = (body.primary_head !== undefined ? body.primary_head : oldInvoice?.primary_head) as
+      | AccountingHead
+      | null
+      | undefined;
+    const noteCheck = await checkInternalNote({
+      note: trimmedNote,
+      accountingHead: effectiveHead ? ACCOUNTING_HEAD_LABELS[effectiveHead] : undefined,
+      context: oldInvoice?.title,
+    });
+    if (noteCheck.status === "rejected") {
+      return NextResponse.json({ error: noteCheck.reason }, { status: 400 });
+    }
+    allowedFields.internal_notes = trimmedNote;
   }
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
-
-  const { data: oldInvoice } = await supabase.from("proforma_invoices").select("*").eq("id", id).single();
 
   const { data, error } = await supabase
     .from("proforma_invoices")

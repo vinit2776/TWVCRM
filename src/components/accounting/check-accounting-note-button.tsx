@@ -12,10 +12,13 @@ interface CheckAccountingNoteButtonProps {
 }
 
 /**
- * Advisory-only wording check for internal accounting notes (ad-hoc invoices,
- * security deposit requests, deposit top-ups). Never blocks submission —
- * failures/timeouts degrade silently, same as the "Improve wording"
- * suggestion button this mirrors (src/components/billing/improve-wording-button.tsx).
+ * Manual "check my wording before I submit" button for internal accounting
+ * notes. This button itself never blocks anything — failures/timeouts degrade
+ * silently — but the same grading is enforced server-side on submit for
+ * ad-hoc invoices (create and edit), so a form using this button may still
+ * reject the note at submit time even if this button reported no issues were
+ * found (submit re-checks the final text, which could differ from what was
+ * checked here).
  */
 export function CheckAccountingNoteButton({ note, accountingHead, context }: CheckAccountingNoteButtonProps) {
   const [loading, setLoading] = useState(false);
