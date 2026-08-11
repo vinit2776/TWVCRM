@@ -6,7 +6,7 @@
 -- non-voided billing_statement_cases row exists for it.
 
 CREATE TABLE billing_statement_cases (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   billing_statement_id UUID NOT NULL REFERENCES billing_statements(id) ON DELETE CASCADE,
   case_id UUID NOT NULL REFERENCES cases(id) ON DELETE RESTRICT,
   amount DECIMAL(12,2) NOT NULL,
