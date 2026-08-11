@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Nested worktrees under .claude/worktrees/ each have their own
+    // .next/out/build output — root-anchored globs above don't match
+    // those nested paths, so ESLint would otherwise crawl into and try
+    // to lint another worktree's generated/minified build artifacts.
+    ".claude/worktrees/**",
   ]),
   {
     rules: {
