@@ -20,6 +20,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   PROCUREMENT_DEPARTMENTS,
+  ITEM_CATALOG_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
   ITEM_UNITS,
@@ -29,7 +30,7 @@ import {
   GST_RATE_LABELS,
 } from "@/lib/constants";
 import { toast } from "sonner";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, apiErrorMessage } from "@/lib/utils";
 import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -204,7 +205,7 @@ export default function CatalogPage() {
       fetchItems();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || (editItem ? "Failed to update item" : "Failed to add item"));
+      toast.error(apiErrorMessage(err?.error, editItem ? "Failed to update item" : "Failed to add item"));
     }
     setSaving(false);
   }
@@ -258,7 +259,7 @@ export default function CatalogPage() {
       fetchItems();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to activate item");
+      toast.error(apiErrorMessage(err?.error, "Failed to activate item"));
     }
     setActivating(false);
   }
@@ -665,7 +666,7 @@ export default function CatalogPage() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {PROCUREMENT_DEPARTMENTS.map((d) => (
+                    {ITEM_CATALOG_DEPARTMENTS.map((d) => (
                       <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
                     ))}
                   </SelectContent>
