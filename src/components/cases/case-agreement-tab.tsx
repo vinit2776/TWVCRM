@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -23,6 +25,7 @@ import {
   Eye,
   Pencil,
   RefreshCw,
+  Stamp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
@@ -33,11 +36,15 @@ interface CaseAgreementTabProps {
 }
 
 export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [acting, setActing] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
   const [viewing, setViewing] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -255,7 +262,42 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
     }
   };
 
+  const handleStampSignSeal = async () => {
+    if (!agreement) return;
+    setStampConfirmOpen(false);
+    setStampingSignSeal(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/agreement/stamp-sign-seal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to stamp agreement");
+      }
+      const { data } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        data?.stamp_reference
+          ? `Agreement stamped with company sign & seal (${data.stamp_reference})`
+          : "Agreement stamped with company sign & seal"
+      );
+      fetchAgreement();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to stamp agreement");
+    } finally {
+      setStampingSignSeal(false);
+    }
+  };
+
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
+  const canStampSignSeal =
+    userRole === "admin" &&
+    !!agreement &&
+    !agreement.signed_document_id &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"].includes(
+      agreement.status
+    );
 
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading proposal...</div>;
@@ -452,6 +494,22 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               </Button>
             )}
 
+            {canStampSignSeal && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setStampConfirmOpen(true)}
+                disabled={stampingSignSeal}
+              >
+                {stampingSignSeal ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Stamp className="mr-2 h-4 w-4" />
+                )}
+                Stamp with company seal
+              </Button>
+            )}
+
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
         </CardContent>
@@ -576,6 +634,35 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
             <Button onClick={handleSaveEdit} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & Regenerate PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={setStampConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Stamp with company seal?</DialogTitle>
+            <DialogDescription>
+              This regenerates the agreement with TWV&apos;s signature and seal applied,
+              marks it executed, and saves it as the signed document for{" "}
+              {agreement?.agreement_number || "this agreement"}. This does not go through
+              Digio and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStampConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Stamp & save"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -24,6 +24,7 @@ import {
   Copy,
   Check,
   Pencil,
+  Stamp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -99,6 +100,8 @@ export default function ContractDetailPage({
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
@@ -255,13 +258,14 @@ export default function ContractDetailPage({
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = async (): Promise<string> => {
+  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string }): Promise<string> => {
     if (!contract) return "";
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      options
     );
     const arrayBuffer = doc.output("arraybuffer");
     const bytes = new Uint8Array(arrayBuffer);
@@ -350,6 +354,33 @@ export default function ContractDetailPage({
       }
     } finally {
       setUploadingSignedDoc(false);
+    }
+  };
+
+  const handleStampSignSeal = async () => {
+    if (!contract) return;
+    setStampConfirmOpen(false);
+    setStampingSignSeal(true);
+    try {
+      const { generateStampReference } = await import("@/lib/company-stamp");
+      const stampRef = generateStampReference();
+      const pdfBase64 = await handleGeneratePDFBase64({ applyCompanyStamp: true, stampRef });
+      const res = await fetch(`/api/contracts/${id}/stamp-sign-seal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64, stampRef }),
+      });
+      if (res.ok) {
+        toast.success(`Contract stamped with company sign & seal (${stampRef})`);
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to stamp contract");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to stamp contract");
+    } finally {
+      setStampingSignSeal(false);
     }
   };
 
@@ -1351,6 +1382,22 @@ export default function ContractDetailPage({
                   )}
                 </div>
               )}
+              {!contract.signed_document && userRole === "admin" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full mt-2"
+                  onClick={() => setStampConfirmOpen(true)}
+                  disabled={stampingSignSeal || uploadingSignedDoc}
+                >
+                  {stampingSignSeal ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Stamp className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Stamp with company seal
+                </Button>
+              )}
               {!contract.signed_document && contract.status === "active" && (
                 <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
@@ -1772,6 +1819,36 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Terminate"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={setStampConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Stamp with company seal?</DialogTitle>
+            <DialogDescription>
+              This generates the membership agreement with TWV&apos;s signature and seal
+              applied, and saves it as the signed contract for {contract.contract_number}.
+              This does not go through Leegality and cannot be undone from here — to
+              replace it afterward, use the &quot;Replace&quot; option on the Signed
+              Contract card.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStampConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Stamp & save"
               )}
             </Button>
           </DialogFooter>
