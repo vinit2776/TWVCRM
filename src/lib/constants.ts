@@ -1648,6 +1648,14 @@ export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
 /**
+ * Departments a catalog item can be tagged with. Excludes "reimbursement" (a
+ * billing treatment, not an item category — see items API) and "amc" (annual
+ * service contracts, not one-off purchasable goods). Matches the department
+ * enum accepted by POST/PATCH /api/procurement/items.
+ */
+export const ITEM_CATALOG_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+
+/**
  * Departments whose items are physical, movable stock — the only ones that can
  * appear in Inventory and be transferred / consumed. Administration (office
  * supplies, utility bills) and AMC (service contracts) are excluded: they are
