@@ -71,7 +71,12 @@ export async function POST(
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone)
     `)
     .eq("id", id)
     .maybeSingle();
@@ -132,10 +137,45 @@ export async function POST(
         phone: string | null;
       } | null;
     } | null;
+    case: {
+      id: string;
+      case_number: string;
+      bill_to: "aggregator" | "client" | null;
+      client_name: string;
+      client_company_name: string | null;
+      client_email: string | null;
+      client_phone: string | null;
+      aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null } | null;
+    } | null;
+    aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null } | null;
   };
 
-  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
-  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
+  /** Mirrors leadFromVoSource in upload-gst-invoice/route.ts. */
+  function leadFromVoSource(s: typeof statement) {
+    if (s.case) {
+      const billToAggregator = s.case.bill_to === "aggregator" ? s.case.aggregator : null;
+      if (billToAggregator) {
+        return {
+          id: billToAggregator.id, first_name: null, last_name: null, company: billToAggregator.name,
+          email: billToAggregator.primary_email, billing_emails: null, mobile: billToAggregator.primary_phone, phone: null,
+        };
+      }
+      return {
+        id: s.case.id, first_name: null, last_name: null, company: s.case.client_company_name ?? s.case.client_name,
+        email: s.case.client_email, billing_emails: null, mobile: s.case.client_phone, phone: null,
+      };
+    }
+    if (s.aggregator) {
+      return {
+        id: s.aggregator.id, first_name: null, last_name: null, company: s.aggregator.name,
+        email: s.aggregator.primary_email, billing_emails: null, mobile: s.aggregator.primary_phone, phone: null,
+      };
+    }
+    return null;
+  }
+
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? statement.case?.case_number ?? statement.aggregator?.name ?? "";
+  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead ?? leadFromVoSource(statement);
 
   // D3 (deliver once): refuse to re-dispatch a statement that's already gone out.
   if (statement.tally_delivered_at) {

@@ -860,6 +860,13 @@ export interface BillingStatement {
   contract?: Contract;
   lead_id: string;
   lead?: Lead;
+  // Virtual Office owners — set instead of contract_id for VO statements.
+  // case_id: per-case invoice (prepaid aggregator / direct client).
+  // aggregator_id: postpaid consolidated invoice (many cases bundled).
+  case_id?: string | null;
+  case?: VoCase;
+  aggregator_id?: string | null;
+  aggregator?: Aggregator;
   period_start: string;
   period_end: string;
   fixed_amount: number;
@@ -896,7 +903,7 @@ export interface BillingStatement {
   primary_head?: string | null;
   // Auto-proforma split: 'combined' (legacy), 'rent' (auto-dispatched), 'usage' (admin review),
   // 'reimbursement' (manually billed from an approved reimbursement purchase_request)
-  statement_type?: 'combined' | 'rent' | 'usage' | 'electricity' | 'reimbursement' | null;
+  statement_type?: 'combined' | 'rent' | 'usage' | 'electricity' | 'reimbursement' | 'vo_renewal' | 'vo_case' | 'vo_aggregator_consolidated' | null;
   // Set when statement_type === 'reimbursement' — traces back to the purchase_request it was billed from
   source_pr_id?: string | null;
   // Proforma tracking
@@ -1809,8 +1816,13 @@ export type AggInvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelle
 export interface VoCase {
   id: string;
   case_number: string;
-  aggregator_id: string;
+  // Direct clients (no aggregator referral) have aggregator_id = null.
+  case_source?: 'aggregator' | 'direct';
+  aggregator_id?: string | null;
   aggregator?: Aggregator;
+  // Prepaid-aggregator cases only: who the per-case invoice bills. Set
+  // explicitly per case (varies case to case), no default.
+  bill_to?: 'aggregator' | 'client' | null;
   aggregator_contact_id?: string;
   aggregator_contact?: AggregatorContact;
   location_id?: string;
@@ -1993,11 +2005,29 @@ export interface CaseEmail {
   created_at: string;
 }
 
+/** One case included in a postpaid aggregator consolidated billing_statements
+ *  row. Replaces the JSONB-only snapshot AggregatorInvoice.items provides —
+ *  a case is "billed for a period" iff a non-voided row exists here. */
+export interface BillingStatementCase {
+  id: string;
+  billing_statement_id: string;
+  case_id: string;
+  case?: VoCase;
+  amount: number;
+  pro_rated_days?: number | null;
+  total_days?: number | null;
+  created_at: string;
+}
+
 export interface AggregatorInvoice {
   id: string;
   invoice_number: string;
   aggregator_id: string;
   aggregator?: Aggregator;
+  // Links to the billing_statements row that actually feeds Accounts
+  // Receivable / Tally Inbox. Null for invoices created before this link
+  // existed — intentionally not backfilled.
+  billing_statement_id?: string | null;
   period_month: number;
   period_year: number;
   status: AggInvoiceStatus;

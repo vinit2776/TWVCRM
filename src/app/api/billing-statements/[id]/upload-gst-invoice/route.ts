@@ -115,7 +115,12 @@ export async function POST(
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
     `)
     .eq("id", id)
     .maybeSingle();
@@ -179,11 +184,55 @@ export async function POST(
         phone: string | null;
       } | null;
     } | null;
+    case: {
+      id: string;
+      case_number: string;
+      bill_to: "aggregator" | "client" | null;
+      client_name: string;
+      client_company_name: string | null;
+      client_email: string | null;
+      client_phone: string | null;
+      client_gst_number: string | null;
+      aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
+    } | null;
+    aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
   };
 
-  const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? "unknown";
-  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
-  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
+  /** Synthesizes the same lead-like shape (email/company/name/mobile/gst_number)
+   *  used elsewhere in this route from a VO case or aggregator-consolidated
+   *  statement, so the rest of the function doesn't need a branch per source. */
+  function leadFromVoSource(s: typeof statement) {
+    if (s.case) {
+      const billToAggregator = s.case.bill_to === "aggregator" ? s.case.aggregator : null;
+      if (billToAggregator) {
+        return {
+          id: billToAggregator.id, gst_number: billToAggregator.gst_number,
+          first_name: null, last_name: null, company: billToAggregator.name,
+          email: billToAggregator.primary_email, billing_emails: null,
+          mobile: billToAggregator.primary_phone, phone: null,
+        };
+      }
+      return {
+        id: s.case.id, gst_number: s.case.client_gst_number,
+        first_name: null, last_name: null, company: s.case.client_company_name ?? s.case.client_name,
+        email: s.case.client_email, billing_emails: null,
+        mobile: s.case.client_phone, phone: null,
+      };
+    }
+    if (s.aggregator) {
+      return {
+        id: s.aggregator.id, gst_number: s.aggregator.gst_number,
+        first_name: null, last_name: null, company: s.aggregator.name,
+        email: s.aggregator.primary_email, billing_emails: null,
+        mobile: s.aggregator.primary_phone, phone: null,
+      };
+    }
+    return null;
+  }
+
+  const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? statement.case?.id ?? statement.aggregator?.id ?? "unknown";
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? statement.case?.case_number ?? statement.aggregator?.name ?? "";
+  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead ?? leadFromVoSource(statement);
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
   // Compare at whole-rupee level — Razorpay collects in paise and the stored

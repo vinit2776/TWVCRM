@@ -69,18 +69,54 @@ interface InvoiceRef {
   internal_notes?: string | null;
 }
 
-/** Normalizes a row's owner (contract, proposal PI, or ad-hoc lead invoice) into
- *  one shape so the UI doesn't need a branch per site. */
+interface AggregatorRef {
+  id: string;
+  name: string;
+  primary_email?: string | null;
+  primary_phone?: string | null;
+  gst_number?: string | null;
+}
+
+interface CaseRef {
+  id: string;
+  case_number: string;
+  client_name: string;
+  client_company_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  client_gst_number?: string | null;
+  aggregator?: AggregatorRef | null;
+}
+
+/** Synthesizes a Lead-shaped object from a Virtual Office case or aggregator so
+ *  customerName()/candidateRecipients() work unchanged for these new sources. */
+function leadFromCase(c: CaseRef): Lead {
+  const billTo = c.aggregator ?? null;
+  return {
+    id: c.id,
+    company: billTo?.name ?? c.client_company_name ?? c.client_name,
+    email: billTo?.primary_email ?? c.client_email ?? undefined,
+    phone: billTo?.primary_phone ?? c.client_phone ?? undefined,
+  };
+}
+
+function leadFromAggregator(a: AggregatorRef): Lead {
+  return { id: a.id, company: a.name, email: a.primary_email ?? undefined, phone: a.primary_phone ?? undefined };
+}
+
+/** Normalizes a row's owner (contract, proposal PI, ad-hoc lead invoice, VO
+ *  case, or postpaid aggregator consolidated invoice) into one shape so the
+ *  UI doesn't need a branch per site. */
 interface Party {
   id: string;
   number: string;
   lead?: Lead;
   href: string;
   isProposal: boolean;
-  kind: "contract" | "proposal" | "invoice" | "unknown";
+  kind: "contract" | "proposal" | "invoice" | "case" | "aggregator" | "unknown";
 }
 
-function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null; invoice?: InvoiceRef | null }): Party {
+function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null; invoice?: InvoiceRef | null; case?: CaseRef | null; aggregator?: AggregatorRef | null }): Party {
   if (row.contract) {
     return { id: row.contract.id, number: row.contract.contract_number, lead: row.contract.lead, href: `/contracts/${row.contract.id}`, isProposal: false, kind: "contract" };
   }
@@ -89,6 +125,12 @@ function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null
   }
   if (row.invoice) {
     return { id: row.invoice.id, number: row.invoice.invoice_number, lead: row.invoice.lead, href: `/leads/${row.invoice.lead?.id ?? ""}`, isProposal: false, kind: "invoice" };
+  }
+  if (row.case) {
+    return { id: row.case.id, number: row.case.case_number, lead: leadFromCase(row.case), href: `/cases/${row.case.id}`, isProposal: false, kind: "case" };
+  }
+  if (row.aggregator) {
+    return { id: row.aggregator.id, number: row.aggregator.name, lead: leadFromAggregator(row.aggregator), href: `/aggregators/${row.aggregator.id}`, isProposal: false, kind: "aggregator" };
   }
   return { id: "", number: "—", lead: undefined, href: "#", isProposal: false, kind: "unknown" };
 }
@@ -118,6 +160,8 @@ interface ReceivableRow {
   contract: Contract | null;
   proposal?: ProposalRef | null;
   invoice?: InvoiceRef | null;
+  case?: CaseRef | null;
+  aggregator?: AggregatorRef | null;
 }
 
 interface Summary {
@@ -164,9 +208,11 @@ function customerName(lead?: Lead): string {
 
 /** gst_direct contracts never have a proforma stage — the invoice route is
  *  the contract's billing_mode, not just whether a GST invoice number has
- *  been generated yet (which can lag behind for a brand-new statement). */
-function isGstRoute(row: Pick<ReceivableRow, "gst_invoice_number" | "contract">): boolean {
-  return row.contract?.billing_mode === "gst_direct" || !!row.gst_invoice_number;
+ *  been generated yet (which can lag behind for a brand-new statement).
+ *  Virtual Office statements (case- or aggregator-owned) are always
+ *  gst_direct — there is no proforma stage for VO, by design. */
+function isGstRoute(row: Pick<ReceivableRow, "gst_invoice_number" | "contract" | "case" | "aggregator">): boolean {
+  return row.contract?.billing_mode === "gst_direct" || !!row.case || !!row.aggregator || !!row.gst_invoice_number;
 }
 
 /** Primary contact email + lead billing_emails, deduped, primary first. */

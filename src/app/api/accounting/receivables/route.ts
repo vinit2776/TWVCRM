@@ -50,7 +50,12 @@ export async function GET(_req: NextRequest) {
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number, primary_head, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
     `)
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])

@@ -166,7 +166,12 @@ async function notifyAccountsOfHandoffTransition(
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        case_number, client_name, client_company_name, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(name)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(name)
     `)
     .eq("id", statementId)
     .maybeSingle();
@@ -188,13 +193,26 @@ async function notifyAccountsOfHandoffTransition(
       invoice_number: string | null;
       lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
     } | null;
+    case: {
+      case_number: string;
+      client_name: string;
+      client_company_name: string | null;
+      bill_to: "aggregator" | "client" | null;
+      aggregator: { name: string } | null;
+    } | null;
+    aggregator: { name: string } | null;
   };
 
   const party = statement.contract ?? statement.proposal ?? statement.invoice;
-  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "—";
+  const partyRef =
+    statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number
+    ?? statement.case?.case_number ?? statement.aggregator?.name ?? "—";
   const partyName =
     party?.lead?.company
     || [party?.lead?.first_name, party?.lead?.last_name].filter(Boolean).join(" ")
+    || (statement.case?.bill_to === "aggregator" ? statement.case?.aggregator?.name : undefined)
+    || statement.case?.client_company_name || statement.case?.client_name
+    || statement.aggregator?.name
     || "(unnamed customer)";
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
@@ -204,7 +222,7 @@ async function notifyAccountsOfHandoffTransition(
     <p>${intimation.body}</p>
     <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Customer</td><td><strong>${escapeHtml(partyName)}</strong></td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal" : "Invoice"}</td><td>${escapeHtml(partyRef)}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal" : statement.invoice ? "Invoice" : statement.case ? "Case" : "Aggregator"}</td><td>${escapeHtml(partyRef)}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Statement</td><td>${escapeHtml(statement.statement_number ?? "—")}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Amount</td><td><strong>${formatCurrency(Number(statement.total_amount))}</strong></td></tr>
     </table>
@@ -253,6 +271,8 @@ export async function handleStatementPaid(
       total_amount,
       proposal_id,
       invoice_id,
+      case_id,
+      aggregator_id,
       contract:contracts!billing_statements_contract_id_fkey(billing_mode)
     `)
     .eq("id", statementId)
@@ -270,8 +290,22 @@ export async function handleStatementPaid(
   const billingMode = contract?.billing_mode;
   const proposalId = (statement as unknown as { proposal_id: string | null }).proposal_id;
   const invoiceId = (statement as unknown as { invoice_id: string | null }).invoice_id;
+  const caseId = (statement as unknown as { case_id: string | null }).case_id;
+  const aggregatorId = (statement as unknown as { aggregator_id: string | null }).aggregator_id;
 
   const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
+
+  // Virtual Office statements (per-case or aggregator-consolidated) are
+  // always gst_direct-shaped — no contract, no proposal, no PI. The GST
+  // invoice is already issued (via Tally handoff) by the time payment lands.
+  if (caseId || aggregatorId) {
+    if (currentState === "gst_sent_awaiting_payment") {
+      await setHandoffState(supabase, statementId, "complete", trigger);
+      return;
+    }
+    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger);
+    return;
+  }
 
   // A statement created from a proposal's first-month PI has no contract yet
   // (and therefore no billing_mode) — it is definitionally a proforma-first
