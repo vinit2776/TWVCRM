@@ -428,18 +428,21 @@ export async function PATCH(
     );
   }
 
-  // Prepaid aggregators require an approved Payment Proof document before
-  // the Leave & License Agreement can be executed.
+  // Prepaid aggregators and direct clients (no aggregator) both require an
+  // approved Payment Proof document before the Leave & License Agreement
+  // can be executed. TODO(Slice 2): replace this manual-proof check with a
+  // real invoice's payment_status once per-case VO invoicing ships.
   if (action === "mark_executed" && currentAgreement.type === "leave_license") {
     const { data: caseRow } = await supabase
       .from("cases")
-      .select("aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
+      .select("aggregator_id, aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
       .eq("id", caseId)
       .single();
 
     const aggregator = caseRow?.aggregator as { billing_method?: string } | null;
+    const requiresPaymentProof = !caseRow?.aggregator_id || aggregator?.billing_method === "prepaid";
 
-    if (aggregator?.billing_method === "prepaid") {
+    if (requiresPaymentProof) {
       const { data: paymentProof } = await supabase
         .from("case_documents")
         .select("status")
@@ -449,7 +452,11 @@ export async function PATCH(
 
       if (!paymentProof || paymentProof.status !== "approved") {
         return NextResponse.json(
-          { error: "This aggregator is prepaid — Payment Proof must be uploaded and approved (Documents tab) before this agreement can be executed." },
+          {
+            error: caseRow?.aggregator_id
+              ? "This aggregator is prepaid — Payment Proof must be uploaded and approved (Documents tab) before this agreement can be executed."
+              : "Direct-client cases require an approved Payment Proof (Documents tab) before this agreement can be executed.",
+          },
           { status: 400 }
         );
       }

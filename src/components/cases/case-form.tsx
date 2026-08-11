@@ -53,6 +53,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   } = useForm<CreateCaseInput>({
     resolver: zodResolver(createCaseSchema),
     defaultValues: {
+      case_source: caseData?.case_source || "aggregator",
       aggregator_id: caseData?.aggregator_id || "",
       purpose: caseData?.purpose || "gst_registration",
       client_name: caseData?.client_name || "",
@@ -77,6 +78,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
     },
   });
 
+  const caseSource = watch("case_source");
   const entityType = watch("client_entity_type");
   const purpose = watch("purpose");
   const startDate = watch("start_date");
@@ -113,26 +115,50 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Aggregator *</Label>
+              <Label>Referral Source *</Label>
               <Select
-                value={watch("aggregator_id")}
-                onValueChange={(val) => setValue("aggregator_id", val)}
+                value={caseSource}
+                onValueChange={(val) => {
+                  setValue("case_source", val as CreateCaseInput["case_source"]);
+                  if (val === "direct") {
+                    setValue("aggregator_id", "");
+                    setValue("aggregator_contact_id", "");
+                  }
+                }}
+                disabled={!!caseData}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select aggregator" />
+                  <SelectValue placeholder="Select source" />
                 </SelectTrigger>
                 <SelectContent>
-                  {aggregators.map((agg) => (
-                    <SelectItem key={agg.id} value={agg.id}>
-                      {agg.name} ({agg.code})
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="aggregator">Aggregator</SelectItem>
+                  <SelectItem value="direct">Direct Client</SelectItem>
                 </SelectContent>
               </Select>
-              {errors.aggregator_id && (
-                <p className="text-sm text-red-500">{errors.aggregator_id.message}</p>
-              )}
             </div>
+            {caseSource === "aggregator" && (
+              <div className="space-y-2">
+                <Label>Aggregator *</Label>
+                <Select
+                  value={watch("aggregator_id")}
+                  onValueChange={(val) => setValue("aggregator_id", val)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select aggregator" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {aggregators.map((agg) => (
+                      <SelectItem key={agg.id} value={agg.id}>
+                        {agg.name} ({agg.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.aggregator_id && (
+                  <p className="text-sm text-red-500">{errors.aggregator_id.message}</p>
+                )}
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Purpose *</Label>
               <Select
@@ -261,9 +287,17 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Monthly Rate (INR)</Label>
-              <Input type="number" {...register("rate", { valueAsNumber: true })} placeholder="Auto-fills from rate card if blank" />
-              <p className="text-xs text-muted-foreground">Leave blank to use aggregator rate card</p>
+              <Label>Monthly Rate (INR) {caseSource === "direct" && "*"}</Label>
+              <Input
+                type="number"
+                {...register("rate", { valueAsNumber: true })}
+                placeholder={caseSource === "direct" ? "Required — no rate card for direct clients" : "Auto-fills from rate card if blank"}
+              />
+              {caseSource === "aggregator" ? (
+                <p className="text-xs text-muted-foreground">Leave blank to use aggregator rate card</p>
+              ) : (
+                errors.rate && <p className="text-sm text-red-500">{errors.rate.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Tenure (months)</Label>

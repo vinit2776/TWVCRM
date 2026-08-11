@@ -144,15 +144,22 @@ export async function POST(request: NextRequest) {
       status: "pending" as const,
     }));
 
-    // Prepaid aggregators require an approved Payment Proof before the
-    // Leave & License Agreement can be executed (see agreement/route.ts).
-    const { data: aggregatorRow } = await supabase
-      .from("aggregators")
-      .select("billing_method")
-      .eq("id", result.data.aggregator_id)
-      .single();
+    // Prepaid aggregators and direct clients both require a paid invoice
+    // before the Leave & License Agreement can execute (see agreement/route.ts).
+    // A Payment Proof document is still seeded here as the pre-Slice-2
+    // manual gate; Slice 2 replaces the check itself with a real invoice's
+    // payment status.
+    let requiresPaymentProof = result.data.case_source === "direct";
+    if (result.data.case_source === "aggregator" && result.data.aggregator_id) {
+      const { data: aggregatorRow } = await supabase
+        .from("aggregators")
+        .select("billing_method")
+        .eq("id", result.data.aggregator_id)
+        .single();
+      requiresPaymentProof = aggregatorRow?.billing_method === "prepaid";
+    }
 
-    if (aggregatorRow?.billing_method === "prepaid") {
+    if (requiresPaymentProof) {
       docRows.push({
         case_id: data.id,
         document_type: "payment_proof",

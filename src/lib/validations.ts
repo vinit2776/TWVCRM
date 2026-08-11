@@ -613,8 +613,11 @@ export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
 // ==========================================
 // Case (Virtual Office) Validations
 // ==========================================
-export const createCaseSchema = z.object({
-  aggregator_id: z.string().uuid("Invalid aggregator ID"),
+const caseFieldsSchema = z.object({
+  // Direct clients (no referral aggregator) have aggregator_id omitted —
+  // enforced by the refine() below, not by this field alone.
+  case_source: z.enum(["aggregator", "direct"]).default("aggregator"),
+  aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
@@ -641,7 +644,21 @@ export const createCaseSchema = z.object({
   assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
 });
 
-export const updateCaseSchema = createCaseSchema.partial();
+export const createCaseSchema = caseFieldsSchema
+  .refine((data) => data.case_source !== "aggregator" || !!data.aggregator_id, {
+    message: "aggregator_id is required for aggregator-referred cases",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || !!data.aggregator_id === false, {
+    message: "Direct-client cases must not have an aggregator_id",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || data.rate !== undefined, {
+    message: "Rate must be entered manually for direct-client cases (no rate card to pull from)",
+    path: ["rate"],
+  });
+
+export const updateCaseSchema = caseFieldsSchema.partial();
 export type CreateCaseInput = z.input<typeof createCaseSchema>;
 export type UpdateCaseInput = z.input<typeof updateCaseSchema>;
 
