@@ -13,6 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
@@ -121,11 +122,11 @@ export default function CaseDetailPage({
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono">{caseData.case_number}</span>
-              {aggregator && (
-                <>
-                  <span>|</span>
-                  <span>{aggregator.name}</span>
-                </>
+              <span>|</span>
+              {aggregator ? (
+                <span>{aggregator.name}</span>
+              ) : (
+                <Badge variant="outline">Direct Client</Badge>
               )}
             </div>
           </div>
