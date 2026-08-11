@@ -503,7 +503,7 @@ export function CreateContractDialog({
                     </p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
                       <span className="text-muted-foreground">Monthly fee</span>
-                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.total_amount)}</span>
+                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.subtotal ?? selectedProposal.total_amount)}</span>
                       {selectedProposal.tax_percentage > 0 && (
                         <>
                           <span className="text-muted-foreground">GST ({selectedProposal.tax_percentage}%)</span>
@@ -516,6 +516,8 @@ export function CreateContractDialog({
                           <span className="font-medium tabular-nums text-green-700">−{formatCurrency(selectedProposal.discount_amount)}</span>
                         </>
                       )}
+                      <span className="text-muted-foreground pt-1 border-t border-[#015E65]/10 font-semibold">Total</span>
+                      <span className="font-semibold tabular-nums pt-1 border-t border-[#015E65]/10">{formatCurrency(selectedProposal.total_amount)}</span>
                     </div>
                     {proposalComplimentaryItems.length > 0 && (
                       <div className="pt-1 border-t border-[#015E65]/10 space-y-1">
