@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 /**
  * POST /api/proposals/[id]/deposit-payment-link
@@ -10,6 +11,11 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  * WhatsApp the customer — mirrors /payment-link's "get or create" role
  * for the deposit, so the link shows up on the proposal page as soon as
  * it can be generated, without requiring an explicit send first.
+ *
+ * Called automatically by the proposal detail page on every view, so
+ * notify.sms/email must stay false — Razorpay sends its own SMS/email the
+ * instant a link is created with notify:true and a customer contact
+ * attached. Deliberate customer notification is the job of /deposit-link.
  */
 export async function POST(
   _request: NextRequest,
@@ -19,6 +25,9 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id").eq("auth_id", user.id).single();
 
   const { data: proposal, error: fetchError } = await supabase
     .from("proposals")
@@ -80,7 +89,9 @@ export async function POST(
     description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
     reference_id: `${proposal.proposal_number}-DEP-${Date.now()}`,
     expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
-    notify: { sms: !!customerPhone, email: !!customerEmail },
+    // Never auto-notify — this route is also called silently on every page
+    // view. Actual customer notification happens only via /deposit-link.
+    notify: { sms: false, email: false },
     reminder_enable: true,
     notes: { proposal_id: id, proposal_number: proposal.proposal_number, type: "security_deposit" },
     callback_url: `${appUrl}/proposals`,
@@ -118,6 +129,17 @@ export async function POST(
         deposit_razorpay_link_url: depositLinkUrl,
       })
       .eq("id", id);
+
+    logAudit(supabase, {
+      entityType: "proposal",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser?.id || null,
+      changes: {
+        deposit_razorpay_link_id: { old: null, new: depositLinkId },
+        deposit_razorpay_link_url: { old: null, new: depositLinkUrl },
+      },
+    });
 
     return NextResponse.json({
       deposit_razorpay_link_url: depositLinkUrl,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 /**
  * POST /api/proposals/[id]/payment-link
@@ -7,6 +8,15 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  * Creates a Razorpay payment link for the proposal if one doesn't exist.
  * Returns the existing link if already created. Allows the PDF download
  * to include the payment link without requiring the proposal to be emailed.
+ *
+ * This is also called automatically by the proposal detail page on every
+ * view (to have the link ready before an explicit send), so notify.sms/email
+ * must stay false — Razorpay sends its own SMS/email the instant a link is
+ * created with notify:true and a customer contact attached, which would
+ * put a live payment link in the customer's hands from a page view alone,
+ * bypassing both the explicit "Send" action and the zero-deposit waiver
+ * gate (which only disables the Send/Download buttons, not this route).
+ * Customer notification is the deliberate job of the send flows.
  */
 export async function POST(
   _request: NextRequest,
@@ -16,6 +26,9 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id").eq("auth_id", user.id).single();
 
   const { data: proposal, error: fetchError } = await supabase
     .from("proposals")
@@ -70,7 +83,10 @@ export async function POST(
     description: `Proposal ${proposal.proposal_number} — ${proposal.title} — The WorkVilla`,
     reference_id: proposal.proposal_number,
     expire_by: expireBy,
-    notify: { sms: !!customerPhone, email: !!customerEmail },
+    // Never auto-notify — this route is also called silently on every page
+    // view. Actual customer notification happens only via the explicit send
+    // flows (email-proposal, deposit-link, send-invoice).
+    notify: { sms: false, email: false },
     reminder_enable: true,
     notes: { proposal_id: id, proposal_number: proposal.proposal_number, lead_id: proposal.lead_id },
     callback_url: `${appUrl}/proposals`,
@@ -109,6 +125,17 @@ export async function POST(
         razorpay_payment_link_url: razorpayLinkUrl,
       })
       .eq("id", id);
+
+    logAudit(supabase, {
+      entityType: "proposal",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser?.id || null,
+      changes: {
+        razorpay_payment_link_id: { old: null, new: razorpayLinkId },
+        razorpay_payment_link_url: { old: null, new: razorpayLinkUrl },
+      },
+    });
 
     return NextResponse.json({
       razorpay_payment_link_url: razorpayLinkUrl,
