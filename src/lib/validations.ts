@@ -594,6 +594,7 @@ export const createAggregatorSchema = z.object({
   commission_percentage: z.number().min(0).max(100).default(0),
   default_rate_card: z.record(z.string(), z.number()).default({}),
   billing_method: z.enum(["postpaid", "prepaid"]).default("postpaid"),
+  billing_mode: z.enum(["proforma_first", "gst_direct"]).default("gst_direct"),
   credit_limit: z.number().min(0).optional(),
   notes: z.string().optional(),
   tags: z.array(z.string()).default([]),

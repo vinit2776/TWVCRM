@@ -289,6 +289,7 @@ export default function AggregatorDetailPage({
                   aggregatorId={id}
                   creditLimit={aggregator.credit_limit}
                   primaryEmail={aggregator.primary_email}
+                  billingMode={aggregator.billing_mode}
                 />
               </CardContent>
             </Card>
