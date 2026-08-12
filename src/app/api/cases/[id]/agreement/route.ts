@@ -8,6 +8,7 @@ import {
 } from "@/lib/agreement-generator";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * GET: Get agreement details with a signed URL for viewing the PDF
@@ -434,34 +435,9 @@ export async function PATCH(
   // "approved Payment Proof document" gate with the real, Tally-issued
   // invoice's payment status.
   if (action === "mark_executed" && currentAgreement.type === "leave_license") {
-    const { data: caseRow } = await supabase
-      .from("cases")
-      .select("aggregator_id, aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
-      .eq("id", caseId)
-      .single();
-
-    const aggregator = caseRow?.aggregator as { billing_method?: string } | null;
-    const requiresPaidInvoice = !caseRow?.aggregator_id || aggregator?.billing_method === "prepaid";
-
-    if (requiresPaidInvoice) {
-      const { data: statement } = await supabase
-        .from("billing_statements")
-        .select("payment_status")
-        .eq("case_id", caseId)
-        .eq("statement_type", "vo_case")
-        .is("voided_at", null)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!statement || statement.payment_status !== "paid") {
-        return NextResponse.json(
-          {
-            error: "An invoice must be generated and paid before this agreement can be executed. Use \"Generate Invoice\" on the case, then have accounts issue the Tally GST invoice and the customer pay it.",
-          },
-          { status: 400 }
-        );
-      }
+    const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+    if (gateError) {
+      return NextResponse.json({ error: gateError }, { status: 400 });
     }
   }
 
