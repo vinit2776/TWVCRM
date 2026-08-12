@@ -7,7 +7,7 @@
  */
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
+import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS, KYC_DOCUMENTS } from "@/lib/constants";
 import {
   BRAND_TEAL,
   BRAND_DARK,
@@ -194,38 +194,8 @@ function getTermsOfUsagePurpose(purpose: VoPurpose): string {
 }
 
 function getRequiredDocuments(entityType: EntityType): string[][] {
-  const docs: Record<string, string[][]> = {
-    individual: [
-      ["1", "Aadhar Card"],
-      ["2", "PAN Card"],
-      ["3", "Cancelled cheque"],
-      ["4", "GST Certificate"],
-    ],
-    company: [
-      ["1", "PAN Card for Company"],
-      ["2", "Certificate of Incorporation"],
-      ["3", "Board Resolution in favour of the authorized Signatory executing the membership agreement"],
-      ["4", "MOA & AOA"],
-      ["5", "KYC (Pan Card & Aadhar card) of all the Directors"],
-      ["6", "Cancelled cheque"],
-      ["7", "GST Certificate"],
-    ],
-    partnership: [
-      ["1", "Partnership Agreement / registration certificate if Partnership is registered"],
-      ["2", "Authority letter in favour of the person executing the membership agreement"],
-      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
-      ["4", "Cancelled cheque"],
-      ["5", "GST Certificate"],
-    ],
-    llp: [
-      ["1", "LLP Agreement / registration certificate if LLP is registered"],
-      ["2", "LLP PAN Card"],
-      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
-      ["4", "Cancelled cheque"],
-      ["5", "GST Certificate"],
-    ],
-  };
-  return docs[entityType] || docs.individual;
+  const docs = KYC_DOCUMENTS[entityType] || KYC_DOCUMENTS.other;
+  return docs.map((label, i) => [String(i + 1), label]);
 }
 
 // ================================================================
