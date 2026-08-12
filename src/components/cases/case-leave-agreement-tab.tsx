@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -30,6 +32,7 @@ import {
   CheckCircle2,
   XCircle,
   Activity,
+  Stamp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
@@ -51,6 +54,8 @@ interface CaseLeaveAgreementTabProps {
 }
 
 export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +69,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [healthLoading, setHealthLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
+  const [stampPreviewLoading, setStampPreviewLoading] = useState(false);
+  const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
+  const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
@@ -402,7 +412,75 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  const closeStampPreview = () => {
+    setStampConfirmOpen(false);
+    if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    setStampPreviewUrl(null);
+    setStampPreviewRef(null);
+  };
+
+  const handleOpenStampPreview = async () => {
+    if (!agreement) return;
+    setStampPreviewLoading(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/preview-stamp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate preview");
+      }
+      const { pdfBase64, stampRef } = await res.json();
+      const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      setStampPreviewUrl(blobUrl);
+      setStampPreviewRef(stampRef);
+      setStampConfirmOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate preview");
+    } finally {
+      setStampPreviewLoading(false);
+    }
+  };
+
+  const handleStampSignSeal = async () => {
+    if (!agreement || !stampPreviewRef) return;
+    setStampingSignSeal(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/stamp-sign-seal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id, stampRef: stampPreviewRef }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to stamp agreement");
+      }
+      const { data } = await res.json().catch(() => ({ data: null }));
+      toast.success(
+        data?.stamp_reference
+          ? `Agreement stamped with company sign & seal (${data.stamp_reference})`
+          : "Agreement stamped with company sign & seal"
+      );
+      closeStampPreview();
+      fetchAgreement();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to stamp agreement");
+    } finally {
+      setStampingSignSeal(false);
+    }
+  };
+
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
+  const canStampSignSeal =
+    userRole === "admin" &&
+    !!agreement &&
+    !agreement.signed_document_id &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"].includes(
+      agreement.status
+    );
 
   if (loading) {
     return <div className="text-center py-8 text-muted-foreground">Loading agreement...</div>;
@@ -638,6 +716,22 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               </Button>
             )}
 
+            {canStampSignSeal && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleOpenStampPreview}
+                disabled={stampPreviewLoading}
+              >
+                {stampPreviewLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Stamp className="mr-2 h-4 w-4" />
+                )}
+                Stamp with company seal
+              </Button>
+            )}
+
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
         </CardContent>
@@ -799,6 +893,42 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             <Button onClick={handleUploadSignedDocument} disabled={uploading}>
               {uploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Upload & Mark Executed
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Preview: stamp with company seal</DialogTitle>
+            <DialogDescription>
+              This is exactly what will be saved as the signed Leave &amp; License Agreement —
+              TWV&apos;s signature and seal applied in the Lessor field, ref {stampPreviewRef}.
+              Review it before confirming. This marks the agreement executed, does not go
+              through Leegality, and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {stampPreviewUrl && (
+            <iframe
+              src={stampPreviewUrl}
+              className="w-full h-[500px] rounded-md border"
+              title="Stamped Leave & License Agreement preview"
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeStampPreview}>
+              Cancel
+            </Button>
+            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Confirm & save"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
