@@ -64,10 +64,21 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
 
 function partyDisplay(row: InboxRow): string {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
-  if (!lead) return "(unknown party)";
-  if (lead.company) return lead.company;
-  const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
-  return name || lead.email || "(unnamed)";
+  if (lead) {
+    if (lead.company) return lead.company;
+    const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
+    return name || lead.email || "(unnamed)";
+  }
+  // Per-case VO statements (prepaid aggregator / direct client) carry no
+  // lead — they use the case's own client fields instead.
+  if (row.case) {
+    return row.case.client_company_name || row.case.client_name || "(unnamed)";
+  }
+  // Postpaid aggregator consolidated statements carry no lead either.
+  if (row.aggregator) {
+    return row.aggregator.name || "(unnamed)";
+  }
+  return "(unknown party)";
 }
 
 function bucketBadgeClass(bucket: HandoffBucket, hasDiscrepancy: boolean): string {
