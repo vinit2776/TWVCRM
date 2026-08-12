@@ -478,19 +478,21 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     y += 4.5 * urlLines.length;
     doc.setFontSize(8);
 
-    // "PAY NOW" clickable button
+    // "PAY NOW" clickable button — width sized to the actual text so it
+    // never clips (a fixed 28mm was too narrow for "PAY NOW →" at 8pt bold).
     if (isProforma) {
-      const btnW = 28;
+      const btnLabel = "PAY NOW →";
       const btnH = 7;
       const btnX = 14;
       const btnY = y;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      const btnW = doc.getTextWidth(btnLabel) + 10;
       // Green filled button
       doc.setFillColor(0, 160, 95);
       doc.roundedRect(btnX, btnY, btnW, btnH, 1.5, 1.5, "F");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8);
       doc.setTextColor(255, 255, 255);
-      doc.text("PAY NOW →", btnX + btnW / 2, btnY + 4.8, { align: "center" });
+      doc.text(btnLabel, btnX + btnW / 2, btnY + 4.8, { align: "center" });
       // Make the button area a clickable hyperlink
       doc.link(btnX, btnY, btnW, btnH, { url: data.razorpayUrl });
       y += btnH + 3;

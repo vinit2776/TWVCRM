@@ -40,7 +40,7 @@ export async function POST(
   const { data: caseRow, error: caseError } = await adminSupabase
     .from("cases")
     .select(
-      "id, rate, start_date, case_source, bill_to, billing_mode, client_gst_number, client_name, client_company_name, aggregator:aggregators!cases_aggregator_id_fkey(gst_number, same_state_as_twv, billing_method, billing_mode)"
+      "id, rate, start_date, tenure_months, case_source, bill_to, billing_mode, client_gst_number, client_name, client_company_name, aggregator:aggregators!cases_aggregator_id_fkey(gst_number, same_state_as_twv, billing_method, billing_mode)"
     )
     .eq("id", caseId)
     .single();
@@ -64,6 +64,7 @@ export async function POST(
       id: caseRow.id,
       rate: caseRow.rate,
       start_date: caseRow.start_date,
+      tenure_months: caseRow.tenure_months,
       case_source: caseRow.case_source,
       bill_to: caseRow.bill_to,
       billing_mode: caseRow.billing_mode,
