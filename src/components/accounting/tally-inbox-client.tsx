@@ -94,6 +94,80 @@ function bucketLabel(bucket: HandoffBucket): string {
   }
 }
 
+function paymentStatusBadge(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "paid":
+      return { label: "Paid", cls: "bg-green-50 text-green-800 border-green-200" };
+    case "partially_paid":
+      return { label: "Partially paid", cls: "bg-amber-50 text-amber-800 border-amber-200" };
+    case "unpaid":
+      return { label: "Unpaid", cls: "bg-muted/60 text-muted-foreground border-transparent" };
+    default:
+      return { label: status, cls: "bg-muted/60 text-muted-foreground border-transparent" };
+  }
+}
+
+/**
+ * "All open" groups rows by the action a user would actually click next,
+ * instead of raw last-updated order. One group per action button already
+ * on the row (canUpload / canSend / canRecordPayment / canMarkAccounted),
+ * plus discrepancies pulled to the top since those block everything else.
+ * Mirrors INBOX_ACTIONABLE_STATES — every open row belongs to exactly one
+ * group (discrepancy overrides state).
+ */
+type ActionGroupKey = "discrepancy" | "upload_gst" | "send_to_customer" | "record_payment" | "mark_accounted";
+
+const ACTION_GROUPS: { key: ActionGroupKey; title: string; caption: string; wrapCls: string }[] = [
+  {
+    key: "discrepancy",
+    title: "Discrepancies to resolve",
+    caption: "Amount, name, or GST number doesn't match what Tally expects. Always cleared first.",
+    wrapCls: "bg-red-50/60 border-red-200",
+  },
+  {
+    key: "upload_gst",
+    title: "Upload GST invoice",
+    caption: "Payment's in, or GST was requested direct — issue the invoice in Tally and upload it here.",
+    wrapCls: "bg-blue-50/60 border-blue-200",
+  },
+  {
+    key: "send_to_customer",
+    title: "Send to customer",
+    caption: "GST invoice is uploaded and name-matched — one click sends it on.",
+    wrapCls: "bg-violet-50/60 border-violet-200",
+  },
+  {
+    key: "record_payment",
+    title: "Record payment",
+    caption: "Customer already has the invoice. Bank statement in hand? Log it here.",
+    wrapCls: "bg-amber-50/60 border-amber-200",
+  },
+  {
+    key: "mark_accounted",
+    title: "Mark as accounted",
+    caption: "GST already sent and payment already collected via the PI — just needs closing out.",
+    wrapCls: "bg-green-50/60 border-green-200",
+  },
+];
+
+function getRowActionGroup(row: InboxRow): ActionGroupKey {
+  if (row.has_discrepancy) return "discrepancy";
+  switch (row.handoff_state) {
+    case "pi_paid_awaiting_gst":
+    case "direct_gst_requested":
+      return "upload_gst";
+    case "ready_to_send":
+      return "send_to_customer";
+    case "gst_sent_awaiting_payment":
+    case "paid_awaiting_receipt_record":
+      return "record_payment";
+    case "gst_sent":
+      return "mark_accounted";
+    default:
+      return "upload_gst";
+  }
+}
+
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
   const diffMs = Date.now() - Date.parse(iso);
@@ -132,6 +206,12 @@ export function TallyInboxClient() {
   const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
+  // "All open" action-group collapse state, keyed by ActionGroupKey. Only
+  // set when a user explicitly toggles a group — undefined falls back to
+  // "open if non-empty" in the render, so newly-populated groups (e.g. a
+  // discrepancy appearing) open on their own without clobbering a group the
+  // user deliberately collapsed.
+  const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
   // Completion confirmations — kept visible until the user dismisses them,
   // even after the underlying row drops out of the "open" list.
   const [completions, setCompletions] = useState<CompletionInfo[]>([]);
@@ -612,6 +692,19 @@ export function TallyInboxClient() {
     return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy);
   }, [data, tab]);
 
+  // Only meaningful on the "All open" tab, where rows needing five different
+  // actions are otherwise interleaved by last-updated order. visibleRows is
+  // already search-filtered (server-side), so grouping it directly keeps
+  // groups in sync with the search box for free.
+  const groupedRows = useMemo(() => {
+    const map = new Map<ActionGroupKey, InboxRow[]>();
+    for (const g of ACTION_GROUPS) map.set(g.key, []);
+    for (const row of visibleRows) {
+      map.get(getRowActionGroup(row))!.push(row);
+    }
+    return map;
+  }, [visibleRows]);
+
   const visibleBookingRows = useMemo(() => {
     if (!data?.booking_rows) return [];
     const br = data.booking_rows;
@@ -621,6 +714,28 @@ export function TallyInboxClient() {
     if (tab === "gst_to_issue") return br.filter((r) => r.bucket === "gst_to_issue" && !r.has_discrepancy && r.handoff_state !== "complete");
     return [];
   }, [data, tab]);
+
+  // Shared row renderer so the flat list and the grouped-by-action sections
+  // (both below) render identical rows — same props, same handlers.
+  const renderStatementRow = (row: InboxRow) => (
+    <InboxRowItem
+      key={row.statement_id}
+      row={row}
+      expanded={expandedId === row.statement_id}
+      sending={sendingId === row.statement_id}
+      closing={closingId === row.statement_id}
+      resending={resendingId === row.statement_id}
+      sentConfirmed={sentConfirmedId === row.statement_id}
+      onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
+      onSend={() => handleSend(row.statement_id, row)}
+      onClose={() => handleAccounted(row.statement_id)}
+      onResend={() => handleResend(row.statement_id)}
+      onUploaded={handleUploaded}
+      onCancelUpload={() => setExpandedId(null)}
+      onGstinUpdated={() => void load()}
+      onRecordPayment={() => openPayDialog(row)}
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -763,45 +878,60 @@ export function TallyInboxClient() {
           {completions.map((c) => (
             <CompletionBanner key={c.id} completion={c} onDismiss={() => dismissCompletion(c.id)} />
           ))}
-          <ul className="rounded-lg border overflow-hidden divide-y" role="list">
-            {activeType === "contracts" && visibleRows.map((row) => (
-              <InboxRowItem
-                key={row.statement_id}
-                row={row}
-                expanded={expandedId === row.statement_id}
-                sending={sendingId === row.statement_id}
-                closing={closingId === row.statement_id}
-                resending={resendingId === row.statement_id}
-                sentConfirmed={sentConfirmedId === row.statement_id}
-                onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
-                onSend={() => handleSend(row.statement_id, row)}
-                onClose={() => handleAccounted(row.statement_id)}
-                onResend={() => handleResend(row.statement_id)}
-                onUploaded={handleUploaded}
-                onCancelUpload={() => setExpandedId(null)}
-                onGstinUpdated={() => void load()}
-                onRecordPayment={() => openPayDialog(row)}
-              />
-            ))}
-            {activeType === "bookings" && visibleBookingRows.map((row) => (
-              <BookingInboxRowItem
-                key={row.task_id}
-                row={row}
-                expanded={expandedBookingId === row.task_id}
-                sending={sendingBookingId === row.task_id}
-                closing={closingBookingId === row.task_id}
-                resending={resendingBookingId === row.task_id}
-                sentConfirmed={sentConfirmedBookingId === row.task_id}
-                onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
-                onSend={() => handleBookingSend(row.task_id, row)}
-                onClose={() => handleBookingClose(row.task_id)}
-                onResend={() => handleBookingResend(row.task_id)}
-                onUploaded={handleUploaded}
-                onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
-                onCancelUpload={() => setExpandedBookingId(null)}
-              />
-            ))}
-          </ul>
+          {activeType === "contracts" && tab === "all" ? (
+            <div className="space-y-2">
+              {ACTION_GROUPS.map((g) => {
+                const rows = groupedRows.get(g.key) ?? [];
+                if (rows.length === 0) return null;
+                const isOpen = groupOverrides[g.key] ?? true;
+                return (
+                  <div key={g.key} className={`rounded-lg border p-2.5 ${g.wrapCls}`}>
+                    <button
+                      type="button"
+                      onClick={() => setGroupOverrides((prev) => ({ ...prev, [g.key]: !isOpen }))}
+                      aria-expanded={isOpen}
+                      className="w-full flex items-baseline gap-2 py-1 text-left"
+                    >
+                      <span className="text-sm font-semibold">{g.title}</span>
+                      <span className="text-xs text-muted-foreground">({rows.length})</span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 ml-auto text-muted-foreground flex-shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                        aria-hidden
+                      />
+                    </button>
+                    <p className="text-xs text-muted-foreground mb-2">{g.caption}</p>
+                    {isOpen && (
+                      <ul className="rounded-lg border overflow-hidden divide-y bg-background" role="list">
+                        {rows.map(renderStatementRow)}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <ul className="rounded-lg border overflow-hidden divide-y" role="list">
+              {activeType === "contracts" && visibleRows.map(renderStatementRow)}
+              {activeType === "bookings" && visibleBookingRows.map((row) => (
+                <BookingInboxRowItem
+                  key={row.task_id}
+                  row={row}
+                  expanded={expandedBookingId === row.task_id}
+                  sending={sendingBookingId === row.task_id}
+                  closing={closingBookingId === row.task_id}
+                  resending={resendingBookingId === row.task_id}
+                  sentConfirmed={sentConfirmedBookingId === row.task_id}
+                  onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
+                  onSend={() => handleBookingSend(row.task_id, row)}
+                  onClose={() => handleBookingClose(row.task_id)}
+                  onResend={() => handleBookingResend(row.task_id)}
+                  onUploaded={handleUploaded}
+                  onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
+                  onCancelUpload={() => setExpandedBookingId(null)}
+                />
+              ))}
+            </ul>
+          )}
           {tab === "closed" && activeType === "contracts" && (
             <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
               <span>Page {closedPage} · {visibleRows.length} records</span>
@@ -1389,8 +1519,16 @@ function InboxRowItem({
           {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
         </div>
 
-        {/* ── Line 3 ── pills: GSTIN · IRN req · Tally · period */}
+        {/* ── Line 3 ── pills: payment status · GSTIN · IRN req · Tally · period */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+          {(() => {
+            const ps = paymentStatusBadge(row.payment_status);
+            return (
+              <span className={`px-1.5 py-0.5 rounded border font-medium ${ps.cls}`} title="Payment status">
+                {ps.label}
+              </span>
+            );
+          })()}
           {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number) ? (
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
               {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number}
@@ -1607,15 +1745,15 @@ function InboxRowItem({
         />
       )}
       {paymentOpen && row.payments_received.length > 0 && (
-        <>
-          <StatementPaymentPanel payments={row.payments_received} totalAmount={row.statement_total_amount} />
-          {row.handoff_state === "pi_paid_awaiting_gst" && (
-            <div className="px-4 py-2 flex items-center gap-1.5 text-xs text-green-800 bg-green-50 border-t border-green-100">
-              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" aria-hidden />
-              Payment confirmed — issue the GST invoice in Tally, then upload it here.
-            </div>
-          )}
-        </>
+        <StatementPaymentPanel
+          payments={row.payments_received}
+          totalAmount={row.statement_total_amount}
+          nextStepMessage={
+            row.handoff_state === "pi_paid_awaiting_gst"
+              ? "Statement fully paid — issue the GST invoice in Tally, then upload it here."
+              : undefined
+          }
+        />
       )}
     </li>
   );
@@ -1626,9 +1764,11 @@ function InboxRowItem({
 function StatementPaymentPanel({
   payments,
   totalAmount,
+  nextStepMessage,
 }: {
   payments: InboxPayment[];
   totalAmount: number;
+  nextStepMessage?: string;
 }) {
   const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
   const isFullyPaid = Math.abs(totalPaid - totalAmount) < 0.5;
@@ -1713,6 +1853,12 @@ function StatementPaymentPanel({
           );
         })}
       </div>
+      {nextStepMessage && (
+        <div className="mt-2 pt-2 border-t border-green-200 flex items-center gap-1.5 text-green-800">
+          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" aria-hidden />
+          {nextStepMessage}
+        </div>
+      )}
     </div>
   );
 }

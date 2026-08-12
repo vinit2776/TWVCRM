@@ -5,7 +5,7 @@ import {
   bucketFor,
   bucketForBooking,
   HANDOFF_STATE_LABELS,
-  INBOX_OPEN_STATES,
+  INBOX_ACTIONABLE_STATES,
   isInboxRole,
   type BookingHandoffState,
   type BookingInboxRow,
@@ -24,7 +24,9 @@ import {
  *
  * Read-only feed for the Accounts Inbox page. Returns:
  *   - stats: counts by bucket (gst to issue, payments to record, discrepancies, aging)
- *   - rows: open handoff items (handoff_state IS NOT NULL AND <> 'complete')
+ *   - rows: actionable handoff items (open states minus `pi_awaiting_payment`,
+ *           which has no available action here and is tracked in Accounts
+ *           Receivable instead — see INBOX_ACTIONABLE_STATES)
  *           enriched with contract + lead + latest upload + latest tally snapshot match
  *   - last_synced_at: most recent tally_voucher_snapshots.last_synced_at (or null)
  *
@@ -123,7 +125,7 @@ export async function GET(req: NextRequest) {
       .order("updated_at", { ascending: false })
       .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
-    query = query.in("handoff_state", INBOX_OPEN_STATES as readonly string[])
+    query = query.in("handoff_state", INBOX_ACTIONABLE_STATES as readonly string[])
       .is("voided_at", null)
       .order("updated_at", { ascending: true });
   }

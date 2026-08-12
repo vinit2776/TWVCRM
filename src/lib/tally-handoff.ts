@@ -71,6 +71,24 @@ export function bucketFor(state: HandoffState | null | undefined, hasDiscrepancy
 /** States that should be visible on the inbox by default (everything except complete). */
 export const INBOX_OPEN_STATES: HandoffState[] = HANDOFF_STATES.filter((s) => s !== "complete") as HandoffState[];
 
+/**
+ * States worth showing on the interactive Tally Inbox worklist itself.
+ * Excludes states that have no available action in the inbox UI — pure
+ * spectate/wait states, not something accounts can act on from this page:
+ *   - `pi_awaiting_payment`: can't issue a GST invoice before payment, and
+ *     can't record the payment from here either. Tracked for follow-up in
+ *     Accounts Receivable instead.
+ *   - `name_check_pending`: set right after a GST invoice upload while the
+ *     bridge/name-check job runs; no manual approve/override action exists
+ *     in the inbox, it resolves on its own once the check completes.
+ * `INBOX_OPEN_STATES` (all non-complete states) is still used as-is for the
+ * digest cron, which is about reminding accounts of pending items, not
+ * about worklist actionability.
+ */
+export const INBOX_ACTIONABLE_STATES: HandoffState[] = INBOX_OPEN_STATES.filter(
+  (s) => s !== "pi_awaiting_payment" && s !== "name_check_pending"
+);
+
 /** Roles permitted to see the inbox. */
 export const INBOX_ROLES = ["accounts", "admin", "office_admin", "manager"] as const;
 export type InboxRole = (typeof INBOX_ROLES)[number];
