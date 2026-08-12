@@ -2030,6 +2030,12 @@ export interface AggregatorInvoice {
   // Receivable / Tally Inbox. Null for invoices created before this link
   // existed — intentionally not backfilled.
   billing_statement_id?: string | null;
+  billing_statement?: {
+    id: string;
+    statement_number: string | null;
+    handoff_state: string | null;
+    payment_status: string;
+  } | null;
   period_month: number;
   period_year: number;
   status: AggInvoiceStatus;

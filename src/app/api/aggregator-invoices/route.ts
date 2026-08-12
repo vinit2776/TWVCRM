@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateConsolidatedInvoice } from "@/lib/aggregator-invoicing";
 import { z } from "zod";
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("aggregator_invoices")
     .select(
-      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code)",
+      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code), billing_statement:billing_statements!aggregator_invoices_billing_statement_id_fkey(id, statement_number, handoff_state, payment_status)",
       { count: "exact" }
     );
 
@@ -98,8 +98,9 @@ export async function POST(request: NextRequest) {
     .eq("auth_id", user.id)
     .single();
 
+  const adminSupabase = await createAdminClient();
   const { invoice, error, status } = await generateConsolidatedInvoice({
-    supabase,
+    supabase: adminSupabase,
     aggregatorId: aggregator_id,
     periodMonth: period_month,
     periodYear: period_year,
