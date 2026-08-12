@@ -16,6 +16,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
+import { dispatchProforma } from "@/lib/send-proforma";
 
 interface CaseForInvoicing {
   id: string;
@@ -29,6 +30,9 @@ interface CaseForInvoicing {
   aggregator: {
     gst_number: string | null;
     same_state_as_twv: boolean | null;
+    // Proforma-First vs GST-Direct — direct-client cases have no aggregator
+    // and are always gst_direct (see createCaseInvoiceStatement below).
+    billing_mode?: "proforma_first" | "gst_direct" | null;
   } | null;
 }
 
@@ -132,7 +136,9 @@ export async function createCaseInvoiceStatement(
       finalized_at: new Date().toISOString(),
       line_items: [
         {
-          section: "Virtual Office License Fee",
+          type: "prepaid_rent",
+          label: "Virtual Office License Fee",
+          subtotal,
           items: [
             {
               description: `Virtual Office License Fee${buyerName ? ` — ${buyerName}` : ""}`,
@@ -151,7 +157,19 @@ export async function createCaseInvoiceStatement(
     throw new CaseInvoicingError(`Failed to create case invoice: ${error?.message}`, 500);
   }
 
-  await handleStatementFinalized(supabase, statement.id, "gst_direct", "case_invoice_request");
+  // Direct-client cases have no aggregator to hold a billing_mode — always
+  // gst_direct. Aggregator-sourced cases honor the aggregator's choice.
+  const billingMode = caseData.case_source === "aggregator" && caseData.aggregator?.billing_mode === "proforma_first"
+    ? "proforma_first"
+    : "gst_direct";
+
+  const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
+
+  if (billingMode === "proforma_first" && !handoff.skipLegacyDispatch) {
+    await dispatchProforma(supabase, statement.id);
+  }
+  // gst_direct: no dispatch — statement sits in the Tally Inbox until an
+  // accountant uploads the real GST invoice (upload-gst-invoice/route.ts).
 
   return statement.id;
 }

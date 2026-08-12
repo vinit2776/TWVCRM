@@ -40,7 +40,7 @@ export async function POST(
   const { data: caseRow, error: caseError } = await adminSupabase
     .from("cases")
     .select(
-      "id, rate, start_date, case_source, bill_to, client_gst_number, client_name, client_company_name, aggregator:aggregators!cases_aggregator_id_fkey(gst_number, same_state_as_twv, billing_method)"
+      "id, rate, start_date, case_source, bill_to, client_gst_number, client_name, client_company_name, aggregator:aggregators!cases_aggregator_id_fkey(gst_number, same_state_as_twv, billing_method, billing_mode)"
     )
     .eq("id", caseId)
     .single();
@@ -49,7 +49,7 @@ export async function POST(
     return NextResponse.json({ error: "Case not found" }, { status: 404 });
   }
 
-  const aggregator = caseRow.aggregator as unknown as { gst_number: string | null; same_state_as_twv: boolean | null; billing_method?: string } | null;
+  const aggregator = caseRow.aggregator as unknown as { gst_number: string | null; same_state_as_twv: boolean | null; billing_method?: string; billing_mode?: "proforma_first" | "gst_direct" } | null;
 
   const eligible = caseRow.case_source === "direct" || aggregator?.billing_method === "prepaid";
   if (!eligible) {
@@ -69,7 +69,7 @@ export async function POST(
       client_gst_number: caseRow.client_gst_number,
       client_name: caseRow.client_name,
       client_company_name: caseRow.client_company_name,
-      aggregator: aggregator ? { gst_number: aggregator.gst_number, same_state_as_twv: aggregator.same_state_as_twv } : null,
+      aggregator: aggregator ? { gst_number: aggregator.gst_number, same_state_as_twv: aggregator.same_state_as_twv, billing_mode: aggregator.billing_mode } : null,
     });
 
     logAudit(supabase, {
