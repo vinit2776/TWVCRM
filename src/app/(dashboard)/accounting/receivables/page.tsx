@@ -85,13 +85,16 @@ interface CaseRef {
   client_email?: string | null;
   client_phone?: string | null;
   client_gst_number?: string | null;
+  bill_to?: "aggregator" | "client" | null;
   aggregator?: AggregatorRef | null;
 }
 
 /** Synthesizes a Lead-shaped object from a Virtual Office case or aggregator so
- *  customerName()/candidateRecipients() work unchanged for these new sources. */
+ *  customerName()/candidateRecipients() work unchanged for these new sources.
+ *  Only shows the aggregator when the case is actually billed to them —
+ *  bill_to varies case by case for prepaid aggregators. */
 function leadFromCase(c: CaseRef): Lead {
-  const billTo = c.aggregator ?? null;
+  const billTo = c.bill_to === "aggregator" ? c.aggregator : null;
   return {
     id: c.id,
     company: billTo?.name ?? c.client_company_name ?? c.client_name,
