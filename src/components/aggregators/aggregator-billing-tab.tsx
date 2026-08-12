@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -18,25 +18,32 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
-import { Plus, Loader2, AlertTriangle, FileCheck, Zap, ExternalLink } from "lucide-react";
+import { Loader2, AlertTriangle, FileCheck, Zap, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import {
-  AGG_INVOICE_STATUS_LABELS,
-  AGG_INVOICE_STATUS_COLORS,
-} from "@/lib/constants";
+import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
-import type { AggregatorInvoice, VoCase } from "@/types";
 
-const MONTH_LABELS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+interface ReferralCase {
+  id: string;
+  case_number: string;
+  client_name: string;
+  purpose: string;
+  rate: number | null;
+}
 
-const BILLABLE_CASE_STATUSES = ["active", "renewal_due", "invoiced", "executed"];
-const UNPAID_INVOICE_STATUSES = ["draft", "sent", "overdue"];
+interface BilledReferral extends ReferralCase {
+  amount: number;
+  statement: {
+    id: string;
+    statement_number: string | null;
+    handoff_state: HandoffState | null;
+    payment_status: string;
+  };
+}
 
 interface AggregatorBillingTabProps {
   aggregatorId: string;
@@ -47,14 +54,12 @@ interface AggregatorBillingTabProps {
 
 export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, billingMethod }: AggregatorBillingTabProps) {
   // Prepaid aggregators bill per-case from the case's own Billing tab
-  // (src/lib/case-invoicing.ts) — this tab's consolidated-invoice UI
-  // (Outstanding estimate, Generate Invoice, invoice history) only applies
-  // to postpaid's bundled monthly billing. Prepaid aggregators still need
-  // this tab for the Proforma/GST-Direct toggle above, just not the rest.
+  // (src/lib/case-invoicing.ts) — this tab's Referrals list only applies to
+  // postpaid's bundled monthly billing. Prepaid aggregators still need this
+  // tab for the Proforma/GST-Direct toggle above, just not the rest.
   const isPostpaid = billingMethod !== "prepaid";
-  const [invoices, setInvoices] = useState<AggregatorInvoice[]>([]);
-  const [eligibleCaseCount, setEligibleCaseCount] = useState(0);
-  const [eligibleCasesSum, setEligibleCasesSum] = useState(0);
+  const [pending, setPending] = useState<ReferralCase[]>([]);
+  const [billed, setBilled] = useState<BilledReferral[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Proforma-vs-GST-Direct billing mode — same toggle pattern as
@@ -91,34 +96,24 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
   };
 
   const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
-
-  const [generateOpen, setGenerateOpen] = useState(false);
+  const [genMonth, setGenMonth] = useState(String(now.getMonth() + 1));
+  const [genYear, setGenYear] = useState(String(now.getFullYear()));
   const [generating, setGenerating] = useState(false);
-  const [genMonth, setGenMonth] = useState(String(currentMonth));
-  const [genYear, setGenYear] = useState(String(currentYear));
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Selection defaults to "bill all" — every pending case starts checked;
+  // unchecking one carves it out as a one-off exception for this invoice
+  // (it stays in the pending pool for next time).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [invRes, caseRes] = await Promise.all([
-        fetch(`/api/aggregator-invoices?aggregator_id=${aggregatorId}&limit=50`),
-        fetch(`/api/cases?aggregator_id=${aggregatorId}&limit=100`),
-      ]);
-
-      if (invRes.ok) {
-        const json = await invRes.json();
-        setInvoices(json.data || []);
-      }
-
-      if (caseRes.ok) {
-        const json = await caseRes.json();
-        const eligible = ((json.data || []) as VoCase[]).filter((c) =>
-          BILLABLE_CASE_STATUSES.includes(c.status)
-        );
-        setEligibleCaseCount(eligible.length);
-        setEligibleCasesSum(eligible.reduce((sum, c) => sum + (c.rate || 0), 0));
+      const res = await fetch(`/api/aggregators/${aggregatorId}/billing-reconciliation`);
+      if (res.ok) {
+        const json = await res.json();
+        setPending(json.data?.pending || []);
+        setBilled(json.data?.billed || []);
       }
     } finally {
       setLoading(false);
@@ -129,18 +124,42 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
     fetchData();
   }, [fetchData]);
 
-  const currentPeriodInvoice = invoices.find(
-    (i) => i.period_month === currentMonth && i.period_year === currentYear && i.status !== "cancelled"
+  useEffect(() => {
+    setSelectedIds(new Set(pending.map((c) => c.id)));
+  }, [pending]);
+
+  const toggleCase = (caseId: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(caseId);
+      else next.delete(caseId);
+      return next;
+    });
+  };
+
+  const allSelected = pending.length > 0 && selectedIds.size === pending.length;
+  const selectedSum = pending
+    .filter((c) => selectedIds.has(c.id))
+    .reduce((sum, c) => sum + (c.rate || 0), 0);
+  const pendingSum = pending.reduce((sum, c) => sum + (c.rate || 0), 0);
+
+  // Outstanding = unpaid invoiced amount + everything still pending — the
+  // credit-limit check needs the full exposure, not just what's on an
+  // already-sent invoice.
+  const unpaidBilledSum = useMemo(
+    () => billed.filter((c) => c.statement.payment_status !== "paid").reduce((sum, c) => sum + c.amount, 0),
+    [billed],
   );
-
-  const outstanding = useMemo(() => {
-    const unpaidTotal = invoices
-      .filter((i) => UNPAID_INVOICE_STATUSES.includes(i.status))
-      .reduce((sum, i) => sum + i.total_amount, 0);
-    return unpaidTotal + (currentPeriodInvoice ? 0 : eligibleCasesSum);
-  }, [invoices, currentPeriodInvoice, eligibleCasesSum]);
-
+  const outstanding = unpaidBilledSum + pendingSum;
   const overLimit = creditLimit != null && creditLimit > 0 && outstanding >= creditLimit;
+
+  const handleOpenConfirm = () => {
+    if (selectedIds.size === 0) {
+      toast.error("Select at least one referral to invoice.");
+      return;
+    }
+    setConfirmOpen(true);
+  };
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -152,14 +171,15 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
           aggregator_id: aggregatorId,
           period_month: parseInt(genMonth),
           period_year: parseInt(genYear),
+          case_ids: Array.from(selectedIds),
         }),
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to generate invoice");
       }
-      toast.success("Invoice generated");
-      setGenerateOpen(false);
+      toast.success(`Invoice generated for ${selectedIds.size} referral(s)`);
+      setConfirmOpen(false);
       fetchData();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate invoice");
@@ -213,146 +233,191 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
 
       {isPostpaid && (
       <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="rounded-md border p-4">
-          <p className="text-xs text-muted-foreground">Outstanding (unpaid + this month&apos;s estimate)</p>
-          <p className="text-2xl font-semibold mt-1">{formatCurrency(outstanding)}</p>
-          {overLimit && (
-            <div className="flex items-center gap-1.5 text-xs text-amber-700 mt-2">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Over credit limit ({formatCurrency(creditLimit!)})
-            </div>
-          )}
-        </div>
-        <div className="rounded-md border p-4">
-          <p className="text-xs text-muted-foreground">
-            {MONTH_LABELS[currentMonth - 1]} {currentYear}
-          </p>
-          {currentPeriodInvoice ? (
-            <p className="text-sm mt-1">
-              Invoiced: <span className="font-medium">{currentPeriodInvoice.invoice_number}</span>
-            </p>
-          ) : (
-            <p className="text-sm mt-1 text-muted-foreground">
-              {eligibleCaseCount} billable case(s), not yet invoiced this month
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-muted-foreground">{invoices.length} invoice(s)</h3>
-        <Button size="sm" onClick={() => setGenerateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Generate Invoice
-        </Button>
-      </div>
-
       {loading ? (
         <div className="text-center py-8 text-muted-foreground text-sm">Loading...</div>
-      ) : invoices.length === 0 ? (
-        <div className="text-center py-8 text-muted-foreground text-sm">No invoices generated yet.</div>
       ) : (
-        <div className="rounded-md border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium">Invoice #</th>
-                <th className="px-4 py-3 text-left font-medium">Period</th>
-                <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium">Total</th>
-                <th className="px-4 py-3 text-left font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.map((inv) => (
-                <tr key={inv.id} className="border-b">
-                  <td className="px-4 py-3 font-medium">{inv.invoice_number}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {MONTH_LABELS[inv.period_month - 1]} {inv.period_year}
-                  </td>
-                  <td className="px-4 py-3">
-                    {inv.billing_statement ? (
-                      <div className="flex flex-col items-start gap-1">
-                        <Badge variant={inv.billing_statement.payment_status === "paid" ? "default" : "outline"}>
-                          {inv.billing_statement.payment_status === "paid" ? "Paid" : "Unpaid"}
-                        </Badge>
-                        {inv.billing_statement.handoff_state && (
-                          <Badge variant="outline" className="text-xs">
-                            {HANDOFF_STATE_LABELS[inv.billing_statement.handoff_state as HandoffState] ?? inv.billing_statement.handoff_state}
-                          </Badge>
-                        )}
-                      </div>
-                    ) : (
-                      // Legacy invoice from before Phase 4 — no linked billing_statement,
-                      // never dispatched or tracked through AR. Not backfilled.
-                      <Badge className={AGG_INVOICE_STATUS_COLORS[inv.status]}>
-                        {AGG_INVOICE_STATUS_LABELS[inv.status]}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 font-medium">{formatCurrency(inv.total_amount)}</td>
-                  <td className="px-4 py-3">
-                    {inv.billing_statement && (
-                      <Link
-                        href={`/accounting/inbox?id=${inv.billing_statement.id}`}
-                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                      >
-                        View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
-                      </Link>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="rounded-md border p-4">
+            <p className="text-xs text-muted-foreground">Outstanding (unpaid invoices + pending referrals)</p>
+            <p className="text-2xl font-semibold mt-1">{formatCurrency(outstanding)}</p>
+            {overLimit && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-700 mt-2">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Over credit limit ({formatCurrency(creditLimit!)})
+              </div>
+            )}
+          </div>
+
+          {/* Pending referrals */}
+          <div className="rounded-md border">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b bg-muted/30">
+              <div>
+                <h3 className="text-sm font-medium">Pending Referrals ({pending.length})</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {selectedIds.size} selected · {formatCurrency(selectedSum)} of {formatCurrency(pendingSum)}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={genMonth} onValueChange={setGenMonth}>
+                  <SelectTrigger className="w-32 h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_NAMES.map((label, idx) => (
+                      <SelectItem key={label} value={String(idx + 1)}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  value={genYear}
+                  onChange={(e) => setGenYear(e.target.value)}
+                  className="w-20 h-8 text-xs"
+                />
+                <Button size="sm" onClick={handleOpenConfirm} disabled={generating || selectedIds.size === 0}>
+                  Invoice Selected ({selectedIds.size})
+                </Button>
+              </div>
+            </div>
+
+            {pending.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-sm">No pending referrals to bill.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-2 text-left">
+                        <Checkbox
+                          checked={allSelected}
+                          onCheckedChange={(checked) =>
+                            setSelectedIds(checked ? new Set(pending.map((c) => c.id)) : new Set())
+                          }
+                        />
+                      </th>
+                      <th className="px-4 py-2 text-left font-medium">Case</th>
+                      <th className="px-4 py-2 text-left font-medium">Client</th>
+                      <th className="px-4 py-2 text-left font-medium">Purpose</th>
+                      <th className="px-4 py-2 text-right font-medium">Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pending.map((c) => (
+                      <tr key={c.id} className="border-b last:border-0">
+                        <td className="px-4 py-2">
+                          <Checkbox
+                            checked={selectedIds.has(c.id)}
+                            onCheckedChange={(checked) => toggleCase(c.id, checked === true)}
+                          />
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs">{c.case_number}</td>
+                        <td className="px-4 py-2">{c.client_name}</td>
+                        <td className="px-4 py-2 text-muted-foreground">{VO_PURPOSE_LABELS[c.purpose] ?? c.purpose}</td>
+                        <td className="px-4 py-2 text-right font-medium">{formatCurrency(c.rate || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Billed referrals */}
+          <div className="rounded-md border">
+            <div className="p-4 border-b bg-muted/30">
+              <h3 className="text-sm font-medium">Invoiced Referrals ({billed.length})</h3>
+            </div>
+            {billed.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-sm">No referrals invoiced yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-2 text-left font-medium">Case</th>
+                      <th className="px-4 py-2 text-left font-medium">Client</th>
+                      <th className="px-4 py-2 text-left font-medium">Statement</th>
+                      <th className="px-4 py-2 text-left font-medium">Status</th>
+                      <th className="px-4 py-2 text-right font-medium">Amount</th>
+                      <th className="px-4 py-2 text-left font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billed.map((c) => (
+                      <tr key={c.id} className="border-b last:border-0">
+                        <td className="px-4 py-2 font-mono text-xs">{c.case_number}</td>
+                        <td className="px-4 py-2">{c.client_name}</td>
+                        <td className="px-4 py-2 font-mono text-xs">{c.statement.statement_number ?? "—"}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge variant={c.statement.payment_status === "paid" ? "default" : "outline"}>
+                              {c.statement.payment_status === "paid" ? "Paid" : "Unpaid"}
+                            </Badge>
+                            {c.statement.handoff_state && (
+                              <Badge variant="outline" className="text-xs">
+                                {HANDOFF_STATE_LABELS[c.statement.handoff_state] ?? c.statement.handoff_state}
+                              </Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-right font-medium">{formatCurrency(c.amount)}</td>
+                        <td className="px-4 py-2">
+                          {c.statement.handoff_state ? (
+                            <Link
+                              href={`/accounting/inbox?id=${c.statement.id}`}
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
+                            >
+                              View in Tally Inbox <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">Awaiting payment</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
       </>
       )}
 
-      {/* Generate Invoice Dialog */}
-      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+      {/* Confirm before dispatching — this is a real, customer-facing action */}
+      <Dialog open={confirmOpen} onOpenChange={(open) => !generating && setConfirmOpen(open)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Generate Invoice</DialogTitle>
+            <DialogTitle>Generate invoice for {selectedIds.size} referral(s)?</DialogTitle>
+            <DialogDescription>
+              {MONTH_NAMES[parseInt(genMonth) - 1]} {genYear} · {formatCurrency(selectedSum)} subtotal
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Month</Label>
-              <Select value={genMonth} onValueChange={setGenMonth}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MONTH_LABELS.map((label, idx) => (
-                    <SelectItem key={label} value={String(idx + 1)}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Year</Label>
-              <Input
-                type="number"
-                value={genYear}
-                onChange={(e) => setGenYear(e.target.value)}
-              />
-            </div>
+          <div className="rounded-md border divide-y text-sm max-h-48 overflow-y-auto">
+            {pending
+              .filter((c) => selectedIds.has(c.id))
+              .map((c) => (
+                <div key={c.id} className="flex items-center justify-between px-3 py-2">
+                  <span>{c.case_number} — {c.client_name}</span>
+                  <span className="font-medium">{formatCurrency(c.rate || 0)}</span>
+                </div>
+              ))}
           </div>
           <p className="text-xs text-muted-foreground">
-            Pulls every active/renewal-due/invoiced/executed case for this aggregator and consolidates them into one invoice for the selected month.
+            {currentMode === "proforma_first"
+              ? "A proforma invoice will be generated and a payment link will be emailed to the aggregator immediately."
+              : "No invoice or payment link goes out yet — this queues in the Tally Inbox until an accountant issues the real GST invoice."}
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setGenerateOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={generating}>Cancel</Button>
             <Button onClick={handleGenerate} disabled={generating}>
               {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Generate
+              Confirm & Generate
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
     </div>
   );
 }

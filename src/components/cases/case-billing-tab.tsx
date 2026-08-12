@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, FileText, ExternalLink } from "lucide-react";
+import { Loader2, FileText, ExternalLink, FileCheck, Zap } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils";
@@ -24,6 +24,7 @@ interface CaseBillingTabProps {
 interface CaseBillingInfo {
   case_source: "aggregator" | "direct";
   bill_to: "aggregator" | "client" | null;
+  billing_mode: "proforma_first" | "gst_direct";
   aggregator: { billing_method?: string } | null;
 }
 
@@ -85,6 +86,26 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     }
   };
 
+  const [savingBillingMode, setSavingBillingMode] = useState(false);
+  const handleBillingModeChange = async (value: "proforma_first" | "gst_direct") => {
+    if (caseInfo?.billing_mode === value) return;
+    setSavingBillingMode(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_mode: value }),
+      });
+      if (!res.ok) throw new Error();
+      setCaseInfo((prev) => (prev ? { ...prev, billing_mode: value } : prev));
+      toast.success(value === "gst_direct" ? "GST Direct billing enabled" : "Proforma First billing enabled");
+    } catch {
+      toast.error("Failed to update billing mode");
+    } finally {
+      setSavingBillingMode(false);
+    }
+  };
+
   const handleGenerateInvoice = async () => {
     setGenerating(true);
     try {
@@ -125,6 +146,45 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
 
   return (
     <div className="space-y-4">
+      {caseInfo?.case_source === "direct" && (
+        <Card>
+          <CardContent className="py-4 space-y-2">
+            <p className="text-sm font-medium">Invoice Type</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleBillingModeChange("proforma_first")}
+                disabled={savingBillingMode || !!statement}
+                className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-60 ${
+                  caseInfo.billing_mode === "proforma_first"
+                    ? "bg-[#015E65] text-white border-[#015E65]"
+                    : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+                }`}
+              >
+                <FileCheck className="h-3.5 w-3.5 shrink-0" />
+                Proforma First
+              </button>
+              <button
+                onClick={() => handleBillingModeChange("gst_direct")}
+                disabled={savingBillingMode || !!statement}
+                className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-60 ${
+                  caseInfo.billing_mode === "gst_direct"
+                    ? "bg-violet-700 text-white border-violet-700"
+                    : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+                }`}
+              >
+                <Zap className="h-3.5 w-3.5 shrink-0" />
+                GST Direct
+              </button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {caseInfo.billing_mode === "gst_direct"
+                ? "Tax invoice issued directly · Accountant creates it in Tally, then the customer is billed · No proforma"
+                : "Proforma invoice sent immediately with a payment link · Real GST invoice issued once paid"}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {caseInfo?.case_source === "aggregator" && (
         <Card>
           <CardContent className="py-4 space-y-2">
@@ -177,12 +237,18 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   )}
                 </div>
               </div>
-              <Link
-                href={`/accounting/inbox?id=${statement.id}`}
-                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              >
-                View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
-              </Link>
+              {statement.handoff_state ? (
+                <Link
+                  href={`/accounting/inbox?id=${statement.id}`}
+                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                >
+                  View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
+                </Link>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Awaiting payment — this invoice will route to the Tally Inbox once paid.
+                </p>
+              )}
             </div>
           )}
         </CardContent>

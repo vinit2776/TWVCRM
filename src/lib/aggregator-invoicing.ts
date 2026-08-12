@@ -11,6 +11,12 @@ export interface GenerateConsolidatedInvoiceParams {
   taxPercentage?: number;
   notes?: string;
   createdBy?: string;
+  /** Explicit case selection from the Referrals list — omit to bill every
+   *  currently-billable case for the aggregator (legacy "bill all"). Cases
+   *  outside this aggregator or not in a billable status are silently
+   *  dropped, not errored — the caller's list may be stale by the time this
+   *  runs. */
+  caseIds?: string[];
 }
 
 export interface GenerateConsolidatedInvoiceResult {
@@ -32,6 +38,7 @@ export async function generateConsolidatedInvoice({
   taxPercentage = 18,
   notes,
   createdBy,
+  caseIds,
 }: GenerateConsolidatedInvoiceParams): Promise<GenerateConsolidatedInvoiceResult> {
   // Check for duplicate invoice
   const { data: existing } = await supabase
@@ -59,25 +66,37 @@ export async function generateConsolidatedInvoice({
     return { error: "Aggregator not found", status: 404 };
   }
 
-  // Get all active cases for this aggregator in the given period
-  const { data: cases } = await supabase
+  // Get billable cases for this aggregator — either the explicit selection
+  // from the Referrals list, or every currently-billable case (legacy "bill
+  // all" behavior, still used by the monthly cron).
+  let caseQuery = supabase
     .from("cases")
     .select("id, case_number, client_name, purpose, rate, tenure_months, start_date, activated_at, status")
     .eq("aggregator_id", aggregatorId)
     .in("status", ["active", "renewal_due", "invoiced", "executed"]);
 
+  if (caseIds && caseIds.length > 0) {
+    caseQuery = caseQuery.in("id", caseIds);
+  }
+
+  const { data: cases } = await caseQuery;
+
   if (!cases || cases.length === 0) {
     return {
-      error: "No active cases found for this aggregator in the period",
+      error: "No billable cases found for this aggregator in the period",
       status: 400,
     };
   }
 
   // Calculate line items with pro-rating
-  const periodStart = new Date(periodYear, periodMonth - 1, 1);
   const periodEnd = new Date(periodYear, periodMonth, 0); // Last day of month
   const totalDaysInMonth = periodEnd.getDate();
-  void periodStart;
+  // Plain string formatting for the stored period bounds — going through
+  // Date + toISOString() here would construct a LOCAL midnight and then
+  // convert to UTC, shifting the date back a day whenever the server's
+  // timezone is ahead of UTC (e.g. IST).
+  const periodStartStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`;
+  const periodEndStr = `${periodYear}-${String(periodMonth).padStart(2, "0")}-${String(totalDaysInMonth).padStart(2, "0")}`;
 
   const lineItems = cases
     .filter((c) => c.rate && c.rate > 0)
@@ -164,8 +183,8 @@ export async function generateConsolidatedInvoice({
     .from("billing_statements")
     .insert({
       aggregator_id: aggregatorId,
-      period_start: periodStart.toISOString().slice(0, 10),
-      period_end: periodEnd.toISOString().slice(0, 10),
+      period_start: periodStartStr,
+      period_end: periodEndStr,
       statement_type: "vo_aggregator_consolidated",
       created_via: "vo_aggregator_monthly",
       fixed_amount: subtotal,

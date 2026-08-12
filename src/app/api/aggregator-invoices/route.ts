@@ -10,6 +10,9 @@ const generateInvoiceSchema = z.object({
   period_year: z.number().int().min(2020).max(2100),
   tax_percentage: z.number().min(0).max(100).default(18),
   notes: z.string().optional(),
+  // Explicit case selection from the Referrals list — omit to auto-pull
+  // every currently-billable case for the aggregator ("bill all").
+  case_ids: z.array(z.string().uuid()).optional(),
 });
 
 /**
@@ -89,7 +92,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { aggregator_id, period_month, period_year, tax_percentage, notes } =
+  const { aggregator_id, period_month, period_year, tax_percentage, notes, case_ids } =
     result.data;
 
   const { data: dbUser } = await supabase
@@ -107,6 +110,7 @@ export async function POST(request: NextRequest) {
     taxPercentage: tax_percentage,
     notes,
     createdBy: dbUser?.id,
+    caseIds: case_ids,
   });
 
   if (error) {

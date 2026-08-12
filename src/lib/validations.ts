@@ -667,6 +667,9 @@ const caseFieldsSchema = z.object({
   // Prepaid-aggregator cases only: who the per-case invoice bills. Set
   // explicitly per case (varies case to case) — no create-time default.
   bill_to: z.enum(["aggregator", "client"]).optional(),
+  // Direct-client cases only (no aggregator to hold a mode) — mirrors
+  // aggregators.billing_mode.
+  billing_mode: z.enum(["proforma_first", "gst_direct"]).optional(),
 });
 
 export const createCaseSchema = caseFieldsSchema
@@ -676,6 +679,7 @@ export const createCaseSchema = caseFieldsSchema
     tenure_months: z.number().int().positive().default(12),
     security_deposit: z.number().min(0).default(0),
     tags: z.array(z.string()).default([]),
+    billing_mode: z.enum(["proforma_first", "gst_direct"]).default("proforma_first"),
   })
   .refine((data) => data.case_source !== "aggregator" || !!data.aggregator_id, {
     message: "aggregator_id is required for aggregator-referred cases",
