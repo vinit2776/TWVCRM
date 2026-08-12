@@ -15,7 +15,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { Loader2, ShieldAlert, Info, ArrowRight, AlertTriangle } from "lucide-react";
+import { Loader2, ShieldAlert, Info, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
 import { preventEnterSubmit } from "@/lib/utils";
@@ -61,9 +61,6 @@ export function InvoiceForm({
   const [notes, setNotes] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // Set when the mandatory pre-submit note check comes back with ok: false.
-  // Cleared on the next submit attempt or once the user edits the note.
-  const [noteWarning, setNoteWarning] = useState<string | null>(null);
 
   const isDeposit = primaryHead === "security_deposit";
 
@@ -76,7 +73,6 @@ export function InvoiceForm({
     setDueDate("");
     setNotes("");
     setInternalNotes("");
-    setNoteWarning(null);
   };
 
   const handleGoToProposal = () => {
@@ -120,13 +116,10 @@ export function InvoiceForm({
     }
 
     setSubmitting(true);
-    setNoteWarning(null);
 
-    // Mandatory gate: the internal note must give accounts real context before
-    // an invoice can be created — not just satisfy the length check above.
-    // If the check service itself is unavailable (unconfigured key, model error,
-    // network failure), fail OPEN so a third-party outage can't block invoicing —
-    // only an explicit ok:false from the model blocks submission.
+    // Advisory only: surfaces the AI's note-quality read as an alert, but never
+    // blocks submission — accounts can still create the invoice as-is.
+    // TODO: this used to be a mandatory gate; temporarily relaxed to alert-only.
     try {
       const checkRes = await fetch("/api/accounting/validate-internal-note", {
         method: "POST",
@@ -140,14 +133,11 @@ export function InvoiceForm({
       if (checkRes.ok) {
         const checkJson = await checkRes.json().catch(() => null);
         if (checkJson && typeof checkJson.ok === "boolean" && !checkJson.ok) {
-          setNoteWarning(checkJson.reason || "This note doesn't give accounts enough context — add specifics.");
-          toast.error("Add more context to the internal note before creating this invoice");
-          setSubmitting(false);
-          return;
+          alert(checkJson.reason || "This note doesn't give accounts enough context — add specifics.");
         }
       }
     } catch {
-      // Network failure — fail open, same as above.
+      // Network failure — advisory only, don't block on it.
     }
 
     const body = {
@@ -307,10 +297,7 @@ export function InvoiceForm({
                 <Textarea
                   id="invoice-internal-notes"
                   value={internalNotes}
-                  onChange={(e) => {
-                    setInternalNotes(e.target.value);
-                    if (noteWarning) setNoteWarning(null);
-                  }}
+                  onChange={(e) => setInternalNotes(e.target.value)}
                   placeholder={
                     primaryHead === "unsure"
                       ? "Describe what this is for so accounts can figure out the right head — never shown to the customer"
@@ -318,12 +305,6 @@ export function InvoiceForm({
                   }
                   rows={2}
                 />
-                {noteWarning && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 flex items-start gap-1.5">
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                    <span>{noteWarning}</span>
-                  </div>
-                )}
                 <CheckAccountingNoteButton
                   note={internalNotes}
                   accountingHead={primaryHead && primaryHead !== "unsure" ? ACCOUNTING_HEAD_LABELS[primaryHead] : undefined}
