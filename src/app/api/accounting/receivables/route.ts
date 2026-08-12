@@ -52,7 +52,7 @@ export async function GET(_req: NextRequest) {
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       ),
       case:cases!billing_statements_case_id_fkey(
-        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number, bill_to,
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)

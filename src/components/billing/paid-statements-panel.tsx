@@ -21,10 +21,28 @@ interface Lead {
   company?: string;
 }
 
+interface AggregatorRef {
+  id: string;
+  name: string;
+  primary_email?: string | null;
+  primary_phone?: string | null;
+}
+
+interface CaseRef {
+  id: string;
+  case_number: string;
+  client_name: string;
+  client_company_name?: string | null;
+  client_email?: string | null;
+  client_phone?: string | null;
+  bill_to?: "aggregator" | "client" | null;
+  aggregator?: AggregatorRef | null;
+}
+
 interface PaidRow {
   id: string;
   statement_number: string;
-  statement_type: "rent" | "usage" | "combined";
+  statement_type: "rent" | "usage" | "combined" | "vo_case" | "vo_aggregator_consolidated" | "vo_renewal" | "electricity" | "reimbursement";
   period_start: string;
   period_end: string;
   total_amount: number;
@@ -34,19 +52,37 @@ interface PaidRow {
   contract: { id: string; contract_number: string; lead?: Lead } | null;
   proposal?: { id: string; proposal_number: string; lead?: Lead } | null;
   invoice?: { id: string; invoice_number: string; lead?: Lead } | null;
+  case?: CaseRef | null;
+  aggregator?: AggregatorRef | null;
 }
 
 interface Party {
   number: string;
   lead?: Lead;
   href: string;
-  kind: "contract" | "proposal" | "invoice" | "unknown";
+  kind: "contract" | "proposal" | "invoice" | "case" | "aggregator" | "unknown";
+}
+
+/** Synthesizes a Lead-shaped object from a Virtual Office case or aggregator —
+ *  mirrors the same helper on the main Accounts Receivable page. */
+function leadFromCase(c: CaseRef): Lead {
+  const billTo = c.bill_to === "aggregator" ? c.aggregator : null;
+  return {
+    id: c.id,
+    company: billTo?.name ?? c.client_company_name ?? c.client_name,
+  };
+}
+
+function leadFromAggregator(a: AggregatorRef): Lead {
+  return { id: a.id, company: a.name };
 }
 
 function partyOf(row: PaidRow): Party {
   if (row.contract) return { number: row.contract.contract_number, lead: row.contract.lead, href: `/contracts/${row.contract.id}`, kind: "contract" };
   if (row.proposal) return { number: row.proposal.proposal_number, lead: row.proposal.lead, href: `/proposals/${row.proposal.id}`, kind: "proposal" };
   if (row.invoice) return { number: row.invoice.invoice_number, lead: row.invoice.lead, href: `/leads/${row.invoice.lead?.id ?? ""}`, kind: "invoice" };
+  if (row.case) return { number: row.case.case_number, lead: leadFromCase(row.case), href: `/cases/${row.case.id}`, kind: "case" };
+  if (row.aggregator) return { number: row.aggregator.name, lead: leadFromAggregator(row.aggregator), href: `/aggregators/${row.aggregator.id}`, kind: "aggregator" };
   return { number: "—", lead: undefined, href: "#", kind: "unknown" };
 }
 

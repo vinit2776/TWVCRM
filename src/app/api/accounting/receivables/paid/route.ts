@@ -48,7 +48,12 @@ export async function GET(req: NextRequest) {
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company)
-      )
+      ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone)
     `, { count: "exact" })
     .in("status", ["finalized", "exported"])
     .eq("payment_status", "paid")
@@ -73,21 +78,29 @@ export async function GET(req: NextRequest) {
         .or(`company.ilike.%${safe}%,first_name.ilike.%${safe}%,last_name.ilike.%${safe}%`);
       const leadIds = (matchingLeads || []).map((l) => l.id as string);
 
-      const [{ data: matchingContracts }, { data: matchingProposals }, { data: matchingInvoices }] = await Promise.all([
+      const [{ data: matchingContracts }, { data: matchingProposals }, { data: matchingInvoices }, { data: matchingAggregators }] = await Promise.all([
         supabase.from("contracts").select("id")
           .or(`contract_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
         supabase.from("proposals").select("id")
           .or(`proposal_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
         supabase.from("proforma_invoices").select("id")
           .or(`invoice_number.ilike.%${safe}%${leadIds.length ? `,lead_id.in.(${leadIds.join(",")})` : ""}`),
+        supabase.from("aggregators").select("id").ilike("name", `%${safe}%`),
       ]);
 
       const contractIds = (matchingContracts || []).map((c) => c.id as string);
       const proposalIds = (matchingProposals || []).map((p) => p.id as string);
       const invoiceIds = (matchingInvoices || []).map((i) => i.id as string);
+      const aggregatorIds = (matchingAggregators || []).map((a) => a.id as string);
       if (contractIds.length) orClauses.push(`contract_id.in.(${contractIds.join(",")})`);
       if (proposalIds.length) orClauses.push(`proposal_id.in.(${proposalIds.join(",")})`);
       if (invoiceIds.length) orClauses.push(`invoice_id.in.(${invoiceIds.join(",")})`);
+      if (aggregatorIds.length) orClauses.push(`aggregator_id.in.(${aggregatorIds.join(",")})`);
+
+      const { data: matchingCases } = await supabase.from("cases").select("id")
+        .or(`case_number.ilike.%${safe}%,client_name.ilike.%${safe}%,client_company_name.ilike.%${safe}%${aggregatorIds.length ? `,aggregator_id.in.(${aggregatorIds.join(",")})` : ""}`);
+      const caseIds = (matchingCases || []).map((c) => c.id as string);
+      if (caseIds.length) orClauses.push(`case_id.in.(${caseIds.join(",")})`);
 
       query = query.or(orClauses.join(","));
     }
