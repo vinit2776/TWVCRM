@@ -21,7 +21,7 @@ import {
 import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-selector";
 import type { Proposal, Lead } from "@/types";
@@ -463,7 +463,7 @@ export function CreateContractDialog({
         <DialogHeader>
           <DialogTitle>Create Membership Agreement</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           {/* Section 1: Linked Proposal (mandatory) */}
           <div className="space-y-3">
             <Label className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -503,7 +503,7 @@ export function CreateContractDialog({
                     </p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
                       <span className="text-muted-foreground">Monthly fee</span>
-                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.total_amount)}</span>
+                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.subtotal ?? selectedProposal.total_amount)}</span>
                       {selectedProposal.tax_percentage > 0 && (
                         <>
                           <span className="text-muted-foreground">GST ({selectedProposal.tax_percentage}%)</span>
@@ -516,6 +516,8 @@ export function CreateContractDialog({
                           <span className="font-medium tabular-nums text-green-700">−{formatCurrency(selectedProposal.discount_amount)}</span>
                         </>
                       )}
+                      <span className="text-muted-foreground pt-1 border-t border-[#015E65]/10 font-semibold">Total</span>
+                      <span className="font-semibold tabular-nums pt-1 border-t border-[#015E65]/10">{formatCurrency(selectedProposal.total_amount)}</span>
                     </div>
                     {proposalComplimentaryItems.length > 0 && (
                       <div className="pt-1 border-t border-[#015E65]/10 space-y-1">

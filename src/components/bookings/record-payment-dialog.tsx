@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { PAYMENT_MODES, PAYMENT_MODE_LABELS } from "@/lib/constants";
 
 interface RecordPaymentDialogProps {
@@ -77,7 +77,7 @@ export function RecordPaymentDialog({
           <DialogTitle>Record Payment</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="rounded-md bg-muted/50 p-3 text-center">
             <p className="text-sm text-muted-foreground">Amount Due</p>
             <p className="text-2xl font-bold">{formatCurrency(amount)}</p>

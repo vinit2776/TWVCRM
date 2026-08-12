@@ -4,6 +4,7 @@ import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatem
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
+import { drawCompanyStamp } from "@/lib/company-stamp";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -1186,7 +1187,8 @@ function amountInWords(amount: number): string {
 export function generateMembershipAgreementPDF(
   contract: Contract,
   lead?: Partial<Lead>,
-  location?: Partial<Location>
+  location?: Partial<Location>,
+  options?: { applyCompanyStamp?: boolean; stampRef?: string }
 ): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1620,6 +1622,11 @@ export function generateMembershipAgreementPDF(
   doc.setLineWidth(0.3);
   doc.line(col1X, y, col1X + colWidth, y);
   doc.line(col2X, y, col2X + colWidth, y);
+
+  if (options?.applyCompanyStamp) {
+    drawCompanyStamp(doc, col1X, y, colWidth, options.stampRef);
+  }
+
   y += 5;
 
   doc.setFontSize(9);

@@ -219,12 +219,14 @@ export async function listVendorsMissingEmail(
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
     .toISOString().split("T")[0];
 
-  // Bill activity
+  // Full bill history — pending_bills_count must see every unpaid approved bill,
+  // not just recent ones, or an old overdue bill silently drops its vendor off
+  // the high-priority list. The 90-day window is applied client-side below,
+  // scoped only to the bills_last_90d / total_billed_last_90d recency stats.
   const { data: bills } = await supabase
     .from("vendor_bills")
     .select("vendor_id, total_amount, invoice_date, approval_status, payment_status")
-    .in("vendor_id", vendorIds)
-    .gte("invoice_date", ninetyDaysAgo);
+    .in("vendor_id", vendorIds);
 
   // Dismissal counts within current escalation window
   const cfg = await loadVendorEmailNagSettings(supabase);
@@ -251,7 +253,8 @@ export async function listVendorsMissingEmail(
     const pending = myBills.filter(
       (b) => b.approval_status === "approved" && b.payment_status !== "paid",
     ).length;
-    const totalBilled = myBills.reduce((s, b) => s + Number(b.total_amount ?? 0), 0);
+    const recentBills = myBills.filter((b) => (b.invoice_date ?? "") >= ninetyDaysAgo);
+    const totalBilled = recentBills.reduce((s, b) => s + Number(b.total_amount ?? 0), 0);
     const lastDate = myBills.length
       ? myBills.map((b) => b.invoice_date).sort().slice(-1)[0]
       : null;
@@ -261,7 +264,7 @@ export async function listVendorsMissingEmail(
       contact_name: v.contact_name ?? null,
       contact_phone: v.contact_phone ?? null,
       pending_bills_count: pending,
-      bills_last_90d: myBills.length,
+      bills_last_90d: recentBills.length,
       total_billed_last_90d: totalBilled,
       last_bill_date: lastDate,
       dismissals_in_window: dismissalCounts.get(v.id) ?? 0,

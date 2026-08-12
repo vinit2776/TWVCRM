@@ -1749,6 +1749,8 @@ export interface Aggregator {
   commission_percentage: number;
   default_rate_card: Record<string, number>;
   billing_method: "postpaid" | "prepaid";
+  // Proforma-First vs GST-Direct invoicing — mirrors contracts.billing_mode.
+  billing_mode?: "proforma_first" | "gst_direct";
   credit_limit?: number;
   kyc_verified: boolean;
   kyc_verified_at?: string;
@@ -2028,6 +2030,12 @@ export interface AggregatorInvoice {
   // Receivable / Tally Inbox. Null for invoices created before this link
   // existed — intentionally not backfilled.
   billing_statement_id?: string | null;
+  billing_statement?: {
+    id: string;
+    statement_number: string | null;
+    handoff_state: string | null;
+    payment_status: string;
+  } | null;
   period_month: number;
   period_year: number;
   status: AggInvoiceStatus;

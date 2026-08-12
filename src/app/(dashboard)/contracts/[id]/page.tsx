@@ -24,6 +24,7 @@ import {
   Copy,
   Check,
   Pencil,
+  Stamp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -99,6 +100,12 @@ export default function ContractDetailPage({
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
+  const [stampingSignSeal, setStampingSignSeal] = useState(false);
+  const [stampConfirmOpen, setStampConfirmOpen] = useState(false);
+  const [stampPreviewLoading, setStampPreviewLoading] = useState(false);
+  const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
+  const [stampPreviewPdfBase64, setStampPreviewPdfBase64] = useState<string | null>(null);
+  const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
@@ -255,13 +262,14 @@ export default function ContractDetailPage({
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = async (): Promise<string> => {
+  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string }): Promise<string> => {
     if (!contract) return "";
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      options
     );
     const arrayBuffer = doc.output("arraybuffer");
     const bytes = new Uint8Array(arrayBuffer);
@@ -350,6 +358,58 @@ export default function ContractDetailPage({
       }
     } finally {
       setUploadingSignedDoc(false);
+    }
+  };
+
+  const closeStampPreview = () => {
+    setStampConfirmOpen(false);
+    if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    setStampPreviewUrl(null);
+    setStampPreviewPdfBase64(null);
+    setStampPreviewRef(null);
+  };
+
+  const handleOpenStampPreview = async () => {
+    if (!contract) return;
+    setStampPreviewLoading(true);
+    try {
+      const { generateStampReference } = await import("@/lib/company-stamp");
+      const stampRef = generateStampReference();
+      const pdfBase64 = await handleGeneratePDFBase64({ applyCompanyStamp: true, stampRef });
+      const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
+      const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      setStampPreviewUrl(blobUrl);
+      setStampPreviewPdfBase64(pdfBase64);
+      setStampPreviewRef(stampRef);
+      setStampConfirmOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate preview");
+    } finally {
+      setStampPreviewLoading(false);
+    }
+  };
+
+  const handleStampSignSeal = async () => {
+    if (!contract || !stampPreviewPdfBase64 || !stampPreviewRef) return;
+    setStampingSignSeal(true);
+    try {
+      const res = await fetch(`/api/contracts/${id}/stamp-sign-seal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: stampPreviewPdfBase64, stampRef: stampPreviewRef }),
+      });
+      if (res.ok) {
+        toast.success(`Contract stamped with company sign & seal (${stampPreviewRef})`);
+        closeStampPreview();
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to stamp contract");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to stamp contract");
+    } finally {
+      setStampingSignSeal(false);
     }
   };
 
@@ -1351,6 +1411,22 @@ export default function ContractDetailPage({
                   )}
                 </div>
               )}
+              {!contract.signed_document && userRole === "admin" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full mt-2"
+                  onClick={handleOpenStampPreview}
+                  disabled={stampPreviewLoading || uploadingSignedDoc}
+                >
+                  {stampPreviewLoading ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Stamp className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Stamp with company seal
+                </Button>
+              )}
               {!contract.signed_document && contract.status === "active" && (
                 <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
@@ -1772,6 +1848,43 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Terminate"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Preview: stamp with company seal</DialogTitle>
+            <DialogDescription>
+              This is exactly what will be saved as the signed contract for{" "}
+              {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
+              {stampPreviewRef}. Review it before confirming. This does not go through
+              Leegality and cannot be undone from here — to replace it afterward, use the
+              &quot;Replace&quot; option on the Signed Contract card.
+            </DialogDescription>
+          </DialogHeader>
+          {stampPreviewUrl && (
+            <iframe
+              src={stampPreviewUrl}
+              className="w-full h-[500px] rounded-md border"
+              title="Stamped contract preview"
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeStampPreview}>
+              Cancel
+            </Button>
+            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+              {stampingSignSeal ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Stamping...
+                </>
+              ) : (
+                "Confirm & save"
               )}
             </Button>
           </DialogFooter>

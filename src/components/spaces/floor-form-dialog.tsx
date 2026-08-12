@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { LocationFloor } from "@/types";
 
 interface Props {
@@ -105,7 +106,7 @@ export function FloorFormDialog({ open, onOpenChange, locationId, floor, onSucce
           <DialogTitle>{isEdit ? "Edit Floor" : "Add Floor"}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1">
               <Label htmlFor="name">Floor Name *</Label>

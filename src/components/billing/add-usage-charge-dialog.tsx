@@ -23,7 +23,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
 import { Loader2, FileText, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
 import { HSN_SAC_OPTIONS } from "@/lib/e-invoice/sac-codes";
 
 interface Contract {
@@ -337,7 +337,7 @@ export function AddUsageChargeDialog({
           )}
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           {/* Charge type toggle — hide if pre-locked to a specific source */}
           {!contractId && !bookingId && (
             <div className="space-y-2">

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 
 /**
  * GET: Get invoice detail
@@ -24,7 +25,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("aggregator_invoices")
     .select(
-      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code, primary_email, billing_address, billing_city, billing_state, billing_pincode, gst_number)"
+      "*, aggregator:aggregators!aggregator_invoices_aggregator_id_fkey(id, name, code, primary_email, billing_address, billing_city, billing_state, billing_pincode, gst_number), billing_statement:billing_statements!aggregator_invoices_billing_statement_id_fkey(id, statement_number, handoff_state, payment_status)"
     )
     .eq("id", id)
     .single();
@@ -49,6 +50,12 @@ export async function PATCH(
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
 
   const body = await request.json();
   const action = body.action as string;
@@ -87,6 +94,15 @@ export async function PATCH(
       break;
 
     case "mark_paid":
+      // Manual-override escape hatch (e.g. bank transfer reconciliation) —
+      // Generate Invoice + the real Razorpay/webhook path is the primary
+      // flow now that generateConsolidatedInvoice() links a billing_statement.
+      if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+        return NextResponse.json(
+          { error: "Only admin, manager, or accounts can mark an invoice paid" },
+          { status: 403 }
+        );
+      }
       if (!["sent", "overdue"].includes(oldInvoice.status)) {
         return NextResponse.json(
           { error: "Can only mark sent or overdue invoices as paid" },
@@ -145,12 +161,36 @@ export async function PATCH(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Audit log
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("id")
-    .eq("auth_id", user.id)
-    .single();
+  // Manual mark-paid override: settle the linked billing_statement the same
+  // way a real payment would, so AR/Ageing/Tally Inbox never disagree with
+  // what this screen shows. No-op for pre-Phase-4 invoices with no link.
+  if (action === "mark_paid" && oldInvoice.billing_statement_id) {
+    const adminSupabase = await createAdminClient();
+    const { data: statement } = await adminSupabase
+      .from("billing_statements")
+      .select("id, total_amount, payment_status")
+      .eq("id", oldInvoice.billing_statement_id)
+      .single();
+
+    if (statement && statement.payment_status !== "paid") {
+      await adminSupabase.from("billing_payments").insert({
+        billing_statement_id: statement.id,
+        amount: oldInvoice.total_amount,
+        payment_date: new Date().toISOString().slice(0, 10),
+        payment_mode: "bank_transfer",
+        payment_reference: body.payment_reference || null,
+        notes: "Recorded via aggregator invoice manual mark-paid override",
+        recorded_by: dbUser?.id || null,
+      });
+
+      await finalizeBillingPayment(adminSupabase, {
+        statementId: statement.id,
+        statementTotalAmount: statement.total_amount,
+        previousPaymentStatus: statement.payment_status,
+        reason: "aggregator_invoice_manual_mark_paid",
+      });
+    }
+  }
 
   if (dbUser?.id) {
     logAudit(supabase, {

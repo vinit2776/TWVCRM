@@ -20,6 +20,7 @@ import {
 import { LOST_REASONS, LOST_REASON_LABELS } from "@/lib/constants";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface MarkLostDialogProps {
   leadId: string;
@@ -94,7 +95,7 @@ export function MarkLostDialog({
         <DialogHeader>
           <DialogTitle>Mark Lead as Lost</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label>
               Lost Reason <span className="text-destructive">*</span>

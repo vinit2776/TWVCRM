@@ -18,6 +18,7 @@ import { LineItemsEditor, type LineItemData } from "@/components/shared/line-ite
 import { Loader2, ShieldAlert, Info, ArrowRight, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { ACCOUNTING_HEADS, ACCOUNTING_HEAD_LABELS, type AccountingHead } from "@/lib/constants";
+import { preventEnterSubmit } from "@/lib/utils";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 
 // "Other Income" is too open-ended a catch-all for staff to reach for by
@@ -192,7 +193,7 @@ export function InvoiceForm({
         <DialogHeader>
           <DialogTitle>Create Ad-Hoc Proforma Invoice</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           <div className="space-y-2">
             <Label htmlFor="invoice-purpose">
               What is this invoice for? <span className="text-destructive">*</span>

@@ -578,7 +578,13 @@ export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;
 // ==========================================
 // Aggregator Validations
 // ==========================================
-export const createAggregatorSchema = z.object({
+// Base shape with NO .default() modifiers — z.object(...).partial() still
+// applies .default() to any field omitted from the input (a documented Zod
+// behavior), which silently resets that field in the DB on every partial
+// PATCH that doesn't mention it. Confirmed live: a PATCH with only
+// { billing_mode } was resetting billing_method back to 'postpaid'. Defaults
+// belong only on createAggregatorSchema, for genuinely-new records.
+const aggregatorFieldsSchema = z.object({
   name: z.string().min(1, "Name is required"),
   company_name: z.string().optional(),
   gst_number: z.string().max(20).optional(),
@@ -590,13 +596,14 @@ export const createAggregatorSchema = z.object({
   billing_city: z.string().optional(),
   billing_state: z.string().optional(),
   billing_pincode: z.string().optional(),
-  same_state_as_twv: z.boolean().default(false),
-  commission_percentage: z.number().min(0).max(100).default(0),
-  default_rate_card: z.record(z.string(), z.number()).default({}),
-  billing_method: z.enum(["postpaid", "prepaid"]).default("postpaid"),
+  same_state_as_twv: z.boolean(),
+  commission_percentage: z.number().min(0).max(100),
+  default_rate_card: z.record(z.string(), z.number()),
+  billing_method: z.enum(["postpaid", "prepaid"]),
+  billing_mode: z.enum(["proforma_first", "gst_direct"]),
   credit_limit: z.number().min(0).optional(),
   notes: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: z.array(z.string()),
   contacts: z.array(z.object({
     name: z.string().min(1, "Contact name is required"),
     email: z.string().email().optional().or(z.literal("")),
@@ -606,19 +613,37 @@ export const createAggregatorSchema = z.object({
   })).optional(),
 });
 
-export const updateAggregatorSchema = createAggregatorSchema.partial();
+export const createAggregatorSchema = aggregatorFieldsSchema.extend({
+  same_state_as_twv: z.boolean().default(false),
+  commission_percentage: z.number().min(0).max(100).default(0),
+  default_rate_card: z.record(z.string(), z.number()).default({}),
+  billing_method: z.enum(["postpaid", "prepaid"]).default("postpaid"),
+  billing_mode: z.enum(["proforma_first", "gst_direct"]).default("gst_direct"),
+  tags: z.array(z.string()).default([]),
+});
+
+export const updateAggregatorSchema = aggregatorFieldsSchema.partial();
 export type CreateAggregatorInput = z.input<typeof createAggregatorSchema>;
 export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
 
 // ==========================================
 // Case (Virtual Office) Validations
 // ==========================================
-export const createCaseSchema = z.object({
-  aggregator_id: z.string().uuid("Invalid aggregator ID"),
+// No .default() modifiers here — z.object(...).partial() still applies
+// .default() to any field omitted from the input (confirmed live: a PATCH
+// with only { bill_to } was silently resetting case_source, tenure_months,
+// security_deposit, and tags back to their defaults). Defaults belong only
+// on createCaseSchema, for genuinely-new records; see the identical fix on
+// aggregatorFieldsSchema above.
+const caseFieldsSchema = z.object({
+  // Direct clients (no referral aggregator) have aggregator_id omitted —
+  // enforced by the refine() below, not by this field alone.
+  case_source: z.enum(["aggregator", "direct"]),
+  aggregator_id: z.string().uuid("Invalid aggregator ID").optional().or(z.literal("")).transform(v => v || undefined),
   aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
-  is_renewal: z.boolean().default(false),
+  is_renewal: z.boolean(),
   parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   client_name: z.string().min(1, "Client name is required"),
   client_entity_type: z.enum(["individual", "proprietorship", "partnership", "llp", "pvt_ltd", "public_ltd", "trust", "society", "huf", "other"]),
@@ -633,15 +658,39 @@ export const createCaseSchema = z.object({
   client_state: z.string().optional(),
   client_pincode: z.string().optional(),
   rate: z.number().positive("Rate must be positive").optional(),
-  tenure_months: z.number().int().positive().default(12),
+  tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),
-  security_deposit: z.number().min(0).default(0),
+  security_deposit: z.number().min(0),
   notes: z.string().optional(),
-  tags: z.array(z.string()).default([]),
+  tags: z.array(z.string()),
   assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  // Prepaid-aggregator cases only: who the per-case invoice bills. Set
+  // explicitly per case (varies case to case) — no create-time default.
+  bill_to: z.enum(["aggregator", "client"]).optional(),
 });
 
-export const updateCaseSchema = createCaseSchema.partial();
+export const createCaseSchema = caseFieldsSchema
+  .extend({
+    case_source: z.enum(["aggregator", "direct"]).default("aggregator"),
+    is_renewal: z.boolean().default(false),
+    tenure_months: z.number().int().positive().default(12),
+    security_deposit: z.number().min(0).default(0),
+    tags: z.array(z.string()).default([]),
+  })
+  .refine((data) => data.case_source !== "aggregator" || !!data.aggregator_id, {
+    message: "aggregator_id is required for aggregator-referred cases",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || !!data.aggregator_id === false, {
+    message: "Direct-client cases must not have an aggregator_id",
+    path: ["aggregator_id"],
+  })
+  .refine((data) => data.case_source !== "direct" || data.rate !== undefined, {
+    message: "Rate must be entered manually for direct-client cases (no rate card to pull from)",
+    path: ["rate"],
+  });
+
+export const updateCaseSchema = caseFieldsSchema.partial();
 export type CreateCaseInput = z.input<typeof createCaseSchema>;
 export type UpdateCaseInput = z.input<typeof updateCaseSchema>;
 

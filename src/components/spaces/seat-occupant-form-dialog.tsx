@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ChevronRight, Check } from "lucide-react";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 import type { SpaceSeatOccupant, SpaceUnit, ContractSpaceAllocation } from "@/types";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -175,7 +176,7 @@ export function SeatOccupantFormDialog({
   };
 
   const StepPersonDetails = () => (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
       {/* Context: which unit */}
       {selectedUnit && !isEdit && (
         <div className="rounded-md bg-muted/40 border px-3 py-2 flex items-center gap-2 text-sm">

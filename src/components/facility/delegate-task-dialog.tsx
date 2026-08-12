@@ -24,7 +24,7 @@ import { LocationSelector } from "@/components/shared/location-selector";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
 import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
-import { cn } from "@/lib/utils";
+import { cn, preventEnterSubmit } from "@/lib/utils";
 import { toast } from "sonner";
 import type { FacilityIssuePriority, FacilityScope } from "@/types";
 
@@ -159,7 +159,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) resetForm(); onOpenChange(next); }}>
       <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
-        <form onSubmit={handleSubmit} className="flex flex-col overflow-hidden flex-1">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="flex flex-col overflow-hidden flex-1">
         <DialogHeader className="p-4 pb-3 border-b">
           <DialogTitle>New Task</DialogTitle>
           <DialogDescription>

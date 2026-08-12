@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { Location } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface Landlord { id: string; name: string; kyc_status: string; }
 
@@ -118,7 +119,7 @@ export default function NewLeasePage() {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
         {/* Location & Landlord */}
         <Card>
           <CardHeader><CardTitle className="text-base">Property Details</CardTitle></CardHeader>

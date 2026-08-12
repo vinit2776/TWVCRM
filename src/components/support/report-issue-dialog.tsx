@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { preventEnterSubmit } from "@/lib/utils";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { Loader2, Upload, X, Image as ImageIcon } from "lucide-react";
 import {
@@ -172,7 +173,7 @@ export function ReportIssueDialog({
           <DialogTitle>Report an Issue</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-4">
           {/* Subject */}
           <div className="space-y-2">
             <Label htmlFor="ticket-subject">

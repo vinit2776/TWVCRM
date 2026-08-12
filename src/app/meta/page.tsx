@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { preventEnterSubmit } from "@/lib/utils";
 
 interface Location {
   id: string;
@@ -120,7 +121,7 @@ export default function MetaEnquirePage() {
               </p>
             </div>
 
-            <form onSubmit={handleSubmit} noValidate>
+            <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} noValidate>
               {/* Honeypot — hidden from real users */}
               <div className="hidden" aria-hidden="true">
                 <input

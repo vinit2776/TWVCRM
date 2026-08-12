@@ -7,7 +7,7 @@ import {
   Upload, FileText, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, preventEnterSubmit } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface AssetInfo {
@@ -221,7 +221,7 @@ function ServiceUploadForm({ assetCode, assetName }: { assetCode: string; assetN
   }
 
   return (
-    <form onSubmit={handleSubmit} className="rounded-xl bg-white border p-4 space-y-4">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="rounded-xl bg-white border p-4 space-y-4">
       <div>
         <h2 className="font-semibold text-gray-900">Upload Service / Repair Sheet</h2>
         <p className="text-xs text-gray-500 mt-0.5">
@@ -359,7 +359,7 @@ function ReportForm({ assetCode, assetName }: { assetCode: string; assetName: st
   }
 
   return (
-    <form onSubmit={handleSubmit} className="rounded-xl bg-white border p-4 space-y-4">
+    <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="rounded-xl bg-white border p-4 space-y-4">
       <div>
         <h2 className="font-semibold text-gray-900">Report an Issue</h2>
         <p className="text-xs text-gray-500 mt-0.5">
