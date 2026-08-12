@@ -26,6 +26,7 @@ interface CaseForInvoicing {
   id: string;
   rate: number | null;
   start_date: string | null;
+  tenure_months: number | null;
   case_source: "aggregator" | "direct";
   bill_to: "aggregator" | "client" | null;
   client_gst_number: string | null;
@@ -105,12 +106,15 @@ export async function createCaseInvoiceStatement(
   const igst = isInterstate ? gstAmount : 0;
   const total = subtotal + gstAmount;
 
-  // One-time license fee covering the case's first month — VO renewal
-  // statements (src/lib/vo-renewal.ts) take over recurring billing once
-  // the case is active.
+  // One-time license fee covering the case's full tenure — matches the
+  // Leave & License Agreement's single term fee (e.g. "License Fee: Rs.
+  // 18,000" for an 11-month term), not a monthly recurring charge. VO
+  // renewal statements (src/lib/vo-renewal.ts) only bill again once this
+  // whole term is ending, not month-to-month within it.
   const periodStart = caseData.start_date ?? new Date().toISOString().slice(0, 10);
+  const tenureMonths = caseData.tenure_months && caseData.tenure_months > 0 ? caseData.tenure_months : 12;
   const periodEndDate = new Date(periodStart);
-  periodEndDate.setMonth(periodEndDate.getMonth() + 1);
+  periodEndDate.setMonth(periodEndDate.getMonth() + tenureMonths);
   periodEndDate.setDate(periodEndDate.getDate() - 1);
   const periodEnd = periodEndDate.toISOString().slice(0, 10);
 

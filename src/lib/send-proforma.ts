@@ -97,7 +97,7 @@ export async function dispatchProforma(
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
       case:cases!billing_statements_case_id_fkey(
-        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number, tenure_months,
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
@@ -365,7 +365,16 @@ export async function dispatchProforma(
   const appBaseUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
   const proformaTrackingUrl = `${appBaseUrl}/api/billing-statements/${statement.id}/track?type=proforma`;
 
-  const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
+  // Virtual Office case statements bill the case's whole tenure as a single
+  // one-time license fee (see src/lib/case-invoicing.ts), not a calendar
+  // month — a "Aug 2026"-style period label misrepresents it. Contract/
+  // proposal-sourced proformas are unaffected and keep the month label.
+  const periodLabel = voCase && voCase.tenure_months
+    ? `${voCase.tenure_months} month${voCase.tenure_months === 1 ? "" : "s"}`
+    : new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
+  const introSentence = voCase
+    ? "Please find attached your proforma invoice for Virtual Office space. Kindly make the payment at your earliest convenience."
+    : `Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.`;
   const dueDateStr = statement.due_date
     ? new Date((statement.due_date as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
     : null;
@@ -390,7 +399,7 @@ export async function dispatchProforma(
       </div>
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-        <p style="color:#333;font-size:14px;">Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.</p>
+        <p style="color:#333;font-size:14px;">${introSentence}</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">${contract ? "Contract" : "Proposal Ref"}</td><td style="padding:6px 0;">${partyRef}</td></tr>
