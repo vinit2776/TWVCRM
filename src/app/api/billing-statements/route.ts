@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
   const bookingId     = searchParams.get("booking_id");
   const leadId        = searchParams.get("lead_id");
   const caseId        = searchParams.get("case_id");
+  const aggregatorId  = searchParams.get("aggregator_id");
   const status        = searchParams.get("status");
   const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ...
 
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
   if (bookingId)     query = query.eq("booking_id", bookingId);
   if (leadId)        query = query.eq("lead_id", leadId);
   if (caseId)        query = query.eq("case_id", caseId);
+  if (aggregatorId)  query = query.eq("aggregator_id", aggregatorId);
   if (status)        query = query.eq("status", status);
   if (statementType) query = query.eq("statement_type", statementType);
 

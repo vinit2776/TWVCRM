@@ -1,4 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
+import { dispatchProforma } from "@/lib/send-proforma";
+import { MONTH_NAMES } from "@/lib/constants";
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -48,7 +51,7 @@ export async function generateConsolidatedInvoice({
 
   const { data: aggregator } = await supabase
     .from("aggregators")
-    .select("id, name, same_state_as_twv")
+    .select("id, name, same_state_as_twv, gst_number, billing_mode, billing_state")
     .eq("id", aggregatorId)
     .single();
 
@@ -154,5 +157,77 @@ export async function generateConsolidatedInvoice({
     return { error: invoiceError.message, status: 500 };
   }
 
-  return { invoice, status: 201 };
+  // Feed the real AR/Ageing/Tally Inbox pipeline — aggregator_invoices stays
+  // alive as the existing reconciliation record, but billing_statements is
+  // what accounts actually follows up on and what payment tracking hooks into.
+  const { data: statement, error: statementError } = await supabase
+    .from("billing_statements")
+    .insert({
+      aggregator_id: aggregatorId,
+      period_start: periodStart.toISOString().slice(0, 10),
+      period_end: periodEnd.toISOString().slice(0, 10),
+      statement_type: "vo_aggregator_consolidated",
+      created_via: "vo_aggregator_monthly",
+      fixed_amount: subtotal,
+      usage_amount: 0,
+      subtotal,
+      tax_percentage: taxPercentage,
+      tax_amount: taxAmount,
+      cgst_amount: cgstAmount,
+      sgst_amount: sgstAmount,
+      igst_amount: igstAmount,
+      total_amount: totalAmount,
+      is_interstate: isInterstate,
+      place_of_supply: isInterstate ? (aggregator.billing_state || "Other") : "Tamil Nadu",
+      buyer_gstin: aggregator.gst_number ?? null,
+      status: "finalized",
+      finalized_at: new Date().toISOString(),
+      line_items: [
+        {
+          type: "prepaid_rent",
+          label: `Virtual Office Referrals — ${MONTH_NAMES[periodMonth - 1]} ${periodYear}`,
+          subtotal,
+          items: lineItems.map((item) => ({
+            description: `${item.case_number} — ${item.client_name}${item.pro_rated_days ? ` (pro-rated ${item.pro_rated_days}/${item.total_days} days)` : ""}`,
+            quantity: 1,
+            rate: item.amount,
+            amount: item.amount,
+          })),
+        },
+      ],
+    })
+    .select("id")
+    .single();
+
+  if (statementError || !statement) {
+    // aggregator_invoices row already exists and is usable on its own — log
+    // and continue rather than failing the whole generate call. No sibling
+    // code in this repo spans a multi-table write in a transaction (see
+    // vo-renewal.ts), so a partial write here is an accepted, known risk.
+    console.error("[aggregator-invoicing] Failed to create billing_statements row:", statementError?.message);
+    return { invoice, status: 201 };
+  }
+
+  await supabase.from("billing_statement_cases").insert(
+    lineItems.map((item) => ({
+      billing_statement_id: statement.id,
+      case_id: item.case_id,
+      amount: item.amount,
+      pro_rated_days: item.pro_rated_days ?? null,
+      total_days: item.total_days ?? null,
+    })),
+  );
+
+  await supabase.from("aggregator_invoices").update({ billing_statement_id: statement.id }).eq("id", invoice.id);
+
+  const billingMode = (aggregator.billing_mode as "proforma_first" | "gst_direct" | null) ?? "gst_direct";
+  const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "aggregator_monthly_invoice");
+
+  if (billingMode === "proforma_first" && !handoff.skipLegacyDispatch) {
+    await dispatchProforma(supabase, statement.id);
+  }
+  // gst_direct: no dispatch — statement sits in the Tally Inbox until an
+  // accountant uploads the real GST invoice (upload-gst-invoice/route.ts).
+
+  return { invoice: { ...invoice, billing_statement_id: statement.id }, status: 201 };
 }
