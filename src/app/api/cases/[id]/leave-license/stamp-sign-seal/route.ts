@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateLeaveLicensePdf, type LeaveLicenseVariables } from "@/lib/leave-license-generator";
 import { generateStampReference } from "@/lib/company-stamp";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 const PRE_EXECUTED_STATUSES = [
   "draft",
@@ -78,6 +79,11 @@ export async function POST(
       { error: `Cannot stamp an agreement in '${agreement.status}' status` },
       { status: 400 }
     );
+  }
+
+  const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+  if (gateError) {
+    return NextResponse.json({ error: gateError }, { status: 400 });
   }
 
   const stampRef = previewedStampRef || generateStampReference();

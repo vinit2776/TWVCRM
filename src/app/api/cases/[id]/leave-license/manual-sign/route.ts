@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * POST: Upload a manually signed stamp-paper PDF and mark the L&L agreement as executed.
@@ -75,6 +76,11 @@ export async function POST(
       { error: `Cannot upload a signed document when agreement is in '${agreement.status}' status` },
       { status: 400 }
     );
+  }
+
+  const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+  if (gateError) {
+    return NextResponse.json({ error: gateError }, { status: 400 });
   }
 
   const adminSupabase = await createAdminClient();

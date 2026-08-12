@@ -5,6 +5,7 @@ import {
   uploadForEStampAndSigning,
   getSigningStatus,
 } from "@/lib/leegality";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * POST: Leegality e-stamp & e-sign operations (user-triggered)
@@ -174,21 +175,28 @@ export async function POST(
         .update({ leegality_status: status.status })
         .eq("id", agreementId);
 
-      // If completed, mark as executed
+      // If completed, mark as executed — unless this case still needs a
+      // paid VO invoice first (src/lib/vo-execution-gate.ts). The customer
+      // already e-signed by this point, so record that, but hold status at
+      // its current value instead of flipping to 'executed'; accounts can
+      // complete it manually once payment lands.
       if (status.status === "COMPLETED") {
+        const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+
         await supabase
           .from("case_agreements")
           .update({
-            status: "executed",
-            signed_at: new Date().toISOString(),
+            ...(gateError ? {} : { status: "executed", signed_at: new Date().toISOString() }),
             leegality_status: "COMPLETED",
           })
           .eq("id", agreementId);
 
-        await supabase
-          .from("cases")
-          .update({ ll_agreement_status: "executed" })
-          .eq("id", caseId);
+        if (!gateError) {
+          await supabase
+            .from("cases")
+            .update({ ll_agreement_status: "executed" })
+            .eq("id", caseId);
+        }
       }
 
       return NextResponse.json({ data: status });

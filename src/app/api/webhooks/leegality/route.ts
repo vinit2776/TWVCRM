@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { verifyWebhookSignature, parseWebhookPayload, downloadStampedDocument } from "@/lib/leegality";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * Fetch the signed PDF from Leegality and store it in crm-documents.
@@ -167,22 +168,37 @@ export async function POST(request: NextRequest) {
         documentNotes.push(`case_agreement document store failed: ${docError}`);
       }
 
+      // Prepaid/direct-client cases require a paid VO invoice before the
+      // agreement can execute — same gate as every other mark-executed path
+      // (src/lib/vo-execution-gate.ts). The customer already e-signed via
+      // Leegality by this point, so we still record that (leegality_status,
+      // signed document) but hold status at its current value instead of
+      // flipping to 'executed' — accounts can complete it manually once
+      // payment lands. Ack 200 regardless so Leegality doesn't retry.
+      const gateError = agreement.type === "leave_license"
+        ? await checkVoExecutionPaymentGate(adminSupabase, agreement.case_id)
+        : null;
+
       await adminSupabase
         .from("case_agreements")
         .update({
-          status: "executed",
-          signed_at: now,
+          ...(gateError ? {} : { status: "executed", signed_at: now }),
           leegality_status: "COMPLETED",
           ...(documentRecordId ? { generated_document_id: documentRecordId } : {}),
         })
         .eq("id", agreement.id);
 
-      await adminSupabase
-        .from("cases")
-        .update({ ll_agreement_status: "executed" })
-        .eq("id", agreement.case_id);
+      if (gateError) {
+        console.warn(`[Leegality Webhook] L&L agreement ${agreement.id} e-signed but held (unpaid): ${gateError}`);
+        documentNotes.push(`Signed via Leegality but not marked executed — invoice unpaid`);
+      } else {
+        await adminSupabase
+          .from("cases")
+          .update({ ll_agreement_status: "executed" })
+          .eq("id", agreement.case_id);
 
-      console.log(`[Leegality Webhook] L&L agreement ${agreement.id} marked executed.`);
+        console.log(`[Leegality Webhook] L&L agreement ${agreement.id} marked executed.`);
+      }
     }
 
     // Update membership contract

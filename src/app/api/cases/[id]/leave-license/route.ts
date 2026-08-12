@@ -5,6 +5,7 @@ import {
   mergeLeaveLicenseVariables,
   generateLeaveLicensePdf,
 } from "@/lib/leave-license-generator";
+import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 
 /**
  * GET: Get Leave & License agreement details with signed PDF URL
@@ -414,6 +415,13 @@ export async function PATCH(
       { error: `Cannot ${action.replace(/_/g, " ")} — agreement must be in ${validTransitions[action].join(" or ")} status (currently: ${currentAgreement.status})` },
       { status: 400 }
     );
+  }
+
+  if (action === "mark_executed") {
+    const gateError = await checkVoExecutionPaymentGate(supabase, caseId);
+    if (gateError) {
+      return NextResponse.json({ error: gateError }, { status: 400 });
+    }
   }
 
   const updateData: Record<string, unknown> = {};
