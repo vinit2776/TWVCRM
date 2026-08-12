@@ -14,6 +14,7 @@ import {
   addFooter,
   createPdfContext,
 } from "@/lib/pdf-utils";
+import { drawCompanyStamp } from "@/lib/company-stamp";
 import type { VoPurpose, EntityType } from "@/types";
 
 // ================================================================
@@ -306,7 +307,8 @@ export function renderAgreementText(
  */
 export function generateAgreementPdf(
   templateKey: AgreementTemplateKey,
-  variables: AgreementVariables
+  variables: AgreementVariables,
+  options?: { applyCompanyStamp?: boolean; stampRef?: string }
 ): jsPDF {
   const doc = new jsPDF();
   const startY = addBrandHeader(doc);
@@ -385,6 +387,11 @@ export function generateAgreementPdf(
   doc.setLineWidth(0.3);
   doc.line(col1X, ctx.y, col1X + colWidth, ctx.y);
   doc.line(col2X, ctx.y, col2X + colWidth, ctx.y);
+
+  if (options?.applyCompanyStamp) {
+    drawCompanyStamp(doc, col1X, ctx.y, colWidth, options.stampRef);
+  }
+
   ctx.y += 5;
 
   doc.setFontSize(8);
