@@ -8,6 +8,11 @@ export interface GenerateConsolidatedInvoiceParams {
   taxPercentage?: number;
   notes?: string;
   createdBy?: string;
+  /** When provided, restricts the invoice to exactly these cases (still
+   *  must be in a billable status) instead of auto-pulling every billable
+   *  case for the aggregator — lets ops "bill all" (omit this) or select a
+   *  subset and carve out exceptions from the Unbilled Referrals list. */
+  caseIds?: string[];
 }
 
 export interface GenerateConsolidatedInvoiceResult {
@@ -29,7 +34,12 @@ export async function generateConsolidatedInvoice({
   taxPercentage = 18,
   notes,
   createdBy,
+  caseIds,
 }: GenerateConsolidatedInvoiceParams): Promise<GenerateConsolidatedInvoiceResult> {
+  if (caseIds && caseIds.length === 0) {
+    return { error: "No cases selected to invoice.", status: 400 };
+  }
+
   // Check for duplicate invoice
   const { data: existing } = await supabase
     .from("aggregator_invoices")
@@ -56,16 +66,27 @@ export async function generateConsolidatedInvoice({
     return { error: "Aggregator not found", status: 404 };
   }
 
-  // Get all active cases for this aggregator in the given period
-  const { data: cases } = await supabase
+  // Billable cases for this aggregator — restricted to an explicit
+  // selection when the caller (Unbilled Referrals UI) provided one.
+  // Re-applying the status filter even with caseIds is defense in depth:
+  // a stale client-side selection can never invoice a non-billable case.
+  let caseQuery = supabase
     .from("cases")
     .select("id, case_number, client_name, purpose, rate, tenure_months, start_date, activated_at, status")
     .eq("aggregator_id", aggregatorId)
     .in("status", ["active", "renewal_due", "invoiced", "executed"]);
 
+  if (caseIds) {
+    caseQuery = caseQuery.in("id", caseIds);
+  }
+
+  const { data: cases } = await caseQuery;
+
   if (!cases || cases.length === 0) {
     return {
-      error: "No active cases found for this aggregator in the period",
+      error: caseIds
+        ? "None of the selected cases are in a billable status — they may have already been billed or changed status."
+        : "No active cases found for this aggregator in the period",
       status: 400,
     };
   }

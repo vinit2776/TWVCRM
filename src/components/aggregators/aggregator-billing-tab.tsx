@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -22,10 +23,13 @@ import {
 import { Plus, Loader2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import {
-  AGG_INVOICE_STATUS_LABELS,
-  AGG_INVOICE_STATUS_COLORS,
+  CASE_STATUS_LABELS,
+  CASE_STATUS_COLORS,
+  VO_PURPOSE_LABELS,
 } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import Link from "next/link";
+import { AggInvoiceLifecyclePill } from "@/components/aggregators/agg-invoice-lifecycle-pill";
 import type { AggregatorInvoice, VoCase } from "@/types";
 
 const MONTH_LABELS = [
@@ -44,6 +48,7 @@ interface AggregatorBillingTabProps {
 
 export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }: AggregatorBillingTabProps) {
   const [invoices, setInvoices] = useState<AggregatorInvoice[]>([]);
+  const [cases, setCases] = useState<VoCase[]>([]);
   const [eligibleCaseCount, setEligibleCaseCount] = useState(0);
   const [eligibleCasesSum, setEligibleCasesSum] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -63,6 +68,10 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
   const [payReference, setPayReference] = useState("");
   const [actioning, setActioning] = useState(false);
 
+  // Billable-and-unbilled cases are selected for the next invoice by
+  // default ("bill all") — unchecking one carves it out as an exception.
+  const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(new Set());
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -78,9 +87,9 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
 
       if (caseRes.ok) {
         const json = await caseRes.json();
-        const eligible = ((json.data || []) as VoCase[]).filter((c) =>
-          BILLABLE_CASE_STATUSES.includes(c.status)
-        );
+        const allCases = (json.data || []) as VoCase[];
+        setCases(allCases);
+        const eligible = allCases.filter((c) => BILLABLE_CASE_STATUSES.includes(c.status));
         setEligibleCaseCount(eligible.length);
         setEligibleCasesSum(eligible.reduce((sum, c) => sum + (c.rate || 0), 0));
       }
@@ -106,7 +115,68 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
 
   const overLimit = creditLimit != null && creditLimit > 0 && outstanding >= creditLimit;
 
+  // A case is "billed" once it appears in a non-cancelled invoice's line
+  // items — cancelling an invoice puts its cases back into the unbilled pool.
+  const billedByCase = useMemo(() => {
+    const map = new Map<string, { invoice: AggregatorInvoice; amount: number }>();
+    for (const inv of invoices) {
+      if (inv.status === "cancelled") continue;
+      for (const item of inv.items) {
+        map.set(item.case_id, { invoice: inv, amount: item.amount });
+      }
+    }
+    return map;
+  }, [invoices]);
+
+  const { billedCases, unbilledBillableCases, unbilledNotYetBillableCases } = useMemo(() => {
+    const billed: { case: VoCase; invoice: AggregatorInvoice; amount: number }[] = [];
+    const unbilledBillable: VoCase[] = [];
+    const unbilledNotYetBillable: VoCase[] = [];
+    for (const c of cases) {
+      const entry = billedByCase.get(c.id);
+      if (entry) {
+        billed.push({ case: c, invoice: entry.invoice, amount: entry.amount });
+      } else if (BILLABLE_CASE_STATUSES.includes(c.status)) {
+        unbilledBillable.push(c);
+      } else {
+        unbilledNotYetBillable.push(c);
+      }
+    }
+    return { billedCases: billed, unbilledBillableCases: unbilledBillable, unbilledNotYetBillableCases: unbilledNotYetBillable };
+  }, [cases, billedByCase]);
+
+  // Default selection = "bill all": every billable-and-unbilled case starts
+  // checked. Re-syncs whenever the underlying set changes (fetch, invoice
+  // generated/cancelled) — a user's in-progress exclusions on THIS set are
+  // preserved across renders that don't change the set itself.
+  useEffect(() => {
+    setSelectedCaseIds(new Set(unbilledBillableCases.map((c) => c.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unbilledBillableCases.map((c) => c.id).join(",")]);
+
+  const toggleCase = (caseId: string, checked: boolean) => {
+    setSelectedCaseIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(caseId);
+      else next.delete(caseId);
+      return next;
+    });
+  };
+
+  const toggleAll = (checked: boolean) => {
+    setSelectedCaseIds(checked ? new Set(unbilledBillableCases.map((c) => c.id)) : new Set());
+  };
+
+  const allSelected = unbilledBillableCases.length > 0 && selectedCaseIds.size === unbilledBillableCases.length;
+  const selectedSum = unbilledBillableCases
+    .filter((c) => selectedCaseIds.has(c.id))
+    .reduce((sum, c) => sum + (c.rate || 0), 0);
+
   const handleGenerate = async () => {
+    if (selectedCaseIds.size === 0) {
+      toast.error("Select at least one case to invoice.");
+      return;
+    }
     setGenerating(true);
     try {
       const res = await fetch("/api/aggregator-invoices", {
@@ -116,6 +186,7 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
           aggregator_id: aggregatorId,
           period_month: parseInt(genMonth),
           period_year: parseInt(genYear),
+          case_ids: Array.from(selectedCaseIds),
         }),
       });
       if (!res.ok) {
@@ -184,12 +255,128 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
         </div>
       </div>
 
+      {/* Unbilled referrals */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-sm font-medium">
+            Unbilled Referrals ({unbilledBillableCases.length + unbilledNotYetBillableCases.length})
+          </h3>
+          <Button size="sm" onClick={() => setGenerateOpen(true)} disabled={selectedCaseIds.size === 0}>
+            <Plus className="mr-2 h-4 w-4" />
+            Generate Invoice ({selectedCaseIds.size} selected)
+          </Button>
+        </div>
+
+        {loading ? (
+          <div className="text-center py-6 text-muted-foreground text-sm">Loading...</div>
+        ) : unbilledBillableCases.length === 0 && unbilledNotYetBillableCases.length === 0 ? (
+          <div className="text-center py-6 text-muted-foreground text-sm rounded-md border">
+            No unbilled referrals — everything billable has been invoiced.
+          </div>
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="px-4 py-3 text-left w-10">
+                    {unbilledBillableCases.length > 0 && (
+                      <Checkbox checked={allSelected} onCheckedChange={(c) => toggleAll(!!c)} aria-label="Select all billable cases" />
+                    )}
+                  </th>
+                  <th className="px-4 py-3 text-left font-medium">Case #</th>
+                  <th className="px-4 py-3 text-left font-medium">Client</th>
+                  <th className="px-4 py-3 text-left font-medium">Purpose</th>
+                  <th className="px-4 py-3 text-left font-medium">Status</th>
+                  <th className="px-4 py-3 text-right font-medium">Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unbilledBillableCases.map((c) => (
+                  <tr key={c.id} className="border-b">
+                    <td className="px-4 py-3">
+                      <Checkbox
+                        checked={selectedCaseIds.has(c.id)}
+                        onCheckedChange={(checked) => toggleCase(c.id, !!checked)}
+                        aria-label={`Include ${c.case_number}`}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link href={`/cases/${c.id}`} className="text-primary hover:underline">{c.case_number}</Link>
+                    </td>
+                    <td className="px-4 py-3">{c.client_company_name || c.client_name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{VO_PURPOSE_LABELS[c.purpose] || c.purpose}</td>
+                    <td className="px-4 py-3">
+                      <Badge className={CASE_STATUS_COLORS[c.status]}>{CASE_STATUS_LABELS[c.status] || c.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">{formatCurrency(c.rate || 0)}</td>
+                  </tr>
+                ))}
+                {unbilledNotYetBillableCases.map((c) => (
+                  <tr key={c.id} className="border-b text-muted-foreground">
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3">
+                      <Link href={`/cases/${c.id}`} className="hover:underline">{c.case_number}</Link>
+                    </td>
+                    <td className="px-4 py-3">{c.client_company_name || c.client_name}</td>
+                    <td className="px-4 py-3">{VO_PURPOSE_LABELS[c.purpose] || c.purpose}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant="outline" title="Not yet in a billable status">{CASE_STATUS_LABELS[c.status] || c.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">{c.rate ? formatCurrency(c.rate) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {selectedCaseIds.size > 0 && (
+          <p className="text-xs text-muted-foreground text-right">Selected total: {formatCurrency(selectedSum)}</p>
+        )}
+      </div>
+
+      {/* Billed referrals */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium">Billed Referrals ({billedCases.length})</h3>
+        {billedCases.length === 0 ? (
+          <div className="text-center py-6 text-muted-foreground text-sm rounded-md border">No referrals billed yet.</div>
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="px-4 py-3 text-left font-medium">Case #</th>
+                  <th className="px-4 py-3 text-left font-medium">Client</th>
+                  <th className="px-4 py-3 text-left font-medium">Purpose</th>
+                  <th className="px-4 py-3 text-right font-medium">Amount</th>
+                  <th className="px-4 py-3 text-left font-medium">Invoice #</th>
+                  <th className="px-4 py-3 text-left font-medium">Lifecycle</th>
+                  <th className="px-4 py-3 text-left font-medium">Paid</th>
+                </tr>
+              </thead>
+              <tbody>
+                {billedCases.map(({ case: c, invoice, amount }) => (
+                  <tr key={c.id} className="border-b">
+                    <td className="px-4 py-3">
+                      <Link href={`/cases/${c.id}`} className="text-primary hover:underline">{c.case_number}</Link>
+                    </td>
+                    <td className="px-4 py-3">{c.client_company_name || c.client_name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{VO_PURPOSE_LABELS[c.purpose] || c.purpose}</td>
+                    <td className="px-4 py-3 text-right">{formatCurrency(amount)}</td>
+                    <td className="px-4 py-3 font-medium">{invoice.invoice_number}</td>
+                    <td className="px-4 py-3">
+                      <AggInvoiceLifecyclePill status={invoice.status} />
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{invoice.paid_at ? formatDate(invoice.paid_at) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-muted-foreground">{invoices.length} invoice(s)</h3>
-        <Button size="sm" onClick={() => setGenerateOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Generate Invoice
-        </Button>
+        <h3 className="text-sm font-medium text-muted-foreground">{invoices.length} invoice(s) — invoice history</h3>
       </div>
 
       {loading ? (
@@ -216,9 +403,7 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
                     {MONTH_LABELS[inv.period_month - 1]} {inv.period_year}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge className={AGG_INVOICE_STATUS_COLORS[inv.status]}>
-                      {AGG_INVOICE_STATUS_LABELS[inv.status]}
-                    </Badge>
+                    <AggInvoiceLifecyclePill status={inv.status} />
                   </td>
                   <td className="px-4 py-3 font-medium">{formatCurrency(inv.total_amount)}</td>
                   <td className="px-4 py-3">
@@ -306,7 +491,7 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Pulls every active/renewal-due/invoiced/executed case for this aggregator and consolidates them into one invoice for the selected month.
+            Consolidates the {selectedCaseIds.size} selected case{selectedCaseIds.size === 1 ? "" : "s"} from Unbilled Referrals ({formatCurrency(selectedSum)}) into one invoice for the selected month. Uncheck any case there first to carve it out as an exception.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setGenerateOpen(false)}>Cancel</Button>
