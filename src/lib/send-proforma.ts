@@ -96,6 +96,11 @@ export async function dispatchProforma(
         id, proposal_number,
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
     .eq("id", statementId)
@@ -109,17 +114,52 @@ export async function dispatchProforma(
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const proposal = statement.proposal as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voCase = statement.case as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voAggregator = statement.aggregator as any;
 
-  if (!contract && !proposal) {
-    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract or proposal linked to this statement" };
+  if (!contract && !proposal && !voCase && !voAggregator) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract, proposal, case, or aggregator linked to this statement" };
+  }
+
+  /** Synthesizes the same lead shape (id/company/email/phone/mobile/gst_number)
+   *  used elsewhere in this function from a Virtual Office case or aggregator —
+   *  mirrors leadFromVoSource in upload-gst-invoice/route.ts. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function leadFromVoSource(): any {
+    if (voCase) {
+      const billToAggregator = voCase.bill_to === "aggregator" ? voCase.aggregator : null;
+      if (billToAggregator) {
+        return {
+          id: billToAggregator.id, first_name: null, last_name: null, company: billToAggregator.name,
+          email: billToAggregator.primary_email, phone: null, mobile: billToAggregator.primary_phone,
+          state: null, gst_number: billToAggregator.gst_number, billing_emails: null,
+        };
+      }
+      return {
+        id: voCase.id, first_name: null, last_name: null, company: voCase.client_company_name ?? voCase.client_name,
+        email: voCase.client_email, phone: null, mobile: voCase.client_phone,
+        state: null, gst_number: voCase.client_gst_number, billing_emails: null,
+      };
+    }
+    if (voAggregator) {
+      return {
+        id: voAggregator.id, first_name: null, last_name: null, company: voAggregator.name,
+        email: voAggregator.primary_email, phone: null, mobile: voAggregator.primary_phone,
+        state: null, gst_number: voAggregator.gst_number, billing_emails: null,
+      };
+    }
+    return null;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = (contract?.lead ?? proposal?.lead) as any;
+  const lead = (contract?.lead ?? proposal?.lead ?? leadFromVoSource()) as any;
   // Reference label printed on the PDF / in emails wherever a contract number
   // would normally go — falls back to the proposal number for a PI that hasn't
-  // converted into a contract yet.
-  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? "";
+  // converted into a contract yet, or the case/aggregator identifier for
+  // Virtual Office statements.
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? voCase?.case_number ?? voAggregator?.name ?? "";
 
   // ── Check for contact info ───────────────────────────────────────────────
   const customerEmail = lead?.email as string | undefined;
