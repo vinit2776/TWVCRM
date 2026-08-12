@@ -1,13 +1,17 @@
 /**
  * Per-case Virtual Office invoicing — prepaid aggregators and direct clients.
  *
- * Both flows require a real, Tally-issued GST invoice before payment can be
- * collected and the case's Leave & License agreement can execute (see
- * src/app/api/cases/[id]/agreement/route.ts). Never a proforma invoice —
- * this always follows the gst_direct sequence: statement finalizes with no
- * dispatch, sits in the Tally Inbox until an accountant uploads the real
- * invoice, and only then does a Razorpay link + customer email go out
- * (src/app/api/billing-statements/[id]/upload-gst-invoice/route.ts).
+ * Both flows gate the case's Leave & License agreement execution on payment
+ * (see src/app/api/cases/[id]/agreement/route.ts). Which sequence gets there
+ * depends on billing_mode: proforma_first dispatches a PI with a Razorpay
+ * link immediately, real GST invoice issued once paid; gst_direct issues no
+ * proforma — the statement sits in the Tally Inbox until an accountant
+ * uploads the real GST invoice, and only then does a Razorpay link +
+ * customer email go out (src/app/api/billing-statements/[id]/upload-gst-invoice/route.ts).
+ * Aggregator-sourced cases follow their aggregator's billing_mode;
+ * direct-client cases carry their own (defaults to proforma_first — a
+ * walk-in customer shouldn't have to wait on an accountant just to get a
+ * payment link).
  *
  * Contrast with postpaid aggregators (src/lib/aggregator-invoicing.ts),
  * which consolidates many cases into one aggregator-billed statement, and
@@ -27,11 +31,13 @@ interface CaseForInvoicing {
   client_gst_number: string | null;
   client_name: string;
   client_company_name: string | null;
+  // Direct-client cases only — no aggregator to hold a mode, so the case
+  // carries its own. Ignored for aggregator-sourced cases (they use the
+  // aggregator's billing_mode instead).
+  billing_mode?: "proforma_first" | "gst_direct" | null;
   aggregator: {
     gst_number: string | null;
     same_state_as_twv: boolean | null;
-    // Proforma-First vs GST-Direct — direct-client cases have no aggregator
-    // and are always gst_direct (see createCaseInvoiceStatement below).
     billing_mode?: "proforma_first" | "gst_direct" | null;
   } | null;
 }
@@ -157,11 +163,12 @@ export async function createCaseInvoiceStatement(
     throw new CaseInvoicingError(`Failed to create case invoice: ${error?.message}`, 500);
   }
 
-  // Direct-client cases have no aggregator to hold a billing_mode — always
-  // gst_direct. Aggregator-sourced cases honor the aggregator's choice.
-  const billingMode = caseData.case_source === "aggregator" && caseData.aggregator?.billing_mode === "proforma_first"
-    ? "proforma_first"
-    : "gst_direct";
+  // Aggregator-sourced cases honor the aggregator's choice; direct-client
+  // cases carry their own billing_mode (no aggregator to hold one), which
+  // defaults to proforma_first at creation.
+  const billingMode = caseData.case_source === "aggregator"
+    ? (caseData.aggregator?.billing_mode === "proforma_first" ? "proforma_first" : "gst_direct")
+    : (caseData.billing_mode === "gst_direct" ? "gst_direct" : "proforma_first");
 
   const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
 

@@ -274,7 +274,7 @@ export async function handleStatementPaid(
       case_id,
       aggregator_id,
       contract:contracts!billing_statements_contract_id_fkey(billing_mode),
-      case:cases!billing_statements_case_id_fkey(aggregator:aggregators!cases_aggregator_id_fkey(billing_mode)),
+      case:cases!billing_statements_case_id_fkey(billing_mode, aggregator:aggregators!cases_aggregator_id_fkey(billing_mode)),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(billing_mode)
     `)
     .eq("id", statementId)
@@ -297,16 +297,16 @@ export async function handleStatementPaid(
 
   const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
 
-  // Virtual Office statements (per-case or aggregator-consolidated). Direct-
-  // client case statements have no aggregator at all and are always
-  // gst_direct-shaped; aggregator-sourced ones (per-case or postpaid
-  // consolidated) honor the aggregator's own billing_mode, same as contracts.
+  // Virtual Office statements (per-case or aggregator-consolidated).
+  // Aggregator-sourced ones (per-case or postpaid consolidated) honor the
+  // aggregator's own billing_mode, same as contracts. Direct-client cases
+  // have no aggregator to hold a mode, so they carry their own instead.
   if (caseId || aggregatorId) {
     const voAggregator = (statement as unknown as {
-      case: { aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null } | null;
+      case: { billing_mode: "proforma_first" | "gst_direct" | null; aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null } | null;
       aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null;
     });
-    const voBillingMode = voAggregator.case?.aggregator?.billing_mode ?? voAggregator.aggregator?.billing_mode;
+    const voBillingMode = voAggregator.case?.aggregator?.billing_mode ?? voAggregator.case?.billing_mode ?? voAggregator.aggregator?.billing_mode;
 
     if (voBillingMode === "proforma_first") {
       if (currentState === "gst_sent_awaiting_payment") {
@@ -317,8 +317,8 @@ export async function handleStatementPaid(
       return;
     }
 
-    // gst_direct (or no aggregator, i.e. a direct-client case): the GST
-    // invoice was already issued via Tally handoff by the time payment lands.
+    // gst_direct: the GST invoice was already issued via Tally handoff by
+    // the time payment lands.
     if (currentState === "gst_sent_awaiting_payment") {
       await setHandoffState(supabase, statementId, "complete", trigger);
       return;
