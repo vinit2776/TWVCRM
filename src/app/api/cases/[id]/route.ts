@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
 
@@ -182,6 +182,65 @@ export async function DELETE(
     .select("*")
     .eq("id", id)
     .single();
+
+  // billing_statements.case_id is ON DELETE SET NULL, but a vo_case statement
+  // (src/lib/case-invoicing.ts) is typically owned by case_id alone — no
+  // contract/booking/proposal/invoice/aggregator. Nulling out its only source
+  // reference violates billing_statements_source_check and fails the whole
+  // case delete with a raw Postgres error. Since these statements have no
+  // reason to survive their case's deletion, remove case-only-owned ones
+  // first — unless they're already paid or Tally-issued, in which case block
+  // the delete instead of silently destroying real financial records.
+  const { data: caseStatements } = await supabase
+    .from("billing_statements")
+    .select("id, statement_number, issuance_channel, contract_id, booking_id, proposal_id, invoice_id, aggregator_id")
+    .eq("case_id", id);
+
+  const caseOnlyStatements = (caseStatements ?? []).filter(
+    (s) => !s.contract_id && !s.booking_id && !s.proposal_id && !s.invoice_id && !s.aggregator_id
+  );
+
+  for (const statement of caseOnlyStatements) {
+    if (statement.issuance_channel === "tally") {
+      return NextResponse.json(
+        {
+          error: `Cannot delete — invoice ${statement.statement_number ?? statement.id.slice(0, 8)} was issued by Tally. Handle it via the cancel/credit-note flow before deleting this case.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    const { data: payments } = await supabase
+      .from("billing_payments")
+      .select("id")
+      .eq("billing_statement_id", statement.id)
+      .limit(1);
+
+    if (payments && payments.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Cannot delete — invoice ${statement.statement_number ?? statement.id.slice(0, 8)} has payments recorded. Reverse or delete payments first.`,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
+  if (caseOnlyStatements.length > 0) {
+    // billing_statements has RLS enabled with no DELETE policy for
+    // `authenticated` (only SELECT/INSERT/UPDATE) — the RLS-scoped client
+    // would silently delete 0 rows here, leaving the case delete below to
+    // still hit the same constraint violation. Admin client required.
+    const adminSupabase = await createAdminClient();
+    const { error: statementDeleteError } = await adminSupabase
+      .from("billing_statements")
+      .delete()
+      .in("id", caseOnlyStatements.map((s) => s.id));
+
+    if (statementDeleteError) {
+      return NextResponse.json({ error: statementDeleteError.message }, { status: 500 });
+    }
+  }
 
   const { error } = await supabase.from("cases").delete().eq("id", id);
 
