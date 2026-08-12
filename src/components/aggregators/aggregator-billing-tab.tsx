@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Loader2, AlertTriangle } from "lucide-react";
+import { Plus, Loader2, AlertTriangle, FileCheck, Zap } from "lucide-react";
 import { toast } from "sonner";
 import {
   AGG_INVOICE_STATUS_LABELS,
@@ -40,13 +40,47 @@ interface AggregatorBillingTabProps {
   aggregatorId: string;
   creditLimit?: number;
   primaryEmail?: string;
+  billingMode?: "proforma_first" | "gst_direct" | null;
 }
 
-export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }: AggregatorBillingTabProps) {
+export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail, billingMode }: AggregatorBillingTabProps) {
   const [invoices, setInvoices] = useState<AggregatorInvoice[]>([]);
   const [eligibleCaseCount, setEligibleCaseCount] = useState(0);
   const [eligibleCasesSum, setEligibleCasesSum] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // Proforma-vs-GST-Direct billing mode — same toggle pattern as
+  // src/components/contracts/contract-invoices-section.tsx. Takes effect
+  // from the next invoice only, never retroactive.
+  const [currentMode, setCurrentMode] = useState<"proforma_first" | "gst_direct">(billingMode || "gst_direct");
+  const [savingMode, setSavingMode] = useState(false);
+
+  useEffect(() => {
+    setCurrentMode(billingMode || "gst_direct");
+  }, [billingMode]);
+
+  const handleModeChange = async (newMode: "proforma_first" | "gst_direct") => {
+    if (newMode === currentMode) return;
+    setSavingMode(true);
+    try {
+      const res = await fetch(`/api/aggregators/${aggregatorId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_mode: newMode }),
+      });
+      if (res.ok) {
+        setCurrentMode(newMode);
+        toast.success(newMode === "gst_direct" ? "GST Direct billing enabled from next invoice" : "Proforma First billing enabled from next invoice");
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to update billing mode");
+      }
+    } catch {
+      toast.error("Failed to update billing mode");
+    } finally {
+      setSavingMode(false);
+    }
+  };
 
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
@@ -157,6 +191,47 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail }
 
   return (
     <div className="space-y-4">
+      {/* Billing mode toggle */}
+      <div className="rounded-md border p-4">
+        <p className="text-xs text-muted-foreground mb-2 font-medium">Invoice Type (from next invoice)</p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleModeChange("proforma_first")}
+            disabled={savingMode}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+              currentMode === "proforma_first"
+                ? "bg-[#015E65] text-white border-[#015E65]"
+                : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+            }`}
+          >
+            <FileCheck className="h-3.5 w-3.5 shrink-0" />
+            Proforma First
+          </button>
+          <button
+            onClick={() => handleModeChange("gst_direct")}
+            disabled={savingMode}
+            className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+              currentMode === "gst_direct"
+                ? "bg-violet-700 text-white border-violet-700"
+                : "bg-background text-muted-foreground border-border hover:bg-muted/30"
+            }`}
+          >
+            <Zap className="h-3.5 w-3.5 shrink-0" />
+            GST Direct
+          </button>
+        </div>
+        {currentMode === "gst_direct" && (
+          <p className="text-[10px] text-violet-700 mt-1.5">
+            Tax invoice issued directly · Accountant creates it in Tally, then the customer is billed · No proforma
+          </p>
+        )}
+        {currentMode === "proforma_first" && (
+          <p className="text-[10px] text-[#015E65] mt-1.5">
+            Proforma invoice sent immediately with a payment link · Real GST invoice issued once paid
+          </p>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="rounded-md border p-4">
           <p className="text-xs text-muted-foreground">Outstanding (unpaid + this month&apos;s estimate)</p>
