@@ -142,9 +142,7 @@ export default function AggregatorDetailPage({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="rate-cards">Rate Cards</TabsTrigger>
-          {aggregator.billing_method === "postpaid" && (
-            <TabsTrigger value="billing">Billing</TabsTrigger>
-          )}
+          <TabsTrigger value="billing">Billing</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -278,23 +276,22 @@ export default function AggregatorDetailPage({
           </Card>
         </TabsContent>
 
-        {aggregator.billing_method === "postpaid" && (
-          <TabsContent value="billing" className="mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Billing</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <AggregatorBillingTab
-                  aggregatorId={id}
-                  creditLimit={aggregator.credit_limit}
-                  primaryEmail={aggregator.primary_email}
-                  billingMode={aggregator.billing_mode}
-                />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
+        <TabsContent value="billing" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Billing</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AggregatorBillingTab
+                aggregatorId={id}
+                creditLimit={aggregator.credit_limit}
+                primaryEmail={aggregator.primary_email}
+                billingMode={aggregator.billing_mode}
+                billingMethod={aggregator.billing_method}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       {/* Edit Dialog */}

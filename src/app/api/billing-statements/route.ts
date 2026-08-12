@@ -17,8 +17,9 @@ export async function GET(request: NextRequest) {
   const contractId    = searchParams.get("contract_id");
   const bookingId     = searchParams.get("booking_id");
   const leadId        = searchParams.get("lead_id");
+  const caseId        = searchParams.get("case_id");
   const status        = searchParams.get("status");
-  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined'
+  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ...
 
   const offset = (page - 1) * limit;
 
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
   if (contractId)    query = query.eq("contract_id", contractId);
   if (bookingId)     query = query.eq("booking_id", bookingId);
   if (leadId)        query = query.eq("lead_id", leadId);
+  if (caseId)        query = query.eq("case_id", caseId);
   if (status)        query = query.eq("status", status);
   if (statementType) query = query.eq("statement_type", statementType);
 

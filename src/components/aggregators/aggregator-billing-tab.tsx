@@ -41,9 +41,16 @@ interface AggregatorBillingTabProps {
   creditLimit?: number;
   primaryEmail?: string;
   billingMode?: "proforma_first" | "gst_direct" | null;
+  billingMethod?: "postpaid" | "prepaid";
 }
 
-export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail, billingMode }: AggregatorBillingTabProps) {
+export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail, billingMode, billingMethod }: AggregatorBillingTabProps) {
+  // Prepaid aggregators bill per-case from the case's own Billing tab
+  // (src/lib/case-invoicing.ts) — this tab's consolidated-invoice UI
+  // (Outstanding estimate, Generate Invoice, invoice history) only applies
+  // to postpaid's bundled monthly billing. Prepaid aggregators still need
+  // this tab for the Proforma/GST-Direct toggle above, just not the rest.
+  const isPostpaid = billingMethod !== "prepaid";
   const [invoices, setInvoices] = useState<AggregatorInvoice[]>([]);
   const [eligibleCaseCount, setEligibleCaseCount] = useState(0);
   const [eligibleCasesSum, setEligibleCasesSum] = useState(0);
@@ -232,6 +239,8 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail, 
         )}
       </div>
 
+      {isPostpaid && (
+      <>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="rounded-md border p-4">
           <p className="text-xs text-muted-foreground">Outstanding (unpaid + this month&apos;s estimate)</p>
@@ -349,6 +358,8 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, primaryEmail, 
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
 
       {/* Generate Invoice Dialog */}

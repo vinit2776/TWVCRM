@@ -428,10 +428,11 @@ export async function PATCH(
     );
   }
 
-  // Prepaid aggregators and direct clients (no aggregator) both require an
-  // approved Payment Proof document before the Leave & License Agreement
-  // can be executed. TODO(Slice 2): replace this manual-proof check with a
-  // real invoice's payment_status once per-case VO invoicing ships.
+  // Prepaid aggregators and direct clients (no aggregator) both require a
+  // paid VO case invoice before the Leave & License Agreement can execute —
+  // see src/lib/case-invoicing.ts. This replaces the earlier manual
+  // "approved Payment Proof document" gate with the real, Tally-issued
+  // invoice's payment status.
   if (action === "mark_executed" && currentAgreement.type === "leave_license") {
     const { data: caseRow } = await supabase
       .from("cases")
@@ -440,22 +441,23 @@ export async function PATCH(
       .single();
 
     const aggregator = caseRow?.aggregator as { billing_method?: string } | null;
-    const requiresPaymentProof = !caseRow?.aggregator_id || aggregator?.billing_method === "prepaid";
+    const requiresPaidInvoice = !caseRow?.aggregator_id || aggregator?.billing_method === "prepaid";
 
-    if (requiresPaymentProof) {
-      const { data: paymentProof } = await supabase
-        .from("case_documents")
-        .select("status")
+    if (requiresPaidInvoice) {
+      const { data: statement } = await supabase
+        .from("billing_statements")
+        .select("payment_status")
         .eq("case_id", caseId)
-        .eq("document_type", "payment_proof")
+        .eq("statement_type", "vo_case")
+        .is("voided_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
-      if (!paymentProof || paymentProof.status !== "approved") {
+      if (!statement || statement.payment_status !== "paid") {
         return NextResponse.json(
           {
-            error: caseRow?.aggregator_id
-              ? "This aggregator is prepaid — Payment Proof must be uploaded and approved (Documents tab) before this agreement can be executed."
-              : "Direct-client cases require an approved Payment Proof (Documents tab) before this agreement can be executed.",
+            error: "An invoice must be generated and paid before this agreement can be executed. Use \"Generate Invoice\" on the case, then have accounts issue the Tally GST invoice and the customer pay it.",
           },
           { status: 400 }
         );

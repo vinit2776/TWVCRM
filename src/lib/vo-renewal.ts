@@ -242,7 +242,9 @@ export async function createRenewalBillingStatement(params: {
       finalized_at: new Date().toISOString(),
       line_items: [
         {
-          section: "Virtual Office Renewal",
+          type: "prepaid_rent",
+          label: "Virtual Office Renewal",
+          subtotal,
           items: [
             {
               description: `Virtual Office License Fee — Renewal · ${locationName} · ${formatDate(periodStart)} to ${formatDate(periodEnd)}`,

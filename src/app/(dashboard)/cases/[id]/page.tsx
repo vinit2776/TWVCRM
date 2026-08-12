@@ -24,6 +24,7 @@ import { CaseDocumentsTab } from "@/components/cases/case-documents-tab";
 import { CaseComplianceTab } from "@/components/cases/case-compliance-tab";
 import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
 import { CaseLeaveAgreementTab } from "@/components/cases/case-leave-agreement-tab";
+import { CaseBillingTab } from "@/components/cases/case-billing-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
 import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-history";
@@ -159,6 +160,7 @@ export default function CaseDetailPage({
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
           <TabsTrigger value="proposal" className="flex items-center gap-1">Proposal <InfoTooltip text="Commercial offer with pricing and terms for this case" side="bottom" /></TabsTrigger>
           <TabsTrigger value="agreement" className="flex items-center gap-1">Agreement <InfoTooltip text="Formal Leave & License agreement with legal clauses and e-stamping" side="bottom" /></TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
           <TabsTrigger value="comments">Comments</TabsTrigger>
           <TabsTrigger value="emails">Emails</TabsTrigger>
         </TabsList>
@@ -377,6 +379,10 @@ export default function CaseDetailPage({
 
         <TabsContent value="agreement" className="mt-4">
           <CaseLeaveAgreementTab caseId={id} />
+        </TabsContent>
+
+        <TabsContent value="billing" className="mt-4">
+          <CaseBillingTab caseId={id} />
         </TabsContent>
 
         <TabsContent value="comments" className="mt-4">

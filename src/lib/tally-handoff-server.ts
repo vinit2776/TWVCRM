@@ -273,7 +273,9 @@ export async function handleStatementPaid(
       invoice_id,
       case_id,
       aggregator_id,
-      contract:contracts!billing_statements_contract_id_fkey(billing_mode)
+      contract:contracts!billing_statements_contract_id_fkey(billing_mode),
+      case:cases!billing_statements_case_id_fkey(aggregator:aggregators!cases_aggregator_id_fkey(billing_mode)),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(billing_mode)
     `)
     .eq("id", statementId)
     .maybeSingle();
@@ -295,10 +297,28 @@ export async function handleStatementPaid(
 
   const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
 
-  // Virtual Office statements (per-case or aggregator-consolidated) are
-  // always gst_direct-shaped — no contract, no proposal, no PI. The GST
-  // invoice is already issued (via Tally handoff) by the time payment lands.
+  // Virtual Office statements (per-case or aggregator-consolidated). Direct-
+  // client case statements have no aggregator at all and are always
+  // gst_direct-shaped; aggregator-sourced ones (per-case or postpaid
+  // consolidated) honor the aggregator's own billing_mode, same as contracts.
   if (caseId || aggregatorId) {
+    const voAggregator = (statement as unknown as {
+      case: { aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null } | null;
+      aggregator: { billing_mode: "proforma_first" | "gst_direct" | null } | null;
+    });
+    const voBillingMode = voAggregator.case?.aggregator?.billing_mode ?? voAggregator.aggregator?.billing_mode;
+
+    if (voBillingMode === "proforma_first") {
+      if (currentState === "gst_sent_awaiting_payment") {
+        await setHandoffState(supabase, statementId, "complete", trigger);
+        return;
+      }
+      await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+      return;
+    }
+
+    // gst_direct (or no aggregator, i.e. a direct-client case): the GST
+    // invoice was already issued via Tally handoff by the time payment lands.
     if (currentState === "gst_sent_awaiting_payment") {
       await setHandoffState(supabase, statementId, "complete", trigger);
       return;
