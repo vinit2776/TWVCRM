@@ -125,6 +125,8 @@ export interface Lead {
   pan_number?: string;
   gst_number?: string;
   entity_type?: string | null;
+  id_proof_path?: string | null;
+  id_proof_uploaded_at?: string | null;
   // Followup flag (attached by API, not DB column)
   _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null;
   // Address
