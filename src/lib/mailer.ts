@@ -25,6 +25,23 @@ if (!smtpUser || !smtpPass) {
 // Port 587 uses STARTTLS (requireTLS=true, secure=false).
 // Port 465 uses implicit TLS (secure=true). 465 is often blocked from cloud IPs.
 // We default to 587 which works reliably from Vercel/AWS.
+//
+// Explicit timeouts matter here: nodemailer's own defaults (connectionTimeout
+// ~2min, socketTimeout ~10min) are far longer than callers' outer timeouts
+// (e.g. EMAIL_TIMEOUT_MS=15s in send-proforma.ts). When Gmail SMTP is slow to
+// respond from Vercel's network, sendMail() would just hang past that outer
+// deadline without ever throwing — so the resend.emails.send() wrapper below
+// never gets a chance to catch an SMTP failure and fall back to Resend; the
+// whole operation is abandoned first. Short timeouts here make a stuck SMTP
+// attempt fail fast, leaving the fallback enough of the outer budget to run.
+// connectionTimeout and greetingTimeout are separate, potentially sequential
+// phases (connect, then wait for greeting) — kept low enough that even their
+// worst-case sum leaves several seconds of the outer 15s budget for the
+// Resend fallback to actually complete.
+const SMTP_CONNECTION_TIMEOUT_MS = 5_000;
+const SMTP_GREETING_TIMEOUT_MS = 3_000;
+const SMTP_SOCKET_TIMEOUT_MS = 5_000;
+
 export const transporter = nodemailer.createTransport({
   host: smtpHost,
   port: smtpPort,
@@ -34,6 +51,9 @@ export const transporter = nodemailer.createTransport({
     user: smtpUser,
     pass: smtpPass,
   },
+  connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+  greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+  socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
 });
 
 // Resend SDK instance for fallback delivery
