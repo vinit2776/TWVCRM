@@ -11,7 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
+import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban, Send, Mail, X } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -27,7 +36,10 @@ interface CaseBillingInfo {
   case_source: "aggregator" | "direct";
   bill_to: "aggregator" | "client" | null;
   billing_mode: "proforma_first" | "gst_direct";
-  aggregator: { billing_method?: string } | null;
+  client_name: string | null;
+  client_company_name: string | null;
+  client_email: string | null;
+  aggregator: { billing_method?: string; billing_mode?: "proforma_first" | "gst_direct"; name?: string; primary_email?: string | null } | null;
 }
 
 interface CaseStatement {
@@ -49,7 +61,13 @@ interface CaseStatement {
   gst_invoice_number: string | null;
 }
 
+interface InvoicePreview {
+  statementNumber: string | null;
+  totalAmount: number;
+}
+
 const CREDIT_NOTE_ROLES = ["accounts", "admin"];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [caseInfo, setCaseInfo] = useState<CaseBillingInfo | null>(null);
@@ -59,6 +77,12 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [generating, setGenerating] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [showCreditNoteCancel, setShowCreditNoteCancel] = useState(false);
+
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<InvoicePreview | null>(null);
+  const [ccEmails, setCcEmails] = useState<string[]>([]);
+  const [ccInput, setCcInput] = useState("");
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
@@ -87,6 +111,29 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
 
   const eligible = caseInfo && (caseInfo.case_source === "direct" || caseInfo.aggregator?.billing_method === "prepaid");
   const needsBillTo = caseInfo?.case_source === "aggregator" && !caseInfo.bill_to;
+
+  // Mirrors the billingMode resolution in src/lib/case-invoicing.ts — aggregator-
+  // sourced cases honor the aggregator's choice, direct-client cases carry their own.
+  const resolvedBillingMode: "proforma_first" | "gst_direct" = caseInfo?.case_source === "aggregator"
+    ? (caseInfo.aggregator?.billing_mode === "proforma_first" ? "proforma_first" : "gst_direct")
+    : (caseInfo?.billing_mode === "gst_direct" ? "gst_direct" : "proforma_first");
+
+  const billToAggregator = caseInfo?.case_source === "aggregator" && caseInfo.bill_to === "aggregator";
+  const primaryEmail = billToAggregator ? caseInfo?.aggregator?.primary_email ?? null : caseInfo?.client_email ?? null;
+  const primaryName = billToAggregator
+    ? caseInfo?.aggregator?.name ?? ""
+    : caseInfo?.client_company_name || caseInfo?.client_name || "";
+
+  // A statement that exists, isn't voided, and has had nothing happen to it
+  // yet (no GST issuance, no Tally handoff, never dispatched) — the state
+  // left behind by the "preview before send" flow when the operator closes
+  // the dialog without sending, or a dispatch attempt fails.
+  const isUnsentPi = !!statement
+    && statement.status !== "voided"
+    && !statement.gst_invoice_number
+    && !statement.handoff_state
+    && !statement.proforma_sent_at
+    && resolvedBillingMode === "proforma_first";
 
   const handleBillToChange = async (value: string) => {
     setSavingBillTo(true);
@@ -126,21 +173,98 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     }
   };
 
+  const addCcEmail = () => {
+    const email = ccInput.trim().toLowerCase();
+    if (!email) return;
+    if (!EMAIL_RE.test(email)) {
+      toast.error("Invalid email address");
+      return;
+    }
+    if (email === primaryEmail?.toLowerCase()) {
+      toast.error("That is already the primary recipient");
+      return;
+    }
+    if (ccEmails.includes(email)) {
+      toast.error("Already added");
+      return;
+    }
+    setCcEmails((prev) => [...prev, email]);
+    setCcInput("");
+  };
+
+  const resetPreviewState = () => {
+    setPreviewOpen(false);
+    setPreview(null);
+    setCcEmails([]);
+    setCcInput("");
+  };
+
+  // "Generate Invoice" (or "Send Invoice" for an already-created-but-unsent
+  // statement — see isUnsentPi). For proforma_first this creates the
+  // statement without dispatching and opens the preview dialog; the actual
+  // send happens from there via handleConfirmSend. gst_direct is unaffected
+  // — it never dispatches from this route, so the whole preview step is
+  // skipped and it goes straight to the Tally Inbox as before.
   const handleGenerateInvoice = async () => {
+    if (isUnsentPi && statement) {
+      setPreview({ statementNumber: statement.statement_number, totalAmount: statement.total_amount });
+      setPreviewOpen(true);
+      return;
+    }
     setGenerating(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/invoice`, { method: "POST" });
+      const res = await fetch(`/api/cases/${caseId}/invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preview: true }),
+      });
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error || "Failed to generate invoice");
         return;
       }
-      toast.success("Invoice generated — it now sits in the Tally Inbox for accounts to process");
-      await load();
+      if (json.data?.requires_send) {
+        setPreview({
+          statementNumber: json.data.preview?.statement_number ?? null,
+          totalAmount: Number(json.data.preview?.total_amount ?? 0),
+        });
+        setPreviewOpen(true);
+        await load();
+      } else {
+        toast.success("Invoice generated — it now sits in the Tally Inbox for accounts to process");
+        await load();
+      }
     } catch {
       toast.error("Failed to generate invoice");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleConfirmSend = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/invoice/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc: ccEmails }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to send invoice");
+        return;
+      }
+      if (json.data?.no_contact) {
+        toast.warning("Invoice created but no email/phone on file — contact the customer manually.");
+      } else {
+        toast.success(`Invoice sent to ${json.data?.emailed_to ?? "customer"}`);
+      }
+      resetPreviewState();
+      await load();
+    } catch {
+      toast.error("Failed to send invoice");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -295,10 +419,20 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                 <p className="text-xs text-muted-foreground">
                   Proforma invoice sent to the customer on {formatDate(statement.proforma_sent_at)} — awaiting payment via the payment link.
                 </p>
+              ) : isUnsentPi ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Invoice created but not yet sent to the customer.
+                </div>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Awaiting payment — this invoice will route to the Tally Inbox once paid.
                 </p>
+              )}
+              {isUnsentPi && (
+                <Button size="sm" onClick={handleGenerateInvoice} disabled={generating}>
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                  Send Invoice
+                </Button>
               )}
               {statement.issuance_channel === "tally" &&
                 statement.status !== "voided" &&
@@ -335,6 +469,87 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
           onClose={() => setShowCreditNoteCancel(false)}
         />
       )}
+
+      {/* Send Invoice Preview Dialog */}
+      <Dialog open={previewOpen} onOpenChange={(open) => { if (!open) resetPreviewState(); else setPreviewOpen(true); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send Proforma Invoice</DialogTitle>
+            <DialogDescription>
+              Review the recipient and amount before sending. A Razorpay payment link will be included.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2 text-sm">
+            <p className="font-medium text-xs text-muted-foreground uppercase tracking-wide">Invoice Summary</p>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Reference</span>
+              <span className="font-mono">{preview?.statementNumber ?? "—"}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between font-semibold">
+              <span>Total Due</span>
+              <span>{formatCurrency(preview?.totalAmount ?? 0)}</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">To (primary — cannot be removed)</p>
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <div className="text-sm min-w-0">
+                  {primaryEmail ? (
+                    <>
+                      <span className="font-medium">{primaryName}</span>
+                      <span className="text-muted-foreground ml-1.5 truncate">&lt;{primaryEmail}&gt;</span>
+                    </>
+                  ) : (
+                    <span className="text-amber-600 text-xs">No email on file — invoice will be created but not emailed</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">CC (optional)</p>
+              {ccEmails.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {ccEmails.map((email) => (
+                    <span key={email} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+                      {email}
+                      <button onClick={() => setCcEmails((prev) => prev.filter((e) => e !== email))} className="text-muted-foreground hover:text-foreground">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={ccInput}
+                  onChange={(e) => setCcInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addCcEmail(); } }}
+                  placeholder="Add CC email and press Enter"
+                  className="flex-1 text-sm border rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <Button size="sm" variant="outline" onClick={addCcEmail} type="button">Add</Button>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={resetPreviewState}>
+              Cancel
+            </Button>
+            <Button disabled={sending} onClick={handleConfirmSend}>
+              {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              Send Invoice
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

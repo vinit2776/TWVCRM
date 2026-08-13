@@ -52,15 +52,31 @@ export class CaseInvoicingError extends Error {
   }
 }
 
+export interface CaseInvoiceResult {
+  statementId: string;
+  billingMode: "proforma_first" | "gst_direct";
+  /** True when the statement was created but NOT dispatched — proforma_first
+   *  with opts.dispatch === false. Caller must trigger the send separately
+   *  (see POST /api/cases/[id]/invoice/send) once the operator confirms. */
+  requiresManualSend: boolean;
+}
+
 /**
  * Creates the vo_case billing statement for a prepaid-aggregator or
  * direct-client case and routes it into the Tally handoff pipeline.
  * Throws CaseInvoicingError for anything the caller should turn into a 4xx.
+ *
+ * By default (opts.dispatch !== false) a proforma_first statement is
+ * dispatched (emailed + Razorpay link) immediately after creation, same as
+ * historical behavior. Pass { dispatch: false } to create the statement
+ * without sending it — used by the "preview before send" flow so an
+ * operator can review the amount/recipient and add CC emails first.
  */
 export async function createCaseInvoiceStatement(
   supabase: SupabaseClient,
   caseData: CaseForInvoicing,
-): Promise<string> {
+  opts: { dispatch?: boolean } = {},
+): Promise<CaseInvoiceResult> {
   if (!caseData.rate || caseData.rate <= 0) {
     throw new CaseInvoicingError("Case has no rate set — cannot generate an invoice.", 400);
   }
@@ -177,39 +193,48 @@ export async function createCaseInvoiceStatement(
 
   const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
 
+  const shouldAutoDispatch = opts.dispatch !== false;
+  let requiresManualSend = false;
   if (billingMode === "proforma_first" && !handoff.skipLegacyDispatch) {
-    // Previously discarded — a dispatch failure (SMTP/Resend/Razorpay down,
-    // no contact info, etc.) was silent: the case invoice still "succeeded"
-    // with no record of why the customer never got anything. Log both to
-    // Vercel's console (immediate visibility) and the audit trail (queryable
-    // after the fact, same as every other mutation in this codebase).
-    const dispatchResult = await dispatchProforma(supabase, statement.id);
-    if (!dispatchResult.success) {
-      console.error(
-        `[case-invoicing] dispatchProforma failed for statement ${statement.id} (case ${caseData.id}): ${dispatchResult.error ?? "unknown error"}`,
-      );
-    }
-    void logAudit(supabase, {
-      entityType: "billing_statement",
-      entityId: statement.id,
-      action: "update",
-      performedBy: "system:case-invoicing",
-      changes: {
-        proforma_dispatch: {
-          old: null,
-          new: {
-            success: dispatchResult.success,
-            error: dispatchResult.error ?? null,
-            emailed_to: dispatchResult.emailedTo,
-            razorpay_link_created: !!dispatchResult.razorpayLinkUrl,
-            no_contact: dispatchResult.noContact,
+    if (!shouldAutoDispatch) {
+      // Caller wants a preview step before sending — leave the statement
+      // finalized-but-undispatched; POST /api/cases/[id]/invoice/send
+      // triggers the actual dispatch once the operator confirms.
+      requiresManualSend = true;
+    } else {
+      // Previously discarded — a dispatch failure (SMTP/Resend/Razorpay down,
+      // no contact info, etc.) was silent: the case invoice still "succeeded"
+      // with no record of why the customer never got anything. Log both to
+      // Vercel's console (immediate visibility) and the audit trail (queryable
+      // after the fact, same as every other mutation in this codebase).
+      const dispatchResult = await dispatchProforma(supabase, statement.id);
+      if (!dispatchResult.success) {
+        console.error(
+          `[case-invoicing] dispatchProforma failed for statement ${statement.id} (case ${caseData.id}): ${dispatchResult.error ?? "unknown error"}`,
+        );
+      }
+      void logAudit(supabase, {
+        entityType: "billing_statement",
+        entityId: statement.id,
+        action: "update",
+        performedBy: "system:case-invoicing",
+        changes: {
+          proforma_dispatch: {
+            old: null,
+            new: {
+              success: dispatchResult.success,
+              error: dispatchResult.error ?? null,
+              emailed_to: dispatchResult.emailedTo,
+              razorpay_link_created: !!dispatchResult.razorpayLinkUrl,
+              no_contact: dispatchResult.noContact,
+            },
           },
         },
-      },
-    });
+      });
+    }
   }
   // gst_direct: no dispatch — statement sits in the Tally Inbox until an
   // accountant uploads the real GST invoice (upload-gst-invoice/route.ts).
 
-  return statement.id;
+  return { statementId: statement.id, billingMode, requiresManualSend };
 }
