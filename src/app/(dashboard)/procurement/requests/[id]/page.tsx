@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
   Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart, ShieldCheck,
-  Activity, ArrowRight, Receipt, Pencil,
+  Activity, ArrowRight, Receipt, Pencil, Paperclip,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -571,6 +571,11 @@ export default function PurchaseRequestDetailPage() {
                           <Badge className={BILLING_STATEMENT_STATUS_COLORS[s.status] ?? ""} variant="secondary">
                             {BILLING_STATEMENT_STATUS_LABELS[s.status] ?? s.status}
                           </Badge>
+                          {(s.supporting_documents?.length ?? 0) > 0 && (
+                            <span className="flex items-center gap-0.5 text-pink-700" title="Supporting documents attached">
+                              <Paperclip className="h-3 w-3" /> {s.supporting_documents!.length}
+                            </span>
+                          )}
                           <span className="font-medium">{formatCurrency(s.total_amount)}</span>
                         </div>
                       ))}

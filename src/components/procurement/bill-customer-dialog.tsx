@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Loader2, ArrowLeft } from "lucide-react";
+import { Plus, Trash2, Loader2, ArrowLeft, Paperclip, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,12 +17,19 @@ import {
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 
 interface BillLineItem {
   id: string; // local draft id
   description: string;
   quantity: string;
   unit_price: string;
+}
+
+interface StagedDocument {
+  id: string; // local draft id
+  file: File;
 }
 
 function generateLocalId() {
@@ -51,6 +58,7 @@ export function BillCustomerDialog({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [supportingDocs, setSupportingDocs] = useState<StagedDocument[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -66,8 +74,21 @@ export function BillCustomerDialog({
     );
     setNotes("");
     setPreviewing(false);
+    setSupportingDocs([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  const addSupportingDocs = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setSupportingDocs((prev) => [
+      ...prev,
+      ...Array.from(files).map((file) => ({ id: generateLocalId(), file })),
+    ]);
+  };
+
+  const removeSupportingDoc = (localId: string) => {
+    setSupportingDocs((prev) => prev.filter((d) => d.id !== localId));
+  };
 
   const addItem = () => {
     setItems((prev) => [...prev, { id: generateLocalId(), description: "", quantity: "1", unit_price: "" }]);
@@ -113,15 +134,66 @@ export function BillCustomerDialog({
   const handleConfirmSend = async () => {
     setSubmitting(true);
     try {
+      // Upload any staged supporting documents first — files are not sent
+      // until the user confirms, so a cancelled dialog leaves nothing orphaned.
+      const uploadedDocs: { filePath: string; fileName: string; mimeType: string }[] = [];
+      if (supportingDocs.length > 0) {
+        const supabase = createBrowserClient();
+        for (const staged of supportingDocs) {
+          let prepared;
+          try {
+            prepared = await prepareUpload(staged.file);
+          } catch (e) {
+            toast.error(e instanceof UploadTooLargeError ? e.message : "Failed to prepare a supporting document");
+            return;
+          }
+          if (!prepared) return; // user declined the large-file confirm
+
+          const urlRes = await fetch("/api/documents/upload-url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: prepared.name,
+              mimeType: prepared.type,
+              path: `reimbursement-support/${prId}`,
+            }),
+          });
+          if (!urlRes.ok) {
+            toast.error(`Failed to upload "${staged.file.name}"`);
+            return;
+          }
+          const { token, path: filePath } = await urlRes.json();
+
+          const { error: storageError } = await supabase.storage
+            .from("crm-documents")
+            .uploadToSignedUrl(filePath, token, prepared, {
+              contentType: prepared.type || "application/octet-stream",
+            });
+          if (storageError) {
+            toast.error(`Failed to upload "${staged.file.name}": ${storageError.message}`);
+            return;
+          }
+
+          uploadedDocs.push({ filePath, fileName: prepared.name, mimeType: prepared.type || "application/octet-stream" });
+        }
+      }
+
       const res = await fetch(`/api/procurement/requests/${prId}/bill-customer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: cleanedItems, notes: notes.trim() || undefined }),
+        body: JSON.stringify({
+          items: cleanedItems,
+          notes: notes.trim() || undefined,
+          supportingDocuments: uploadedDocs.length > 0 ? uploadedDocs : undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error || "Failed to create invoice");
         return;
+      }
+      if (json.data.supportingDocumentsError) {
+        toast.warning("Invoice created, but attaching the supporting documents failed. You can re-attach them later.");
       }
 
       // Finalize + dispatch immediately — same one-click behaviour as the
@@ -225,6 +297,51 @@ export function BillCustomerDialog({
                 />
               </div>
 
+              <div className="space-y-1.5 pt-2">
+                <Label>
+                  Supporting Documents <span className="text-muted-foreground font-normal">(optional)</span>
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Receipts / vendor bills — attached as extra pages on the invoice sent to the customer.
+                </p>
+                {supportingDocs.length > 0 && (
+                  <div className="space-y-1">
+                    {supportingDocs.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between gap-2 text-xs bg-muted/40 rounded px-2 py-1.5">
+                        <span className="flex items-center gap-1 truncate">
+                          <Paperclip className="h-3 w-3 shrink-0" /> {d.file.name}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 text-muted-foreground hover:text-red-600 shrink-0"
+                          onClick={() => removeSupportingDoc(d.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Label
+                  htmlFor="bill-customer-supporting-docs"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground border rounded-md px-2.5 py-1.5 cursor-pointer hover:bg-muted/50 w-fit"
+                >
+                  <Upload className="h-3.5 w-3.5" /> Add file(s)
+                </Label>
+                <input
+                  id="bill-customer-supporting-docs"
+                  type="file"
+                  multiple
+                  accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
+                  className="hidden"
+                  onChange={(e) => {
+                    addSupportingDocs(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+
               <div className="flex justify-end text-sm font-medium pt-2 border-t">
                 Subtotal: {formatCurrency(subtotal)} <span className="text-muted-foreground font-normal ml-1">(+ GST)</span>
               </div>
@@ -282,6 +399,13 @@ export function BillCustomerDialog({
                 </div>
               </div>
             </div>
+
+            {supportingDocs.length > 0 && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Paperclip className="h-3.5 w-3.5" />
+                {supportingDocs.length} supporting document{supportingDocs.length === 1 ? "" : "s"} will be attached to the invoice.
+              </p>
+            )}
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setPreviewing(false)} disabled={submitting}>
