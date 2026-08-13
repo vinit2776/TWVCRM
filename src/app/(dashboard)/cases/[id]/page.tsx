@@ -135,6 +135,13 @@ export default function CaseDetailPage({
         <div className="flex gap-2">
           <Button
             variant="outline"
+            onClick={() => router.push(`/cases/${caseData.id}/edit`)}
+          >
+            <Edit2 className="mr-2 h-4 w-4" />
+            Edit
+          </Button>
+          <Button
+            variant="outline"
             onClick={() => setStatusDialogOpen(true)}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
