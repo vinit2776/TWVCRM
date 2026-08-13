@@ -14,7 +14,7 @@ import {
 import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
@@ -45,6 +45,8 @@ interface CaseStatement {
   tally_credit_note_number: string | null;
   tally_last_error: string | null;
   tally_delivered_at: string | null;
+  proforma_sent_at: string | null;
+  gst_invoice_number: string | null;
 }
 
 const CREDIT_NOTE_ROLES = ["accounts", "admin"];
@@ -265,6 +267,23 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   />
                 </div>
               </div>
+              {(() => {
+                const viewHref = statement.gst_invoice_number
+                  ? `/api/billing-statements/${statement.id}/gst-invoice-pdf`
+                  : statement.proforma_sent_at
+                    ? `/api/billing-statements/${statement.id}/proforma-pdf`
+                    : null;
+                return viewHref ? (
+                  <a
+                    href={viewHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                  >
+                    View Invoice <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null;
+              })()}
               {statement.handoff_state ? (
                 <Link
                   href={`/accounting/inbox?id=${statement.id}`}
@@ -272,6 +291,10 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                 >
                   View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
                 </Link>
+              ) : statement.proforma_sent_at ? (
+                <p className="text-xs text-muted-foreground">
+                  Proforma invoice sent to the customer on {formatDate(statement.proforma_sent_at)} — awaiting payment via the payment link.
+                </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Awaiting payment — this invoice will route to the Tally Inbox once paid.

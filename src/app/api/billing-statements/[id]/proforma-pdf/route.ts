@@ -49,6 +49,11 @@ export async function GET(
         id, invoice_number,
         lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
       ),
+      case:cases!billing_statements_case_id_fkey(
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      ),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
     .eq("id", id)
@@ -71,12 +76,43 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const invoice = statement.invoice as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = (contract?.lead ?? proposal?.lead ?? invoice?.lead) as any;
-  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? "";
+  const voCase = statement.case as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voAggregator = statement.aggregator as any;
 
-  if (!contract && !proposal && !invoice) {
-    return NextResponse.json({ error: "No contract, proposal, or invoice linked to this statement" }, { status: 400 });
+  if (!contract && !proposal && !invoice && !voCase && !voAggregator) {
+    return NextResponse.json({ error: "No contract, proposal, invoice, case, or aggregator linked to this statement" }, { status: 400 });
   }
+
+  /** Synthesizes the same lead shape used below from a Virtual Office case
+   *  or aggregator — mirrors leadFromVoSource in send-proforma.ts. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function leadFromVoSource(): any {
+    if (voCase) {
+      const billToAggregator = voCase.bill_to === "aggregator" ? voCase.aggregator : null;
+      if (billToAggregator) {
+        return {
+          company: billToAggregator.name, gst_number: billToAggregator.gst_number, state: null,
+          street: null, city: null, zip_code: null, first_name: null, last_name: null,
+        };
+      }
+      return {
+        company: voCase.client_company_name ?? voCase.client_name, gst_number: voCase.client_gst_number, state: null,
+        street: null, city: null, zip_code: null, first_name: null, last_name: null,
+      };
+    }
+    if (voAggregator) {
+      return {
+        company: voAggregator.name, gst_number: voAggregator.gst_number, state: null,
+        street: null, city: null, zip_code: null, first_name: null, last_name: null,
+      };
+    }
+    return null;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lead = (contract?.lead ?? proposal?.lead ?? invoice?.lead ?? leadFromVoSource()) as any;
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? voCase?.case_number ?? voAggregator?.name ?? "";
 
   // Recalculate totals — derive from the structured line_items sections (the
   // same data the table below is built from) so the totals box can never
