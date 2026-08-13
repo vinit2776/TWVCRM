@@ -311,7 +311,7 @@ export async function GET(req: NextRequest) {
       .maybeSingle(),
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("billing_payments")
-      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
+      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
       .in("billing_statement_id", statementIds)
       .order("payment_date", { ascending: false }),
     // Only fetched in single-row mode with ?include=timeline.
@@ -400,6 +400,7 @@ export async function GET(req: NextRequest) {
       payment_date: p.payment_date as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
+      notes: (p.notes as string | null) ?? null,
       razorpay_payment_id: rzpId,
       recorded_by_name: recorder?.full_name ?? null,
       settled: settlement?.settled ?? null,

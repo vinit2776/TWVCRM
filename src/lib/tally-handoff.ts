@@ -167,6 +167,7 @@ export interface InboxPayment {
   payment_date: string;
   payment_mode: string;
   payment_reference: string | null;
+  notes: string | null;
   razorpay_payment_id: string | null;
   recorded_by_name: string | null;
   // Razorpay settlement (from razorpay_settlement_cache)
