@@ -97,7 +97,7 @@ export async function GET(
         };
       }
       return {
-        company: voCase.client_company_name ?? voCase.client_name, gst_number: voCase.client_gst_number, state: null,
+        company: voCase.client_company_name || voCase.client_name, gst_number: voCase.client_gst_number, state: null,
         street: null, city: null, zip_code: null, first_name: null, last_name: null,
       };
     }

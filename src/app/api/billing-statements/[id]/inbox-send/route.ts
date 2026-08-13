@@ -161,7 +161,7 @@ export async function POST(
         };
       }
       return {
-        id: s.case.id, first_name: null, last_name: null, company: s.case.client_company_name ?? s.case.client_name,
+        id: s.case.id, first_name: null, last_name: null, company: s.case.client_company_name || s.case.client_name,
         email: s.case.client_email, billing_emails: null, mobile: s.case.client_phone, phone: null,
       };
     }
