@@ -36,7 +36,13 @@ interface InfraData {
     memory: { used_bytes: number; total_bytes: number; percent: number };
     connections: { max: number };
     auth_users: { count: number; limit: number };
-    storage: { bucket_count: number; file_count: number; limit_bytes: number };
+    storage: {
+      bucket_count: number;
+      file_count: number;
+      used_bytes: number;
+      included_bytes: number;
+      buckets: Array<{ id: string; public: boolean; file_count: number; used_bytes: number }>;
+    };
     tables: Array<{ name: string; row_count: number }>;
     total_rows: number;
   };
@@ -131,6 +137,7 @@ function UsageMeter({
   percent,
   icon: Icon,
   formatFn = formatBytes,
+  warningText = "Nearing capacity — consider upgrading",
 }: {
   label: string;
   used: number;
@@ -138,6 +145,7 @@ function UsageMeter({
   percent: number;
   icon: React.ComponentType<{ className?: string }>;
   formatFn?: (n: number) => string;
+  warningText?: string;
 }) {
   return (
     <Card>
@@ -163,7 +171,7 @@ function UsageMeter({
         {percent >= 80 && (
           <p className="mt-2 text-xs text-red-600 flex items-center gap-1">
             <AlertTriangle className="h-3 w-3" />
-            Nearing capacity — consider upgrading
+            {warningText}
           </p>
         )}
       </CardContent>
@@ -277,6 +285,9 @@ export default function InfrastructurePage() {
   const sb = data.supabase;
   const gw = data.google_workspace;
   const rs = data.resend;
+  const storagePercent = sb.storage.included_bytes > 0
+    ? Math.round((sb.storage.used_bytes / sb.storage.included_bytes) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -322,6 +333,10 @@ export default function InfrastructurePage() {
               <div className="flex items-center gap-2">
                 <div className={`h-2 w-2 rounded-full shrink-0 ${sb.memory.percent >= 80 ? "bg-red-500" : sb.memory.percent >= 60 ? "bg-amber-500" : "bg-emerald-500"}`} />
                 <span>Memory: <strong>{sb.memory.percent}%</strong></span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full shrink-0 ${storagePercent >= 80 ? "bg-red-500" : storagePercent >= 60 ? "bg-amber-500" : "bg-emerald-500"}`} />
+                <span>Storage: <strong>{formatBytes(sb.storage.used_bytes)}</strong></span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
@@ -599,23 +614,14 @@ export default function InfrastructurePage() {
 
           {/* Storage + Connections */}
           <div className="space-y-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">File Storage</CardTitle>
-                <FolderOpen className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold">{sb.storage.file_count}</span>
-                  <span className="text-xs text-muted-foreground">
-                    files across {sb.storage.bucket_count} bucket{sb.storage.bucket_count !== 1 ? "s" : ""}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Free tier: {formatBytes(sb.storage.limit_bytes)} limit
-                </p>
-              </CardContent>
-            </Card>
+            <UsageMeter
+              label="File Storage"
+              used={sb.storage.used_bytes}
+              total={sb.storage.included_bytes}
+              percent={storagePercent}
+              icon={FolderOpen}
+              warningText="Approaching the 100GB Pro quota — usage above this is billed per GB"
+            />
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -632,6 +638,65 @@ export default function InfrastructurePage() {
               </CardContent>
             </Card>
           </div>
+        </div>
+
+        {/* Storage by bucket */}
+        <div className="mt-4">
+          <h3 className="text-sm font-medium mb-2 text-muted-foreground">
+            Storage by Bucket — {formatNumber(sb.storage.file_count)} files, {formatBytes(sb.storage.used_bytes)} total
+          </h3>
+          <Card>
+            <CardContent className="p-0">
+              <div className="rounded-md overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-3 text-left font-medium">Bucket</th>
+                      <th className="px-4 py-3 text-right font-medium">Files</th>
+                      <th className="px-4 py-3 text-right font-medium">Size</th>
+                      <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">% of Storage</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sb.storage.buckets.map((bucket, i) => {
+                      const pct = sb.storage.used_bytes > 0
+                        ? ((bucket.used_bytes / sb.storage.used_bytes) * 100).toFixed(1)
+                        : "0";
+                      return (
+                        <tr key={bucket.id} className={`border-b transition-colors ${i % 2 === 0 ? "" : "bg-muted/20"}`}>
+                          <td className="px-4 py-2.5 font-medium">
+                            <span className="flex items-center gap-2">
+                              {bucket.id}
+                              {bucket.public && (
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">public</Badge>
+                              )}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs">
+                            {formatNumber(bucket.file_count)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-xs">
+                            {formatBytes(bucket.used_bytes)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right hidden sm:table-cell">
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-primary/60"
+                                  style={{ width: `${Math.min(parseFloat(pct), 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-muted-foreground w-12 text-right">{pct}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
 

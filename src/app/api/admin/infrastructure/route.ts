@@ -108,34 +108,76 @@ export async function GET() {
   const totalRows = tableCounts.reduce((sum, t) => sum + t.row_count, 0);
 
   // ── 3. Storage ──
+  // Recursively walks a bucket (folders included) and sums file sizes from object metadata.
+  async function walkBucket(bucket: string, prefix = ""): Promise<{ count: number; bytes: number }> {
+    let count = 0;
+    let bytes = 0;
+    let offset = 0;
+    const PAGE_SIZE = 1000;
+
+    while (true) {
+      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${bucket}`, {
+        method: "POST",
+        headers: {
+          apikey: SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prefix, limit: PAGE_SIZE, offset }),
+        cache: "no-store",
+      });
+      if (!res.ok) break;
+      const items = await res.json() as Array<{ name: string; id?: string; metadata?: { size?: number } }>;
+      if (!Array.isArray(items)) break;
+
+      for (const item of items) {
+        if (item.id) {
+          // file
+          count++;
+          bytes += item.metadata?.size || 0;
+        } else if (item.name) {
+          // folder — recurse
+          const sub = await walkBucket(bucket, `${prefix}${item.name}/`);
+          count += sub.count;
+          bytes += sub.bytes;
+        }
+      }
+
+      if (items.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+
+    return { count, bytes };
+  }
+
   let bucketCount = 0;
   let fileCount = 0;
+  let storageBytesUsed = 0;
+  const bucketBreakdown: Array<{ id: string; public: boolean; file_count: number; used_bytes: number }> = [];
+
   try {
     const bucketsRes = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
       headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
       cache: "no-store",
     });
     if (bucketsRes.ok) {
-      const buckets = await bucketsRes.json();
+      const buckets = await bucketsRes.json() as Array<{ id: string; public: boolean }>;
       bucketCount = Array.isArray(buckets) ? buckets.length : 0;
-      for (const bucket of buckets) {
-        try {
-          const listRes = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${bucket.id}`, {
-            method: "POST",
-            headers: {
-              apikey: SERVICE_ROLE_KEY,
-              Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ limit: 1000, offset: 0 }),
-            cache: "no-store",
-          });
-          if (listRes.ok) {
-            const files = await listRes.json();
-            fileCount += Array.isArray(files) ? files.length : 0;
+
+      const results = await Promise.all(
+        buckets.map(async (bucket) => {
+          try {
+            const { count, bytes } = await walkBucket(bucket.id);
+            return { id: bucket.id, public: bucket.public, file_count: count, used_bytes: bytes };
+          } catch {
+            return { id: bucket.id, public: bucket.public, file_count: 0, used_bytes: 0 };
           }
-        } catch { /* skip */ }
-      }
+        })
+      );
+
+      bucketBreakdown.push(...results.sort((a, b) => b.used_bytes - a.used_bytes));
+      fileCount = results.reduce((sum, r) => sum + r.file_count, 0);
+      storageBytesUsed = results.reduce((sum, r) => sum + r.used_bytes, 0);
     }
   } catch { /* unavailable */ }
 
@@ -222,7 +264,7 @@ export async function GET() {
   return NextResponse.json({
     fetched_at: new Date().toISOString(),
     supabase: {
-      plan: "Free",
+      plan: "Pro",
       project_ref: SUPABASE_REF,
       database: {
         used_bytes: diskUsed,
@@ -242,7 +284,9 @@ export async function GET() {
       storage: {
         bucket_count: bucketCount,
         file_count: fileCount,
-        limit_bytes: 1 * 1024 * 1024 * 1024,
+        used_bytes: storageBytesUsed,
+        included_bytes: 100 * 1024 * 1024 * 1024, // Pro plan: 100GB included, then billed per GB
+        buckets: bucketBreakdown,
       },
       tables: tableCounts,
       total_rows: totalRows,

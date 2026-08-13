@@ -142,38 +142,59 @@ export async function POST(
     .eq("billing_statement_id", id);
 
   // 3. Create a fresh draft copy (carries over the billing-relevant data
-  //    but strips out all finalization artifacts)
-  const { data: newStatement, error: insertErr } = await supabase
-    .from("billing_statements")
-    .insert({
-      contract_id: statement.contract_id,
-      booking_id: statement.booking_id,
-      lead_id: statement.lead_id,
-      statement_type: statement.statement_type,
-      period_start: statement.period_start,
-      period_end: statement.period_end,
-      accounting_period_id: statement.accounting_period_id,
-      fixed_amount: statement.fixed_amount,
-      usage_amount: statement.usage_amount,
-      service_usage_amount: statement.service_usage_amount,
-      booking_usage_amount: statement.booking_usage_amount,
-      subtotal: statement.subtotal,
-      tax_percentage: statement.tax_percentage,
-      tax_amount: statement.tax_amount,
-      total_amount: statement.total_amount,
-      line_items: statement.line_items,
-      prepaid_month: statement.prepaid_month,
-      prepaid_year: statement.prepaid_year,
-      status: "draft",
-      notes: `Re-issued from voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nOriginal void reason: ${voidReason}`,
-      created_by: dbUser.id,
-      voided_statement_id: id, // back-reference to the voided original
-    })
-    .select("*")
-    .single();
+  //    but strips out all finalization artifacts) — but only for
+  //    contract/booking/lead-sourced statements. case_id/aggregator_id-owned
+  //    statements (vo_case, vo_renewal, vo_aggregator_consolidated) have no
+  //    "draft, then re-issue" concept: their generators (case-invoicing.ts,
+  //    vo-renewal.ts, aggregator-invoicing.ts) create statements directly in
+  //    a finalized state and already permit regeneration once voided_at is
+  //    set, so leaving a leftover draft row here would (a) violate
+  //    billing_statements_source_check, since none of contract_id/booking_id/
+  //    lead_id are ever set on those statements, and (b) if case_id/
+  //    aggregator_id were copied instead, poison the generators' own
+  //    "does an active statement already exist" dedupe check (which only
+  //    looks at voided_at, not status).
+  const hasReissuableOwner = Boolean(
+    statement.contract_id || statement.booking_id || statement.lead_id
+  );
 
-  if (insertErr) {
-    return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  let newStatement: { id: string; statement_number?: string | null } | null = null;
+
+  if (hasReissuableOwner) {
+    const { data: inserted, error: insertErr } = await supabase
+      .from("billing_statements")
+      .insert({
+        contract_id: statement.contract_id,
+        booking_id: statement.booking_id,
+        lead_id: statement.lead_id,
+        statement_type: statement.statement_type,
+        period_start: statement.period_start,
+        period_end: statement.period_end,
+        accounting_period_id: statement.accounting_period_id,
+        fixed_amount: statement.fixed_amount,
+        usage_amount: statement.usage_amount,
+        service_usage_amount: statement.service_usage_amount,
+        booking_usage_amount: statement.booking_usage_amount,
+        subtotal: statement.subtotal,
+        tax_percentage: statement.tax_percentage,
+        tax_amount: statement.tax_amount,
+        total_amount: statement.total_amount,
+        line_items: statement.line_items,
+        prepaid_month: statement.prepaid_month,
+        prepaid_year: statement.prepaid_year,
+        status: "draft",
+        notes: `Re-issued from voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nOriginal void reason: ${voidReason}`,
+        created_by: dbUser.id,
+        voided_statement_id: id, // back-reference to the voided original
+      })
+      .select("*")
+      .single();
+
+    if (insertErr) {
+      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
+
+    newStatement = inserted;
   }
 
   // 4. Audit both operations
@@ -188,20 +209,24 @@ export async function POST(
     },
   });
 
-  logAudit(supabase, {
-    entityType: "billing_statement",
-    entityId: newStatement.id,
-    action: "create",
-    performedBy: dbUser.id,
-    changes: {
-      reissued_from: { old: null, new: id },
-      status: { old: null, new: "draft" },
-    },
-  });
+  if (newStatement) {
+    logAudit(supabase, {
+      entityType: "billing_statement",
+      entityId: newStatement.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        reissued_from: { old: null, new: id },
+        status: { old: null, new: "draft" },
+      },
+    });
+  }
 
   return NextResponse.json({
     voided_statement_id: id,
     new_statement: newStatement,
-    message: `Statement voided. New draft ${newStatement.statement_number || newStatement.id.slice(0, 8)} created.`,
+    message: newStatement
+      ? `Statement voided. New draft ${newStatement.statement_number || newStatement.id.slice(0, 8)} created.`
+      : "Statement voided. Generate a new invoice for this case/aggregator when ready.",
   });
 }
