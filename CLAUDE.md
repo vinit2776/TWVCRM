@@ -207,9 +207,20 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Contract Lifecycle
 
-Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Cancellation.
+Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Extension / Cancellation.
 
 Cancellation has side effects (WiFi voucher revocation, usage charge settlement) that must be handled atomically.
+
+### Contract Extension (short validity gaps — do not confuse with Renewal)
+
+`POST /api/contracts/[id]/extend` — pushes an **active** contract's `end_date` forward by 1–60 days without changing rate, tenure, or terms. For short gaps only (e.g. a few days before renewal paperwork is signed); a new contract term still goes through Renewal.
+
+**Hard rules (do not bypass):**
+- 60-day cap is a **lifetime total per contract**, tracked in `contracts.days_extended` — not per single extension call.
+- Blocked if contract status is `renewal_in_progress` (the parent's `end_date` is load-bearing for the renewal's split-billing logic in `computeRenewalSplitRentSegments`, `src/lib/billing.ts`).
+- Blocked once `end_date` has already lapsed (`today > end_date`), even if the daily `contract-expiry` cron hasn't flipped status to `expired` yet — Extension is proactive only. A lapsed contract needs a fresh term via Renewal, not retroactive billing.
+- No approval workflow — direct action by `admin`/`manager`/`sales_rep`, same roles as Renewal. A reason is required and logged to `audit_trail` (`action: "contract_extended"`).
+- No new billing logic — billing already prorates by day and pools contracts by `end_date`, so extension just needs the date pushed forward.
 
 ## Environment Variables
 
