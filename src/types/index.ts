@@ -1857,6 +1857,17 @@ export interface VoCase {
   agreement_status?: AgreementStatus;
   ll_agreement_id?: string;
   ll_agreement_status?: AgreementStatus;
+  // Populated by GET /api/cases/[id] only (latest row per type, or null) —
+  // not present on list-page rows from GET /api/cases.
+  agreement?: { status?: AgreementStatus } | null;
+  ll_agreement?: { status?: AgreementStatus } | null;
+  billing_statement?: {
+    id: string;
+    statement_number?: string | null;
+    payment_status?: string | null;
+    handoff_state?: string | null;
+    total_amount?: number | null;
+  } | null;
   compliance_passed: boolean;
   compliance_passed_at?: string;
   // Timestamps

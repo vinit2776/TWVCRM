@@ -1197,6 +1197,42 @@ export const AGREEMENT_TYPE_LABELS: Record<string, string> = {
 };
 
 // ==========================================
+// Case Lifecycle Substate Helpers (Proposal / Agreement / Invoice)
+// ==========================================
+// Shared by CaseStatusPipeline (case detail captions) and CaseLifecycleIcons
+// (cases list row icons) so both surfaces derive the same tone/label from
+// the same underlying proposal/agreement/billing-statement status instead
+// of duplicating the mapping in two places.
+export type LifecycleSubstateTone = "muted" | "amber" | "green" | "red";
+
+export interface LifecycleSubstate {
+  tone: LifecycleSubstateTone;
+  label: string;
+}
+
+export const LIFECYCLE_SUBSTATE_TEXT_COLORS: Record<LifecycleSubstateTone, string> = {
+  muted: "text-gray-400",
+  amber: "text-amber-600",
+  green: "text-green-600",
+  red: "text-red-600",
+};
+
+export function agreementLifecycleSubstate(status?: string | null): LifecycleSubstate {
+  if (!status) return { tone: "muted", label: "Not started" };
+  const tone: LifecycleSubstateTone =
+    status === "executed" ? "green" : status === "expired" ? "red" : "amber";
+  return { tone, label: AGREEMENT_STATUS_LABELS[status] || status };
+}
+
+export function invoiceLifecycleSubstate(
+  billingStatement?: { payment_status?: string | null } | null
+): LifecycleSubstate {
+  if (!billingStatement) return { tone: "muted", label: "Not generated" };
+  if (billingStatement.payment_status === "paid") return { tone: "green", label: "Paid" };
+  return { tone: "red", label: "Awaiting payment" };
+}
+
+// ==========================================
 // Purpose-based Document Checklists
 // ==========================================
 export const DOCUMENT_CHECKLISTS: Record<string, Record<string, { type: string; label: string; required: boolean }[]>> = {
