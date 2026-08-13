@@ -11,7 +11,7 @@ import {
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
   StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send, DoorOpen, Building2,
-  Activity, ShieldAlert, ImageIcon,
+  Activity, ShieldAlert, ImageIcon, FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1417,6 +1417,31 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Company</span>
                 <span>{booking.guest_company || booking.lead?.company}</span>
+              </div>
+            )}
+            {booking.lead_id && (
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">KYC</span>
+                {booking.lead?.id_proof_path ? (
+                  <a
+                    href={`/api/leads/${booking.lead_id}/id-proof`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+                    title="Open the customer's KYC identity document"
+                  >
+                    <FileText className="h-3 w-3" />
+                    View KYC
+                  </a>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed text-muted-foreground cursor-default"
+                    title="No KYC document uploaded for this customer"
+                  >
+                    <FileText className="h-3 w-3" />
+                    No KYC
+                  </span>
+                )}
               </div>
             )}
             {booking.contract_id && (
