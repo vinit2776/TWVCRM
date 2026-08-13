@@ -1395,6 +1395,11 @@ function InboxRowItem({
           )}
           <span> · {row.handoff_state ? HANDOFF_STATE_LABELS[row.handoff_state] : "Draft"}</span>
           {row.contract?.billing_mode === "gst_direct" && <span> · direct GST</span>}
+          {row.tally_credit_note_number && (
+            <span className="font-mono text-red-700" title="Cancelled via credit note">
+              {" "}· Cancelled via {row.tally_credit_note_number}
+            </span>
+          )}
         </div>
         <div className={`text-xs ${agingClass} text-right`}>
           {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}

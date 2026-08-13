@@ -233,6 +233,10 @@ export interface InboxRow {
   /** True when the proforma was cancelled via the early-GST override. Distinguishes
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
+  /** Set once a Tally-issued invoice has been cancelled via the manual
+   *  credit-note upload flow (see upload-credit-note/route.ts). */
+  lifecycle_stage: string | null;
+  tally_credit_note_number: string | null;
   contract: InboxContract | null;
   proposal: InboxProposal | null;
   invoice: InboxInvoice | null;
