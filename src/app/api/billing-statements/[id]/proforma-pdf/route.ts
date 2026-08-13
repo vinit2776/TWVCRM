@@ -26,7 +26,7 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts", "office_admin"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "accounts", "office_admin", "sales_rep"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
