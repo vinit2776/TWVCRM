@@ -81,6 +81,7 @@ export async function GET(req: NextRequest) {
       total_amount, payment_status, handoff_state, updated_at,
       created_at, proforma_sent_at, tally_delivered_at,
       voided_at, void_reason, pi_cancelled_at,
+      lifecycle_stage, tally_credit_note_number,
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
       subtotal, tax_percentage, tax_amount,
@@ -168,6 +169,8 @@ export async function GET(req: NextRequest) {
     voided_at: string | null;
     void_reason: string | null;
     pi_cancelled_at: string | null;
+    lifecycle_stage: string | null;
+    tally_credit_note_number: string | null;
     contract: {
       id: string;
       contract_number: string;
@@ -468,6 +471,8 @@ export async function GET(req: NextRequest) {
       voided_at: s.voided_at,
       void_reason: s.void_reason,
       pi_was_cancelled: !!s.pi_cancelled_at,
+      lifecycle_stage: s.lifecycle_stage,
+      tally_credit_note_number: s.tally_credit_note_number,
       ...(timelineEvents ? { timeline_events: timelineEvents } : {}),
       contract: s.contract
         ? {
