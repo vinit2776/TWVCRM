@@ -138,7 +138,7 @@ export async function dispatchProforma(
         };
       }
       return {
-        id: voCase.id, first_name: null, last_name: null, company: voCase.client_company_name ?? voCase.client_name,
+        id: voCase.id, first_name: null, last_name: null, company: voCase.client_company_name || voCase.client_name,
         email: voCase.client_email, phone: null, mobile: voCase.client_phone,
         state: null, gst_number: voCase.client_gst_number, billing_emails: null,
       };

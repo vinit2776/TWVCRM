@@ -137,7 +137,7 @@ export async function createCaseInvoiceStatement(
 
   const buyerName = billToAggregator
     ? undefined // aggregator name isn't stored on billing_statements directly; case/aggregator join carries it
-    : caseData.client_company_name ?? caseData.client_name;
+    : caseData.client_company_name || caseData.client_name;
 
   const { data: statement, error } = await supabase
     .from("billing_statements")

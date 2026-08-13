@@ -214,7 +214,7 @@ export async function POST(
       }
       return {
         id: s.case.id, gst_number: s.case.client_gst_number,
-        first_name: null, last_name: null, company: s.case.client_company_name ?? s.case.client_name,
+        first_name: null, last_name: null, company: s.case.client_company_name || s.case.client_name,
         email: s.case.client_email, billing_emails: null,
         mobile: s.case.client_phone, phone: null,
       };
