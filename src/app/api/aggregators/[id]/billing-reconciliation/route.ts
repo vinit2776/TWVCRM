@@ -43,7 +43,7 @@ export async function GET(
     .select(`
       case_id, amount,
       billing_statement:billing_statements!billing_statement_cases_billing_statement_id_fkey(
-        id, statement_number, handoff_state, payment_status, voided_at
+        id, statement_number, handoff_state, payment_status, voided_at, proforma_sent_at, gst_invoice_number
       )
     `)
     .in("case_id", caseIds);
@@ -76,6 +76,8 @@ export async function GET(
           statement_number: entry.statement.statement_number,
           handoff_state: entry.statement.handoff_state,
           payment_status: entry.statement.payment_status,
+          proforma_sent_at: entry.statement.proforma_sent_at,
+          gst_invoice_number: entry.statement.gst_invoice_number,
         },
       });
     } else {

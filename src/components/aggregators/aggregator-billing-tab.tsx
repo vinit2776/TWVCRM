@@ -24,7 +24,7 @@ import { Loader2, AlertTriangle, FileCheck, Zap, ExternalLink } from "lucide-rea
 import { toast } from "sonner";
 import Link from "next/link";
 import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
 
 interface ReferralCase {
@@ -42,6 +42,8 @@ interface BilledReferral extends ReferralCase {
     statement_number: string | null;
     handoff_state: HandoffState | null;
     payment_status: string;
+    proforma_sent_at: string | null;
+    gst_invoice_number: string | null;
   };
 }
 
@@ -362,16 +364,39 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
                         </td>
                         <td className="px-4 py-2 text-right font-medium">{formatCurrency(c.amount)}</td>
                         <td className="px-4 py-2">
-                          {c.statement.handoff_state ? (
-                            <Link
-                              href={`/accounting/inbox?id=${c.statement.id}`}
-                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
-                            >
-                              View in Tally Inbox <ExternalLink className="h-3 w-3" />
-                            </Link>
-                          ) : (
-                            <span className="text-xs text-muted-foreground whitespace-nowrap">Awaiting payment</span>
-                          )}
+                          <div className="flex flex-col items-start gap-1">
+                            {(() => {
+                              const viewHref = c.statement.gst_invoice_number
+                                ? `/api/billing-statements/${c.statement.id}/gst-invoice-pdf`
+                                : c.statement.proforma_sent_at
+                                  ? `/api/billing-statements/${c.statement.id}/proforma-pdf`
+                                  : null;
+                              return viewHref ? (
+                                <a
+                                  href={viewHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
+                                >
+                                  View Invoice <ExternalLink className="h-3 w-3" />
+                                </a>
+                              ) : null;
+                            })()}
+                            {c.statement.handoff_state ? (
+                              <Link
+                                href={`/accounting/inbox?id=${c.statement.id}`}
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline whitespace-nowrap"
+                              >
+                                View in Tally Inbox <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            ) : c.statement.proforma_sent_at ? (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                Sent {formatDate(c.statement.proforma_sent_at)} — awaiting payment
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">Awaiting payment</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
