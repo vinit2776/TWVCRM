@@ -25,6 +25,7 @@ import {
   Check,
   Pencil,
   Stamp,
+  CalendarPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,6 +77,8 @@ import {
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
+import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
 import { toast } from "sonner";
@@ -112,6 +115,7 @@ export default function ContractDetailPage({
   const [copiedLessor, setCopiedLessor] = useState(false);
   const [copiedLessee, setCopiedLessee] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
+  const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
   const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1214,27 +1218,55 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
+                {/* Extension usage — visible whenever this contract has ever been extended */}
+                {(contract.days_extended || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Extended</span>
+                    <span className="text-xs">{contract.days_extended} / 60 days</span>
+                  </div>
+                )}
+
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
-                {/* Role gate: admin, manager, sales_rep can renew/decline */}
+                {/* Role gate: admin, manager, sales_rep can renew/decline/extend */}
                 {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
-                  <div className="flex gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => setRenewDialogOpen(true)}
-                    >
-                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                      Renew
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => setDeclineDialogOpen(true)}
-                    >
-                      <XCircle className="mr-1.5 h-3.5 w-3.5" />
-                      Decline
-                    </Button>
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span>Not sure which to use?</span>
+                      <InfoTooltip
+                        text="Extend pushes the current end date forward by up to 60 days total, with no change to rate or terms — use it for a short gap (e.g. paperwork running a few days late). Renew creates a new contract term with its own tenure, escalation, and deposit — use it when the member is signing on for a fresh period."
+                        side="top"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => setRenewDialogOpen(true)}
+                      >
+                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                        Renew
+                      </Button>
+                      {contract.status === "active" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => setExtendDialogOpen(true)}
+                        >
+                          <CalendarPlus className="mr-1.5 h-3.5 w-3.5" />
+                          Extend
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setDeclineDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Decline
+                      </Button>
+                    </div>
                   </div>
                 )}
 
@@ -1910,6 +1942,14 @@ export default function ContractDetailPage({
         onOpenChange={setRenewDialogOpen}
         contract={contract}
         userRole={userRole}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Extend Dialog */}
+      <ContractExtendDialog
+        open={extendDialogOpen}
+        onOpenChange={setExtendDialogOpen}
+        contract={contract}
         onSuccess={() => fetchContract(false)}
       />
 
