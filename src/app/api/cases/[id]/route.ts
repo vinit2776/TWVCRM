@@ -23,7 +23,7 @@ export async function GET(
       supabase
         .from("cases")
         .select(
-          "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code, primary_email, billing_method), aggregator_contact:aggregator_contacts!cases_aggregator_contact_id_fkey(id, name, email, phone), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
+          "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code, primary_email, billing_method, billing_mode), aggregator_contact:aggregator_contacts!cases_aggregator_contact_id_fkey(id, name, email, phone), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"
         )
         .eq("id", id)
         .single(),
