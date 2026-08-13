@@ -61,7 +61,7 @@ function addLogoToDoc(doc: jsPDF): number {
   // Logo image (left side)
   const logoW = 52;
   const logoH = 13;
-  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH);
+  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
 
   // Company details (right-aligned)
   doc.setFontSize(7.5);
@@ -410,7 +410,7 @@ export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
     // QR Code (left of seal)
     try {
       const qrDataUrl = await QRCode.toDataURL(verifyUrl, { width: 200, margin: 1, color: { dark: "#015E65", light: "#FFFFFF" } });
-      doc.addImage(qrDataUrl, "PNG", sealX - qrSize - 4, sealY, qrSize, qrSize);
+      doc.addImage(qrDataUrl, "PNG", sealX - qrSize - 4, sealY, qrSize, qrSize, undefined, "FAST");
       doc.setFontSize(5);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(120, 120, 120);

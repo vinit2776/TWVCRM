@@ -313,7 +313,7 @@ function addLogoToDoc(doc: jsPDF): number {
   // Original logo aspect ratio is ~4:1 (1024x260)
   const logoW = 52;
   const logoH = 13;
-  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH);
+  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
 
   // ── Company details (right-aligned, beside logo) ──
   doc.setFontSize(7.5);
@@ -731,11 +731,11 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.rect(qrX - 1, qrY - 1, imgW + 2, imgH + 2);
 
     try {
-      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, imgW, imgH);
+      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, imgW, imgH, undefined, "FAST");
     } catch {
       // Fallback: try as JPEG if PNG fails
       try {
-        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, imgW, imgH);
+        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, imgW, imgH, undefined, "FAST");
       } catch {
         // Silently skip if image is invalid
       }
@@ -1247,7 +1247,7 @@ export function generateMembershipAgreementPDF(
   // White background behind logo so it prints clearly on the teal header
   doc.setFillColor(255, 255, 255);
   doc.rect(marginLeft - 2, 3, 54, 18, "F");
-  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
+  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5, undefined, "FAST");
 
   // Company details in header (right side)
   doc.setFontSize(7);

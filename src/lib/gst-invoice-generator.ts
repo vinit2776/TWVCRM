@@ -96,7 +96,7 @@ function drawSignatureMark(doc: jsPDF, sx: number, baseY: number): void {
     /* keep square fallback */
   }
   try {
-    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sx, baseY - sigH, sigW, sigH);
+    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sx, baseY - sigH, sigW, sigH, undefined, "FAST");
   } catch {
     /* signature failed to load — silently skip */
   }
@@ -109,7 +109,7 @@ function drawSignatureMark(doc: jsPDF, sx: number, baseY: number): void {
 function drawCompanySeal(doc: jsPDF, cx: number, cy: number, r: number): void {
   const size = r * 2;
   try {
-    doc.addImage(COMPANY_SEAL_BASE64, "PNG", cx - r, cy - r, size, size);
+    doc.addImage(COMPANY_SEAL_BASE64, "PNG", cx - r, cy - r, size, size, undefined, "FAST");
   } catch {
     /* seal failed to load — silently skip */
   }
@@ -216,7 +216,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
 
   // Logo
   try {
-    doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, 52, 13);
+    doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, 52, 13, undefined, "FAST");
   } catch { /* skip if logo fails */ }
 
   // Title: TAX INVOICE or PROFORMA INVOICE
@@ -255,7 +255,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
         const qrSize = 20;
         const qrX = Math.round(pageWidth / 2) - qrSize / 2; // centred on page
         const qrY = 8;
-        doc.addImage(data.irnQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
+        doc.addImage(data.irnQrBase64, "PNG", qrX, qrY, qrSize, qrSize, undefined, "FAST");
         doc.setFontSize(5.5);
         doc.setTextColor(100, 100, 100);
         doc.text("e-Invoice QR", qrX + qrSize / 2, qrY + qrSize + 2, { align: "center" });
@@ -503,7 +503,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   if (hasQr && data.razorpayQrBase64) {
     try {
       const qrY = qrStartY - 4;
-      doc.addImage(data.razorpayQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
+      doc.addImage(data.razorpayQrBase64, "PNG", qrX, qrY, qrSize, qrSize, undefined, "FAST");
       doc.setFontSize(6.5);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(...BRAND_TEAL);

@@ -28,7 +28,7 @@ export function drawCompanyStamp(doc: jsPDF, x: number, lineY: number, maxWidth:
   }
   const sigY = lineY - sigH - 2;
   try {
-    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", x, sigY, sigW, sigH);
+    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", x, sigY, sigW, sigH, undefined, "FAST");
   } catch {
     /* signature failed to load — silently skip */
   }
@@ -39,7 +39,7 @@ export function drawCompanyStamp(doc: jsPDF, x: number, lineY: number, maxWidth:
   const sealFits = sealCx + sealR <= x + maxWidth;
   if (sealFits) {
     try {
-      doc.addImage(COMPANY_SEAL_BASE64, "PNG", sealCx - sealR, sealCy - sealR, sealR * 2, sealR * 2);
+      doc.addImage(COMPANY_SEAL_BASE64, "PNG", sealCx - sealR, sealCy - sealR, sealR * 2, sealR * 2, undefined, "FAST");
     } catch {
       /* seal failed to load — silently skip */
     }
@@ -77,7 +77,7 @@ export function drawCompanyStampInBox(
   const sigX = box.x + pad;
   const sigY = box.y + (box.height - sigH) / 2;
   try {
-    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sigX, sigY, sigW, sigH);
+    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sigX, sigY, sigW, sigH, undefined, "FAST");
   } catch {
     /* signature failed to load — silently skip */
   }
@@ -88,7 +88,7 @@ export function drawCompanyStampInBox(
   const sealFits = sealCx + sealR <= box.x + box.width - pad;
   if (sealFits) {
     try {
-      doc.addImage(COMPANY_SEAL_BASE64, "PNG", sealCx - sealR, sealCy - sealR, sealR * 2, sealR * 2);
+      doc.addImage(COMPANY_SEAL_BASE64, "PNG", sealCx - sealR, sealCy - sealR, sealR * 2, sealR * 2, undefined, "FAST");
     } catch {
       /* seal failed to load — silently skip */
     }
