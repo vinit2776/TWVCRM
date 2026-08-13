@@ -28,6 +28,20 @@ const has = (c: AuditChanges, key: string) => Object.prototype.hasOwnProperty.ca
 const went = (c: AuditChanges, key: string, from: unknown, to: unknown) =>
   has(c, key) && c[key].old === from && c[key].new === to;
 
+function summarizeContract(c: AuditChanges, action: string): AuditSummary | null {
+  if (action === "contract_extended" && has(c, "days_added")) {
+    const daysAdded = c.days_added.new as number;
+    const newEndDate = (c.end_date?.new as string | null) ?? null;
+    const reason = (c.reason?.new as string | null) ?? null;
+    return {
+      label: `Extended by ${daysAdded} day${daysAdded === 1 ? "" : "s"}`,
+      tone: "blue",
+      detail: [newEndDate ? `now expires ${newEndDate}` : null, reason].filter(Boolean).join(" · ") || undefined,
+    };
+  }
+  return null;
+}
+
 function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | null {
   // ── Approval flow ──────────────────────────────────────────────────────
   if (went(c, "approval_status", "pending", "approved")) {
@@ -207,7 +221,8 @@ export function summarizeAuditEvent(row: {
   const changes = row.changes ?? {};
   let specific: AuditSummary | null = null;
 
-  if (row.entity_type === "vendor_bill") specific = summarizeVendorBill(changes, row.action);
+  if (row.entity_type === "contract") specific = summarizeContract(changes, row.action);
+  else if (row.entity_type === "vendor_bill") specific = summarizeVendorBill(changes, row.action);
   else if (row.entity_type === "purchase_order") specific = summarizePurchaseOrder(changes, row.action);
   else if (row.entity_type === "purchase_request") specific = summarizePurchaseRequest(changes, row.action);
 
