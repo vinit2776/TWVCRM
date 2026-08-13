@@ -25,6 +25,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { CaseKanbanBoard } from "@/components/cases/case-kanban-board";
+import { CaseLifecycleIcons } from "@/components/cases/case-lifecycle-icons";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCases } from "@/hooks/use-cases";
 import { LocationSelector } from "@/components/shared/location-selector";
@@ -227,7 +228,14 @@ export default function CasesPage() {
                     <StatusBadge type="vo_purpose" value={c.purpose} />
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge type="case_status" value={c.status} />
+                    <div className="flex flex-col gap-1">
+                      <StatusBadge type="case_status" value={c.status} />
+                      <CaseLifecycleIcons
+                        proposalStatus={c.agreement?.status}
+                        agreementStatus={c.ll_agreement?.status}
+                        billingStatus={c.billing_statement}
+                      />
+                    </div>
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     {c.rate ? formatCurrency(c.rate) : "-"}

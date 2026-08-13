@@ -56,8 +56,51 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const caseIds = (data ?? []).map((c) => c.id);
+  let enriched = data ?? [];
+
+  if (caseIds.length > 0) {
+    const [agreementsRes, billingRes] = await Promise.all([
+      supabase
+        .from("case_agreements")
+        .select("case_id, type, status, created_at")
+        .in("case_id", caseIds)
+        .in("type", ["proposal", "leave_license"])
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("billing_statements")
+        .select("case_id, payment_status, created_at")
+        .in("case_id", caseIds)
+        .eq("statement_type", "vo_case")
+        .is("voided_at", null)
+        .order("created_at", { ascending: false }),
+    ]);
+
+    // Rows arrive newest-first, so the first occurrence per case_id (and per
+    // agreement type) is the latest — no need to compare timestamps.
+    const latestProposal = new Map<string, { status: string }>();
+    const latestLlAgreement = new Map<string, { status: string }>();
+    for (const row of agreementsRes.data ?? []) {
+      const target = row.type === "proposal" ? latestProposal : latestLlAgreement;
+      if (!target.has(row.case_id)) target.set(row.case_id, { status: row.status });
+    }
+    const latestBilling = new Map<string, { payment_status: string }>();
+    for (const row of billingRes.data ?? []) {
+      if (!latestBilling.has(row.case_id)) {
+        latestBilling.set(row.case_id, { payment_status: row.payment_status });
+      }
+    }
+
+    enriched = (data ?? []).map((c) => ({
+      ...c,
+      agreement: latestProposal.get(c.id) ?? null,
+      ll_agreement: latestLlAgreement.get(c.id) ?? null,
+      billing_statement: latestBilling.get(c.id) ?? null,
+    }));
+  }
+
   return NextResponse.json({
-    data,
+    data: enriched,
     pagination: {
       page,
       limit,

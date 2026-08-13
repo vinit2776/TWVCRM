@@ -150,7 +150,12 @@ export default function CaseDetailPage({
       </div>
 
       {/* Status Pipeline */}
-      <CaseStatusPipeline currentStatus={caseData.status} />
+      <CaseStatusPipeline
+        currentStatus={caseData.status}
+        proposalStatus={caseData.agreement?.status}
+        agreementStatus={caseData.ll_agreement?.status}
+        billingStatus={caseData.billing_statement}
+      />
 
       <Tabs defaultValue="overview">
         <TabsList className="flex-wrap">

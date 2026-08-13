@@ -18,7 +18,7 @@ export async function GET(
   }
 
   // Fetch case with all related data
-  const [caseRes, docsRes, complianceRes, agreementRes, llAgreementRes, commentsRes] =
+  const [caseRes, docsRes, complianceRes, agreementRes, llAgreementRes, billingRes, commentsRes] =
     await Promise.all([
       supabase
         .from("cases")
@@ -53,6 +53,14 @@ export async function GET(
         .order("created_at", { ascending: false })
         .limit(1),
       supabase
+        .from("billing_statements")
+        .select("id, statement_number, payment_status, handoff_state, total_amount, voided_at")
+        .eq("case_id", id)
+        .eq("statement_type", "vo_case")
+        .is("voided_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1),
+      supabase
         .from("case_comments")
         .select(
           "*, creator:users!case_comments_created_by_fkey(id, full_name, email)"
@@ -73,6 +81,7 @@ export async function GET(
       compliance_checks: complianceRes.data || [],
       agreement: agreementRes.data?.[0] || null,
       ll_agreement: llAgreementRes.data?.[0] || null,
+      billing_statement: billingRes.data?.[0] || null,
       comments: commentsRes.data || [],
     },
   });
