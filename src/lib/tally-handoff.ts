@@ -167,6 +167,7 @@ export interface InboxPayment {
   payment_date: string;
   payment_mode: string;
   payment_reference: string | null;
+  notes: string | null;
   razorpay_payment_id: string | null;
   recorded_by_name: string | null;
   // Razorpay settlement (from razorpay_settlement_cache)
@@ -196,6 +197,21 @@ export interface InboxLineItemBreakdown {
   booking_usage_amount: number;    // ad-hoc booking charges
   period_start: string | null;
   period_end: string | null;
+}
+
+/**
+ * One real, individually-described charge — sourced from whichever of
+ * billing_statements.line_items (structured JSONB) / the usage_charges
+ * table actually has the data, same priority order proforma-pdf uses.
+ * This is what accounts needs to see to know exactly what they're billing,
+ * not just a category total like "Usage charges: ₹648".
+ */
+export interface InboxItemizedCharge {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+  notes: string | null;
 }
 
 export interface InboxUpload {
@@ -276,6 +292,9 @@ export interface InboxRow {
   expected_prefix: string;           // e.g. "SD/A/" or "SD/B/"
   tax: InboxTaxBreakup;
   line_items: InboxLineItemBreakdown;
+  /** Real per-charge breakdown (description/qty/rate/notes) — empty when
+   *  neither structured line_items nor usage_charges rows exist. */
+  itemized_charges: InboxItemizedCharge[];
   payments_received: InboxPayment[]; // empty array if none yet
   total_paid: number;                // sum of payments_received amounts
   /** ISO timestamp of the last time the GST invoice email was successfully sent. */

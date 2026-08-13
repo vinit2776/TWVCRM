@@ -22,6 +22,19 @@ interface Props {
   onCancel: () => void;
 }
 
+// billing_statements.statement_type has more values than the narrow
+// InboxLineItemBreakdown type declares (see types/index.ts) — switch on the
+// raw string so real values like "electricity"/"reimbursement" still get a
+// readable label instead of falling through to "Rent" or nothing at all.
+function usageLineLabel(statementType: string | null): string {
+  switch (statementType) {
+    case "electricity": return "Electricity charges";
+    case "reimbursement": return "Reimbursement charges";
+    case "usage": return "Usage charges";
+    default: return "Usage charges";
+  }
+}
+
 export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
   const customerHasGstin = !!lead?.gst_number;
@@ -255,14 +268,47 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           <div className="text-muted-foreground mb-1">Line items</div>
           <table className="w-full">
             <tbody>
-              {row.line_items.fixed_amount > 0 && (
-                <tr><td>Rent</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.fixed_amount)}</td></tr>
-              )}
-              {row.line_items.service_usage_amount > 0 && (
-                <tr><td>Service usage (print, electricity, etc.)</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.service_usage_amount)}</td></tr>
-              )}
-              {row.line_items.booking_usage_amount > 0 && (
-                <tr><td>Booking charges</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.booking_usage_amount)}</td></tr>
+              {row.itemized_charges.length > 0 ? (
+                // Real per-charge detail — same source proforma-pdf builds from
+                // (structured line_items, falling back to usage_charges rows).
+                row.itemized_charges.map((c, i) => (
+                  <tr key={i}>
+                    <td className="py-0.5 align-top">
+                      <div>
+                        {c.description}
+                        {c.quantity !== 1 && (
+                          <span className="text-muted-foreground"> · {c.quantity} × {formatCurrency(c.unit_price)}</span>
+                        )}
+                      </div>
+                      {c.notes && <div className="text-muted-foreground italic">{c.notes}</div>}
+                    </td>
+                    <td className="py-0.5 text-right tabular-nums align-top">{formatCurrency(c.amount)}</td>
+                  </tr>
+                ))
+              ) : (
+                <>
+                  {row.line_items.fixed_amount > 0 && (
+                    <tr><td>Rent</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.fixed_amount)}</td></tr>
+                  )}
+                  {row.line_items.service_usage_amount > 0 && (
+                    <tr><td>Service usage (print, electricity, etc.)</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.service_usage_amount)}</td></tr>
+                  )}
+                  {row.line_items.booking_usage_amount > 0 && (
+                    <tr><td>Booking charges</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.booking_usage_amount)}</td></tr>
+                  )}
+                  {/* Some statement types only ever populate the coarse usage_amount
+                      total with no per-charge detail anywhere — without this fallback
+                      the table renders with zero rows and accounts has no idea what
+                      they're actually billing. */}
+                  {row.line_items.service_usage_amount === 0
+                    && row.line_items.booking_usage_amount === 0
+                    && row.line_items.usage_amount > 0 && (
+                    <tr>
+                      <td>{usageLineLabel(row.line_items.statement_type)}</td>
+                      <td className="text-right tabular-nums">{formatCurrency(row.line_items.usage_amount)}</td>
+                    </tr>
+                  )}
+                </>
               )}
               <tr className="border-t">
                 <td className="pt-1 text-muted-foreground">Subtotal</td>

@@ -90,6 +90,8 @@ export async function GET(req: NextRequest) {
       cgst_amount, sgst_amount, igst_amount,
       is_interstate, place_of_supply, hsn_sac_code,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      line_items,
+      usage_charges:usage_charges(description, quantity, unit_price, total, notes),
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
@@ -165,6 +167,18 @@ export async function GET(req: NextRequest) {
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
+    line_items: Array<{
+      type: string;
+      label: string;
+      items: Array<{ description?: string; qty?: number; unit_price?: number; amount?: number; notes?: string }>;
+    }> | null;
+    usage_charges: Array<{
+      description: string | null;
+      quantity: number | null;
+      unit_price: number | null;
+      total: number | null;
+      notes: string | null;
+    }> | null;
     created_at: string;
     proforma_sent_at: string | null;
     tally_delivered_at: string | null;
@@ -300,7 +314,7 @@ export async function GET(req: NextRequest) {
       .maybeSingle(),
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("billing_payments")
-      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
+      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
       .in("billing_statement_id", statementIds)
       .order("payment_date", { ascending: false }),
     // Only fetched in single-row mode with ?include=timeline.
@@ -389,6 +403,7 @@ export async function GET(req: NextRequest) {
       payment_date: p.payment_date as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
+      notes: (p.notes as string | null) ?? null,
       razorpay_payment_id: rzpId,
       recorded_by_name: recorder?.full_name ?? null,
       settled: settlement?.settled ?? null,
@@ -457,6 +472,29 @@ export async function GET(req: NextRequest) {
         }>,
       });
     }
+
+    // Prefer structured line_items (the same source proforma-pdf builds
+    // from), fall back to usage_charges rows — accounts sees the exact same
+    // itemization that ends up on the customer-facing PDF, not a lump total.
+    const structuredSections = s.line_items ?? [];
+    const itemizedCharges =
+      structuredSections.length > 0
+        ? structuredSections.flatMap((section) =>
+            section.items.map((item) => ({
+              description: item.description || section.label,
+              quantity: item.qty ?? 1,
+              unit_price: item.unit_price ?? Number(item.amount ?? 0),
+              amount: Number(item.amount ?? 0),
+              notes: item.notes ?? null,
+            }))
+          )
+        : (s.usage_charges ?? []).map((c) => ({
+            description: c.description ?? "Usage charge",
+            quantity: Number(c.quantity ?? 1),
+            unit_price: Number(c.unit_price ?? 0),
+            amount: Number(c.total ?? 0),
+            notes: c.notes,
+          }));
 
     return {
       statement_id: s.id,
@@ -529,6 +567,7 @@ export async function GET(req: NextRequest) {
         period_start: s.period_start,
         period_end: s.period_end,
       },
+      itemized_charges: itemizedCharges,
       payments_received: payments,
       total_paid: totalPaid,
       gst_invoice_sent_at: s.gst_invoice_sent_at ?? null,

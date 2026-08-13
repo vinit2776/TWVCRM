@@ -1865,6 +1865,12 @@ function StatementPaymentPanel({
                   )}
                 </div>
               )}
+              {p.notes && (
+                <div className="text-[11px] text-green-800 border-t border-green-100 pt-1.5">
+                  <span className="text-muted-foreground">Notes: </span>
+                  {p.notes}
+                </div>
+              )}
             </div>
           );
         })}
