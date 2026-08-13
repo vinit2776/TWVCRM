@@ -11,11 +11,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, FileText, ExternalLink, FileCheck, Zap } from "lucide-react";
+import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
+import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
+import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 
 interface CaseBillingTabProps {
   caseId: string;
@@ -33,9 +35,19 @@ interface CaseStatement {
   statement_number: string | null;
   total_amount: number;
   payment_status: string;
+  status: string;
   handoff_state: HandoffState | null;
   voided_at: string | null;
+  issuance_channel: string | null;
+  lifecycle_stage: string | null;
+  tally_invoice_number: string | null;
+  tally_irn: string | null;
+  tally_credit_note_number: string | null;
+  tally_last_error: string | null;
+  tally_delivered_at: string | null;
 }
+
+const CREDIT_NOTE_ROLES = ["accounts", "admin"];
 
 export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [caseInfo, setCaseInfo] = useState<CaseBillingInfo | null>(null);
@@ -43,6 +55,12 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [loading, setLoading] = useState(true);
   const [savingBillTo, setSavingBillTo] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [showCreditNoteCancel, setShowCreditNoteCancel] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -235,6 +253,16 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                       {HANDOFF_STATE_LABELS[statement.handoff_state] ?? statement.handoff_state}
                     </Badge>
                   )}
+                  <TallyStatusBadge
+                    variant="compact"
+                    issuance_channel={statement.issuance_channel}
+                    lifecycle_stage={statement.lifecycle_stage}
+                    tally_invoice_number={statement.tally_invoice_number}
+                    tally_irn={statement.tally_irn}
+                    tally_credit_note_number={statement.tally_credit_note_number}
+                    tally_last_error={statement.tally_last_error}
+                    tally_delivered_at={statement.tally_delivered_at}
+                  />
                 </div>
               </div>
               {statement.handoff_state ? (
@@ -249,10 +277,41 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   Awaiting payment — this invoice will route to the Tally Inbox once paid.
                 </p>
               )}
+              {statement.issuance_channel === "tally" &&
+                statement.status !== "voided" &&
+                !!userRole &&
+                CREDIT_NOTE_ROLES.includes(userRole) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-red-700 border-red-200 hover:bg-red-50"
+                    onClick={() => setShowCreditNoteCancel(true)}
+                  >
+                    <Ban className="mr-1.5 h-3.5 w-3.5" />
+                    Cancel Invoice
+                  </Button>
+                )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {statement && showCreditNoteCancel && (
+        <CreditNoteUploadDialog
+          statement={{
+            id: statement.id,
+            statement_number: statement.statement_number,
+            tally_invoice_number: statement.tally_invoice_number,
+            total_amount: statement.total_amount,
+            payment_status: statement.payment_status,
+          }}
+          onCancelled={() => {
+            setShowCreditNoteCancel(false);
+            load();
+          }}
+          onClose={() => setShowCreditNoteCancel(false)}
+        />
+      )}
     </div>
   );
 }

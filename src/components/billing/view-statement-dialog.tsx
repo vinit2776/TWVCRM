@@ -23,6 +23,7 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
+import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
 import { StatementTimeline } from "@/components/accounting/statement-timeline";
 import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
@@ -176,6 +177,7 @@ export function ViewStatementDialog({
   const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
   const [gstModeReady, setGstModeReady] = useState<boolean | null>(null); // null = loading
+  const [showCreditNoteCancel, setShowCreditNoteCancel] = useState(false);
 
   // Reminder state
   const [sendingReminder, setSendingReminder] = useState(false);
@@ -484,23 +486,11 @@ export function ViewStatementDialog({
         onOpenChange(false);
         return;
       }
-      // Tally-issued invoice — auto-route to credit-note cancel
+      // Tally-issued invoice — plain void isn't allowed, cancellation needs a
+      // real credit note (see credit-note-upload-dialog.tsx).
       if (json.issuance_channel === "tally") {
-        const cancelRes = await fetch(`/api/billing-statements/${statementId}/cancel-tally`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: voidReason.trim() }),
-        });
-        const cancelJson = await cancelRes.json();
-        if (cancelRes.ok) {
-          toast.success(cancelJson.message || "Credit note queued — invoice will cancel once Tally confirms.");
-          setShowVoidConfirm(false);
-          setVoidReason("");
-          onStatusChange();
-          onOpenChange(false);
-        } else {
-          toast.error(cancelJson.error || "Failed to queue the Tally credit note");
-        }
+        setShowVoidConfirm(false);
+        setShowCreditNoteCancel(true);
       } else {
         toast.error(json.error || "Failed to void statement");
       }
@@ -1501,6 +1491,26 @@ export function ViewStatementDialog({
         totalAmount={statement.total_amount}
         hasExistingPaymentLink={!!statement.razorpay_payment_link_url}
         onSuccess={() => { onStatusChange(); onOpenChange(false); }}
+      />
+    )}
+
+    {/* Credit-note cancellation dialog — Tally-issued invoices only */}
+    {statement && showCreditNoteCancel && (
+      <CreditNoteUploadDialog
+        statement={{
+          id: statement.id,
+          statement_number: statement.statement_number,
+          tally_invoice_number: statement.tally_invoice_number ?? null,
+          total_amount: statement.total_amount,
+          payment_status: statement.payment_status ?? "unpaid",
+        }}
+        onCancelled={() => {
+          setShowCreditNoteCancel(false);
+          setVoidReason("");
+          onStatusChange();
+          onOpenChange(false);
+        }}
+        onClose={() => setShowCreditNoteCancel(false)}
       />
     )}
 
