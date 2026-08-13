@@ -199,6 +199,12 @@ export interface GstInvoiceData {
   irn?: string | null;
   /** Base64 PNG of the IRP signed QR code — mandatory on B2B e-invoices */
   irnQrBase64?: string | null;
+  /**
+   * Number of customer-facing supporting documents (receipts, vendor bills)
+   * appended as extra pages after this invoice — see reimbursement-supporting-docs.ts.
+   * When set, a short note is printed so the merged PDF is self-explanatory.
+   */
+  supportingDocsCount?: number;
 }
 
 export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
@@ -428,6 +434,23 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.text(`Payment Due By: ${formatDateInv(data.dueDate)}`, 14, y);
     y += 5;
     doc.setTextColor(80, 80, 80);
+  }
+
+  // Supporting documents note — reimbursement invoices only. The referenced
+  // pages are appended after this PDF is generated (see mergeSupportingDocuments
+  // in reimbursement-supporting-docs.ts), so this note is what makes the merged
+  // document self-explanatory rather than just unlabeled extra pages.
+  if (data.supportingDocsCount && data.supportingDocsCount > 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    const plural = data.supportingDocsCount === 1 ? "" : "s";
+    doc.text(
+      `Note: ${data.supportingDocsCount} supporting document${plural} attached for reference — see following page${plural}.`,
+      14,
+      y
+    );
+    y += 5;
   }
   y += 3;
 

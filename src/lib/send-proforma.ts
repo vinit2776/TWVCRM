@@ -23,6 +23,7 @@ import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
  *  slow/hung Razorpay or email call must not stall the whole batch loop. */
@@ -318,6 +319,12 @@ export async function dispatchProforma(
     } catch { /* skip QR */ }
   }
 
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments).
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id as string)
+    : [];
+
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
     // Rent proformas: invoice date = 1st of the billed month (period_start).
@@ -350,10 +357,14 @@ export async function dispatchProforma(
     razorpayUrl: razorpayLinkUrl ?? undefined,
     razorpayQrBase64,
     razorpayExpiry: razorpayLinkUrl ? razorpayExpiry : undefined,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   // Upload PDF to storage
   const storagePath = `proforma/${proformaRef.replace(/\//g, "-")}.pdf`;
@@ -747,10 +758,20 @@ export async function dispatchGstDirect(
   if (razorpayLinkUrl) {
     try { razorpayQrBase64 = await QRCode.toDataURL(razorpayLinkUrl, { width: 200, margin: 1, errorCorrectionLevel: "M" }); } catch { /* skip */ }
   }
+
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments).
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id as string)
+    : [];
+
   const invoiceData: GstInvoiceData = {
     invoiceNumber,
     invoiceDate: issueDateYmd,
     isProforma: false,
+    // Reimbursement GST-direct invoices collapse to Description | Amount, same
+    // as the proforma and on-demand PDF paths for this statement type.
+    compactLineItems: (statement.statement_type as string) === "reimbursement",
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
     buyerState: lead?.state || undefined,
@@ -769,9 +790,13 @@ export async function dispatchGstDirect(
     razorpayUrl: razorpayLinkUrl ?? undefined,
     razorpayQrBase64,
     razorpayExpiry: undefined,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   const storagePath = `gst-invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
   await adminSupabase.storage.from("crm-documents").upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });

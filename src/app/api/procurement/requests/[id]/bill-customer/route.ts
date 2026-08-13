@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { IMAGE_MIME_TYPES, PDF_MIME_TYPE } from "@/lib/uploads/normalize-upload-server";
 import { z } from "zod";
 
 const billCustomerSchema = z.object({
@@ -15,6 +16,18 @@ const billCustomerSchema = z.object({
     )
     .min(1, "At least one line item is required"),
   notes: z.string().optional(),
+  // Customer-facing proof (receipts, vendor bills) already uploaded directly to
+  // storage via /api/documents/upload-url — this route only persists the metadata.
+  supportingDocuments: z
+    .array(
+      z.object({
+        filePath: z.string().min(1),
+        fileName: z.string().min(1),
+        mimeType: z.string().min(1),
+      })
+    )
+    .max(10)
+    .optional(),
 });
 
 /**
@@ -88,6 +101,16 @@ export async function POST(
     return NextResponse.json({ error: "Total amount must be greater than zero" }, { status: 422 });
   }
 
+  const supportingDocuments = parsed.data.supportingDocuments ?? [];
+  for (const doc of supportingDocuments) {
+    if (!IMAGE_MIME_TYPES.has(doc.mimeType) && doc.mimeType !== PDF_MIME_TYPE) {
+      return NextResponse.json(
+        { error: `Unsupported supporting document type: ${doc.mimeType}` },
+        { status: 400 }
+      );
+    }
+  }
+
   const taxPercentage = Number(contract.tax_percentage || 0);
   const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
@@ -142,6 +165,27 @@ export async function POST(
     return NextResponse.json({ error: chargesError.message }, { status: 500 });
   }
 
+  // Supporting documents are supplementary — a failure here must not roll back
+  // an otherwise-valid statement/charges. Reported via supportingDocumentsError
+  // so the dialog can warn the user without blocking the send.
+  let supportingDocumentsError = false;
+  if (supportingDocuments.length > 0) {
+    const adminSupabase = await createAdminClient();
+    const { error: docsError } = await adminSupabase.from("reimbursement_supporting_documents").insert(
+      supportingDocuments.map((doc) => ({
+        billing_statement_id: statement.id,
+        file_path: doc.filePath,
+        file_name: doc.fileName,
+        file_mime_type: doc.mimeType,
+        uploaded_by: dbUser.id,
+      }))
+    );
+    if (docsError) {
+      console.error("[bill-customer] Failed to persist supporting documents:", docsError.message);
+      supportingDocumentsError = true;
+    }
+  }
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: statement.id,
@@ -158,6 +202,12 @@ export async function POST(
   });
 
   return NextResponse.json({
-    data: { id: statement.id, statement_number: statement.statement_number, subtotal, total_amount: totalAmount },
+    data: {
+      id: statement.id,
+      statement_number: statement.statement_number,
+      subtotal,
+      total_amount: totalAmount,
+      supportingDocumentsError,
+    },
   }, { status: 201 });
 }

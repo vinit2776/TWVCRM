@@ -2254,6 +2254,7 @@ export interface PurchaseRequest {
     total_amount: number;
     voided_at: string | null;
     created_at: string;
+    supporting_documents?: Array<{ id: string }>;
   }>;
 }
 
@@ -2266,6 +2267,19 @@ export interface MaterialRequestQuotation {
   file_name: string;
   file_mime_type: string;
   notes?: string | null;
+  uploaded_by?: string | null;
+  created_at: string;
+  // Joined / computed
+  uploader?: { id: string; full_name?: string; email?: string } | null;
+  signed_url?: string;
+}
+
+export interface ReimbursementSupportingDocument {
+  id: string;
+  billing_statement_id: string;
+  file_path: string;
+  file_name: string;
+  file_mime_type: string;
   uploaded_by?: string | null;
   created_at: string;
   // Joined / computed

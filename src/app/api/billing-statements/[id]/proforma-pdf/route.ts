@@ -4,6 +4,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 import QRCode from "qrcode";
 
 export const maxDuration = 30;
@@ -187,6 +188,10 @@ export async function GET(
     razorpayExpiry = expiryDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
   }
 
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id as string)
+    : [];
+
   const proformaRef = statement.statement_number as string;
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
@@ -215,10 +220,14 @@ export async function GET(
     razorpayQrBase64,
     razorpayExpiry,
     upiId,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
   const filename = `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`;
 
   return new NextResponse(pdfBuffer, {
