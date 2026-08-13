@@ -21,6 +21,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
+import { logAudit } from "@/lib/audit";
 
 interface CaseForInvoicing {
   id: string;
@@ -177,7 +178,35 @@ export async function createCaseInvoiceStatement(
   const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
 
   if (billingMode === "proforma_first" && !handoff.skipLegacyDispatch) {
-    await dispatchProforma(supabase, statement.id);
+    // Previously discarded — a dispatch failure (SMTP/Resend/Razorpay down,
+    // no contact info, etc.) was silent: the case invoice still "succeeded"
+    // with no record of why the customer never got anything. Log both to
+    // Vercel's console (immediate visibility) and the audit trail (queryable
+    // after the fact, same as every other mutation in this codebase).
+    const dispatchResult = await dispatchProforma(supabase, statement.id);
+    if (!dispatchResult.success) {
+      console.error(
+        `[case-invoicing] dispatchProforma failed for statement ${statement.id} (case ${caseData.id}): ${dispatchResult.error ?? "unknown error"}`,
+      );
+    }
+    void logAudit(supabase, {
+      entityType: "billing_statement",
+      entityId: statement.id,
+      action: "update",
+      performedBy: "system:case-invoicing",
+      changes: {
+        proforma_dispatch: {
+          old: null,
+          new: {
+            success: dispatchResult.success,
+            error: dispatchResult.error ?? null,
+            emailed_to: dispatchResult.emailedTo,
+            razorpay_link_created: !!dispatchResult.razorpayLinkUrl,
+            no_contact: dispatchResult.noContact,
+          },
+        },
+      },
+    });
   }
   // gst_direct: no dispatch — statement sits in the Tally Inbox until an
   // accountant uploads the real GST invoice (upload-gst-invoice/route.ts).
