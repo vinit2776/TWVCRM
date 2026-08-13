@@ -361,6 +361,22 @@ export async function POST(
     );
   }
 
+  // ── Also mirror the GST invoice number onto the linked ad-hoc invoice ─────
+  // (proforma_invoices) so it shows on the lead page. The mirror above only
+  // updates the accounting-side statement row — nothing previously kept the
+  // customer-facing invoice's gst_invoice_number in sync. Non-fatal: the
+  // upload itself already succeeded (PDF stored, statement updated); a failure
+  // here just means the lead page won't show the GST number until retried.
+  if (statement.invoice) {
+    const { error: invoiceMirrorErr } = await adminClient
+      .from("proforma_invoices")
+      .update({ gst_invoice_number: meta.tally_invoice_number })
+      .eq("id", statement.invoice.id);
+    if (invoiceMirrorErr) {
+      console.error("[upload-gst-invoice] proforma_invoices mirror failed (non-fatal):", invoiceMirrorErr);
+    }
+  }
+
   // ── Transition handoff_state ─────────────────────────────────────────────
   await setHandoffState(supabase, statement.id, "ready_to_send", "gst_invoice_uploaded");
 
@@ -546,6 +562,12 @@ export async function POST(
           emailed_at: nowIso,
           emailed_to: customerEmail,
         }).eq("id", id);
+        if (statement.invoice) {
+          await adminSupabase.from("proforma_invoices").update({
+            gst_invoice_sent_at: nowIso,
+            gst_invoice_sent_to: [customerEmail, ...ccEmails].join(", "),
+          }).eq("id", statement.invoice.id);
+        }
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
         // Log every recipient to billing_send_log — this is what actually feeds
         // the "Communications" timeline on the lead page (GET

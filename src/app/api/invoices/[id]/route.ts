@@ -41,6 +41,18 @@ export async function PATCH(
   if (body.status) allowedFields.status = body.status;
   if (body.paid_at) allowedFields.paid_at = body.paid_at;
   if (body.payment_reference) allowedFields.payment_reference = body.payment_reference;
+  // Lets accounts manually correct a GST invoice number that never got mirrored
+  // from billing_statements (e.g. payment/GST recorded via the accounting side
+  // rather than this invoice's own payment route — see the mirrors added to
+  // handleStatementPaid and upload-gst-invoice for the forward-going fix).
+  if (body.gst_invoice_number !== undefined) {
+    if (body.gst_invoice_number !== null && typeof body.gst_invoice_number !== "string") {
+      return NextResponse.json({ error: "gst_invoice_number must be a string or null" }, { status: 400 });
+    }
+    allowedFields.gst_invoice_number = body.gst_invoice_number;
+  }
+  if (body.gst_invoice_sent_at !== undefined) allowedFields.gst_invoice_sent_at = body.gst_invoice_sent_at;
+  if (body.gst_invoice_sent_to !== undefined) allowedFields.gst_invoice_sent_to = body.gst_invoice_sent_to;
 
   // Lets accounts resolve an invoice created with "I don't know" (primary_head
   // null) into a real accounting head, and/or tighten up the internal note.

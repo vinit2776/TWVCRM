@@ -356,8 +356,40 @@ export async function handleStatementPaid(
   }
 
   // Same reasoning applies to ad-hoc lead invoices (proforma_invoices) — no
-  // contract exists, always proforma-first. No mirror-back needed here: the
-  // /api/invoices/[id]/payment route already updates proforma_invoices itself.
+  // contract exists, always proforma-first. This mirror IS needed here: when
+  // payment is recorded from the lead page (/api/invoices/[id]/payment) that
+  // route already updates proforma_invoices itself, but this function is also
+  // reached from the accounting-side Record Payment route
+  // (billing-statements/[id]/payment, via finalizeBillingPayment) and the
+  // deposit-adjustment approval path — neither of those touch proforma_invoices,
+  // so without this the invoice stays stuck on "sent" even after the linked
+  // statement is correctly paid and its GST invoice issued.
+  if (invoiceId) {
+    const now = new Date().toISOString();
+    const { data: invoiceRow } = await supabase
+      .from("proforma_invoices")
+      .select("status")
+      .eq("id", invoiceId)
+      .maybeSingle();
+    if (invoiceRow && invoiceRow.status !== "paid") {
+      const { data: lastPayment } = await supabase
+        .from("billing_payments")
+        .select("payment_reference")
+        .eq("billing_statement_id", statementId)
+        .order("payment_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      await supabase
+        .from("proforma_invoices")
+        .update({
+          status: "paid",
+          paid_at: now,
+          payment_reference: lastPayment?.payment_reference ?? null,
+        })
+        .eq("id", invoiceId);
+    }
+  }
+
   if (proposalId || invoiceId) {
     if (currentState === "gst_sent_awaiting_payment") {
       await setHandoffState(supabase, statementId, "complete", trigger);
