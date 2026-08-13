@@ -13,8 +13,8 @@
  * underlying statement detail page.
  */
 
-import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -37,6 +37,7 @@ import {
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
+import { StatementHistoryDialog } from "./statement-history-dialog";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
@@ -232,6 +233,8 @@ export function TallyInboxClient() {
   const dismissCompletion = useCallback((id: string) => {
     setCompletions((prev) => prev.filter((x) => x.id !== id));
   }, []);
+  // History dialog (timeline + communications) — shared across open/closed rows.
+  const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string | null } | null>(null);
   // Pre-send dialog
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[] } | { type: "booking"; id: string; recipients: string[] } | null>(null);
@@ -290,6 +293,49 @@ export function TallyInboxClient() {
       setLoading(false);
     }
   }, [tab, searchTerm, closedPage]);
+
+  // Re-fetch and patch a single statement instead of the whole list after a
+  // row-level mutation (upload / send / record payment / close / GSTIN
+  // save). The full inbox query joins across 5 owner types plus a 6-query
+  // fan-out — doing that for every click when only one row actually changed
+  // is what made the page feel slower with each successive action. The
+  // ?id= mode is the same query scoped to one row, so it's cheap.
+  // contractStats/visibleRows/groupedRows are memoized off `data`, so
+  // patching data.rows here is enough for the whole UI to catch up —
+  // nothing downstream needs to change.
+  const refreshRow = useCallback(async (statementId: string) => {
+    try {
+      const res = await fetch(`/api/accounting/inbox?id=${encodeURIComponent(statementId)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as InboxResponse;
+      const fresh = json.rows[0] as InboxRow | undefined;
+      setData((prev) => {
+        if (!prev) return prev;
+        // Which tab we're viewing determines whether a state change should
+        // make the row appear or disappear from the current list — e.g.
+        // "mark accounted" should drop the row off "All open" immediately,
+        // but a resend on the Closed tab should keep it right where it is.
+        const isClosedTab = tab === "closed";
+        const belongsHere = !!fresh && (isClosedTab
+          ? (fresh.handoff_state === "complete" || fresh.is_voided)
+          : (fresh.handoff_state !== "complete" && !fresh.is_voided));
+        const idx = prev.rows.findIndex((r) => r.statement_id === statementId);
+        let rows: InboxRow[];
+        if (!belongsHere) {
+          rows = idx === -1 ? prev.rows : prev.rows.filter((r) => r.statement_id !== statementId);
+        } else if (idx === -1) {
+          rows = [...prev.rows, fresh as InboxRow];
+        } else {
+          rows = prev.rows.map((r, i) => (i === idx ? (fresh as InboxRow) : r));
+        }
+        return rows === prev.rows ? prev : { ...prev, rows };
+      });
+    } catch {
+      // Silent — worst case the row looks stale until the next natural
+      // reload or manual Refresh click, which beats failing the action
+      // that already succeeded server-side.
+    }
+  }, [tab]);
 
   useEffect(() => {
     void load();
@@ -386,7 +432,8 @@ export function TallyInboxClient() {
           });
         }
       }
-      await load();
+      if (type === "statement") await refreshRow(id);
+      else await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Send failed");
     } finally {
@@ -394,12 +441,12 @@ export function TallyInboxClient() {
       setSendingBookingId(null);
       setPendingSend(null);
     }
-  }, [pendingSend, load, data, pushCompletion]);
+  }, [pendingSend, load, refreshRow, data, pushCompletion]);
 
-  const handleUploaded = useCallback(async () => {
+  const handleUploaded = useCallback(async (statementId: string) => {
     setExpandedId(null);
-    await load();
-  }, [load]);
+    await refreshRow(statementId);
+  }, [refreshRow]);
 
   const handleBookingUploaded = useCallback(async (
     row: BookingInboxRow,
@@ -458,13 +505,13 @@ export function TallyInboxClient() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setSentConfirmedId(statementId);
-      await load();
+      await refreshRow(statementId);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setResendingId(null);
     }
-  }, [load]);
+  }, [refreshRow]);
 
   const openPayDialog = useCallback((row: InboxRow) => {
     const balance = Math.max(0, row.statement_total_amount - (row.total_paid ?? 0));
@@ -528,12 +575,12 @@ export function TallyInboxClient() {
               `${formatCurrency(payRemainderLeg)} remainder failed: ${remainderJson.error || "unknown error"}. Record it separately.`
             );
             setPayRow(null);
-            await load();
+            await refreshRow(payRow.id);
             return;
           }
         }
         setPayRow(null);
-        await load();
+        await refreshRow(payRow.id);
       } catch (e) {
         setActionError(e instanceof Error ? e.message : "Failed to submit deposit adjustment");
       } finally {
@@ -566,13 +613,13 @@ export function TallyInboxClient() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
       setPayRow(null);
-      await load();
+      await refreshRow(payRow.id);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Failed to record payment");
     } finally {
       setPaySubmitting(false);
     }
-  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, load, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, refreshRow, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
 
   const handleAccounted = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -596,13 +643,13 @@ export function TallyInboxClient() {
           action: "marked_complete",
         });
       }
-      await load();
+      await refreshRow(statementId);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Failed");
     } finally {
       setClosingId(null);
     }
-  }, [load, data, pushCompletion]);
+  }, [refreshRow, data, pushCompletion]);
 
   const handleBookingSend = useCallback((taskId: string, row: BookingInboxRow) => {
     const recipients = Array.from(new Set([
@@ -741,10 +788,11 @@ export function TallyInboxClient() {
       onSend={() => handleSend(row.statement_id, row)}
       onClose={() => handleAccounted(row.statement_id)}
       onResend={() => handleResend(row.statement_id)}
-      onUploaded={handleUploaded}
+      onUploaded={() => handleUploaded(row.statement_id)}
       onCancelUpload={() => setExpandedId(null)}
-      onGstinUpdated={() => void load()}
+      onGstinUpdated={() => void refreshRow(row.statement_id)}
       onRecordPayment={() => openPayDialog(row)}
+      onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
     />
   );
 
@@ -936,7 +984,7 @@ export function TallyInboxClient() {
                   onSend={() => handleBookingSend(row.task_id, row)}
                   onClose={() => handleBookingClose(row.task_id)}
                   onResend={() => handleBookingResend(row.task_id)}
-                  onUploaded={handleUploaded}
+                  onUploaded={() => void load()}
                   onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
                   onCancelUpload={() => setExpandedBookingId(null)}
                 />
@@ -1171,6 +1219,13 @@ export function TallyInboxClient() {
         sending={!!(sendingId || sendingBookingId)}
         onConfirm={handleSendConfirm}
       />
+
+      {/* History dialog — timeline + communications, open or closed rows */}
+      <StatementHistoryDialog
+        statementId={historyRow?.id ?? null}
+        statementNumber={historyRow?.statement_number ?? null}
+        onOpenChange={(open) => { if (!open) setHistoryRow(null); }}
+      />
     </div>
   );
 }
@@ -1361,7 +1416,7 @@ function formatSentAt(iso: string): string {
   return new Date(iso).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" });
 }
 
-function InboxRowItem({
+const InboxRowItem = memo(function InboxRowItem({
   row,
   expanded,
   sending,
@@ -1376,6 +1431,7 @@ function InboxRowItem({
   onCancelUpload,
   onGstinUpdated,
   onRecordPayment,
+  onViewHistory,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1391,6 +1447,7 @@ function InboxRowItem({
   onCancelUpload: () => void;
   onGstinUpdated: () => void;
   onRecordPayment: () => void;
+  onViewHistory: () => void;
 }) {
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
@@ -1639,6 +1696,15 @@ function InboxRowItem({
 
         {/* ── Actions row ── */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          <button
+            type="button"
+            onClick={onViewHistory}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+            title="Timeline and communications sent for this statement"
+          >
+            <History className="h-3 w-3" />
+            History
+          </button>
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -1773,7 +1839,20 @@ function InboxRowItem({
       )}
     </li>
   );
-}
+}, (prev, next) =>
+  // Callback props are re-created every parent render regardless — comparing
+  // them by reference would defeat the memo. They all just forward to
+  // useCallback-stabilized handlers with `row` (or its id) as the argument,
+  // so skipping a re-render when `row` itself hasn't changed is safe:
+  // refreshRow() only creates a new row object for the one row that
+  // actually changed, leaving every other row's reference untouched.
+  prev.row === next.row &&
+  prev.expanded === next.expanded &&
+  prev.sending === next.sending &&
+  prev.closing === next.closing &&
+  prev.resending === next.resending &&
+  prev.sentConfirmed === next.sentConfirmed
+);
 
 // ── Billing statement payment panel ────────────────────────────────────────
 
