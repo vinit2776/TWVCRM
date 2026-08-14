@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Plus, Search, ChevronLeft, ChevronRight, Handshake } from "lucide-react";
@@ -38,6 +38,26 @@ export default function AggregatorsPage() {
     search,
     status: statusFilter || undefined,
   });
+
+  const [caseCounts, setCaseCounts] = useState<Record<string, { total: number; incomplete: number }>>({});
+  const [caseCountsLoading, setCaseCountsLoading] = useState(false);
+
+  // Key off a stable string, not the `aggregators` array reference — usePaginatedFetch
+  // returns a fresh `[]` on every render until the first fetch resolves, which would
+  // otherwise re-fire this effect (and its unconditional setState) every render.
+  const aggregatorIdsKey = aggregators.map((a) => a.id).join(",");
+
+  useEffect(() => {
+    if (!aggregatorIdsKey) {
+      setCaseCounts({});
+      return;
+    }
+    setCaseCountsLoading(true);
+    fetch(`/api/aggregators/case-counts?ids=${aggregatorIdsKey}`)
+      .then((r) => r.json())
+      .then((j) => setCaseCounts(j.data ?? {}))
+      .finally(() => setCaseCountsLoading(false));
+  }, [aggregatorIdsKey]);
 
   const handleSearch = () => {
     setSearch(searchInput);
@@ -117,6 +137,7 @@ export default function AggregatorsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Email Domain</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
+                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Cases</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Billing Method</th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Created</th>
               </tr>
@@ -157,6 +178,26 @@ export default function AggregatorsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge type="aggregator_status" value={agg.status} />
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    {caseCountsLoading ? (
+                      <span className="text-muted-foreground text-xs">…</span>
+                    ) : caseCounts[agg.id] ? (
+                      <Link
+                        href={`/aggregators/${agg.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="hover:underline"
+                      >
+                        <span className="font-medium">{caseCounts[agg.id].total}</span>
+                        {caseCounts[agg.id].incomplete > 0 && (
+                          <span className="ml-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
+                            {caseCounts[agg.id].incomplete} pending
+                          </span>
+                        )}
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
                     {AGGREGATOR_BILLING_METHOD_LABELS[agg.billing_method] || agg.billing_method}
