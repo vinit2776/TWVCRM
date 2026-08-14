@@ -24,6 +24,7 @@ import { AggregatorContactsTab } from "@/components/aggregators/aggregator-conta
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
 import { AggregatorBillingTab } from "@/components/aggregators/aggregator-billing-tab";
 import { AggregatorForm } from "@/components/aggregators/aggregator-form";
+import { AggregatorCaseSummary } from "@/components/aggregators/aggregator-case-summary";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
@@ -210,6 +211,8 @@ export default function AggregatorDetailPage({
 
             {/* Sidebar */}
             <div className="space-y-4">
+              <AggregatorCaseSummary aggregatorId={id} />
+
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Quick Info</CardTitle>
