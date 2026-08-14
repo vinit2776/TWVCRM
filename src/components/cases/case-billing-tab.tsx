@@ -40,7 +40,7 @@ interface CaseBillingInfo {
   client_name: string | null;
   client_company_name: string | null;
   client_email: string | null;
-  aggregator: { billing_method?: string; billing_mode?: "proforma_first" | "gst_direct"; name?: string; primary_email?: string | null } | null;
+  aggregator: { billing_method?: string; billing_mode?: "proforma_first" | "gst_direct"; name?: string; company_name?: string; primary_email?: string | null } | null;
 }
 
 interface CaseStatement {
@@ -126,7 +126,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const billToAggregator = caseInfo?.case_source === "aggregator" && caseInfo.bill_to === "aggregator";
   const primaryEmail = billToAggregator ? caseInfo?.aggregator?.primary_email ?? null : caseInfo?.client_email ?? null;
   const primaryName = billToAggregator
-    ? caseInfo?.aggregator?.name ?? ""
+    ? caseInfo?.aggregator?.company_name || caseInfo?.aggregator?.name || ""
     : caseInfo?.client_company_name || caseInfo?.client_name || "";
 
   // A statement that exists, isn't voided, and has had nothing happen to it

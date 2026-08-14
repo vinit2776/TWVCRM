@@ -102,7 +102,7 @@ export default function CaseDetailPage({
     );
   }
 
-  const aggregator = caseData.aggregator as { id: string; name: string; code: string } | null;
+  const aggregator = caseData.aggregator as { id: string; name: string; company_name?: string; code: string } | null;
 
   return (
     <div className="space-y-6">
@@ -126,7 +126,7 @@ export default function CaseDetailPage({
               <span className="font-mono">{caseData.case_number}</span>
               <span>|</span>
               {aggregator ? (
-                <span>{aggregator.name}</span>
+                <span>{aggregator.company_name || aggregator.name}</span>
               ) : (
                 <Badge variant="outline">Direct Client</Badge>
               )}

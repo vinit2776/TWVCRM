@@ -222,7 +222,10 @@ export default function CasesPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                    {c.aggregator ? (c.aggregator as { name: string }).name : "-"}
+                    {c.aggregator
+                      ? (c.aggregator as { name: string; company_name?: string }).company_name ||
+                        (c.aggregator as { name: string }).name
+                      : "-"}
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell">
                     <StatusBadge type="vo_purpose" value={c.purpose} />
