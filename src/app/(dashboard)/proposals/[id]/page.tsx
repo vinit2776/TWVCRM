@@ -1168,6 +1168,17 @@ export default function ProposalDetailPage({
                         <span className="text-green-800 text-xs">{formatDate(proposal.deposit_payment_received_at)}</span>
                       </div>
                     )}
+                    {proposal.deposit_payment_recorded_by_user?.full_name ? (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Recorded by</span>
+                        <span className="text-green-800 text-xs">{proposal.deposit_payment_recorded_by_user.full_name}</span>
+                      </div>
+                    ) : proposal.deposit_payment_reference?.startsWith("Legacy") ? (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Recorded by</span>
+                        <span className="text-green-800 text-xs italic">Legacy import — no recorder on file</span>
+                      </div>
+                    ) : null}
                     {proposal.deposit_payment_screenshot_url && (
                       <a
                         href={proposal.deposit_payment_screenshot_url}

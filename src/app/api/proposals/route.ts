@@ -14,19 +14,42 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get("limit") || "25");
   const status = searchParams.get("status");
   const leadId = searchParams.get("lead_id");
+  const search = searchParams.get("search");
 
   const offset = (page - 1) * limit;
 
-  let query = supabase
-    .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)", { count: "exact" });
+  // Search path: search_proposals RPC does a proper JOIN with ILIKE across
+  // proposal_number, title, and lead/location fields — Supabase's .or()
+  // can't filter on embedded relation columns. Mirrors /api/contracts.
+  let data: Record<string, unknown>[] | null;
+  let count: number;
 
-  if (status) query = query.eq("status", status);
-  if (leadId) query = query.eq("lead_id", leadId);
-  query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+  if (search && !leadId) {
+    const { data: rpcRows, error: rpcErr } = await supabase.rpc("search_proposals", {
+      p_search: search || null,
+      p_status: status || null,
+      p_limit: limit,
+      p_offset: offset,
+    });
+    if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 });
 
-  const { data, error, count } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const rows = (rpcRows ?? []) as { data: Record<string, unknown>; total_count: number }[];
+    data = rows.map((r) => r.data);
+    count = Number(rows[0]?.total_count ?? 0);
+  } else {
+    let query = supabase
+      .from("proposals")
+      .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)", { count: "exact" });
+
+    if (status) query = query.eq("status", status);
+    if (leadId) query = query.eq("lead_id", leadId);
+    query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+
+    const { data: rows, error, count: c } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    data = rows;
+    count = c || 0;
+  }
 
   // Latest PI billing_statements row per proposal (for the flow-status badge).
   // One extra round-trip, reduced to "most recent per proposal_id" in JS —
