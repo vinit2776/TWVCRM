@@ -567,6 +567,7 @@ export interface Contract {
   printer_department_id?: string;
   // Renewal chain
   parent_contract_id?: string | null;
+  parent_contract?: { id: string; contract_number: string } | null;
   is_renewal?: boolean;
   renewal_sequence?: number;
   // Escalation waiver
