@@ -10,9 +10,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileDown, History, CheckCircle2 } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Loader2, FileDown, History, CheckCircle2, IndianRupee, CreditCard, Hash, Calendar, User, StickyNote } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 
 interface Lead {
   id: string;
@@ -39,6 +43,17 @@ interface CaseRef {
   aggregator?: AggregatorRef | null;
 }
 
+interface PaymentDetail {
+  id: string;
+  amount: number;
+  payment_date: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  razorpay_payment_id: string | null;
+  notes: string | null;
+  recorded_by_user: { id: string; full_name: string } | null;
+}
+
 interface PaidRow {
   id: string;
   statement_number: string;
@@ -49,6 +64,14 @@ interface PaidRow {
   gst_invoice_number: string | null;
   paid_on: string | null;
   payment_mode: string | null;
+  status: string;
+  payment_status: string | null;
+  accounted: boolean | null;
+  proforma_sent_at: string | null;
+  pi_cancelled_at: string | null;
+  proforma_viewed_at: string | null;
+  gst_invoice_viewed_at: string | null;
+  payments: PaymentDetail[];
   contract: { id: string; contract_number: string; lead?: Lead } | null;
   proposal?: { id: string; proposal_number: string; lead?: Lead } | null;
   invoice?: { id: string; invoice_number: string; lead?: Lead } | null;
@@ -106,6 +129,7 @@ export function PaidStatementsPanel({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [detailRow, setDetailRow] = useState<PaidRow | null>(null);
   const requestIdRef = useRef(0);
 
   const fetchPage = useCallback(async (pageNum: number, replace: boolean, searchTerm: string) => {
@@ -171,6 +195,7 @@ export function PaidStatementsPanel({
               <th className="px-4 py-3 text-left">Paid</th>
               <th className="px-4 py-3 text-right">Amount</th>
               <th className="px-4 py-3 text-left">Mode</th>
+              <th className="px-4 py-3 text-left">Lifecycle</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
@@ -178,10 +203,10 @@ export function PaidStatementsPanel({
             {rows.map((r) => {
               const party = partyOf(r);
               return (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr key={r.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetailRow(r)}>
                   <td className="px-4 py-3">
                     <div className="font-medium">
-                      <Link href={party.href} className="text-teal-700 hover:underline">{party.number}</Link>
+                      <Link href={party.href} className="text-teal-700 hover:underline" onClick={(e) => e.stopPropagation()}>{party.number}</Link>
                       {party.kind === "proposal" && <Badge variant="outline" className="ml-1.5 text-[10px]">Proposal PI</Badge>}
                       {party.kind === "invoice" && <Badge variant="outline" className="ml-1.5 text-[10px]">Ad-hoc Invoice</Badge>}
                     </div>
@@ -189,11 +214,11 @@ export function PaidStatementsPanel({
                   </td>
                   <td className="px-4 py-3">
                     {r.gst_invoice_number ? (
-                      <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                      <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {r.gst_invoice_number}<FileDown className="h-3 w-3" />
                       </Link>
                     ) : (
-                      <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                      <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {r.statement_number}<FileDown className="h-3 w-3" />
                       </Link>
                     )}
@@ -212,6 +237,18 @@ export function PaidStatementsPanel({
                   <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.total_amount)}</td>
                   <td className="px-4 py-3 text-xs capitalize whitespace-nowrap">{r.payment_mode ? r.payment_mode.replace(/_/g, " ") : "—"}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
+                    <BillingLifecycleStatus
+                      status={r.status}
+                      payment_status={r.payment_status}
+                      accounted={r.accounted}
+                      gst_invoice_number={r.gst_invoice_number}
+                      proforma_sent_at={r.proforma_sent_at}
+                      pi_cancelled_at={r.pi_cancelled_at}
+                      proforma_viewed_at={r.proforma_viewed_at}
+                      gst_invoice_viewed_at={r.gst_invoice_viewed_at}
+                    />
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1 justify-end">
                       <Button size="sm" variant="ghost" onClick={() => onOpenHistory(r)} title="View send/payment history">
                         <History className="h-3.5 w-3.5" />
@@ -235,6 +272,84 @@ export function PaidStatementsPanel({
           <span className="text-xs text-muted-foreground">All {total} paid statement{total === 1 ? "" : "s"} loaded.</span>
         )}
       </div>
+
+      <Dialog open={!!detailRow} onOpenChange={(o) => !o && setDetailRow(null)}>
+        <DialogContent className="max-w-md">
+          {detailRow && (() => {
+            const party = partyOf(detailRow);
+            const payment = detailRow.payments[0] ?? null;
+            const pdfHref = detailRow.gst_invoice_number
+              ? `/api/billing-statements/${detailRow.id}/gst-invoice-pdf`
+              : `/api/billing-statements/${detailRow.id}/proforma-pdf`;
+            const isRazorpayAuto = payment?.payment_mode === "razorpay" && !payment.recorded_by_user;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Payment received</DialogTitle>
+                  <div className="text-xs text-muted-foreground">{party.number} · {customerName(party.lead)}</div>
+                </DialogHeader>
+
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-2xl font-semibold">{formatCurrency(detailRow.total_amount)}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {detailRow.statement_number} · <span className="capitalize">{detailRow.statement_type}</span> · {formatDate(detailRow.period_start)} – {formatDate(detailRow.period_end)}
+                  </div>
+                </div>
+
+                {payment ? (
+                  <table className="w-full text-sm">
+                    <tbody>
+                      <tr>
+                        <td className="py-1.5 text-muted-foreground"><CreditCard className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Mode</td>
+                        <td className="py-1.5 text-right capitalize">{payment.payment_mode.replace(/_/g, " ")}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 text-muted-foreground"><Hash className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Reference</td>
+                        <td className="py-1.5 text-right font-mono text-xs">{payment.razorpay_payment_id || payment.payment_reference || "—"}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 text-muted-foreground"><Calendar className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Paid on</td>
+                        <td className="py-1.5 text-right">{formatDate(payment.payment_date)}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 text-muted-foreground"><User className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Recorded by</td>
+                        <td className="py-1.5 text-right">{isRazorpayAuto ? "Captured via Razorpay" : payment.recorded_by_user?.full_name || "—"}</td>
+                      </tr>
+                      {payment.notes && (
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground align-top"><StickyNote className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Notes</td>
+                          <td className="py-1.5 text-right text-muted-foreground">{payment.notes}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-sm text-muted-foreground py-2">No payment record found — this statement may predate offline payment tracking.</div>
+                )}
+
+                {detailRow.payments.length > 1 && (
+                  <div className="text-xs text-muted-foreground -mt-2">
+                    +{detailRow.payments.length - 1} earlier payment{detailRow.payments.length - 1 === 1 ? "" : "s"} — see full history.
+                  </div>
+                )}
+
+                <DialogFooter className="gap-2 sm:gap-2">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={pdfHref} target="_blank"><IndianRupee className="h-3.5 w-3.5 mr-1" />View statement</Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { onOpenHistory(detailRow); setDetailRow(null); }}
+                  >
+                    <History className="h-3.5 w-3.5 mr-1" />Full history
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
