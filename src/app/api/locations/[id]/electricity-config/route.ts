@@ -16,6 +16,8 @@ const upsertSchema = z.object({
   landlord_gst_rate: z.number().min(0).nullable(),
   tds_section: z.string().nullable(),
   tds_rate: z.number().min(0).nullable(),
+  onegrid_enabled: z.boolean().optional().default(false),
+  onegrid_api_key: z.string().nullable().optional(),
 }).refine(
   (d) => Math.abs(d.landlord_utility_pct + d.landlord_generator_pct - 100) < 0.01,
   { message: "Landlord split percentages must sum to 100", path: ["landlord_generator_pct"] }
@@ -135,6 +137,8 @@ export async function PUT(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  const redact = (k: string, v: unknown) => (k === "onegrid_api_key" ? (v ? "[set]" : null) : v);
+
   await logAudit(supabase, {
     entityType: "location_electricity_config",
     entityId: data.id,
@@ -144,7 +148,7 @@ export async function PUT(
       ? Object.fromEntries(
           Object.entries(parsed.data)
             .filter(([k, v]) => (existing as Record<string, unknown>)[k] !== v)
-            .map(([k, v]) => [k, { old: (existing as Record<string, unknown>)[k], new: v }])
+            .map(([k, v]) => [k, { old: redact(k, (existing as Record<string, unknown>)[k]), new: redact(k, v) }])
         )
       : { location_id: { old: null, new: id } },
   });

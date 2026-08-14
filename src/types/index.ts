@@ -3929,6 +3929,8 @@ export interface LocationElectricityConfig {
   landlord_gst_rate: number | null;
   tds_section: string | null;
   tds_rate: number | null;
+  onegrid_enabled: boolean;
+  onegrid_api_key: string | null;
   // Deprecated: customer settings moved to contract_electricity_config
   customer_utility_pct: number;
   customer_generator_pct: number;
