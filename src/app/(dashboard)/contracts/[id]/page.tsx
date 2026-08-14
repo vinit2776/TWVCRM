@@ -814,10 +814,25 @@ export default function ContractDetailPage({
                     )}
                   </>
                 )}
-                {contract.proposal && (
+                {contract.is_renewal && contract.parent_contract_id ? (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Parent Contract</p>
+                    <Link
+                      href={`/contracts/${contract.parent_contract_id}`}
+                      className="text-primary hover:underline font-medium font-mono text-xs"
+                    >
+                      {contract.parent_contract?.contract_number ?? "View parent contract"}
+                    </Link>
+                  </div>
+                ) : contract.proposal && (
                   <div>
                     <p className="text-muted-foreground text-xs">Proposal</p>
-                    <p className="font-mono text-xs">{contract.proposal.proposal_number}</p>
+                    <Link
+                      href={`/proposals/${contract.proposal.id}`}
+                      className="text-primary hover:underline font-medium font-mono text-xs"
+                    >
+                      {contract.proposal.proposal_number}
+                    </Link>
                   </div>
                 )}
               </div>

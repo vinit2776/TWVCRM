@@ -39,7 +39,22 @@ export async function GET(
     await logView(supabase, { entityType: "contract", entityId: id, performedBy: dbUser.id });
   }
 
-  return NextResponse.json({ data: { ...data, ...actorNames } });
+  // Parent contract number for the renewal-chain link — fetched separately
+  // rather than embedded in the select() above: PostgREST's self-referencing
+  // embed for contracts!contracts_parent_contract_id_fkey doesn't resolve
+  // against this project's schema cache (confirmed directly, not just a
+  // stale-cache blip), so a plain follow-up query sidesteps it entirely.
+  let parentContract: { id: string; contract_number: string } | null = null;
+  if (data.parent_contract_id) {
+    const { data: parent } = await supabase
+      .from("contracts")
+      .select("id, contract_number")
+      .eq("id", data.parent_contract_id)
+      .maybeSingle();
+    parentContract = parent;
+  }
+
+  return NextResponse.json({ data: { ...data, ...actorNames, parent_contract: parentContract } });
 }
 
 export async function PATCH(
