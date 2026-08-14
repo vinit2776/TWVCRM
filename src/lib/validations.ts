@@ -622,7 +622,15 @@ export const createAggregatorSchema = aggregatorFieldsSchema.extend({
   tags: z.array(z.string()).default([]),
 });
 
-export const updateAggregatorSchema = aggregatorFieldsSchema.partial();
+// .partial() alone isn't enough for company_name: it allows the KEY to be
+// omitted or `undefined`, but a blank text input still submits "" (a defined
+// value), which still fails the base schema's .min(1) — silently blocking
+// saves on any legacy aggregator with no company name on file. Override it
+// to explicitly accept "" on update, since re-requiring it retroactively
+// was never the intent (see fix/aggregator-edit-company-name-validation).
+export const updateAggregatorSchema = aggregatorFieldsSchema.partial().extend({
+  company_name: z.string().optional().or(z.literal("")),
+});
 export type CreateAggregatorInput = z.input<typeof createAggregatorSchema>;
 export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
 
