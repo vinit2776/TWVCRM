@@ -12,9 +12,9 @@ for (const [groupKey, group] of Object.entries(CASE_STATUS_GROUPS)) {
 /**
  * GET /api/aggregators/[id]/case-summary
  *
- * Case-count breakdown by pipeline stage for an aggregator's Overview tab —
- * gives visibility into referrals still stuck before "Active", which never
- * show up on the Billing tab (that only lists BILLABLE_CASE_STATUSES).
+ * Case list + pipeline-stage breakdown for an aggregator's Cases tab — gives
+ * visibility into referrals still stuck before "Active", which never show up
+ * on the Billing tab (that only lists BILLABLE_CASE_STATUSES).
  */
 export async function GET(
   _request: NextRequest,
@@ -27,13 +27,24 @@ export async function GET(
 
   const { data: cases, error } = await supabase
     .from("cases")
-    .select("id, case_number, client_name, status")
+    .select("id, case_number, client_name, client_company_name, purpose, status, rate, created_at")
     .eq("aggregator_id", id)
     .order("case_number", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const byGroup = new Map<string, { id: string; case_number: string; client_name: string; status: string }[]>();
+  type CaseRow = {
+    id: string;
+    case_number: string;
+    client_name: string;
+    client_company_name: string | null;
+    purpose: string;
+    status: string;
+    rate: number | null;
+    created_at: string;
+  };
+
+  const byGroup = new Map<string, CaseRow[]>();
   for (const key of GROUP_ORDER) byGroup.set(key, []);
 
   for (const c of cases || []) {
