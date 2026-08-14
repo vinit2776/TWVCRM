@@ -134,6 +134,9 @@ export default function ContractDetailPage({
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
+  // null = not yet confirmed by the prorata section's own billing-statement fetch;
+  // falls back to the (possibly stale) cached column until it reports in.
+  const [prorataSettled, setProrataSettled] = useState<boolean | null>(null);
   const [showOverride, setShowOverride] = useState(false);
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
@@ -148,6 +151,10 @@ export default function ContractDetailPage({
 
   const handleKycStatusChange = useCallback((allSatisfied: boolean, total: number, approved: number, deferred: number) => {
     setKycStatus({ allSatisfied, total, approved, deferred });
+  }, []);
+
+  const handleProrataStatusChange = useCallback((settled: boolean) => {
+    setProrataSettled(settled);
   }, []);
 
   const fetchContract = useCallback(async (showSpinner = true) => {
@@ -596,7 +603,15 @@ export default function ContractDetailPage({
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
             const depositPaid = isRenewal || !depositRequired || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid");
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            const prorataRequired = !!(contract.is_renewal && contract.prorata_payment_status === "pending");
+            // Trust the ContractProrataSection's live billing-statement check over the
+            // cached column once it reports in — the cache only syncs via the Razorpay
+            // webhook or an activation attempt, so payments recorded via AR/Tally inbox
+            // can leave it stuck at "pending" while the statement is actually paid.
+            const prorataRequired = !!(
+              contract.is_renewal &&
+              contract.prorata_payment_status === "pending" &&
+              prorataSettled !== true
+            );
             const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataRequired;
             const hasDeferred = kycStatus.deferred > 0;
 
@@ -715,6 +730,7 @@ export default function ContractDetailPage({
               contract={contract}
               userRole={userRole}
               onSuccess={() => fetchContract(false)}
+              onProrataStatusChange={handleProrataStatusChange}
             />
           )}
 
@@ -820,9 +836,32 @@ export default function ContractDetailPage({
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Security Deposit</p>
-                  <p className="font-medium">{(contract.security_deposit_months ?? 3) === 0 ? "Waived" : formatCurrency(securityDeposit)}</p>
-                  {contract.deposit_carried_from && (
-                    <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                  {(contract.security_deposit_months ?? 3) === 0 ? (
+                    <>
+                      <p className="font-medium">Waived</p>
+                      {linkedProposal?.deposit_waiver_verified_by_user?.full_name && (
+                        <Link
+                          href={`/proposals/${linkedProposal.id}#deposit-waiver-gate`}
+                          className="text-[10px] text-green-600 mt-0.5 hover:underline block"
+                        >
+                          ✓ Waived off by {linkedProposal.deposit_waiver_verified_by_user.full_name}
+                        </Link>
+                      )}
+                    </>
+                  ) : contract.deposit_carried_from ? (
+                    <>
+                      <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                    </>
+                  ) : linkedProposal?.deposit_payment_status === "paid" ? (
+                    <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block hover:underline">
+                      <p className="font-medium">
+                        {formatCurrency(Number(linkedProposal.deposit_payment_amount || linkedProposal.security_deposit_amount || securityDeposit))}
+                      </p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Received — view payment details</p>
+                    </Link>
+                  ) : (
+                    <p className="font-medium text-amber-600">Pending</p>
                   )}
                   {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
                     <p className="text-[10px] text-amber-600 mt-0.5">

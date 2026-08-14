@@ -31,9 +31,10 @@ interface Props {
   contract: Contract;
   userRole: string | null;
   onSuccess: () => void;
+  onProrataStatusChange?: (settled: boolean) => void;
 }
 
-export function ContractProrataSection({ contract, userRole, onSuccess }: Props) {
+export function ContractProrataSection({ contract, userRole, onSuccess, onProrataStatusChange }: Props) {
   const [sending, setSending] = useState(false);
   const [piPreviewOpen, setPiPreviewOpen] = useState(false);
   const [ccEmails, setCcEmails] = useState<string[]>([]);
@@ -56,6 +57,19 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   }, [contract.prorata_billing_statement_id]);
 
   useEffect(() => { fetchStmtState(); }, [fetchStmtState]);
+
+  // Report the real settlement state to the parent so the Activate button
+  // gate isn't stuck on a stale `contracts.prorata_payment_status` cache —
+  // that column only syncs on the Razorpay webhook or an activation attempt,
+  // so payments recorded via AR/Tally inbox can leave it at "pending" even
+  // though the billing statement itself already shows paid.
+  useEffect(() => {
+    if (!onProrataStatusChange) return;
+    const status = contract.prorata_payment_status as string;
+    if (status === "not_applicable") { onProrataStatusChange(true); return; }
+    const settled = status === "paid" || status === "waived" || stmtState?.payment_status === "paid";
+    onProrataStatusChange(settled);
+  }, [contract.is_renewal, contract.prorata_payment_status, stmtState, onProrataStatusChange]);
 
   if (!contract.is_renewal || contract.prorata_payment_status === "not_applicable") {
     return null;

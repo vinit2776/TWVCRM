@@ -333,6 +333,8 @@ export interface Proposal {
   deposit_payment_reference?: string;
   deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_screenshot_url?: string;
+  deposit_payment_recorded_by?: string; // user id of who manually recorded this deposit payment
+  deposit_payment_recorded_by_user?: { id: string; full_name: string } | null;
   deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
   // Internal-only note for accounts (why this deposit request/collection exists) — never sent to the customer.
   deposit_internal_notes?: string | null;
@@ -365,6 +367,7 @@ export interface Proposal {
   deposit_waiver_otp_expires?: string;
   deposit_waiver_verified_at?: string;
   deposit_waiver_verified_by?: string;
+  deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
 }
 
