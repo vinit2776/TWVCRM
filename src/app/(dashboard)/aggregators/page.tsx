@@ -212,6 +212,35 @@ export default function AggregatorsPage() {
         </div>
       )}
 
+      {/* Legend */}
+      {!loading && aggregators.length > 0 && (
+        <div className="rounded-md border bg-muted/20 px-4 py-3">
+          <p className="text-xs font-medium text-muted-foreground mb-2">Legend</p>
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="active" />
+              <span className="text-xs text-muted-foreground">currently engaged</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="inactive" />
+              <span className="text-xs text-muted-foreground">not currently referring</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="suspended" />
+              <span className="text-xs text-muted-foreground">flagged, under review</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
+                N pending
+              </span>
+              <span className="text-xs text-muted-foreground">
+                cases not yet Active — won&apos;t show on the Billing tab
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Pagination */}
       {pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
