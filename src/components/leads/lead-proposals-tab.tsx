@@ -485,7 +485,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <p className="text-xs font-mono text-green-700">{inv.payment_reference}</p>
                             )}
                             {inv.gst_invoice_number && (
-                              <p className="text-xs text-muted-foreground">GST: {inv.gst_invoice_number}</p>
+                              <a
+                                href={`/api/invoices/${inv.id}/gst-invoice-pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                <FileText className="h-3 w-3" />
+                                GST: {inv.gst_invoice_number}
+                              </a>
                             )}
                           </div>
                         ) : inv.razorpay_link_url ? (
