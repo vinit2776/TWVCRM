@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { createAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
+import { createAggregatorSchema, updateAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
 import { preventEnterSubmit } from "@/lib/utils";
 import type { Aggregator } from "@/types";
 import { Loader2, Plus, Trash2 } from "lucide-react";
@@ -44,7 +44,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
     control,
     formState: { errors },
   } = useForm<CreateAggregatorInput>({
-    resolver: zodResolver(createAggregatorSchema),
+    // Editing an existing (possibly legacy) aggregator must not re-enforce
+    // create-time-only requirements like company_name — otherwise saving an
+    // unrelated correction on an aggregator that predates that rule fails
+    // validation before it even reaches the API.
+    resolver: zodResolver(aggregator ? updateAggregatorSchema : createAggregatorSchema) as Resolver<CreateAggregatorInput>,
     defaultValues: {
       name: aggregator?.name || "",
       company_name: aggregator?.company_name || "",
