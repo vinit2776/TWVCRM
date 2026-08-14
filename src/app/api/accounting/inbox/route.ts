@@ -332,6 +332,28 @@ export async function GET(req: NextRequest) {
       .order("uploaded_at", { ascending: true }),
   ]);
 
+  // gst_invoice_uploads.uploaded_by references auth.users(id), not
+  // public.users(id) — no FK exists for Supabase to embed a join, so
+  // resolve display names with a second lookup keyed on auth_id. Only
+  // needed for the timeline (same gating as allUploadsRes above).
+  const uploaderNameByAuthId = new Map<string, string>();
+  if (includeTimeline && allUploadsRes.data) {
+    const uploaderAuthIds = [...new Set(
+      (allUploadsRes.data as Array<{ uploaded_by: string | null }>)
+        .map((u) => u.uploaded_by)
+        .filter((id): id is string => !!id)
+    )];
+    if (uploaderAuthIds.length > 0) {
+      const { data: uploaderUsers } = await supabase
+        .from("users")
+        .select("auth_id, full_name")
+        .in("auth_id", uploaderAuthIds);
+      for (const u of (uploaderUsers ?? []) as Array<{ auth_id: string; full_name: string | null }>) {
+        if (u.full_name) uploaderNameByAuthId.set(u.auth_id, u.full_name);
+      }
+    }
+  }
+
   // Latest gst_invoice_upload per statement (most recent non-superseded).
   const uploadByStatement = new Map<string, InboxUpload>();
   for (const u of uploadsRes.data || []) {
@@ -470,6 +492,7 @@ export async function GET(req: NextRequest) {
           performed_by: string | null;
           created_at: string;
         }>,
+        uploaderNameByAuthId,
       });
     }
 
@@ -712,84 +735,93 @@ export async function GET(req: NextRequest) {
   const bookingTaskIds = filteredBookingTasks.map((t) => t.id);
   const bookingIds = filteredBookingTasks.map((t) => t.booking?.id).filter(Boolean) as string[];
 
-  // booking_payments keyed by booking_id
-  const bookingPaymentsMap = new Map<string, BookingPaymentConfirmation[]>();
-  if (bookingIds.length > 0) {
-    const { data: bpRows } = await supabase
-      .from("booking_payments")
-      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes, screenshot_path")
-      .in("booking_id", bookingIds)
-      .in("status", ["confirmed", "captured", "verified"])
-      .order("created_at", { ascending: false });
+  // booking_payments (+ settlement) and gst_invoice_uploads are independent
+  // of each other — both only need bookingIds/bookingTaskIds, which are
+  // already in hand — so run them concurrently instead of one after the
+  // other. (Settlement itself stays sequential *within* the payments branch
+  // since it needs the razorpay_payment_ids the payments query returns.)
+  const [bookingPaymentsMap, bookingUploadsMap] = await Promise.all([
+    (async () => {
+      const map = new Map<string, BookingPaymentConfirmation[]>();
+      if (bookingIds.length === 0) return map;
+      const { data: bpRows } = await supabase
+        .from("booking_payments")
+        .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes, screenshot_path")
+        .in("booking_id", bookingIds)
+        .in("status", ["confirmed", "captured", "verified"])
+        .order("created_at", { ascending: false });
 
-    // Fetch settlement data for all Razorpay payment IDs in one query
-    const rzpIds = (bpRows || [])
-      .map((bp) => bp.razorpay_payment_id as string | null)
-      .filter(Boolean) as string[];
+      // Fetch settlement data for all Razorpay payment IDs in one query
+      const rzpIds = (bpRows || [])
+        .map((bp) => bp.razorpay_payment_id as string | null)
+        .filter(Boolean) as string[];
 
-    const settlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
-    if (rzpIds.length > 0) {
-      const { data: sRows } = await supabase
-        .from("razorpay_settlement_cache")
-        .select("razorpay_payment_id, settled, settled_at, settlement_utr")
-        .in("razorpay_payment_id", rzpIds);
-      for (const s of sRows || []) {
-        settlementMap.set(s.razorpay_payment_id as string, {
-          settled: s.settled as boolean,
-          settled_at: (s.settled_at as string | null) ?? null,
-          settlement_utr: (s.settlement_utr as string | null) ?? null,
-        });
+      const settlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
+      if (rzpIds.length > 0) {
+        const { data: sRows } = await supabase
+          .from("razorpay_settlement_cache")
+          .select("razorpay_payment_id, settled, settled_at, settlement_utr")
+          .in("razorpay_payment_id", rzpIds);
+        for (const s of sRows || []) {
+          settlementMap.set(s.razorpay_payment_id as string, {
+            settled: s.settled as boolean,
+            settled_at: (s.settled_at as string | null) ?? null,
+            settlement_utr: (s.settlement_utr as string | null) ?? null,
+          });
+        }
       }
-    }
 
-    for (const bp of bpRows || []) {
-      const bid = (bp as { booking_id: string }).booking_id;
-      const rzpId = (bp.razorpay_payment_id as string | null) ?? null;
-      const settlement = rzpId ? (settlementMap.get(rzpId) ?? null) : null;
-      const list = bookingPaymentsMap.get(bid) ?? [];
-      list.push({
-        id: bp.id as string,
-        amount: Number(bp.amount),
-        payment_mode: bp.payment_mode as string,
-        payment_reference: (bp.payment_reference as string | null) ?? null,
-        razorpay_payment_id: rzpId,
-        created_at: bp.created_at as string,
-        status: bp.status as string,
-        verification_notes: (bp.verification_notes as string | null) ?? null,
-        screenshot_path: (bp.screenshot_path as string | null) ?? null,
-        settled: settlement?.settled ?? null,
-        settled_at: settlement?.settled_at ?? null,
-        settlement_utr: settlement?.settlement_utr ?? null,
-      });
-      bookingPaymentsMap.set(bid, list);
-    }
-  }
-
-  const bookingUploadsMap = new Map<string, InboxUpload>();
-  if (bookingTaskIds.length > 0) {
-    const { data: bookingUploads } = await supabase
-      .from("gst_invoice_uploads")
-      .select("id, booking_gst_task_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
-      .in("booking_gst_task_id", bookingTaskIds)
-      .is("superseded_by", null)
-      .order("uploaded_at", { ascending: false });
-
-    for (const u of bookingUploads || []) {
-      const tid = (u as { booking_gst_task_id: string }).booking_gst_task_id;
-      if (!bookingUploadsMap.has(tid)) {
-        bookingUploadsMap.set(tid, {
-          id: u.id as string,
-          tally_invoice_number: u.tally_invoice_number as string,
-          tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
-          irn: (u.irn as string | null) ?? null,
-          invoice_amount: Number(u.invoice_amount),
-          uploaded_at: u.uploaded_at as string,
-          name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
-          autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
+      for (const bp of bpRows || []) {
+        const bid = (bp as { booking_id: string }).booking_id;
+        const rzpId = (bp.razorpay_payment_id as string | null) ?? null;
+        const settlement = rzpId ? (settlementMap.get(rzpId) ?? null) : null;
+        const list = map.get(bid) ?? [];
+        list.push({
+          id: bp.id as string,
+          amount: Number(bp.amount),
+          payment_mode: bp.payment_mode as string,
+          payment_reference: (bp.payment_reference as string | null) ?? null,
+          razorpay_payment_id: rzpId,
+          created_at: bp.created_at as string,
+          status: bp.status as string,
+          verification_notes: (bp.verification_notes as string | null) ?? null,
+          screenshot_path: (bp.screenshot_path as string | null) ?? null,
+          settled: settlement?.settled ?? null,
+          settled_at: settlement?.settled_at ?? null,
+          settlement_utr: settlement?.settlement_utr ?? null,
         });
+        map.set(bid, list);
       }
-    }
-  }
+      return map;
+    })(),
+    (async () => {
+      const map = new Map<string, InboxUpload>();
+      if (bookingTaskIds.length === 0) return map;
+      const { data: bookingUploads } = await supabase
+        .from("gst_invoice_uploads")
+        .select("id, booking_gst_task_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
+        .in("booking_gst_task_id", bookingTaskIds)
+        .is("superseded_by", null)
+        .order("uploaded_at", { ascending: false });
+
+      for (const u of bookingUploads || []) {
+        const tid = (u as { booking_gst_task_id: string }).booking_gst_task_id;
+        if (!map.has(tid)) {
+          map.set(tid, {
+            id: u.id as string,
+            tally_invoice_number: u.tally_invoice_number as string,
+            tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
+            irn: (u.irn as string | null) ?? null,
+            invoice_amount: Number(u.invoice_amount),
+            uploaded_at: u.uploaded_at as string,
+            name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
+            autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
+          });
+        }
+      }
+      return map;
+    })(),
+  ]);
 
   const bookingRows: BookingInboxRow[] = filteredBookingTasks.map((t) => {
     const lead = t.booking?.lead ?? null;
@@ -957,6 +989,8 @@ function buildTimelineEvents(args: {
     performed_by: string | null;
     created_at: string;
   }>;
+  /** uploaded_by (auth.users id) → display name, resolved by the caller. */
+  uploaderNameByAuthId: Map<string, string>;
 }): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
@@ -978,30 +1012,35 @@ function buildTimelineEvents(args: {
 
   for (const p of args.payments) {
     const refSuffix = p.payment_reference ? ` · ${p.payment_reference}` : "";
+    const bySuffix = p.recorded_by_name ? ` — by ${p.recorded_by_name}` : "";
     events.push({
       kind: "payment_received",
       at: p.payment_date,
-      label: `Payment received: ₹${p.amount.toLocaleString("en-IN")} via ${p.payment_mode}${refSuffix}`,
+      label: `Payment received: ₹${p.amount.toLocaleString("en-IN")} via ${p.payment_mode}${refSuffix}${bySuffix}`,
       details: {
         amount: p.amount,
         mode: p.payment_mode,
         reference: p.payment_reference,
         razorpay_payment_id: p.razorpay_payment_id,
+        recorded_by_name: p.recorded_by_name,
       },
     });
   }
 
   for (const u of args.uploads) {
     const supersededNote = u.superseded_by ? " (superseded)" : "";
+    const uploaderName = u.uploaded_by ? args.uploaderNameByAuthId.get(u.uploaded_by) ?? null : null;
+    const bySuffix = uploaderName ? ` — by ${uploaderName}` : "";
     events.push({
       kind: "gst_uploaded",
       at: u.uploaded_at,
-      label: `GST invoice uploaded: ${u.tally_invoice_number}${supersededNote}`,
+      label: `GST invoice uploaded: ${u.tally_invoice_number}${supersededNote}${bySuffix}`,
       details: {
         upload_id: u.id,
         invoice_number: u.tally_invoice_number,
         superseded: !!u.superseded_by,
         uploaded_by: u.uploaded_by,
+        uploaded_by_name: uploaderName,
       },
     });
   }

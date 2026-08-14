@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { formatCurrency } from "@/lib/utils";
+import { logCommunication } from "@/lib/communications-log";
 
 /**
  * POST /api/billing-statements/[id]/resend-gst-invoice
@@ -168,6 +169,23 @@ export async function POST(
       triggered_by_user_id: dbUser.id,
     })),
   );
+
+  // Same content-preview log every other send path writes to — without this,
+  // a resend triggered from the Tally Inbox never shows up in "Recent
+  // communications" even though the email genuinely went out.
+  await logCommunication(adminClient, {
+    entityType: "billing_statement",
+    entityId: id,
+    channel: "email",
+    recipient: toList.join(", "),
+    subject,
+    body: html,
+    attachmentUrl: upload.invoice_pdf_url as string,
+    attachmentName: filename,
+    status: sendResult.error ? "failed" : "sent",
+    errorMessage: sendResult.error?.message ?? null,
+    sentBy: dbUser.id,
+  });
 
   if (sendResult.error) {
     await adminClient.from("audit_trail").insert({
