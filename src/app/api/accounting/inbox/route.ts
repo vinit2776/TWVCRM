@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
         )
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number,
+        id, invoice_number, title, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number, billing_emails
         )
@@ -218,6 +218,8 @@ export async function GET(req: NextRequest) {
     invoice: {
       id: string;
       invoice_number: string;
+      title: string | null;
+      internal_notes: string | null;
       lead: {
         id: string;
         first_name: string | null;
@@ -570,6 +572,8 @@ export async function GET(req: NextRequest) {
         ? {
             id: s.invoice.id,
             invoice_number: s.invoice.invoice_number,
+            title: s.invoice.title,
+            internal_notes: s.invoice.internal_notes,
             lead: s.invoice.lead,
           }
         : null,
