@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, MessageCircleQuestion } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, MessageCircleQuestion, Lightbulb, X } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { QueryThreadPanel } from "@/components/billing/query-thread-panel";
 import type { BillingQueryListItem } from "@/lib/billing-queries";
@@ -37,6 +37,16 @@ export function BillingQueriesClient({ currentUserRole }: { currentUserRole: str
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [introDismissed, setIntroDismissed] = useState(true); // default hidden until localStorage check runs, avoids a flash for returning users
+
+  useEffect(() => {
+    setIntroDismissed(window.localStorage.getItem("billing-queries-intro-dismissed") === "true");
+  }, []);
+
+  const dismissIntro = useCallback(() => {
+    window.localStorage.setItem("billing-queries-intro-dismissed", "true");
+    setIntroDismissed(true);
+  }, []);
 
   const loadStats = useCallback(async () => {
     try {
@@ -97,6 +107,28 @@ export function BillingQueriesClient({ currentUserRole }: { currentUserRole: str
 
   return (
     <div>
+      {!introDismissed && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3.5 mb-6 flex items-start gap-2.5">
+          <Lightbulb className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-900 flex-1">
+            <p className="font-medium mb-1">New here? Use this when a statement needs a human answer.</p>
+            <p className="text-amber-800 leading-relaxed">
+              Accounts raises a query from a Tally Inbox row when a line item, discount, or charge isn&apos;t self-explanatory
+              — e.g. &ldquo;why was this billed this way&rdquo; or &ldquo;which ledger does this go under.&rdquo;
+              Everyone here gets notified and can reply; only the person who asked (or an admin) marks it resolved.
+              Don&apos;t use it for routine GST-upload or payment recording — those stay in the Tally Inbox itself.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={dismissIntro}
+            aria-label="Dismiss"
+            className="text-amber-400 hover:text-amber-600 flex-shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3 mb-6">
         <StatCard label="Open" value={stats?.open} variant="danger" />
         <StatCard label="Awaiting you" value={stats?.awaiting_you} variant="warning" />

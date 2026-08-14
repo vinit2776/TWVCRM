@@ -646,6 +646,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id, handoff_state, updated_at, created_at,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      voided_at, void_reason,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst, total_amount, gst_amount, gst_rate,
         payment_status, payment_mode, payment_reference,
@@ -660,9 +661,11 @@ export async function GET(req: NextRequest) {
     `);
 
   if (tab === "closed") {
-    bookingTasksQuery = bookingTasksQuery.eq("handoff_state", "complete");
+    // Voided tasks surface here alongside genuinely complete ones — same
+    // "still visible in Archive" behavior billing_statements.voided_at gets.
+    bookingTasksQuery = bookingTasksQuery.or("handoff_state.eq.complete,voided_at.not.is.null");
   } else {
-    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete");
+    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete").is("voided_at", null);
   }
 
   const { data: bookingTaskData } = await bookingTasksQuery
@@ -676,6 +679,8 @@ export async function GET(req: NextRequest) {
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
+    voided_at: string | null;
+    void_reason: string | null;
     booking: {
       id: string;
       booking_number: string | null;
@@ -924,6 +929,8 @@ export async function GET(req: NextRequest) {
         }
         return [];
       })(),
+      is_voided: !!t.voided_at,
+      void_reason: t.void_reason ?? null,
     };
   });
 

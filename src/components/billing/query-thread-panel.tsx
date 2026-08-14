@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { MessageCircleQuestion, CheckCircle2, RotateCcw, Loader2 } from "lucide-react";
+import { MessageCircleQuestion, CheckCircle2, RotateCcw, Loader2, Bell } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import type { BillingQueryThread } from "@/lib/billing-queries";
@@ -183,6 +183,7 @@ export function QueryThreadPanel({ statementId, initialQueryId, onChanged }: Pro
   }
 
   const isResolved = thread.status === "resolved";
+  const canResolve = user?.id === thread.created_by.id || user?.role === "admin";
 
   return (
     <div className="space-y-2.5">
@@ -192,6 +193,14 @@ export function QueryThreadPanel({ statementId, initialQueryId, onChanged }: Pro
         <span className="font-medium">{thread.statement.party_name}</span>
         {" · "}
         <span className="tabular-nums">{formatCurrency(thread.statement.total_amount)}</span>
+      </div>
+
+      <div
+        className="text-[11px] text-muted-foreground px-0.5"
+        title="Admin and office_admin can see and reply to every query, but aren't emailed/WhatsApp-escalated for each one — they're monitoring, not on the hook to respond."
+      >
+        <Bell className="h-2.5 w-2.5 inline mr-1 -mt-0.5" />
+        Alerted by email: Accounts, Manager, Sales Rep — admin can monitor and reply but isn&apos;t alerted
       </div>
 
       <div className="space-y-2">
@@ -241,7 +250,7 @@ export function QueryThreadPanel({ statementId, initialQueryId, onChanged }: Pro
             rows={2}
             value={composerText}
             onChange={(e) => setComposerText(e.target.value)}
-            placeholder={`Reply${user?.role !== "accounts" ? " or resolve" : ""}…`}
+            placeholder={`Reply${canResolve ? " or resolve" : ""}…`}
             className="flex-1 text-xs border rounded p-2 resize-none bg-background"
           />
           <div className="flex flex-col gap-1 flex-shrink-0">
@@ -253,14 +262,17 @@ export function QueryThreadPanel({ statementId, initialQueryId, onChanged }: Pro
             >
               Send
             </button>
-            <button
-              type="button"
-              onClick={() => reply(true)}
-              disabled={submitting}
-              className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-green-300 text-green-800 hover:bg-green-50 disabled:opacity-50"
-            >
-              <CheckCircle2 className="h-3 w-3" /> Resolve
-            </button>
+            {canResolve && (
+              <button
+                type="button"
+                onClick={() => reply(true)}
+                disabled={submitting}
+                className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-green-300 text-green-800 hover:bg-green-50 disabled:opacity-50"
+                title="Only the person who asked, or an admin, can resolve"
+              >
+                <CheckCircle2 className="h-3 w-3" /> Resolve
+              </button>
+            )}
           </div>
         </div>
       )}
