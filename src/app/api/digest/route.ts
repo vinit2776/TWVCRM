@@ -76,7 +76,7 @@ export async function GET(request: Request) {
   const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard, revenueBreakdown, yesterdayRevenueBreakdown] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
@@ -85,6 +85,8 @@ export async function GET(request: Request) {
     fetchMetrics(supabase, yesterdayIST),
     fetchLocationBreakdown(supabase, yesterdayIST),
     fetchStoryboardHighlights(supabase, todayIST),
+    fetchRevenueBreakdown(supabase, todayIST),
+    fetchRevenueBreakdown(supabase, yesterdayIST),
   ]);
 
   // Build and send email
@@ -96,7 +98,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard, revenueBreakdown, yesterdayRevenueBreakdown);
 
   // ?preview=1 renders the HTML without sending — used for local/staging QA so
   // testing against real (prod) data never fans out real emails to recipients.
@@ -404,6 +406,152 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
       bookings: bookingsCountByLocation[loc.id] || 0,
     };
   });
+}
+
+interface RevenueTransaction {
+  number: string;
+  customer: string;
+  method: string;
+  amount: number;
+}
+
+const REVENUE_BREAKDOWN_LIMIT = 20;
+
+// Freeform payment_mode values differ slightly across contract_payments,
+// billing_payments, and booking_payments (e.g. "neft" vs "bank_transfer" vs
+// "other") — normalize to a readable label without coupling to any one
+// table's constants.ts label map, since none of them cover every value seen.
+function formatPaymentMethod(mode: string | null): string {
+  if (!mode) return "—";
+  const upper: Record<string, string> = { neft: "NEFT", rtgs: "RTGS", upi: "UPI" };
+  const lower = mode.toLowerCase();
+  if (upper[lower]) return upper[lower];
+  return lower.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function leadName(lead: any): string | null {
+  if (!lead) return null;
+  return [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || null;
+}
+
+/**
+ * billing_statements.contract_id has been nullable since migration 00041 —
+ * a statement can instead be owned by booking_id/proposal_id/invoice_id/
+ * case_id (ad-hoc invoices, VO cases, etc. that never had a contract). Show
+ * whichever owner is actually set instead of a bare "no contract" dash, and
+ * resolve the customer name through that same owner.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function billingStatementOwner(statement: any): { number: string; customer: string } {
+  if (statement?.contract?.contract_number) {
+    return { number: statement.contract.contract_number, customer: leadName(statement.contract.lead) || "—" };
+  }
+  if (statement?.booking?.booking_number) {
+    return {
+      number: statement.booking.booking_number,
+      customer: leadName(statement.booking.lead) || statement.booking.guest_name || statement.booking.guest_company || "—",
+    };
+  }
+  if (statement?.proposal?.proposal_number) {
+    return { number: statement.proposal.proposal_number, customer: leadName(statement.proposal.lead) || "—" };
+  }
+  if (statement?.invoice?.invoice_number) {
+    return { number: `${statement.invoice.invoice_number} (invoice)`, customer: leadName(statement.invoice.lead) || "—" };
+  }
+  if (statement?.case?.case_number) {
+    return { number: `${statement.case.case_number} (VO case)`, customer: statement.case.client_name || statement.case.client_company_name || "—" };
+  }
+  return { number: `— (statement ${statement?.statement_number || "?"})`, customer: "—" };
+}
+
+/**
+ * Itemized transactions behind the day's "Revenue In" KPI (collections +
+ * bookings) — contract_payments and billing_payments both roll into
+ * "collections"; booking_payments is the "bookings" half.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ transactions: RevenueTransaction[]; total: number; truncated: number }> {
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+
+  const [cp, bp, bkp] = await Promise.all([
+    supabase
+      .from("contract_payments")
+      .select(`amount, payment_mode, created_at, contract:contracts!contract_payments_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      )`)
+      .eq("status", "verified")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    supabase
+      .from("billing_payments")
+      .select(`amount, payment_mode, created_at, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        statement_number,
+        contract:contracts!billing_statements_contract_id_fkey(contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
+        booking:bookings!billing_statements_booking_id_fkey(booking_number, guest_name, guest_company, lead:leads!bookings_lead_id_fkey(first_name, last_name, company)),
+        proposal:proposals!billing_statements_proposal_id_fkey(proposal_number, lead:leads!proposals_lead_id_fkey(first_name, last_name, company)),
+        invoice:proforma_invoices!billing_statements_invoice_id_fkey(invoice_number, lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)),
+        case:cases!billing_statements_case_id_fkey(case_number, client_name, client_company_name)
+      )`)
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    supabase
+      .from("booking_payments")
+      .select(`amount, payment_mode, created_at, booking:bookings!booking_payments_booking_id_fkey(
+        booking_number, guest_name, guest_company,
+        lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
+      )`)
+      .eq("status", "verified")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const contractRows = (cp.data || []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const billingRows = (bp.data || []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookingRows = (bkp.data || []) as any[];
+
+  const transactions: (RevenueTransaction & { createdAt: string })[] = [
+    ...contractRows.map((r) => ({
+      number: r.contract?.contract_number || "—",
+      customer: leadName(r.contract?.lead) || "—",
+      method: formatPaymentMethod(r.payment_mode),
+      amount: Number(r.amount || 0),
+      createdAt: r.created_at,
+    })),
+    ...billingRows.map((r) => {
+      const owner = billingStatementOwner(r.billing_statement);
+      return {
+        number: owner.number,
+        customer: owner.customer,
+        method: formatPaymentMethod(r.payment_mode),
+        amount: Number(r.amount || 0),
+        createdAt: r.created_at,
+      };
+    }),
+    ...bookingRows.map((r) => ({
+      number: r.booking?.booking_number || "—",
+      customer: leadName(r.booking?.lead) || r.booking?.guest_name || r.booking?.guest_company || "—",
+      method: formatPaymentMethod(r.payment_mode),
+      amount: Number(r.amount || 0),
+      createdAt: r.created_at,
+    })),
+  ];
+
+  transactions.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  const total = transactions.reduce((s, t) => s + t.amount, 0);
+  const truncated = Math.max(0, transactions.length - REVENUE_BREAKDOWN_LIMIT);
+
+  return {
+    transactions: transactions.slice(0, REVENUE_BREAKDOWN_LIMIT).map(({ number, customer, method, amount }) => ({ number, customer, method, amount })),
+    total,
+    truncated,
+  };
 }
 
 interface UnpaidBill {
@@ -1133,6 +1281,36 @@ function kpiTile(label: string, value: string, sub?: string, accent?: boolean): 
     </td>`;
 }
 
+// Itemized transaction table used for both "Revenue In" (today) and
+// "Yesterday's Collections" breakdown cards — same shape, different title/day.
+function buildRevenueBreakdownCard(title: string, breakdown: { transactions: RevenueTransaction[]; total: number; truncated: number }): string {
+  if (breakdown.transactions.length === 0) return "";
+  return `
+    <div style="background:#f7fbfa;border:1px solid #d1fae5;border-radius:8px;padding:16px 18px;margin-bottom:24px;">
+      <p style="margin:0 0 12px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.4px;">${title}</p>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr style="background:#f7f8fa;">
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Contract / Booking #</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Customer</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Method</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Amount</td>
+        </tr>
+        ${breakdown.transactions.map((t) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:${t.number.startsWith("—") ? "#999" : "#015E65"};font-weight:${t.number.startsWith("—") ? "400" : "600"};${t.number.startsWith("—") ? "font-style:italic;" : ""}">${t.number}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;">${t.customer}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;">${t.method}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;text-align:right;">${rupees(t.amount)}</td>
+        </tr>`).join("")}
+        <tr>
+          <td colspan="3" style="padding:8px;font-size:12px;font-weight:700;color:#015E65;text-align:right;">Total</td>
+          <td style="padding:8px;font-size:12px;font-weight:700;color:#015E65;text-align:right;border-top:2px solid #015E65;">${rupees(breakdown.total)}</td>
+        </tr>
+      </table>
+      ${breakdown.truncated > 0 ? `<p style="margin:8px 0 0;font-size:10px;color:#888;">+ ${breakdown.truncated} more transaction${breakdown.truncated > 1 ? "s" : ""} not shown — see Billing for the full list.</p>` : ""}
+    </div>`;
+}
+
 // Pipeline stage pill
 function stagePill(label: string, count: number, isWarn: boolean): string {
   const bg = isWarn ? "#fef3c7" : "#f0faf5";
@@ -1269,7 +1447,9 @@ function buildDigestHtml(
   portfolio: Portfolio,
   extended: ExtendedData,
   receivables: ReceivablesAging,
-  storyboard: StoryboardEvent[]
+  storyboard: StoryboardEvent[],
+  revenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number },
+  yesterdayRevenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number }
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
   const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
@@ -1305,6 +1485,12 @@ function buildDigestHtml(
       </table>
     </div>`;
 
+  // ── Yesterday's Collections — transaction breakdown ─────────────────────
+  const yesterdayRevenueBreakdownHtml = buildRevenueBreakdownCard(
+    `Yesterday's Collections &nbsp;·&nbsp; Transaction Breakdown`,
+    yesterdayRevenueBreakdown
+  );
+
   // ── KPI row ──────────────────────────────────────────────────────────────
   const stuckCount = extended.stuckProposals.length + extended.stuckNegotiations.length;
   const kpiHtml = `
@@ -1316,6 +1502,12 @@ function buildDigestHtml(
         ${kpiTile("Active Contracts", `${portfolio.activeContracts}`, `MRR ${rupees(portfolio.totalMRR)}`)}
       </tr>
     </table>`;
+
+  // ── Revenue In — transaction breakdown ──────────────────────────────────
+  const revenueBreakdownHtml = buildRevenueBreakdownCard(
+    `Revenue In &nbsp;·&nbsp; Transaction Breakdown`,
+    revenueBreakdown
+  );
 
   // ── Week to Date strip ────────────────────────────────────────────────────
   const wtdRevenue = wtd.collections + wtd.bookingRevenue;
@@ -1486,25 +1678,6 @@ function buildDigestHtml(
     metricRow("POs Raised", `${today.posRaised} (${rupees(today.poAmount)})`, `${wtd.posRaised} (${rupees(wtd.poAmount)})`, `${lw.posRaised}`, `${ly.posRaised}`, today.posRaised, lw.posRaised),
   ].join("");
 
-  // ── Operations ──────────────────────────────────────────────────────────
-  const opsRows = [
-    metricRow("New Leads", `${today.newLeads}`, `${wtd.newLeads}`, `${lw.newLeads}`, `${ly.newLeads}`, today.newLeads, lw.newLeads),
-    metricRow("Won / Lost", `${today.leadsWon} / ${today.leadsLost}`, `${wtd.leadsWon} / ${wtd.leadsLost}`, `${lw.leadsWon} / ${lw.leadsLost}`, `${ly.leadsWon} / ${ly.leadsLost}`, today.leadsWon, lw.leadsWon),
-    metricRow("Activities Logged", `${today.activities}`, `${wtd.activities}`, `${lw.activities}`, `${ly.activities}`, today.activities, lw.activities),
-    metricRow("Tasks Completed", `${today.tasksCompleted}`, `${wtd.tasksCompleted}`, `${lw.tasksCompleted}`, `${ly.tasksCompleted}`, today.tasksCompleted, lw.tasksCompleted),
-    metricRow("Bookings", `${today.newBookings}`, `${wtd.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
-    metricRow("New Contracts", `${today.newContracts}`, `${wtd.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
-    metricRow("Support Tickets", `${today.supportTickets}`, `${wtd.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
-    metricRow(
-      "Work Orders (opened/closed)",
-      `${today.workOrdersOpened}/${today.workOrdersClosed}`,
-      `${wtd.workOrdersOpened}/${wtd.workOrdersClosed}`,
-      `${lw.workOrdersOpened}/${lw.workOrdersClosed}`,
-      `${ly.workOrdersOpened}/${ly.workOrdersClosed}`,
-      today.workOrdersOpened, lw.workOrdersOpened
-    ),
-  ].join("");
-
   // ── Center-wise ─────────────────────────────────────────────────────────
   // Same "only show centers with something to report" filter already used
   // for Yesterday's Collections (activeYesterdayLocations above) — most
@@ -1593,8 +1766,14 @@ function buildDigestHtml(
     <!-- Yesterday's Collections -->
     ${yesterdayHtml}
 
+    <!-- Yesterday's Collections — Transaction Breakdown -->
+    ${yesterdayRevenueBreakdownHtml}
+
     <!-- KPI Snapshot -->
     ${kpiHtml}
+
+    <!-- Revenue In — Transaction Breakdown -->
+    ${revenueBreakdownHtml}
 
     <!-- Receivables Aging -->
     ${buildReceivablesAgingHtml(receivables)}
@@ -1628,13 +1807,6 @@ function buildDigestHtml(
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       ${tableHeader()}
       ${financialRows}
-    </table>
-
-    <!-- Operations -->
-    ${sectionHeader("Operations")}
-    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
-      ${tableHeader()}
-      ${opsRows}
     </table>
 
     <!-- Center-wise -->
