@@ -20,7 +20,8 @@ import {
   DialogFooter,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Loader2, AlertTriangle, FileCheck, Zap, ExternalLink } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Loader2, AlertTriangle, FileCheck, Zap, ExternalLink, Ban } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
@@ -40,10 +41,12 @@ interface BilledReferral extends ReferralCase {
   statement: {
     id: string;
     statement_number: string | null;
+    status: string;
     handoff_state: HandoffState | null;
     payment_status: string;
     proforma_sent_at: string | null;
     gst_invoice_number: string | null;
+    issuance_channel: string | null;
   };
 }
 
@@ -63,6 +66,18 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
   const [pending, setPending] = useState<ReferralCase[]>([]);
   const [billed, setBilled] = useState<BilledReferral[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
+  }, []);
+
+  // Void — mirrors the billing-statement void flow used elsewhere (case
+  // Billing tab, /billing statement dialog). Only for non-Tally-issued
+  // invoices; Tally-issued ones must go through the credit-note cancel flow.
+  const [voidTarget, setVoidTarget] = useState<{ statementId: string; caseCount: number } | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
 
   // Proforma-vs-GST-Direct billing mode — same toggle pattern as
   // src/components/contracts/contract-invoices-section.tsx. Takes effect
@@ -154,6 +169,53 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
   );
   const outstanding = unpaidBilledSum + pendingSum;
   const overLimit = creditLimit != null && creditLimit > 0 && outstanding >= creditLimit;
+
+  // Referrals are consolidated onto one billing_statement per invoice run —
+  // group by statement id so the Void action (and its "N referrals" label)
+  // is shown once per invoice, not once per case row.
+  const statementCaseCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of billed) counts.set(c.statement.id, (counts.get(c.statement.id) || 0) + 1);
+    return counts;
+  }, [billed]);
+  const firstRowForStatement = useMemo(() => {
+    const seen = new Set<string>();
+    const firsts = new Set<string>();
+    for (const c of billed) {
+      if (!seen.has(c.statement.id)) {
+        seen.add(c.statement.id);
+        firsts.add(c.id);
+      }
+    }
+    return firsts;
+  }, [billed]);
+
+  const canVoid = (statement: BilledReferral["statement"]) =>
+    userRole === "admin" &&
+    ["finalized", "exported"].includes(statement.status) &&
+    statement.issuance_channel !== "tally";
+
+  const handleVoid = async () => {
+    if (!voidTarget || !voidReason.trim()) return;
+    setVoidSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${voidTarget.statementId}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: voidReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to void invoice");
+      toast.success(json.message || "Invoice voided");
+      setVoidTarget(null);
+      setVoidReason("");
+      fetchData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to void invoice");
+    } finally {
+      setVoidSubmitting(false);
+    }
+  };
 
   const handleOpenConfirm = () => {
     if (selectedIds.size === 0) {
@@ -396,6 +458,20 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
                             ) : (
                               <span className="text-xs text-muted-foreground whitespace-nowrap">Awaiting payment</span>
                             )}
+                            {firstRowForStatement.has(c.id) && canVoid(c.statement) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVoidTarget({
+                                    statementId: c.statement.id,
+                                    caseCount: statementCaseCounts.get(c.statement.id) || 1,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 text-xs text-red-700 hover:underline whitespace-nowrap"
+                              >
+                                <Ban className="h-3 w-3" /> Void invoice
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -439,6 +515,36 @@ export function AggregatorBillingTab({ aggregatorId, creditLimit, billingMode, b
             <Button onClick={handleGenerate} disabled={generating}>
               {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirm & Generate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Void invoice — blocked server-side if any payment is recorded */}
+      <Dialog open={!!voidTarget} onOpenChange={(open) => { if (!open && !voidSubmitting) { setVoidTarget(null); setVoidReason(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Void this invoice?</DialogTitle>
+            <DialogDescription>
+              {voidTarget && voidTarget.caseCount > 1
+                ? `This voids the whole consolidated invoice, covering ${voidTarget.caseCount} referrals. Every case on it returns to "pending" and can be re-invoiced.`
+                : "The case returns to \"pending\" and can be re-invoiced."}
+              {" "}Blocked if any payment has already been recorded.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder="Reason for voiding (required)"
+            value={voidReason}
+            onChange={(e) => setVoidReason(e.target.value)}
+            rows={2}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setVoidTarget(null); setVoidReason(""); }} disabled={voidSubmitting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleVoid} disabled={voidSubmitting || !voidReason.trim()}>
+              {voidSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Ban className="mr-2 h-4 w-4" />}
+              Void Invoice
             </Button>
           </DialogFooter>
         </DialogContent>
