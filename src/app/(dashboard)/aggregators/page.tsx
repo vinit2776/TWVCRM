@@ -142,10 +142,10 @@ export default function AggregatorsPage() {
                         pushTrailEntry({ href: `/aggregators/${agg.id}`, label: agg.name });
                       }}
                     >
-                      {agg.name}
+                      {agg.company_name || agg.name}
                     </Link>
                     {agg.company_name && (
-                      <p className="text-xs text-muted-foreground">{agg.company_name}</p>
+                      <p className="text-xs text-muted-foreground">{agg.name}</p>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">

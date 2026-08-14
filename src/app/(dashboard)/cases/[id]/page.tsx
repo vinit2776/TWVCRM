@@ -11,6 +11,7 @@ import {
   Building,
   MapPin,
   RefreshCw,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -195,6 +196,8 @@ export default function CaseDetailPage({
                     <InfoRow label="PAN" value={caseData.client_pan_number} />
                     <InfoRow label="GST" value={caseData.client_gst_number} />
                     <InfoRow label="CIN" value={caseData.client_cin_number} />
+                    <InfoRow icon={User} label="Represented By" value={caseData.represented_by_name} />
+                    <InfoRow label="Designation" value={caseData.represented_by_designation} />
                   </div>
                 </CardContent>
               </Card>

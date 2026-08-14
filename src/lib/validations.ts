@@ -586,7 +586,7 @@ export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;
 // belong only on createAggregatorSchema, for genuinely-new records.
 const aggregatorFieldsSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  company_name: z.string().optional(),
+  company_name: z.string().min(1, "Company name is required"),
   gst_number: z.string().max(20).optional(),
   pan_number: z.string().max(15).optional(),
   email_domain: z.string().optional(),
@@ -657,6 +657,10 @@ const caseFieldsSchema = z.object({
   client_city: z.string().optional(),
   client_state: z.string().optional(),
   client_pincode: z.string().optional(),
+  represented_by_name: z.string().optional(),
+  represented_by_designation: z.string().optional(),
+  represented_by_id_type: z.enum(["pan", "aadhaar"]).optional(),
+  represented_by_id_number: z.string().optional(),
   rate: z.number().positive("Rate must be positive").optional(),
   tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),
