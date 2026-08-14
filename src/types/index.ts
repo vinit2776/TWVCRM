@@ -367,6 +367,7 @@ export interface Proposal {
   deposit_waiver_otp_expires?: string;
   deposit_waiver_verified_at?: string;
   deposit_waiver_verified_by?: string;
+  deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
 }
 

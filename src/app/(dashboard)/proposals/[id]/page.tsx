@@ -201,6 +201,16 @@ export default function ProposalDetailPage({
       .catch(() => {});
   }, [fetchProposal, id]);
 
+  // Client-side navigations (e.g. from the contract page's "view payment
+  // details" link) land here before the hash target has mounted, so the
+  // browser's native #anchor scroll fires too early and silently no-ops.
+  // Retry once loading finishes and the section has actually rendered.
+  useEffect(() => {
+    if (loading || !window.location.hash) return;
+    const el = document.querySelector(window.location.hash);
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [loading]);
+
   const handleDownloadPDF = async () => {
     if (!proposal) return;
 
@@ -1044,7 +1054,7 @@ export default function ProposalDetailPage({
         <div className="space-y-4">
           {/* Security Deposit */}
           {Number(proposal.security_deposit_months) > 0 && (
-            <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
+            <Card id="security-deposit" className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
               <CardHeader className="pb-2">
                 <CardTitle className={`text-base flex items-center gap-2 ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
                   {proposal.deposit_payment_status !== "paid" && (
@@ -1173,12 +1183,19 @@ export default function ProposalDetailPage({
                         <span className="text-green-700">Recorded by</span>
                         <span className="text-green-800 text-xs">{proposal.deposit_payment_recorded_by_user.full_name}</span>
                       </div>
-                    ) : proposal.deposit_payment_reference?.startsWith("Legacy") ? (
+                    ) : (
                       <div className="flex justify-between">
                         <span className="text-green-700">Recorded by</span>
-                        <span className="text-green-800 text-xs italic">Legacy import — no recorder on file</span>
+                        <span className="text-green-800 text-xs italic">
+                          {proposal.deposit_payment_reference?.startsWith("Legacy")
+                            ? "Legacy import — no recorder on file"
+                            : "No recorder on file"}
+                        </span>
                       </div>
-                    ) : null}
+                    )}
+                    {!proposal.deposit_payment_recorded_by_user?.full_name && proposal.deposit_internal_notes && (
+                      <p className="text-xs text-green-700/80 italic">{proposal.deposit_internal_notes}</p>
+                    )}
                     {proposal.deposit_payment_screenshot_url && (
                       <a
                         href={proposal.deposit_payment_screenshot_url}
@@ -1456,6 +1473,7 @@ export default function ProposalDetailPage({
                 proposalNumber={proposal.proposal_number}
                 isVerified={waiverVerified}
                 requestedAt={proposal.deposit_waiver_requested_at}
+                verifiedByName={proposal.deposit_waiver_verified_by_user?.full_name}
                 onVerified={fetchProposal}
               />
             </div>

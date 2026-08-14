@@ -12,10 +12,11 @@ interface Props {
   proposalNumber: string;
   isVerified: boolean;
   requestedAt?: string | null;
+  verifiedByName?: string | null;
   onVerified: () => void;
 }
 
-export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requestedAt, onVerified }: Props) {
+export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requestedAt, verifiedByName, onVerified }: Props) {
   const [otp, setOtp] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -27,7 +28,10 @@ export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requ
         <CardContent className="py-4">
           <div className="flex items-center gap-2 text-green-700">
             <CheckCircle2 className="h-5 w-5" />
-            <p className="text-sm font-medium">Deposit waiver approved — proposal unlocked</p>
+            <p className="text-sm font-medium">
+              Deposit waiver approved — proposal unlocked
+              {verifiedByName && <span className="font-normal"> · by {verifiedByName}</span>}
+            </p>
           </div>
         </CardContent>
       </Card>
