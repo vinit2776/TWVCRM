@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -116,7 +117,7 @@ export default function AggregatorsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Email Domain</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">State</th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Billing Method</th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Created</th>
               </tr>
             </thead>
@@ -158,7 +159,7 @@ export default function AggregatorsPage() {
                     <StatusBadge type="aggregator_status" value={agg.status} />
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                    {agg.same_state_as_twv ? "Same (TN)" : "Interstate"}
+                    {AGGREGATOR_BILLING_METHOD_LABELS[agg.billing_method] || agg.billing_method}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">
                     {formatDate(agg.created_at)}
