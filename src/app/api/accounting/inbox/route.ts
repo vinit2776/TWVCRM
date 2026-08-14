@@ -294,7 +294,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -330,7 +330,20 @@ export async function GET(req: NextRequest) {
       .select("id, tally_invoice_number, uploaded_at, uploaded_by, superseded_by")
       .eq("billing_statement_id", statementIds[0])
       .order("uploaded_at", { ascending: true }),
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("billing_queries")
+      .select("billing_statement_id")
+      .in("billing_statement_id", statementIds)
+      .eq("status", "open"),
   ]);
+
+  // Open billing_queries count per statement — one grouped-in-JS count from
+  // a single batched query, same pattern as uploadByStatement below.
+  const openQueryCountByStatement = new Map<string, number>();
+  for (const r of openQueriesRes.data || []) {
+    const sid = (r as { billing_statement_id: string }).billing_statement_id;
+    openQueryCountByStatement.set(sid, (openQueryCountByStatement.get(sid) ?? 0) + 1);
+  }
 
   // gst_invoice_uploads.uploaded_by references auth.users(id), not
   // public.users(id) — no FK exists for Supabase to embed a join, so
@@ -566,6 +579,7 @@ export async function GET(req: NextRequest) {
       latest_snapshot: snapshot,
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
+      open_query_count: openQueryCountByStatement.get(s.id) ?? 0,
       // New detail fields
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",

@@ -14,7 +14,8 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MessageCircleQuestion } from "lucide-react";
+import { QueryThreadPanel } from "@/components/billing/query-thread-panel";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -793,6 +794,7 @@ export function TallyInboxClient() {
       onGstinUpdated={() => void refreshRow(row.statement_id)}
       onRecordPayment={() => openPayDialog(row)}
       onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
+      onQueryChanged={() => void refreshRow(row.statement_id)}
     />
   );
 
@@ -1432,6 +1434,7 @@ const InboxRowItem = memo(function InboxRowItem({
   onGstinUpdated,
   onRecordPayment,
   onViewHistory,
+  onQueryChanged,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1448,6 +1451,7 @@ const InboxRowItem = memo(function InboxRowItem({
   onGstinUpdated: () => void;
   onRecordPayment: () => void;
   onViewHistory: () => void;
+  onQueryChanged: () => void;
 }) {
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
@@ -1458,6 +1462,7 @@ const InboxRowItem = memo(function InboxRowItem({
   const [paymentOpen, setPaymentOpen] = useState(
     row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
   );
+  const [queryOpen, setQueryOpen] = useState(false);
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -1705,6 +1710,22 @@ const InboxRowItem = memo(function InboxRowItem({
             <History className="h-3 w-3" />
             History
           </button>
+          <button
+            type="button"
+            onClick={() => setQueryOpen((v) => !v)}
+            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
+              queryOpen ? "bg-blue-50 border-blue-300 text-blue-800" : "hover:bg-muted"
+            }`}
+            title="Ask accounts leadership a question about this statement"
+          >
+            <MessageCircleQuestion className="h-3 w-3" />
+            Query
+            {row.open_query_count > 0 && (
+              <span className="text-[10px] leading-none bg-blue-700 text-white rounded-full px-1.5 py-0.5 ml-0.5">
+                {row.open_query_count}
+              </span>
+            )}
+          </button>
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -1819,6 +1840,11 @@ const InboxRowItem = memo(function InboxRowItem({
           )}
         </div>
       </div>
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel statementId={row.statement_id} onChanged={onQueryChanged} />
+        </div>
+      )}
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}

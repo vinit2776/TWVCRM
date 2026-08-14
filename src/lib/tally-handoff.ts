@@ -282,6 +282,9 @@ export interface InboxRow {
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
+  /** Open billing_queries thread count for this statement — drives the
+   *  "Query" button badge in the Tally Inbox. See src/lib/billing-queries.ts. */
+  open_query_count: number;
   /** Present only when the request specified `?include=timeline`. */
   timeline_events?: TimelineEvent[];
 
