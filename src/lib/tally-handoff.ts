@@ -137,6 +137,11 @@ export interface InboxProposal {
 export interface InboxInvoice {
   id: string;
   invoice_number: string;
+  /** The invoice's own title — often clearer than a free-typed line-item
+   *  description (e.g. "Security Deposit - Add on Seat" vs. "SD - Additional Seat"). */
+  title: string | null;
+  /** Internal-only context for accounts, never sent to the customer. */
+  internal_notes: string | null;
   lead: InboxLead | null;
 }
 

@@ -242,6 +242,25 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
             <span className="font-mono">{row.contract?.contract_number ?? "—"}</span>
             {row.contract?.title && <span className="text-muted-foreground"> · {row.contract.title}</span>}
           </div>
+          {row.invoice && (
+            // Ad-hoc invoices have no contract, so the line-item description
+            // is often shorthand a person typed (e.g. "SD - Additional Seat").
+            // The invoice's own title is usually clearer — surface it here
+            // instead of silently discarding it.
+            <div className="md:col-span-2 bg-secondary rounded px-2 py-1 -mx-1">
+              <span className="text-muted-foreground">Invoice: </span>
+              <span className="font-mono">{row.invoice.invoice_number}</span>
+              {row.invoice.title && <span className="text-muted-foreground"> · {row.invoice.title}</span>}
+            </div>
+          )}
+          {row.invoice?.internal_notes && (
+            <div className="md:col-span-2 rounded border border-amber-200 bg-amber-50 text-amber-900 px-2.5 py-2 text-sm leading-snug">
+              <div className="text-[0.65rem] font-semibold uppercase tracking-wide opacity-80 mb-0.5">
+                Internal note (accounts only)
+              </div>
+              {row.invoice.internal_notes}
+            </div>
+          )}
           {row.period_start && row.period_end && (
             <div className="md:col-span-2">
               <span className="text-muted-foreground">Period: </span>
