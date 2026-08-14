@@ -67,6 +67,16 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
     return { label: "Resubmitted for approval", tone: "blue" };
   }
 
+  // ── Approved amount corrected (post-approval mismatch fix) ─────────────
+  if (has(c, "total_amount") && c.total_amount.new !== c.total_amount.old && has(c, "amount_correction_reason")) {
+    const reason = (c.amount_correction_reason?.new as string | null) ?? "";
+    return {
+      label: "Approved amount corrected",
+      tone: "amber",
+      detail: `${INR(c.total_amount.old)} → ${INR(c.total_amount.new)}${reason ? ` · ${reason}` : ""}`,
+    };
+  }
+
   // ── Payment recorded (real money moved) ────────────────────────────────
   if (has(c, "amount_paid") && Number(c.amount_paid.new) > Number(c.amount_paid.old ?? 0)) {
     const delta = Number(c.amount_paid.new) - Number(c.amount_paid.old ?? 0);

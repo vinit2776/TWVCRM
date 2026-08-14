@@ -8,7 +8,7 @@ import {
   ArrowLeft, FileText, Truck, ClipboardList, Package,
   ExternalLink, CheckCircle, AlertCircle, Clock, ChevronDown,
   ChevronUp, Send, CreditCard, Building2, ShieldCheck, Info,
-  PauseCircle, PlayCircle, BookOpen, Loader2,
+  PauseCircle, PlayCircle, BookOpen, Loader2, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -396,6 +396,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [releaseNotes, setReleaseNotes] = useState("");
   const [holdLoading, setHoldLoading] = useState(false);
 
+  // Correct approved amount state
+  const [correctAmountDialog, setCorrectAmountDialog] = useState(false);
+  const [correctedAmount, setCorrectedAmount] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctingAmount, setCorrectingAmount] = useState(false);
+
   const fetchChain = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/procurement/bills/${id}/chain`);
@@ -493,6 +499,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const isOnHold = bill?.payment_hold_status === "on_hold";
   const canHoldPayment = (userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && !isFullyPaid;
   const canReleaseHold = (userRole === "admin" || userRole === "manager") && isOnHold;
+  const canCorrectAmount = userRole === "admin" && bill?.approval_status === "approved" && !isFullyPaid;
 
   const HOLD_REASON_LABELS: Record<string, string> = {
     wrong_scan: "Wrong or unclear invoice scan",
@@ -744,6 +751,29 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     }
   }
 
+  async function handleCorrectAmount() {
+    const amt = parseFloat(correctedAmount);
+    if (!amt || amt <= 0) { toast.error("Enter a valid corrected amount"); return; }
+    if (!correctionReason.trim()) { toast.error("Add a reason for the correction"); return; }
+    setCorrectingAmount(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "correct_approved_amount", total_amount: amt, reason: correctionReason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to correct amount"); return; }
+      toast.success("Approved amount corrected");
+      setCorrectAmountDialog(false);
+      setCorrectedAmount("");
+      setCorrectionReason("");
+      await fetchChain();
+    } finally {
+      setCorrectingAmount(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-6 space-y-4">
@@ -915,6 +945,17 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               Release Hold
             </Button>
           )}
+          {canCorrectAmount && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { setCorrectedAmount(String(billBaseAmount)); setCorrectAmountDialog(true); }}
+              className="gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Correct Amount
+            </Button>
+          )}
         </div>
       </div>
 
@@ -944,7 +985,23 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               {bill.payment_hold_reason === "wrong_scan" && <li>Request the vendor to re-submit a clear invoice scan via procurement</li>}
               {bill.payment_hold_reason === "wrong_bank_details" && <li>Verify and update vendor bank details in the vendor profile, then release</li>}
               {bill.payment_hold_reason === "bank_rejected" && <li>Contact the bank, confirm correct account details, then release for retry</li>}
-              {bill.payment_hold_reason === "amount_mismatch" && <li>Review the approved amount vs. invoice — correct via approval if needed</li>}
+              {bill.payment_hold_reason === "amount_mismatch" && (
+                <li>
+                  Review the approved amount vs. invoice
+                  {canCorrectAmount && (
+                    <>
+                      {" — "}
+                      <button
+                        type="button"
+                        onClick={() => { setCorrectedAmount(String(billBaseAmount)); setCorrectAmountDialog(true); }}
+                        className="underline font-medium hover:text-orange-950"
+                      >
+                        Correct Amount
+                      </button>
+                    </>
+                  )}
+                </li>
+              )}
               {bill.payment_hold_reason === "duplicate_suspected" && <li>Cross-check payment history and bill records before releasing</li>}
               {bill.payment_hold_reason === "pending_docs" && <li>Ensure all required supporting documents are uploaded before releasing</li>}
               {(!bill.payment_hold_reason || bill.payment_hold_reason === "other") && <li>Investigate the stated issue and release once resolved</li>}
@@ -2332,6 +2389,63 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             >
               <PlayCircle className="h-4 w-4" />
               {holdLoading ? "Releasing…" : "Release Hold"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Correct Approved Amount Dialog */}
+      <Dialog open={correctAmountDialog} onOpenChange={setCorrectAmountDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-blue-600" />
+              Correct Approved Amount
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground">
+              Use this when the recorded amount doesn&apos;t match the vendor&apos;s invoice. This re-approves the bill in full at the corrected amount.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="rounded-lg bg-muted p-3 text-sm space-y-1">
+              <p className="text-xs text-muted-foreground font-medium">Current approved amount (base, pre-GST)</p>
+              <p className="font-medium">{formatCurrency(billBaseAmount)}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Corrected amount (base, pre-GST) *</Label>
+              <Input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={correctedAmount}
+                onChange={(e) => setCorrectedAmount(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason for correction *</Label>
+              <Input
+                value={correctionReason}
+                onChange={(e) => setCorrectionReason(e.target.value)}
+                placeholder="e.g. Invoice shows ₹18,300, not ₹19,300 — data entry error"
+                maxLength={500}
+              />
+            </div>
+            {Number(bill?.amount_paid ?? 0) > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                ₹{Number(bill?.amount_paid ?? 0).toLocaleString("en-IN")} has already been paid on this bill — the corrected amount must cover it.
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectAmountDialog(false)} disabled={correctingAmount}>Cancel</Button>
+            <Button
+              onClick={handleCorrectAmount}
+              disabled={correctingAmount || !correctedAmount || !correctionReason.trim()}
+              className="gap-2 bg-blue-600 hover:bg-blue-700"
+            >
+              <Pencil className="h-4 w-4" />
+              {correctingAmount ? "Saving…" : "Save Corrected Amount"}
             </Button>
           </DialogFooter>
         </DialogContent>
