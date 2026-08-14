@@ -1132,7 +1132,27 @@ async function fetchStoryboardHighlights(supabase: any, date: string): Promise<S
 
   scored.sort((a, b) => b.score - a.score);
 
-  return scored
+  // A single bulk operation (e.g. a batch billing run touching a dozen
+  // statements at once) can otherwise monopolize every slot with the same
+  // entity_type, turning the storyline into one event repeated 5x instead of
+  // a spread of the day's highlights. Cap picks per type, then backfill any
+  // remaining slots from the overflow — so a genuinely quiet, single-type
+  // day still fills out to 5 rather than being artificially shrunk.
+  const MAX_PER_ENTITY_TYPE = 2;
+  const typeCounts = new Map<string, number>();
+  const diverse: typeof scored = [];
+  const overflow: typeof scored = [];
+  for (const item of scored) {
+    const count = typeCounts.get(item.row.entity_type) || 0;
+    if (count < MAX_PER_ENTITY_TYPE) {
+      diverse.push(item);
+      typeCounts.set(item.row.entity_type, count + 1);
+    } else {
+      overflow.push(item);
+    }
+  }
+
+  return [...diverse, ...overflow]
     .slice(0, 5)
     .sort((a, b) => new Date(a.row.created_at).getTime() - new Date(b.row.created_at).getTime())
     .map(({ row, amount }) => {
