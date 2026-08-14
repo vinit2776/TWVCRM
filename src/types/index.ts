@@ -1850,6 +1850,11 @@ export interface VoCase {
   client_city?: string;
   client_state?: string;
   client_pincode?: string;
+  // Authorized representative signing on the client's behalf
+  represented_by_name?: string;
+  represented_by_designation?: string;
+  represented_by_id_type?: 'pan' | 'aadhaar';
+  represented_by_id_number?: string;
   // Financials
   rate?: number;
   tenure_months: number;

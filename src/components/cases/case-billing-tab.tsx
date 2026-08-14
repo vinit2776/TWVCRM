@@ -62,6 +62,7 @@ interface CaseStatement {
 }
 
 interface InvoicePreview {
+  statementId: string | null;
   statementNumber: string | null;
   totalAmount: number;
 }
@@ -207,7 +208,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   // skipped and it goes straight to the Tally Inbox as before.
   const handleGenerateInvoice = async () => {
     if (isUnsentPi && statement) {
-      setPreview({ statementNumber: statement.statement_number, totalAmount: statement.total_amount });
+      setPreview({ statementId: statement.id, statementNumber: statement.statement_number, totalAmount: statement.total_amount });
       setPreviewOpen(true);
       return;
     }
@@ -225,6 +226,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
       }
       if (json.data?.requires_send) {
         setPreview({
+          statementId: json.data.statement_id ?? null,
           statementNumber: json.data.preview?.statement_number ?? null,
           totalAmount: Number(json.data.preview?.total_amount ?? 0),
         });
@@ -492,6 +494,19 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
               <span>{formatCurrency(preview?.totalAmount ?? 0)}</span>
             </div>
           </div>
+
+          {preview?.statementId && (
+            <a
+              href={`/api/billing-statements/${preview.statementId}/proforma-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Preview invoice PDF — exactly what the customer will receive
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
 
           <div className="space-y-3">
             <div className="space-y-1">

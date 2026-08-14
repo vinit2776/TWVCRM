@@ -964,6 +964,22 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
 };
 
 // ==========================================
+// Case Representative Designation Options
+// ==========================================
+export const CASE_DESIGNATION_OPTIONS = [
+  "Director",
+  "Managing Director",
+  "Partner",
+  "Designated Partner",
+  "Proprietor",
+  "Authorized Signatory",
+  "Trustee",
+  "Karta",
+  "Secretary",
+  "President",
+] as const;
+
+// ==========================================
 // KYC Documents Required per Entity Type
 // ==========================================
 export const KYC_DOCUMENTS: Record<string, string[]> = {

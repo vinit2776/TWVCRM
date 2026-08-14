@@ -102,13 +102,14 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label htmlFor="company_name">Company Name *</Label>
+              <Input id="company_name" {...register("company_name")} />
+              {errors.company_name && <p className="text-sm text-red-500">{errors.company_name.message}</p>}
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" {...register("name")} placeholder="e.g. ABC Associates" />
               {errors.name && <p className="text-sm text-red-500">{errors.name.message}</p>}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="company_name">Company Name</Label>
-              <Input id="company_name" {...register("company_name")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="gst_number">GST Number</Label>
@@ -287,8 +288,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardHeader>
           <CardTitle className="text-base">Additional Notes</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <Textarea {...register("notes")} rows={3} placeholder="Any additional notes about this aggregator..." />
+          <p className="text-xs text-muted-foreground">
+            Internal only — never shown to the aggregator.
+          </p>
         </CardContent>
       </Card>
 

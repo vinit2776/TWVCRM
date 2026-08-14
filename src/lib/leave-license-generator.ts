@@ -59,6 +59,8 @@ export interface LeaveLicenseVariables {
   lessor_signatory_name: string;
   lessee_signatory_name: string;
   lessee_signatory_designation?: string;
+  lessee_signatory_id_label?: string;
+  lessee_signatory_id_number?: string;
   nature_of_business: string;
   witness_1_name?: string;
   witness_1_aadhaar_last4?: string;
@@ -97,6 +99,8 @@ export function mergeLeaveLicenseVariables(params: {
   natureOfBusiness?: string;
   lesseeSignatoryName?: string;
   lesseeSignatoryDesignation?: string;
+  lesseeSignatoryIdType?: 'pan' | 'aadhaar';
+  lesseeSignatoryIdNumber?: string;
   witness1Name?: string;
   witness1AadhaarLast4?: string;
   witness1Mobile?: string;
@@ -141,6 +145,8 @@ export function mergeLeaveLicenseVariables(params: {
     lessor_signatory_name: LESSOR_DIRECTOR,
     lessee_signatory_name: params.lesseeSignatoryName || params.clientName,
     lessee_signatory_designation: params.lesseeSignatoryDesignation || "Authorized Signatory",
+    lessee_signatory_id_label: params.lesseeSignatoryIdType === "aadhaar" ? "Aadhaar" : "PAN",
+    lessee_signatory_id_number: params.lesseeSignatoryIdNumber,
     nature_of_business: params.natureOfBusiness || "To be provided",
     witness_1_name: params.witness1Name,
     witness_1_aadhaar_last4: params.witness1AadhaarLast4,
@@ -321,7 +327,10 @@ export function generateLeaveLicensePdf(
     const panText = variables.client_pan_number
       ? `, with PAN Number ${variables.client_pan_number}`
       : "";
-    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}, having registered office at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+    const signatoryIdText = variables.lessee_signatory_id_number
+      ? ` (${variables.lessee_signatory_id_label}: ${variables.lessee_signatory_id_number})`
+      : "";
+    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}${signatoryIdText}, having registered office at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
   } else {
     const panText = variables.client_pan_number
       ? `, with PAN Number ${variables.client_pan_number}`
@@ -706,6 +715,9 @@ export function generateLeaveLicensePdf(
         "Designation/Title: Director",
         `Designation/Title: ${variables.lessee_signatory_designation || "Director"}`,
       ],
+      ...(variables.lessee_signatory_id_number
+        ? [["", `${variables.lessee_signatory_id_label}: ${variables.lessee_signatory_id_number}`]]
+        : []),
       [
         `Date: ${variables.agreement_date}`,
         `Date: ${variables.agreement_date}`,

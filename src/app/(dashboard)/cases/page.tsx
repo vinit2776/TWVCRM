@@ -215,10 +215,10 @@ export default function CasesPage() {
                         pushTrailEntry({ href: `/cases/${c.id}`, label: c.client_name });
                       }}
                     >
-                      {c.client_name}
+                      {c.client_company_name || c.client_name}
                     </Link>
                     {c.client_company_name && (
-                      <p className="text-xs text-muted-foreground">{c.client_company_name}</p>
+                      <p className="text-xs text-muted-foreground">{c.client_name}</p>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">

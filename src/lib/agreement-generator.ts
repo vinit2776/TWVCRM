@@ -56,7 +56,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office address for the purpose of GST Registration under the Goods and Services Tax Act, 2017.
 
@@ -87,7 +87,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of registered office address for Company/LLP registration with the Ministry of Corporate Affairs (MCA).
 
@@ -117,7 +117,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office address for establishing a branch office presence.
 
@@ -145,7 +145,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of business address with mail handling and forwarding services.
 
@@ -172,7 +172,7 @@ PARTY 1 (Service Provider):
 {{company_name}}, operating as "{{brand_name}}", having its registered office at {{company_address}}.
 
 PARTY 2 (Client):
-{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}, {{entity_type_label}}, having address at {{client_address}}.
+{{client_name}}{{#if client_company_name}} ({{client_company_name}}){{/if}}{{#if represented_by_name}}, represented by {{represented_by_name}}{{#if represented_by_designation}} ({{represented_by_designation}}){{/if}}{{#if represented_by_id_number}} [{{represented_by_id_label}}: {{represented_by_id_number}}]{{/if}}{{/if}}, {{entity_type_label}}, having address at {{client_address}}.
 
 PURPOSE: Provision of virtual office services including business address and related facilities.
 
@@ -211,6 +211,10 @@ export interface AgreementVariables {
   client_cin_number?: string;
   client_email?: string;
   client_phone?: string;
+  represented_by_name?: string;
+  represented_by_designation?: string;
+  represented_by_id_label?: string;
+  represented_by_id_number?: string;
   location_name: string;
   location_address: string;
   purpose: VoPurpose;
@@ -241,6 +245,10 @@ export function mergeVariables(params: {
   clientCinNumber?: string;
   clientEmail?: string;
   clientPhone?: string;
+  representedByName?: string;
+  representedByDesignation?: string;
+  representedByIdType?: 'pan' | 'aadhaar';
+  representedByIdNumber?: string;
   locationName: string;
   locationAddress: string;
   purpose: VoPurpose;
@@ -270,6 +278,10 @@ export function mergeVariables(params: {
     client_cin_number: params.clientCinNumber,
     client_email: params.clientEmail,
     client_phone: params.clientPhone,
+    represented_by_name: params.representedByName,
+    represented_by_designation: params.representedByDesignation,
+    represented_by_id_label: params.representedByIdType === "aadhaar" ? "Aadhaar" : "PAN",
+    represented_by_id_number: params.representedByIdNumber,
     location_name: params.locationName,
     location_address: params.locationAddress,
     purpose: params.purpose,
@@ -394,11 +406,15 @@ export function generateAgreementPdf(
 
   ctx.y += 5;
 
+  const clientSignatoryLine = variables.represented_by_name
+    ? `${variables.represented_by_name}${variables.represented_by_designation ? ", " + variables.represented_by_designation : ""}`
+    : "Authorized Signatory";
+
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
   doc.text("Authorized Signatory", col1X, ctx.y);
-  doc.text("Authorized Signatory", col2X, ctx.y);
+  doc.text(clientSignatoryLine, col2X, ctx.y);
   ctx.y += 5;
   doc.text(`Date: ${variables.agreement_date}`, col1X, ctx.y);
   doc.text(`Date: ${variables.agreement_date}`, col2X, ctx.y);

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
-import { MONTH_NAMES } from "@/lib/constants";
+import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -127,6 +127,8 @@ export async function generateConsolidatedInvoice({
         case_number: c.case_number,
         client_name: c.client_name,
         purpose: c.purpose,
+        purpose_label: VO_PURPOSE_LABELS[c.purpose] || c.purpose,
+        tenure_months: c.tenure_months,
         rate: monthlyRate,
         pro_rated_days: proRatedDays,
         total_days: totalDaysInMonth,
@@ -207,7 +209,7 @@ export async function generateConsolidatedInvoice({
           label: `Virtual Office Referrals — ${MONTH_NAMES[periodMonth - 1]} ${periodYear}`,
           subtotal,
           items: lineItems.map((item) => ({
-            description: `${item.case_number} — ${item.client_name}${item.pro_rated_days ? ` (pro-rated ${item.pro_rated_days}/${item.total_days} days)` : ""}`,
+            description: `${item.case_number} — ${item.client_name} · ${item.purpose_label} · ${item.tenure_months} mo tenure${item.pro_rated_days ? ` (pro-rated ${item.pro_rated_days}/${item.total_days} days)` : ""}`,
             quantity: 1,
             rate: item.amount,
             amount: item.amount,
