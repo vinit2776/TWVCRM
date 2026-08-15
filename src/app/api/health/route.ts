@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 // Max allowed hours since last run before a cron is flagged as stale
 const CRON_THRESHOLDS: Record<string, number> = {
@@ -45,8 +45,47 @@ export async function GET() {
       if (hoursAgo > threshold) staleJobs.push(row.job);
     }
 
+    // Messaging channel health — precomputed by /api/cron/messaging-health, so
+    // this stays a single indexed row read on an endpoint polled every minute.
+    //
+    // Read with the admin client: this endpoint is public and usually called
+    // without a session, and messaging_health_state (like cron_health) is only
+    // readable by authenticated users under RLS.
+    //
+    // Only status and counts are exposed. dominant_error is deliberately
+    // withheld — it is raw provider text that carries the sender number.
+    const messaging: Record<string, { status: string; fail_rate: number; sample_size: number; stale: boolean }> = {};
+    const messagingProblems: string[] = [];
+
+    try {
+      const { data: msgRows } = await createAdminClient()
+        .from("messaging_health_state")
+        .select("channel, status, fail_rate, sample_size, template_issues, last_checked_at");
+
+      for (const row of msgRows ?? []) {
+        // The cron runs every 30 min; >2h without a write means it stopped.
+        const stale = Date.now() - new Date(row.last_checked_at).getTime() > 2 * 3_600_000;
+        messaging[row.channel] = {
+          status: stale ? "unknown" : row.status,
+          fail_rate: Number(row.fail_rate),
+          sample_size: row.sample_size,
+          stale,
+        };
+        if (stale) messagingProblems.push(`${row.channel}:stale`);
+        else if (row.status === "down" || row.status === "degraded") {
+          messagingProblems.push(`${row.channel}:${row.status}`);
+        }
+        const issues = (row.template_issues ?? []) as unknown[];
+        if (issues.length > 0) messagingProblems.push(`${row.channel}:${issues.length} template issue(s)`);
+      }
+    } catch (err) {
+      // Never let the messaging read take down the health endpoint itself —
+      // DB reachability is the primary signal and it already passed above.
+      console.error("[health] messaging state read failed:", err);
+    }
+
     const latencyMs = Date.now() - start;
-    const allOk = staleJobs.length === 0;
+    const allOk = staleJobs.length === 0 && messagingProblems.length === 0;
 
     return NextResponse.json(
       {
@@ -55,6 +94,8 @@ export async function GET() {
         latency_ms: latencyMs,
         crons: cronStatus,
         stale_crons: staleJobs,
+        messaging,
+        messaging_problems: messagingProblems,
         timestamp: new Date().toISOString(),
         version: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local",
       },
