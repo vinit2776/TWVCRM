@@ -646,7 +646,9 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workOrderRows = (workOrders.data || []) as any[];
-  const slaCutoff = new Date(`${date}T23:59:59Z`).getTime();
+  // `date` is an IST calendar date — an explicit "Z" (UTC) suffix would put
+  // the cutoff ~5.5h later than intended end-of-IST-day. Use the IST offset.
+  const slaCutoff = new Date(`${date}T23:59:59+05:30`).getTime();
   const woGroups = new Map<string, WorkOrderBreakdownRow>();
   let workOrdersSlaAtRisk = 0;
   let workOrdersOpenCritical = 0;
@@ -699,17 +701,22 @@ interface Portfolio {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchPortfolio(supabase: any): Promise<Portfolio> {
+  // `monthly_membership_fee` was never a real column on `contracts` — no
+  // migration creates it, so this select silently errored and always
+  // returned 0 rows (only `data` was destructured, `error` was ignored).
+  // The contract detail page's own "Monthly Fee" display resolves to
+  // `subtotal ?? total_amount` (see contracts/[id]/page.tsx) — use the same.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("monthly_membership_fee")
+    .select("subtotal, total_amount")
     .eq("status", "active");
 
   const rows = contracts || [];
   return {
     activeContracts: rows.length,
     totalMRR: rows.reduce(
-      (s: number, r: { monthly_membership_fee: number }) =>
-        s + Number(r.monthly_membership_fee || 0),
+      (s: number, r: { subtotal: number | null; total_amount: number | null }) =>
+        s + Number(r.subtotal ?? r.total_amount ?? 0),
       0
     ),
   };
@@ -978,10 +985,14 @@ async function fetchExtended(supabase: any, date: string): Promise<ExtendedData>
     return { clientName, daysSince };
   });
 
-  // Team activity — aggregate by user
+  // Team activity — aggregate by user. Rows with created_by = null are
+  // system-generated (e.g. SMS delivery-status notes logged by the
+  // reminder cron), not unattributed staff work — exclude them rather than
+  // folding them into a misleading "Unknown" bucket next to real names.
   const teamMap: Record<string, number> = {};
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const row of (teamRaw.data || []) as any[]) {
+    if (!row.created_by) continue;
     const name = row.user?.full_name || "Unknown";
     teamMap[name] = (teamMap[name] || 0) + 1;
   }
@@ -1713,8 +1724,12 @@ function buildDigestHtml(
     </tr>`).join("");
 
   // ── Outstanding Client Invoices ─────────────────────────────────────────
+  // Separate scope from "Receivables Aging" above: that's finalized billing
+  // statements; this is proforma invoices (sent/overdue) — the two totals
+  // are not meant to reconcile, so say so to avoid reading as a contradiction.
   const clientInvHtml = extended.pendingClientInvoices.length > 0 ? `
     ${sectionHeader(`Outstanding Client Invoices (${extended.pendingClientInvoices.length})`)}
+    <p style="margin:-8px 0 12px;font-size:11px;color:#888;">Proforma invoices sent to clients — a separate total from the finalized billing statements in Receivables Aging above.</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Client</td>
