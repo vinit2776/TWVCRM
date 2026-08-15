@@ -88,6 +88,15 @@ const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "acc
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
   { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
+  // Queries sits here rather than under Finance because it spans modules —
+  // a thread can hang off a statement, a vendor bill, a contract or a PO.
+  // Roles mirror ANY_QUERY_ROLE in src/lib/queries/registry.ts.
+  {
+    href: "/queries",
+    label: "Queries",
+    icon: MessageCircleQuestion,
+    roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "office_admin", "viewer"],
+  },
 ];
 
 // Collapsible sections
@@ -115,7 +124,6 @@ const navSections: NavSection[] = [
       { href: "/accounting/receivables", label: "Receivables (AR)",  icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"] },
-      { href: "/billing-queries", label: "Billing Queries",     icon: MessageCircleQuestion, roles: ["admin", "manager", "accounts", "office_admin", "sales_rep"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
       { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
