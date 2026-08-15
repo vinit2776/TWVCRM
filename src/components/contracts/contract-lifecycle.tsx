@@ -95,6 +95,18 @@ export function ContractLifecycle({ contract }: Props) {
         actor: null,
       });
     }
+  } else if (contract.deposit_carried_from) {
+    // Renewals carry the deposit forward from the parent contract and never
+    // link a new proposal — this isn't a gap, so don't warn about it (mirrors
+    // the isRenewal bypass in the activation gate).
+    stages.push({
+      key: "deposit_carried",
+      label: "Deposit Carried from Parent Contract",
+      sub: "Renewal — no new proposal or deposit collection required",
+      date: null,
+      state: "done",
+      actor: null,
+    });
   } else if (!["draft"].includes(contract.status)) {
     // No proposal linked — warn unless still a draft
     stages.push({

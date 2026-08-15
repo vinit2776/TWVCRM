@@ -602,7 +602,10 @@ export default function ContractDetailPage({
             const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
             const depositPaid = isRenewal || !depositRequired || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid");
-            const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
+            // KYC carries forward from the parent contract on renewal (see the
+            // contract_documents copy step in POST /api/contracts/[id]/renew) —
+            // don't re-require fresh collection/approval for the same customer.
+            const kycComplete = isRenewal || kycStatus.total === 0 || kycStatus.allSatisfied;
             // Trust the ContractProrataSection's live billing-statement check over the
             // cached column once it reports in — the cache only syncs via the Razorpay
             // webhook or an activation attempt, so payments recorded via AR/Tally inbox
