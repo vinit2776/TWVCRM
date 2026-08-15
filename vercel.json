@@ -135,6 +135,10 @@
     {
       "path": "/api/cron/unifi-ap-health",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/messaging-health",
+      "schedule": "*/30 * * * *"
     }
   ],
   "headers": [

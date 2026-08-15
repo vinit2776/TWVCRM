@@ -96,6 +96,10 @@ const DLT_TEMPLATES = {
    * Status: MSG91 flow ID set (6a117c270836a9277c0968a2). Awaiting TRAI DLT
    * template approval — once approved, MSG91 activates the flow automatically.
    * No code change needed when it's approved.
+   *
+   * The empty `id` below does NOT disable the send — see the note in
+   * sendDltSms() about why guarding on it silently broke PIN delivery. Fill it
+   * in for traceability once TRAI issues the ID.
    */
   access_pin:       { id: "", vars: 3 }, // TRAI DLT template ID — to be filled once TRAI approves
 } as const;
@@ -563,12 +567,23 @@ export async function sendDltSms(
     return { success: false, error: "Duplicate suppressed", channel: "sms" };
   }
 
-  // Guard: TRAI DLT template ID is empty — template not yet approved by TRAI.
-  // Sending without approval causes MSG91 to return 400. Skip gracefully.
-  if (!tpl.id) {
-    console.warn(`[messaging] DLT template "${templateKey}" has no TRAI template ID — skipping until approved.`);
-    return { success: false, error: `DLT template "${templateKey}" awaiting TRAI approval`, channel: "sms" };
-  }
+  // There is deliberately no `if (!tpl.id) return` guard here.
+  //
+  // `tpl.id` is the TRAI DLT template ID. It is documentation — MSG91 resolves
+  // the DLT template from `flow_id`, and tpl.id is never part of the request
+  // body below; it only reaches the DB in messageBody for traceability.
+  //
+  // Guarding on it took booking access PINs off SMS entirely: access_pin has
+  // id "" pending TRAI approval, so every send returned here *before*
+  // logMessage(), leaving no whatsapp_messages row at all. Combined with the
+  // WhatsApp path being commented out (the booking_access_pin template is
+  // REJECTED by Meta for INCORRECT_CATEGORY), guests silently stopped
+  // receiving their door PIN by phone — last one logged was 28 May 2026 — and
+  // nothing recorded the failure. Email was the only channel still delivering.
+  //
+  // Attempting the send is strictly better: MSG91_SMS_DLT_FLOW_ACCESS_PIN is
+  // configured, so if TRAI has approved it, it works. If not, it fails with a
+  // logged row that says so, which is visible instead of invisible.
 
   const toNumber = normalisePhone(to);
 
@@ -579,8 +594,23 @@ export async function sendDltSms(
   // Determine which Flow ID to use
   const flowId = opts?.flowId || SMS_DLT_FLOWS[templateKey];
   if (!flowId) {
-    console.warn(`[messaging] No MSG91 flow ID configured for DLT template "${templateKey}". Set MSG91_SMS_DLT_FLOW_${templateKey.toUpperCase()} env var.`);
-    return { success: false, error: `No flow ID for template "${templateKey}"`, channel: "sms" };
+    const error = `No MSG91 flow ID configured for DLT template "${templateKey}" — set MSG91_SMS_DLT_FLOW_${templateKey.toUpperCase()}`;
+    console.warn(`[messaging] ${error}`);
+    // Logged, not just warned: a missing flow ID is a misconfiguration that
+    // drops real messages, and a console warning on a serverless function is
+    // not something anyone reads. A failed row makes it show up in the
+    // messaging-health failure rate like any other failure.
+    await logMessage({
+      channel:      "sms",
+      direction:    "outbound",
+      toNumber:     normalisePhone(to),
+      templateName: `dlt_${templateKey}`,
+      status:       "failed",
+      entityType:   opts?.entityType,
+      entityId:     opts?.entityId,
+      errorMessage: error,
+    });
+    return { success: false, error, channel: "sms" };
   }
 
   const payload = {
@@ -625,7 +655,7 @@ export async function sendDltSms(
     direction:    "outbound",
     toNumber,
     templateName: `dlt_${templateKey}`,
-    messageBody:  `DLT:${tpl.id} PE:${DLT_PE_ID}`,
+    messageBody:  `DLT:${tpl.id || "unregistered"} PE:${DLT_PE_ID} FLOW:${flowId}`,
     status:       result.success ? "sent" : "failed",
     entityType:   opts?.entityType,
     entityId:     opts?.entityId,
