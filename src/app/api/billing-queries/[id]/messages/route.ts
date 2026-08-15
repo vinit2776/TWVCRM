@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
-import { BILLING_QUERY_ROLES, isBillingQueryRole } from "@/lib/billing-queries";
+import { emailBillingQueryEvent } from "@/lib/billing-queries-notify";
+import { BILLING_QUERY_ROLES, BILLING_QUERY_ALERT_ROLES, isBillingQueryRole, resolveStatementSummary, STATEMENT_OWNER_SELECT } from "@/lib/billing-queries";
 
 /**
  * POST /api/billing-queries/[id]/messages
@@ -43,6 +44,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (existing.status === "resolved" && !resolve) {
     return NextResponse.json({ error: "This query is resolved. Reopen it before replying." }, { status: 409 });
   }
+  if (resolve && existing.created_by !== dbUser.id && dbUser.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only the person who asked this question (or an admin) can mark it resolved." },
+      { status: 403 },
+    );
+  }
 
   if (messageBody) {
     const { error: msgErr } = await adminClient.from("billing_query_messages").insert({
@@ -71,8 +78,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Touch updated_at so the thread resurfaces at the top of the list even
     // without a status change (trigger only fires on billing_queries rows
     // that are actually updated — a reply alone doesn't update this row, so
-    // do it explicitly).
-    await adminClient.from("billing_queries").update({ updated_at: new Date().toISOString() }).eq("id", id);
+    // do it explicitly). Also clear escalated_at — new activity means the
+    // silence the escalation cron flagged is over; if it goes quiet again
+    // past the threshold, it's eligible to escalate again.
+    await adminClient.from("billing_queries").update({ updated_at: new Date().toISOString(), escalated_at: null }).eq("id", id);
   }
 
   // Notify the other participants — everyone in the role set except whoever
@@ -92,6 +101,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       url: `/billing-queries?open=${id}`,
       entityType: "billing_statement",
       entityId: existing.billing_statement_id,
+    });
+
+    const { data: emailRecipients } = await adminClient
+      .from("users")
+      .select("email")
+      .in("role", BILLING_QUERY_ALERT_ROLES)
+      .eq("is_active", true)
+      .neq("id", dbUser.id);
+    const { data: statementForEmail } = await adminClient
+      .from("billing_statements")
+      .select(STATEMENT_OWNER_SELECT)
+      .eq("id", existing.billing_statement_id)
+      .maybeSingle();
+    const summary = statementForEmail
+      ? resolveStatementSummary(statementForEmail as unknown as Parameters<typeof resolveStatementSummary>[0])
+      : null;
+    void emailBillingQueryEvent({
+      recipients: emailRecipients ?? [],
+      headline: resolve ? "Billing query resolved" : "Billing query reply",
+      statementLabel: summary
+        ? `${summary.party_name} · ${summary.context_label} · ${summary.statement_number ?? ""}`
+        : "Billing statement",
+      message: `${dbUser.full_name}: ${messageBody || "Marked resolved"}`,
+      queryId: id,
     });
   }
 

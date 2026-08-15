@@ -20,6 +20,12 @@ export function isBillingQueryRole(role: string | null | undefined): role is Bil
   return !!role && (BILLING_QUERY_ROLES as readonly string[]).includes(role);
 }
 
+/** Roles that receive outbound alerts (email, WhatsApp escalation) — a
+ *  narrower set than BILLING_QUERY_ROLES. Admin/office_admin can see and act
+ *  on every query in-app, but don't need to be paged for each one; they're
+ *  monitoring, not on the hook to respond. */
+export const BILLING_QUERY_ALERT_ROLES = ["accounts", "manager", "sales_rep"] as const;
+
 export type BillingQueryStatus = "open" | "resolved";
 export type BillingQueryMessageEventType = "message" | "resolved" | "reopened";
 

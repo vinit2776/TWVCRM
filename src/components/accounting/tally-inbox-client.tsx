@@ -18,6 +18,8 @@ import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileTe
 import { QueryThreadPanel } from "@/components/billing/query-thread-panel";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -195,6 +197,8 @@ function timeAgo(iso: string | null): string {
 }
 
 export function TallyInboxClient() {
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? "";
   const [data, setData] = useState<InboxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -989,6 +993,8 @@ export function TallyInboxClient() {
                   onUploaded={() => void load()}
                   onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
                   onCancelUpload={() => setExpandedBookingId(null)}
+                  onVoided={() => void load()}
+                  currentUserRole={currentUserRole}
                 />
               ))}
             </ul>
@@ -2209,6 +2215,8 @@ function BookingInboxRowItem({
   onUploaded,
   onInvoiceUploaded,
   onCancelUpload,
+  onVoided,
+  currentUserRole,
 }: {
   row: BookingInboxRow;
   expanded: boolean;
@@ -2223,12 +2231,43 @@ function BookingInboxRowItem({
   onUploaded: () => void;
   onInvoiceUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancelUpload: () => void;
+  onVoided: () => void;
+  currentUserRole: string;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
   const [gstinError, setGstinError] = useState<string | null>(null);
+  const [voiding, setVoiding] = useState(false);
+  const [voidPromptOpen, setVoidPromptOpen] = useState(false);
+  const [voidReasonInput, setVoidReasonInput] = useState("");
+
+  const handleVoidConfirm = async () => {
+    const reason = voidReasonInput.trim();
+    if (!reason) return;
+    setVoiding(true);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${row.task_id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: reason }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || "Failed to void");
+        return;
+      }
+      toast.success("Booking task voided — excluded from the open worklist");
+      setVoidPromptOpen(false);
+      setVoidReasonInput("");
+      onVoided();
+    } catch {
+      toast.error("Failed to void — check your connection");
+    } finally {
+      setVoiding(false);
+    }
+  };
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -2541,6 +2580,56 @@ function BookingInboxRowItem({
                 </span>
               ) : null}
             </div>
+          )}
+          {currentUserRole === "admin" && !row.is_voided && !voidPromptOpen && (
+            <button
+              type="button"
+              onClick={() => setVoidPromptOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+              title="Exclude this booking's Tally task from the open worklist (test/bad data) — does not touch the booking or payment"
+            >
+              <X className="h-3 w-3" />
+              Void
+            </button>
+          )}
+          {voidPromptOpen && (
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                type="text"
+                autoFocus
+                value={voidReasonInput}
+                onChange={(e) => setVoidReasonInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleVoidConfirm();
+                  if (e.key === "Escape") { setVoidPromptOpen(false); setVoidReasonInput(""); }
+                }}
+                placeholder="Reason for voiding (required)…"
+                className="flex-1 text-xs border rounded px-2 py-1 bg-background"
+              />
+              <button
+                type="button"
+                onClick={handleVoidConfirm}
+                disabled={voiding || !voidReasonInput.trim()}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex-shrink-0"
+              >
+                {voiding ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm void"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setVoidPromptOpen(false); setVoidReasonInput(""); }}
+                className="text-xs px-2 py-1 rounded border hover:bg-muted flex-shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {row.is_voided && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200"
+              title={row.void_reason ? `Voided: ${row.void_reason}` : "Voided"}
+            >
+              Voided
+            </span>
           )}
         </div>
       </div>

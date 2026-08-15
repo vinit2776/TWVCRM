@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
+import { emailBillingQueryEvent } from "@/lib/billing-queries-notify";
 import {
   BILLING_QUERY_ROLES,
+  BILLING_QUERY_ALERT_ROLES,
   isBillingQueryRole,
   isAwaitingViewer,
   resolveStatementSummary,
@@ -217,6 +219,30 @@ export async function POST(req: NextRequest) {
         entityId: statementId,
       },
     );
+
+    const { data: emailRecipients } = await adminClient
+      .from("users")
+      .select("email")
+      .in("role", BILLING_QUERY_ALERT_ROLES)
+      .eq("is_active", true)
+      .neq("id", dbUser.id);
+    const { data: statementForEmail } = await adminClient
+      .from("billing_statements")
+      .select(STATEMENT_OWNER_SELECT)
+      .eq("id", statementId)
+      .maybeSingle();
+    const summary = statementForEmail
+      ? resolveStatementSummary(statementForEmail as unknown as Parameters<typeof resolveStatementSummary>[0])
+      : null;
+    void emailBillingQueryEvent({
+      recipients: emailRecipients ?? [],
+      headline: "New billing query",
+      statementLabel: summary
+        ? `${summary.party_name} · ${summary.context_label} · ${summary.statement_number ?? ""}`
+        : "Billing statement",
+      message: `${dbUser.full_name} asked:\n\n"${messageBody}"`,
+      queryId: newQuery.id,
+    });
   }
 
   void logAudit(adminClient, {

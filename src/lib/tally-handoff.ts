@@ -385,6 +385,8 @@ export interface BookingInboxRow {
   discrepancy_reason: string | null;
   gst_invoice_sent_at: string | null;
   payment_confirmations: BookingPaymentConfirmation[];
+  is_voided: boolean;
+  void_reason: string | null;
 }
 
 export interface InboxStats {
