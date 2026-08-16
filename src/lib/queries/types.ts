@@ -22,7 +22,8 @@ export const QUERY_ENTITY_TYPES = [
   "deposit_topup",
   "vendor_bill",
   "contract",
-  // PR 5 adds: purchase_order, purchase_request.
+  "purchase_order",
+  "purchase_request",
 ] as const;
 
 export type QueryEntityType = (typeof QUERY_ENTITY_TYPES)[number];
@@ -64,7 +65,7 @@ export const QUERY_KIND_LABELS: Record<QueryKind, string> = {
  */
 export type QueryAudience = "all" | "roles" | "users";
 
-export type QueryMessageEventType = "message" | "resolved" | "reopened" | "retargeted";
+export type QueryMessageEventType = "message" | "resolved" | "reopened" | "retargeted" | "nudged";
 
 export interface QueryAuthor {
   id: string;

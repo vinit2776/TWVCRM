@@ -36,6 +36,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 type ActionType = "approve" | "reject" | "cancel" | "submit" | "resubmit";
 
@@ -358,6 +359,7 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
                 {PR_STATUS_LABELS[pr.status]}
               </Badge>
+              <QueryButton entityType="purchase_request" entityId={pr.id} />
             </div>
             <div className="flex items-center gap-2 mt-1">
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>

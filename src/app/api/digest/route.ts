@@ -4,6 +4,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
 import { summarizeAuditEvent } from "@/lib/audit-labels";
+import { queryEntityDef } from "@/lib/queries/registry";
+import { loadEntitySummaries, entityKey, entityLabel } from "@/lib/queries/server";
 
 export const maxDuration = 60;
 
@@ -76,7 +78,7 @@ export async function GET(request: Request) {
   const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard, revenueBreakdown, yesterdayRevenueBreakdown] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard, revenueBreakdown, yesterdayRevenueBreakdown, openQueries] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
@@ -87,6 +89,7 @@ export async function GET(request: Request) {
     fetchStoryboardHighlights(supabase, todayIST),
     fetchRevenueBreakdown(supabase, todayIST),
     fetchRevenueBreakdown(supabase, yesterdayIST),
+    fetchOpenQueries(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -98,7 +101,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard, revenueBreakdown, yesterdayRevenueBreakdown);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard, revenueBreakdown, yesterdayRevenueBreakdown, openQueries);
 
   // ?preview=1 renders the HTML without sending — used for local/staging QA so
   // testing against real (prod) data never fans out real emails to recipients.
@@ -582,6 +585,72 @@ interface AttentionItems {
   workOrdersSlaAtRisk: number;
   workOrdersOpenCritical: number;
   workOrderBreakdown: WorkOrderBreakdownRow[];
+}
+
+/**
+ * Open clarification threads, for the digest's Queries block.
+ *
+ * The digest is one org-wide email rather than a per-user one, so this is a
+ * standing count plus the worst offenders — not a personal to-do list. It's
+ * the tier that works today regardless of whether the WhatsApp escalation
+ * template has been approved: even with every other channel dark, an
+ * unanswered query surfaces here each morning.
+ */
+interface DigestQueries {
+  open: number;
+  overdue: number;
+  oldest: Array<{ label: string; days: number; askedBy: string }>;
+}
+
+const DIGEST_QUERY_LIMIT = 5;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchOpenQueries(supabase: any, date: string): Promise<DigestQueries> {
+  const { data } = await supabase
+    .from("queries")
+    .select(`
+      id, entity_type, entity_id, needed_by, created_at,
+      creator:users!queries_created_by_fkey(full_name)
+    `)
+    .eq("status", "open");
+
+  const rows = (data || []) as Array<{
+    entity_type: string;
+    entity_id: string;
+    needed_by: string | null;
+    created_at: string;
+    creator: { full_name: string } | null;
+  }>;
+  if (rows.length === 0) return { open: 0, overdue: 0, oldest: [] };
+
+  const today = Date.parse(`${date}T00:00:00Z`);
+  const overdueRows = rows.filter(
+    (r) => r.needed_by && Date.parse(`${r.needed_by}T00:00:00Z`) < today,
+  );
+
+  // Resolve display labels only for the handful actually shown.
+  const shown = [...rows]
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    .slice(0, DIGEST_QUERY_LIMIT);
+
+  const summaries = await loadEntitySummaries(
+    supabase,
+    shown.map((r) => ({ entity_type: r.entity_type, entity_id: r.entity_id })),
+  );
+
+  return {
+    open: rows.length,
+    overdue: overdueRows.length,
+    oldest: shown.map((r) => {
+      const def = queryEntityDef(r.entity_type);
+      const summary = summaries.get(entityKey(r.entity_type, r.entity_id)) ?? null;
+      return {
+        label: def ? entityLabel(def, summary) : "(unknown record)",
+        days: Math.max(0, Math.floor((today - Date.parse(r.created_at)) / 86400000)),
+        askedBy: r.creator?.full_name ?? "—",
+      };
+    }),
+  };
 }
 
 const OPEN_WORK_ORDER_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
@@ -1469,7 +1538,8 @@ function buildDigestHtml(
   receivables: ReceivablesAging,
   storyboard: StoryboardEvent[],
   revenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number },
-  yesterdayRevenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number }
+  yesterdayRevenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number },
+  openQueries: DigestQueries
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
   const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
@@ -1646,6 +1716,21 @@ function buildDigestHtml(
       </div>` : `<div style="margin-bottom:24px;"></div>`}
   ` : "";
 
+  // ── Open Queries ─────────────────────────────────────────────────────────
+  // The channel that always works. Even with WhatsApp escalation dark and
+  // every in-app notification ignored, an unanswered clarification surfaces
+  // here every morning.
+  const queriesHtml = openQueries.open > 0 ? `
+    ${sectionHeader(`Open Queries (${openQueries.open}${openQueries.overdue > 0 ? `, ${openQueries.overdue} overdue` : ""})`)}
+    <div style="background:${openQueries.overdue > 0 ? "#fffbeb" : "#f7f8fa"};border:1px solid ${openQueries.overdue > 0 ? "#fde68a" : "#e5e7eb"};border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+      ${openQueries.oldest.map(q => `
+        <p style="margin:3px 0;color:#333;font-size:13px;">
+          • <span style="font-weight:600;">${q.label}</span>
+          <span style="color:#888;">— asked by ${q.askedBy}, open ${q.days} day${q.days === 1 ? "" : "s"}</span>
+        </p>`).join("")}
+      <p style="margin:10px 0 0;"><a href="https://twv-crm.vercel.app/queries" style="color:#015E65;font-size:12px;font-weight:600;text-decoration:none;">Open Queries →</a></p>
+    </div>` : "";
+
   // ── Team Activity ──────────────────────────────────────────────────────
   const teamHtml = extended.teamActivity.length > 0 ? `
     <div style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
@@ -1815,6 +1900,9 @@ function buildDigestHtml(
 
     <!-- Work Orders by Location -->
     ${workOrderBreakdownHtml}
+
+    <!-- Open Queries -->
+    ${queriesHtml}
 
     <!-- Team Activity -->
     ${teamHtml}
