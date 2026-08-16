@@ -39,6 +39,7 @@ import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-emai
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -610,6 +611,9 @@ export default function VendorBillDetailPage() {
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="vendor_bill" entityId={bill.id} />
+            </div>
             {bill.auto_approved && bill.auto_approval_note && (
               <p className="text-xs text-muted-foreground mt-1">{bill.auto_approval_note}</p>
             )}

@@ -17,7 +17,7 @@
  * read-and-record only.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,8 @@ import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } f
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Lead {
@@ -156,6 +158,8 @@ interface ReceivableRow {
   last_reminder_sent_at: string | null;
   reminder_count: number;
   days_overdue: number | null;
+  /** Open query threads on this statement — drives the row's Query badge. */
+  open_query_count?: number;
   status: string;
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
@@ -246,6 +250,8 @@ export default function AccountsReceivablePage() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("detail");
   const [canRecordPayment, setCanRecordPayment] = useState(false);
+  // Which row has its query thread expanded (one at a time).
+  const [queryRowId, setQueryRowId] = useState<string | null>(null);
 
   // Record-payment dialog state (form lives in RecordPaymentDialog)
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
@@ -650,7 +656,11 @@ export default function AccountsReceivablePage() {
                     const party = partyOf(r);
                     const avg = avgDays[party.id];
                     return (
-                      <tr key={r.id} className="hover:bg-gray-50">
+                      // Fragment, not a wrapper element: the query panel is a
+                      // sibling <tr> and anything else here would be invalid
+                      // inside <tbody>.
+                      <Fragment key={r.id}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-4 py-3">
                           <div className="font-medium">
                             <Link href={party.href} className="text-teal-700 hover:underline">
@@ -758,6 +768,12 @@ export default function AccountsReceivablePage() {
                             <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={isGstRoute(r) ? "Resend GST invoice" : "Resend proforma email"}>
                               <Send className="h-3.5 w-3.5" />
                             </Button>
+                            <InboxQueryButton
+                              open={queryRowId === r.id}
+                              openCount={r.open_query_count ?? 0}
+                              onToggle={() => setQueryRowId(queryRowId === r.id ? null : r.id)}
+                              title="Raise or answer a question about this statement"
+                            />
                             {r.razorpay_payment_link_url && (
                               <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -766,6 +782,18 @@ export default function AccountsReceivablePage() {
                           </div>
                         </td>
                       </tr>
+                      {queryRowId === r.id && (
+                        <tr key={`${r.id}-query`} className="bg-muted/20">
+                          <td colSpan={10} className="px-4 py-3">
+                            <QueryThreadPanel
+                              entityType="billing_statement"
+                              entityId={r.id}
+                              onChanged={load}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                     );
                   })}
                 </tbody>

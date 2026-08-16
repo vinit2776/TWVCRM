@@ -80,6 +80,23 @@ export async function GET(_req: NextRequest) {
     }, new Map<string, number>());
   }
 
+  // Open query count per statement — one grouped query for the page rather
+  // than a fetch per row, same as the Tally Inbox badges. Scoped by
+  // entity_type since `queries` spans every module.
+  const openQueriesByStatement = new Map<string, number>();
+  if (statementIds.length > 0) {
+    const { data: openQueries } = await supabase
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
+      .eq("status", "open");
+    for (const q of openQueries || []) {
+      const id = (q as { entity_id: string }).entity_id;
+      openQueriesByStatement.set(id, (openQueriesByStatement.get(id) ?? 0) + 1);
+    }
+  }
+
   // Today in IST as a YYYY-MM-DD anchor for daysOverdue.
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const todayIst = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -98,6 +115,7 @@ export async function GET(_req: NextRequest) {
       amount_paid: Math.round(paid),
       balance_due: Math.round(balance),
       days_overdue: daysOverdue,
+      open_query_count: openQueriesByStatement.get(s.id as string) ?? 0,
     };
   });
 

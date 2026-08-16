@@ -283,6 +283,66 @@ function depositTopupSummary(raw: EntityRow): QueryEntitySummary | null {
   };
 }
 
+// ── vendor_bill ─────────────────────────────────────────────────────────────
+
+const VENDOR_BILL_SELECT = `
+  id, bill_number, invoice_number, invoice_date, total_amount,
+  vendor:procurement_vendors!vendor_bills_vendor_id_fkey(id, name)
+`;
+
+interface VendorBillRow {
+  id: string;
+  bill_number: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total_amount: number | null;
+  vendor: { id: string; name: string } | null;
+}
+
+function vendorBillSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as VendorBillRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    title: row.vendor?.name || "(unknown vendor)",
+    // The vendor's own invoice number — the thing you'd quote back to them,
+    // and distinct from bill_number (the `reference`, which is ours).
+    subtitle: row.invoice_number ? `Invoice ${row.invoice_number}` : "",
+    amount: row.total_amount,
+    reference: row.bill_number,
+    href: `/procurement/bills/${row.id}`,
+  };
+}
+
+// ── contract ────────────────────────────────────────────────────────────────
+
+const CONTRACT_SELECT = `
+  id, contract_number, title, total_amount, status,
+  lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+`;
+
+interface ContractRow {
+  id: string;
+  contract_number: string | null;
+  title: string | null;
+  total_amount: number | null;
+  status: string | null;
+  lead: LeadLike;
+}
+
+function contractSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as ContractRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    title: leadName(row.lead) || "(unknown)",
+    subtitle: row.title ?? "",
+    amount: row.total_amount,
+    reference: row.contract_number,
+    href: `/contracts/${row.id}`,
+  };
+}
+
 /**
  * Tally Inbox rows are *raised* by the inbox roles, but frequently *answered*
  * by someone with no inbox access at all — the floor manager who took the
@@ -435,6 +495,82 @@ export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
         key: "ref_not_traceable",
         label: "Payment ref not traceable",
         body: "The payment reference on this top-up doesn't match anything in the bank statement. Can you confirm the date it hit?",
+      },
+    ],
+  },
+
+  vendor_bill: {
+    type: "vendor_bill",
+    label: "Vendor Bill",
+    module: "payables",
+    table: "vendor_bills",
+    select: VENDOR_BILL_SELECT,
+    // Union of the gates on the two surfaces a bill query is raised from:
+    // /accounting (LEGACY_ROLES + accounts) and /procurement/bills.
+    roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "office_admin", "viewer"],
+    // Bills are paid by accounts/admin/office_admin and approved by
+    // admin/manager — those are the people who can actually answer. The
+    // sales_rep and floor_manager who can *see* /accounting aren't paged.
+    alertRoles: ["accounts", "manager", "office_admin"],
+    auditEntityType: "vendor_bill",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: vendorBillSummary,
+    templates: [
+      {
+        key: "po_mismatch",
+        label: "Bill doesn't match the PO",
+        body: "The bill total doesn't match the approved PO amount. Which one is right — do I need a revised PO before booking this?",
+      },
+      {
+        key: "tds_section",
+        label: "TDS section unclear",
+        body: "Which TDS section applies to this bill, and at what rate?",
+      },
+      {
+        key: "duplicate",
+        label: "Possible duplicate",
+        body: "This looks like it may duplicate a bill already booked for this vendor. Can you confirm before I pay it?",
+      },
+      {
+        key: "gst_missing",
+        label: "GST details missing",
+        body: "The vendor's GST details are missing or don't match their invoice. Can you confirm the correct ones?",
+      },
+    ],
+  },
+
+  contract: {
+    type: "contract",
+    label: "Contract",
+    module: "contracts",
+    table: "contracts",
+    select: CONTRACT_SELECT,
+    roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "viewer"],
+    // The sales rep owns the commercial terms; accounts raises most of these.
+    alertRoles: ["accounts", "manager", "sales_rep"],
+    auditEntityType: "contract",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: contractSummary,
+    templates: [
+      {
+        key: "billing_start",
+        label: "Billing start date unclear",
+        body: "When should billing actually start on this contract? The dates on it don't match what was invoiced.",
+      },
+      {
+        key: "rate_revision",
+        label: "Rate revision not reflected",
+        body: "A rate revision was agreed but isn't reflected on this contract. Can you confirm the correct rate and from when?",
+      },
+      {
+        key: "deposit_terms",
+        label: "Deposit terms unclear",
+        body: "What was actually agreed on the security deposit for this contract — was any waiver or carry-forward approved?",
+      },
+      {
+        key: "renewal_intent",
+        label: "Renewal intent?",
+        body: "This contract is approaching its end date. Is it renewing, and on what terms?",
       },
     ],
   },

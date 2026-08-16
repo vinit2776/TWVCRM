@@ -1,6 +1,12 @@
 "use client";
 
 import { MessageCircleQuestion } from "lucide-react";
+import {
+  QUERY_BADGE,
+  QUERY_BUTTON_ACTIVE,
+  QUERY_BUTTON_HAS_OPEN,
+  QUERY_BUTTON_IDLE,
+} from "@/lib/queries/theme";
 
 /**
  * The "Query" toggle that sits in a Tally Inbox row's action strip.
@@ -31,7 +37,7 @@ export function InboxQueryButton({
       type="button"
       onClick={onToggle}
       className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
-        open ? "bg-blue-50 border-blue-300 text-blue-800" : "hover:bg-muted"
+        open ? QUERY_BUTTON_ACTIVE : openCount > 0 ? QUERY_BUTTON_HAS_OPEN : QUERY_BUTTON_IDLE
       }`}
       title={title}
       aria-expanded={open}
@@ -39,7 +45,7 @@ export function InboxQueryButton({
       <MessageCircleQuestion className="h-3 w-3" />
       Query
       {openCount > 0 && (
-        <span className="text-[10px] leading-none bg-blue-700 text-white rounded-full px-1.5 py-0.5 ml-0.5">
+        <span className={`text-[10px] leading-none rounded-full px-1.5 py-0.5 ml-0.5 ${QUERY_BADGE}`}>
           {openCount}
         </span>
       )}

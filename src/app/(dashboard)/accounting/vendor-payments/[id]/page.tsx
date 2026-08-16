@@ -37,6 +37,7 @@ import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-emai
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -921,6 +922,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           <p className="text-sm text-muted-foreground mt-0.5">
             {vendor?.name} · Invoice {bill.invoice_number ?? "—"} · {formatDate(bill.invoice_date)}
           </p>
+          <div className="mt-2">
+            <QueryButton entityType="vendor_bill" entityId={bill.id} />
+          </div>
         </div>
         <div className="text-right shrink-0 space-y-1">
           <p className="text-2xl font-bold">{formatCurrency(billBaseAmount + billGstAmount)}</p>
