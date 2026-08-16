@@ -5,10 +5,11 @@ import {
   isAwaitingUser,
   resolveRecipients,
   validateTargeting,
+  READ_ONLY_ROLES,
   type Viewer,
 } from "@/lib/queries/audience";
-import type { QueryEntityDef } from "@/lib/queries/registry";
-import type { QueryTargeting } from "@/lib/queries/types";
+import { QUERY_ENTITIES, type QueryEntityDef } from "@/lib/queries/registry";
+import { QUERY_ENTITY_TYPES, type QueryTargeting } from "@/lib/queries/types";
 
 /**
  * The routing rules for query threads. These replace two heuristics in the
@@ -203,6 +204,44 @@ describe("resolveRecipients", () => {
       authorId: "priya",
     });
     expect(notify).toContain("meera");
+  });
+});
+
+describe("registry invariants", () => {
+  const entries = QUERY_ENTITY_TYPES.map((t) => [t, QUERY_ENTITIES[t]] as const);
+
+  it("registers every declared entity type", () => {
+    for (const [type, def] of entries) {
+      expect(def, `${type} missing from QUERY_ENTITIES`).toBeDefined();
+      expect(def.type).toBe(type);
+    }
+  });
+
+  it.each(entries)("%s: alertRoles is a subset of roles", (type, def) => {
+    // Alerts ⊆ notified ⊆ audience, and for audience 'all' the audience is
+    // `roles`. A role listed only in alertRoles can therefore never be paged
+    // — it silently does nothing, which is how the first draft of the Tally
+    // Inbox entries shipped floor_manager and sales_rep as dead entries.
+    const orphans = def.alertRoles.filter((r) => !def.roles.includes(r));
+    expect(orphans, `${type}: alertRoles not in roles`).toEqual([]);
+  });
+
+  it.each(entries)("%s: alertRoles contains no read-only role", (type, def) => {
+    const readOnly = def.alertRoles.filter((r) => (READ_ONLY_ROLES as readonly string[]).includes(r));
+    expect(readOnly, `${type}: read-only roles can't answer, so can't be paged`).toEqual([]);
+  });
+
+  it.each(entries)("%s: has at least one askable role and one template", (type, def) => {
+    const askable = def.roles.filter((r) => !(READ_ONLY_ROLES as readonly string[]).includes(r));
+    expect(askable.length, `${type}: nobody could ever be asked`).toBeGreaterThan(0);
+    expect(def.templates.length, `${type}: no canned asks`).toBeGreaterThan(0);
+  });
+
+  it.each(entries)("%s: toSummary tolerates a missing row", (type, def) => {
+    // (entity_type, entity_id) carries no FK, so a deleted entity must render
+    // as "no longer available" rather than throwing.
+    expect(() => def.toSummary({})).not.toThrow();
+    expect(def.toSummary({})).toBeNull();
   });
 });
 

@@ -6,14 +6,26 @@
  * what to call the entity, which Supabase table and columns to read for the
  * summary card, who is authorized on it, and which canned asks to offer.
  *
- * ROLES ARE NOT HAND-CURATED. `roles` reuses the gate that already governs
- * the surface the query is raised from — the same list that decides whether
- * you can open that page at all. There is deliberately no second
- * "default audience" list to drift out of sync: the default is
- * audience: 'all', and 'all' resolves to `roles` (see audience.ts).
+ * ROLES ARE NOT HAND-CURATED. `roles` starts from the gate that already
+ * governs the surface the query is raised from — the same list that decides
+ * whether you can open that page at all — extended with any role that can
+ * actually *answer* but has no access to that page. Tally Inbox rows are the
+ * clear case: accounts raises them, but the floor manager who took the
+ * walk-in or the sales rep who agreed the deposit terms is the one who knows,
+ * and neither can open the inbox. The original feature had the same
+ * asymmetry (BILLING_QUERY_ROLES included sales_rep, INBOX_ROLES never did).
+ *
+ * There is deliberately no second "default audience" list to drift out of
+ * sync: the default is audience: 'all', and 'all' resolves to `roles`
+ * (see audience.ts).
+ *
+ * INVARIANT: alertRoles ⊆ roles. Alerts are a subset of the notified set,
+ * which is a subset of the audience, which for 'all' is `roles` — so a role
+ * listed only in alertRoles can never actually be paged. Asserted in
+ * src/lib/__tests__/queries-audience.test.ts.
  */
 
-import type { AuditEntityType, UserRole } from "@/types";
+import { DEPOSIT_TOPUP_CATEGORY_LABELS, type AuditEntityType, type DepositTopupCategory, type UserRole } from "@/types";
 import { INBOX_ROLES } from "@/lib/tally-handoff";
 import type { QueryEntityType, QueryEntitySummary, QueryModule, QueryTemplate } from "./types";
 
@@ -156,6 +168,137 @@ const STATEMENT_ROLES = Array.from(
   ]),
 );
 
+// ── booking_gst_task ────────────────────────────────────────────────────────
+
+const BOOKING_TASK_SELECT = `
+  id, booking_id,
+  booking:bookings!booking_gst_tasks_booking_id_fkey(
+    id, booking_number, booking_date, total_amount_with_gst,
+    guest_name, guest_company,
+    lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
+  )
+`;
+
+interface BookingTaskRow {
+  id: string;
+  booking_id: string;
+  booking: {
+    id: string;
+    booking_number: string | null;
+    booking_date: string | null;
+    total_amount_with_gst: number | null;
+    guest_name: string | null;
+    guest_company: string | null;
+    lead: LeadLike;
+  } | null;
+}
+
+function bookingTaskSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as BookingTaskRow;
+  if (!row?.id) return null;
+  const b = row.booking;
+
+  // Walk-ins carry guest_* directly; contract-holder bookings resolve through
+  // the lead. Prefer whichever is actually filled in.
+  const party = b?.guest_company || leadName(b?.lead ?? null) || b?.guest_name || "(unknown)";
+
+  return {
+    id: row.id,
+    title: party,
+    // The booking number is the `reference`; repeating it here would render
+    // twice on the card.
+    subtitle: b?.booking_date ?? "",
+    amount: b?.total_amount_with_gst ?? null,
+    reference: b?.booking_number ?? null,
+    href: b?.id ? `/bookings/${b.id}` : null,
+  };
+}
+
+// ── proposal_deposit ────────────────────────────────────────────────────────
+
+const PROPOSAL_DEPOSIT_SELECT = `
+  id, proposal_number, security_deposit_amount, deposit_payment_amount,
+  lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
+`;
+
+interface ProposalDepositRow {
+  id: string;
+  proposal_number: string | null;
+  security_deposit_amount: number | null;
+  deposit_payment_amount: number | null;
+  lead: LeadLike;
+}
+
+function proposalDepositSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as ProposalDepositRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    title: leadName(row.lead) || "(unknown)",
+    // Label ("Deposit") and reference (the proposal number) already carry
+    // this one; anything more would just repeat them.
+    subtitle: "",
+    // What was actually received, falling back to what was asked for — the
+    // deposit inbox makes the same distinction, since legacy proposals can be
+    // marked paid with no amount ever recorded.
+    amount: row.deposit_payment_amount ?? row.security_deposit_amount ?? null,
+    reference: row.proposal_number,
+    href: `/proposals/${row.id}`,
+  };
+}
+
+// ── deposit_topup ───────────────────────────────────────────────────────────
+
+const DEPOSIT_TOPUP_SELECT = `
+  id, amount, category, contract_id,
+  contract:contracts!deposit_topups_contract_id_fkey(
+    id, contract_number, title,
+    lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+  )
+`;
+
+interface DepositTopupRow {
+  id: string;
+  amount: number | null;
+  category: string | null;
+  contract_id: string;
+  contract: { id: string; contract_number: string; title: string | null; lead: LeadLike } | null;
+}
+
+function depositTopupSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as DepositTopupRow;
+  if (!row?.id) return null;
+  const c = row.contract;
+  return {
+    id: row.id,
+    title: leadName(c?.lead ?? null) || "(unknown)",
+    // Why the top-up was collected — genuinely new information, unlike the
+    // contract number (the reference) or "Deposit top-up" (the label).
+    subtitle: row.category
+      ? (DEPOSIT_TOPUP_CATEGORY_LABELS[row.category as DepositTopupCategory] ?? row.category)
+      : "",
+    amount: row.amount,
+    reference: c?.contract_number ?? null,
+    href: c?.id ? `/contracts/${c.id}` : null,
+  };
+}
+
+/**
+ * Tally Inbox rows are *raised* by the inbox roles, but frequently *answered*
+ * by someone with no inbox access at all — the floor manager who took the
+ * walk-in, the sales rep who agreed the deposit terms. So `roles` is the
+ * inbox gate plus whoever can actually answer, not the inbox gate alone.
+ *
+ * This is the same asymmetry the original feature had (BILLING_QUERY_ROLES
+ * included sales_rep, who has never been able to open the Tally Inbox), and
+ * it's why `roles` is "who is authorized on the query" rather than strictly
+ * "who is authorized on the page it was raised from". `alertRoles` must stay
+ * a subset — see the registry invariant test.
+ */
+function inboxRolesPlus(...answerers: UserRole[]): readonly UserRole[] {
+  return Array.from(new Set<UserRole>([...(INBOX_ROLES as readonly UserRole[]), ...answerers]));
+}
+
 export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
   billing_statement: {
     type: "billing_statement",
@@ -188,6 +331,110 @@ export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
         key: "gst_details",
         label: "Customer GST details missing",
         body: "The customer's GST details are missing or don't match. Can you confirm the correct ones?",
+      },
+    ],
+  },
+
+  booking_gst_task: {
+    type: "booking_gst_task",
+    label: "Booking",
+    module: "tally_inbox",
+    table: "booking_gst_tasks",
+    select: BOOKING_TASK_SELECT,
+    roles: inboxRolesPlus("floor_manager"),
+    // Floor managers took the booking and are the ones who can answer "whose
+    // walk-in was this" — they're the point of asking, even though the Tally
+    // Inbox itself isn't theirs to open.
+    alertRoles: ["accounts", "manager", "floor_manager"],
+    auditEntityType: "booking",
+    // booking_gst_task has no AuditEntityType of its own; the audit row hangs
+    // off the booking, which is the record a person would actually look up.
+    auditEntityId: (row) => (row as unknown as BookingTaskRow)?.booking_id ?? null,
+    toSummary: bookingTaskSummary,
+    templates: [
+      {
+        key: "which_booking",
+        label: "Which booking is this payment against?",
+        body: "I can't match the payment received to this booking. Can you confirm which booking it belongs to?",
+      },
+      {
+        key: "walkin_gst",
+        label: "Walk-in GST details missing",
+        body: "This walk-in has no GST details on file. Do we have them, or should I raise it without?",
+      },
+      {
+        key: "amount_mismatch",
+        label: "Amount doesn't match",
+        body: "The amount collected doesn't match the booking total. Which figure should I invoice?",
+      },
+    ],
+  },
+
+  proposal_deposit: {
+    type: "proposal_deposit",
+    label: "Deposit",
+    module: "tally_inbox",
+    table: "proposals",
+    select: PROPOSAL_DEPOSIT_SELECT,
+    roles: inboxRolesPlus("sales_rep"),
+    // The sales rep who closed the deal knows what was actually agreed on the
+    // deposit — waivers, credits and exceptions all originate with them.
+    alertRoles: ["accounts", "manager", "sales_rep"],
+    auditEntityType: "proposal",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: proposalDepositSummary,
+    templates: [
+      {
+        key: "deposit_or_topup",
+        label: "Fresh deposit or top-up?",
+        body: "Is this a fresh security deposit or a top-up against an existing contract?",
+      },
+      {
+        key: "no_contract_linked",
+        label: "No contract linked",
+        body: "This deposit is paid but I can't see a contract linked to it. Which contract should it sit against?",
+      },
+      {
+        key: "ref_not_traceable",
+        label: "Payment ref not traceable",
+        body: "The payment reference on this deposit doesn't match anything in the bank statement. Can you confirm the date it hit, or share the payment screenshot?",
+      },
+      {
+        key: "waiver_or_exception",
+        label: "Waiver / exception unclear",
+        body: "The deposit collected is less than the contract calls for. Was a waiver or exception approved, and by whom?",
+      },
+    ],
+  },
+
+  deposit_topup: {
+    type: "deposit_topup",
+    label: "Deposit top-up",
+    module: "tally_inbox",
+    table: "deposit_topups",
+    select: DEPOSIT_TOPUP_SELECT,
+    roles: inboxRolesPlus("sales_rep"),
+    alertRoles: ["accounts", "manager", "sales_rep"],
+    auditEntityType: "contract",
+    // Same as booking_gst_task: no AuditEntityType of its own, so the trail
+    // hangs off the contract the top-up tops up.
+    auditEntityId: (row) => (row as unknown as DepositTopupRow)?.contract_id ?? null,
+    toSummary: depositTopupSummary,
+    templates: [
+      {
+        key: "topup_reason",
+        label: "What is this top-up for?",
+        body: "What was this deposit top-up collected for? The category on it doesn't tell me enough to book it.",
+      },
+      {
+        key: "shortfall",
+        label: "Does this clear the shortfall?",
+        body: "Does this top-up fully clear the deposit shortfall on the contract, or is more still due?",
+      },
+      {
+        key: "ref_not_traceable",
+        label: "Payment ref not traceable",
+        body: "The payment reference on this top-up doesn't match anything in the bank statement. Can you confirm the date it hit?",
       },
     ],
   },

@@ -349,6 +349,9 @@ export interface BookingInboxAddon {
 export interface BookingInboxRow {
   row_type: "booking";
   task_id: string;
+  /** Open query thread count for this task — drives the "Query" button badge.
+   *  See src/lib/queries/registry.ts. */
+  open_query_count: number;
   booking_id: string;
   booking_number: string | null;
   booking_date: string | null;

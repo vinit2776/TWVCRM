@@ -14,8 +14,9 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MessageCircleQuestion } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -994,6 +995,7 @@ export function TallyInboxClient() {
                   onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
                   onCancelUpload={() => setExpandedBookingId(null)}
                   onVoided={() => void load()}
+                  onQueryChanged={() => void load()}
                   currentUserRole={currentUserRole}
                 />
               ))}
@@ -1716,22 +1718,12 @@ const InboxRowItem = memo(function InboxRowItem({
             <History className="h-3 w-3" />
             History
           </button>
-          <button
-            type="button"
-            onClick={() => setQueryOpen((v) => !v)}
-            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
-              queryOpen ? "bg-blue-50 border-blue-300 text-blue-800" : "hover:bg-muted"
-            }`}
-            title="Ask accounts leadership a question about this statement"
-          >
-            <MessageCircleQuestion className="h-3 w-3" />
-            Query
-            {row.open_query_count > 0 && (
-              <span className="text-[10px] leading-none bg-blue-700 text-white rounded-full px-1.5 py-0.5 ml-0.5">
-                {row.open_query_count}
-              </span>
-            )}
-          </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this statement"
+          />
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -2216,6 +2208,7 @@ function BookingInboxRowItem({
   onInvoiceUploaded,
   onCancelUpload,
   onVoided,
+  onQueryChanged,
   currentUserRole,
 }: {
   row: BookingInboxRow;
@@ -2232,9 +2225,11 @@ function BookingInboxRowItem({
   onInvoiceUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancelUpload: () => void;
   onVoided: () => void;
+  onQueryChanged: () => void;
   currentUserRole: string;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [queryOpen, setQueryOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
@@ -2488,6 +2483,12 @@ function BookingInboxRowItem({
             Payment
             {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this booking"
+          />
           {row.lead_id && row.lead_id_proof_path && (
             <a
               href={`/api/leads/${row.lead_id}/id-proof`}
@@ -2636,6 +2637,16 @@ function BookingInboxRowItem({
 
       {paymentOpen && (
         <BookingPaymentPanel confirmations={row.payment_confirmations} totalAmount={row.statement_total_amount} />
+      )}
+
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel
+            entityType="booking_gst_task"
+            entityId={row.task_id}
+            onChanged={onQueryChanged}
+          />
+        </div>
       )}
 
       {expanded && canUpload && (

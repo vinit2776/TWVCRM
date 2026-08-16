@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { DEPOSIT_TOPUP_CATEGORY_LABELS, type DepositInboxRow } from "@/types";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 
 interface Props {
   currentUserRole: string;
@@ -37,6 +39,9 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Separate from `expanded` so opening a query thread doesn't collapse the
+  // verification details someone is reading while they type the question.
+  const [queryOpen, setQueryOpen] = useState<string | null>(null);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search), 250);
@@ -169,6 +174,12 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                         </span>
                       )}
                     </span>
+                    <InboxQueryButton
+                      open={queryOpen === key}
+                      openCount={row.open_query_count ?? 0}
+                      onToggle={() => setQueryOpen(queryOpen === key ? null : key)}
+                      title={`Raise or answer a question about this ${row.kind === "deposit" ? "deposit" : "top-up"}`}
+                    />
                     {subTab === "open" ? (
                       <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setUploadTarget(row)}>
                         <Upload className="h-3.5 w-3.5" /> Upload Receipt
@@ -196,6 +207,16 @@ export function DepositAccountingInbox({ currentUserRole, onOpenCountChange }: P
                   </div>
                 </div>
                 {isOpen && <VerificationPanel row={row} />}
+                {queryOpen === key && (
+                  <div className="border-t px-3 py-2.5">
+                    <QueryThreadPanel
+                      // A deposit row is a proposal; a top-up is its own table.
+                      entityType={row.kind === "deposit" ? "proposal_deposit" : "deposit_topup"}
+                      entityId={row.id}
+                      onChanged={() => load(subTab, debouncedSearch)}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
