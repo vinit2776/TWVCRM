@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Loader2, MessageCircleQuestion } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
@@ -44,7 +44,12 @@ function daysOverdue(neededBy: string): number {
 }
 
 export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
-  const [tab, setTab] = useState<Tab>("awaiting_me");
+  // Arriving from a notification (?open=<id>) means "you were called about
+  // this one". "Awaiting you" is the wrong landing tab for that — the linked
+  // thread is very often not in it (you were told about a reply, or it was
+  // just resolved), so the page would say "Nothing waiting on you right now"
+  // while the thread you were sent to look at sat one tab over.
+  const [tab, setTab] = useState<Tab>(openQueryId ? "open" : "awaiting_me");
   const [moduleFilter, setModuleFilter] = useState<QueryModule | null>(null);
   const [stats, setStats] = useState<QueryStats | null>(null);
   const [items, setItems] = useState<QueryListItem[]>([]);
@@ -111,6 +116,22 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   useEffect(() => {
     void loadStats();
   }, [loadStats]);
+
+  // A deep-linked thread that isn't open is a resolved one — fall through to
+  // the Resolved tab rather than showing an empty list. Runs at most once, and
+  // only before the reader has touched the tabs themselves, so it can never
+  // yank the tab out from under someone browsing.
+  const deepLinkFallbackDone = useRef(false);
+  useEffect(() => {
+    if (!openQueryId || deepLinkFallbackDone.current || loading) return;
+    if (tab !== "open") return;
+    if (items.some((i) => i.id === openQueryId)) {
+      deepLinkFallbackDone.current = true;
+      return;
+    }
+    deepLinkFallbackDone.current = true;
+    setTab("resolved");
+  }, [openQueryId, loading, items, tab]);
 
   useEffect(() => {
     void loadFirstPage(tab);
