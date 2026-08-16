@@ -81,6 +81,10 @@
       "schedule": "0 4 * * 1"
     },
     {
+      "path": "/api/cron/gmail-watch-renew",
+      "schedule": "0 1 * * *"
+    },
+    {
       "path": "/api/cron/invoice-gap-audit",
       "schedule": "30 4 * * 1"
     },
