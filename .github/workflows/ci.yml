@@ -44,7 +44,8 @@ jobs:
       - name: Test
         run: npm test
 
+      # Heap size lives in the "build" script in package.json, not here — this job
+      # used to set NODE_OPTIONS itself, which meant CI built fine while a plain
+      # local `npm run build` still died on Node's ~4GB default.
       - name: Build
         run: npm run build
-        env:
-          NODE_OPTIONS: "--max-old-space-size=6144"
