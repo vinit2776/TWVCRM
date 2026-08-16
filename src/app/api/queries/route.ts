@@ -10,6 +10,8 @@ import {
   fanOutQueryEvent,
   logQueryAudit,
 } from "@/lib/queries/server";
+import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
+import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import type { QueryAuthor, QueryKind, QueryListItem, QueryStats } from "@/lib/queries/types";
 
 /**
@@ -228,7 +230,7 @@ export async function POST(req: NextRequest) {
   if ("error" in auth) return auth.error;
   const { dbUser } = auth;
 
-  const body = (await req.json().catch(() => ({}))) as {
+  let body: {
     entity_type?: string;
     entity_id?: string;
     body?: string;
@@ -239,6 +241,17 @@ export async function POST(req: NextRequest) {
     audience_roles?: unknown;
     audience_user_ids?: unknown;
   };
+  let files: File[] = [];
+  try {
+    const parsed = await parseQueryRequest<typeof body>(req);
+    body = parsed.meta ?? {};
+    files = parsed.files;
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 
   const entityType = (body.entity_type ?? "").trim();
   const entityId = (body.entity_id ?? "").trim();
@@ -285,13 +298,26 @@ export async function POST(req: NextRequest) {
     .single();
   if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
-  const { error: msgErr } = await admin.from("query_messages").insert({
-    query_id: created.id,
-    event_type: "message",
-    body: messageBody,
-    created_by: dbUser.id,
-  });
+  const { data: openingMessage, error: msgErr } = await admin
+    .from("query_messages")
+    .insert({
+      query_id: created.id,
+      event_type: "message",
+      body: messageBody,
+      created_by: dbUser.id,
+    })
+    .select("id")
+    .single();
   if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 });
+
+  const attachments = files.length
+    ? await storeAttachments(admin, {
+        queryId: created.id,
+        messageId: openingMessage.id,
+        files,
+        uploadedBy: dbUser.id,
+      })
+    : { stored: 0, failed: [] as string[] };
 
   const summary = def.toSummary(entityRow as unknown as EntityRow);
 
@@ -319,5 +345,10 @@ export async function POST(req: NextRequest) {
     performedBy: dbUser.id,
   });
 
-  return NextResponse.json({ id: created.id }, { status: 201 });
+  // The query is saved either way; a failed attachment is reported rather
+  // than rolled back, so a dropped screenshot can't lose the question.
+  return NextResponse.json(
+    { id: created.id, attachments_failed: attachments.failed },
+    { status: 201 },
+  );
 }

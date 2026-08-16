@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Loader2, MessageCircleQuestion, RotateCcw, Send, Users } from "lucide-react";
+import { CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Send, Users } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { queryEntityDef } from "@/lib/queries/registry";
 import { AudiencePicker } from "@/components/queries/audience-picker";
+import { NeededByPicker } from "@/components/queries/needed-by-picker";
+import { AttachmentPicker, formatBytes } from "@/components/queries/attachment-picker";
 import { QUERY_KIND_LABELS, type QueryKind, type QueryTargeting, type QueryThread } from "@/lib/queries/types";
 
 /**
@@ -44,8 +46,37 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
   const [composerText, setComposerText] = useState("");
   const [kind, setKind] = useState<QueryKind>("question");
   const [targeting, setTargeting] = useState<QueryTargeting>(DEFAULT_TARGETING);
+  const [neededBy, setNeededBy] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [templateKey, setTemplateKey] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Send as multipart only when there are files — the JSON path stays the
+   * cheap default for the overwhelming majority of messages.
+   */
+  function requestInit(meta: Record<string, unknown>, attached: File[]): RequestInit {
+    if (attached.length === 0) {
+      return {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(meta),
+      };
+    }
+    const form = new FormData();
+    form.append("meta", JSON.stringify(meta));
+    for (const f of attached) form.append("file", f);
+    // No Content-Type header — the browser sets it with the boundary.
+    return { method: "POST", body: form };
+  }
+
+  /** Surfaced verbatim: silently dropping an attachment is worse than saying so. */
+  function reportFailedAttachments(failed: string[] | undefined) {
+    if (failed && failed.length > 0) {
+      setError(`Sent, but these attachments failed: ${failed.join(", ")}`);
+    }
+  }
 
   const loadThread = useCallback(async (id: string) => {
     setLoading(true);
@@ -91,16 +122,30 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/queries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entity_type: entityType, entity_id: entityId, body, kind, ...targeting }),
-      });
+      const res = await fetch(
+        "/api/queries",
+        requestInit(
+          {
+            entity_type: entityType,
+            entity_id: entityId,
+            body,
+            kind,
+            needed_by: neededBy ?? undefined,
+            template_key: templateKey ?? undefined,
+            ...targeting,
+          },
+          files,
+        ),
+      );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Failed to send");
       setComposerText("");
       setTargeting(DEFAULT_TARGETING);
+      setNeededBy(null);
+      setFiles([]);
+      setTemplateKey(null);
       await loadThread(json.id as string);
+      reportFailedAttachments(json.attachments_failed);
       onChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");
@@ -112,19 +157,20 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
   async function reply(resolve: boolean) {
     if (!thread) return;
     const body = composerText.trim();
-    if (!resolve && !body) return;
+    if (!resolve && !body && files.length === 0) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/queries/${thread.id}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: body || undefined, resolve }),
-      });
+      const res = await fetch(
+        `/api/queries/${thread.id}/messages`,
+        requestInit({ body: body || undefined, resolve }, files),
+      );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Failed to send");
       setComposerText("");
+      setFiles([]);
       await loadThread(thread.id);
+      reportFailedAttachments(json.attachments_failed);
       onChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");
@@ -205,7 +251,12 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                 <button
                   key={t.key}
                   type="button"
-                  onClick={() => setComposerText(t.body)}
+                  onClick={() => {
+                    setComposerText(t.body);
+                    // Recorded on the query so "what do accounts keep getting
+                    // stuck on?" is answerable later.
+                    setTemplateKey(t.key);
+                  }}
                   className="text-xs px-2 py-1 rounded border border-dashed text-muted-foreground hover:bg-muted"
                 >
                   {t.label}
@@ -222,6 +273,9 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
           onChange={setTargeting}
           disabled={submitting}
         />
+
+        <NeededByPicker value={neededBy} onChange={setNeededBy} disabled={submitting} />
+        <AttachmentPicker files={files} onChange={setFiles} disabled={submitting} />
 
         <div className="flex justify-end">
           <button
@@ -241,6 +295,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
   // ── Existing thread ─────────────────────────────────────────────────────
   const isResolved = thread.status === "resolved";
   const canResolve = user?.id === thread.created_by.id || user?.role === "admin";
+  // Resolved threads are never "overdue" — the clock stopped when it closed.
+  const overdueDays =
+    thread.needed_by && !isResolved
+      ? Math.floor((Date.now() - new Date(`${thread.needed_by}T00:00:00`).getTime()) / 86_400_000)
+      : 0;
   const audienceText =
     thread.audience === "users"
       ? thread.audience_users.map((u) => u.full_name).join(", ") || "specific people"
@@ -274,6 +333,20 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
           <Users className="h-3 w-3" />
           Asked: {audienceText}
         </span>
+        {thread.needed_by && (
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${
+              overdueDays > 0
+                ? "bg-amber-50 border-amber-200 text-amber-800"
+                : "bg-muted border-transparent text-muted-foreground"
+            }`}
+          >
+            <CalendarClock className="h-3 w-3" />
+            {overdueDays > 0
+              ? `Overdue · ${overdueDays}d`
+              : `Needed by ${new Date(`${thread.needed_by}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`}
+          </span>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -308,6 +381,26 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                 <span className="font-normal opacity-75 flex-none">{timeAgo(m.created_at)}</span>
               </div>
               {m.body}
+              {m.attachments && m.attachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {m.attachments.map((a) => (
+                    <a
+                      key={a.id}
+                      href={`/api/queries/attachments/${a.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border bg-background/60 hover:bg-background max-w-[240px]"
+                      title={a.file_name}
+                    >
+                      <Paperclip className="h-3 w-3 flex-none" />
+                      <span className="truncate">{a.file_name}</span>
+                      {a.size_bytes != null && (
+                        <span className="text-muted-foreground flex-none">{formatBytes(a.size_bytes)}</span>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -334,6 +427,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
             placeholder="Reply…"
             className="w-full text-xs border rounded p-2 resize-none bg-background"
           />
+          <AttachmentPicker files={files} onChange={setFiles} disabled={submitting} />
           {canResolve && (
             <p className="text-[11px] text-muted-foreground">
               If you resolve, this note is recorded on the {def.label.toLowerCase()}&apos;s history — write it as the
@@ -344,7 +438,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
             <button
               type="button"
               onClick={() => reply(false)}
-              disabled={submitting || !composerText.trim()}
+              disabled={submitting || (!composerText.trim() && files.length === 0)}
               className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded border hover:bg-muted disabled:opacity-50"
             >
               <Send className="h-3 w-3" />
