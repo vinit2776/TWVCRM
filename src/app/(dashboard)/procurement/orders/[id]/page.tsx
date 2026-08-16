@@ -37,6 +37,7 @@ import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -920,6 +921,9 @@ export default function PurchaseOrderDetailPage() {
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="purchase_order" entityId={po.id} />
+            </div>
           </div>
         </div>
 

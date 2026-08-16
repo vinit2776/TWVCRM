@@ -343,6 +343,73 @@ function contractSummary(raw: EntityRow): QueryEntitySummary | null {
   };
 }
 
+// ── purchase_order ──────────────────────────────────────────────────────────
+
+const PURCHASE_ORDER_SELECT = `
+  id, po_number, status, total_amount_with_gst, total_ordered_amount,
+  vendor:procurement_vendors!purchase_orders_vendor_id_fkey(name)
+`;
+
+interface PurchaseOrderRow {
+  id: string;
+  po_number: string | null;
+  status: string | null;
+  total_amount_with_gst: number | null;
+  total_ordered_amount: number | null;
+  vendor: { name: string } | null;
+}
+
+function purchaseOrderSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as PurchaseOrderRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    title: row.vendor?.name || "(unknown vendor)",
+    subtitle: row.status ? row.status.replace(/_/g, " ") : "",
+    // GST-inclusive where set; older POs only carry the pre-GST total.
+    amount: row.total_amount_with_gst ?? row.total_ordered_amount,
+    reference: row.po_number,
+    href: `/procurement/orders/${row.id}`,
+  };
+}
+
+// ── purchase_request ────────────────────────────────────────────────────────
+
+const PURCHASE_REQUEST_SELECT = `
+  id, pr_number, status, total_estimated_amount,
+  requester:users!purchase_requests_requested_by_fkey(full_name),
+  location:locations!purchase_requests_location_id_fkey(name)
+`;
+
+interface PurchaseRequestRow {
+  id: string;
+  pr_number: string | null;
+  status: string | null;
+  total_estimated_amount: number | null;
+  requester: { full_name: string } | null;
+  location: { name: string } | null;
+}
+
+function purchaseRequestSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as PurchaseRequestRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    // A material request has no counterparty — the useful "who" is whoever
+    // asked for it, since they're who you'd go back to.
+    title: row.requester?.full_name || "(unknown requester)",
+    subtitle: [row.location?.name, row.status?.replace(/_/g, " ")].filter(Boolean).join(" · "),
+    amount: row.total_estimated_amount,
+    reference: row.pr_number,
+    href: `/procurement/requests/${row.id}`,
+  };
+}
+
+/** Both procurement surfaces share a gate; office_admin runs procurement and
+ *  is the one who can actually answer, so they're paged rather than just
+ *  notified. */
+const PROCUREMENT_ROLES: readonly UserRole[] = ["admin", "manager", "office_admin", "viewer"];
+
 /**
  * Tally Inbox rows are *raised* by the inbox roles, but frequently *answered*
  * by someone with no inbox access at all — the floor manager who took the
@@ -571,6 +638,66 @@ export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
         key: "renewal_intent",
         label: "Renewal intent?",
         body: "This contract is approaching its end date. Is it renewing, and on what terms?",
+      },
+    ],
+  },
+
+  purchase_order: {
+    type: "purchase_order",
+    label: "Purchase Order",
+    module: "procurement",
+    table: "purchase_orders",
+    select: PURCHASE_ORDER_SELECT,
+    roles: PROCUREMENT_ROLES,
+    alertRoles: ["admin", "manager", "office_admin"],
+    auditEntityType: "purchase_order",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: purchaseOrderSummary,
+    templates: [
+      {
+        key: "delivery_mismatch",
+        label: "Delivered doesn't match ordered",
+        body: "What was delivered doesn't match what this PO ordered. Should I raise a short-receipt, or is a revised PO coming?",
+      },
+      {
+        key: "vendor_changed",
+        label: "Vendor changed",
+        body: "The bill has come from a different vendor than this PO was raised on. Was that change approved?",
+      },
+      {
+        key: "advance_status",
+        label: "Advance payment status",
+        body: "What's the status of the advance on this PO — has it been paid, and should it net off the final bill?",
+      },
+    ],
+  },
+
+  purchase_request: {
+    type: "purchase_request",
+    label: "Material Request",
+    module: "procurement",
+    table: "purchase_requests",
+    select: PURCHASE_REQUEST_SELECT,
+    roles: PROCUREMENT_ROLES,
+    alertRoles: ["admin", "manager", "office_admin"],
+    auditEntityType: "purchase_request",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: purchaseRequestSummary,
+    templates: [
+      {
+        key: "spec_unclear",
+        label: "Spec or quantity unclear",
+        body: "The spec or quantity on this request isn't clear enough to raise a PO against. Can you confirm exactly what's needed?",
+      },
+      {
+        key: "still_needed",
+        label: "Still needed?",
+        body: "This request has been open a while. Is it still needed, or can it be closed?",
+      },
+      {
+        key: "budget_head",
+        label: "Which budget head?",
+        body: "Which budget head and location should this be charged to?",
       },
     ],
   },
