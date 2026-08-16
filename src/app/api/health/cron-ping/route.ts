@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { recordCronHealth } from "@/lib/cron-ping";
 
-// Called by each cron job on successful completion:
+// Manual / external cron health ping:
 //   POST /api/health/cron-ping  { job: "digest", status: "ok", details: {...} }
-// Secured with CRON_SECRET header so only Vercel crons can call it.
+// Secured with CRON_SECRET so only trusted callers can write.
 //
-// Writes with the service-role client. cron_health has RLS enabled with a
-// SELECT-only policy (migration 00110) and no INSERT/UPDATE policy — writes are
-// expected to come from the service role. This route previously used
-// createClient(), which carries the caller's cookie session; a cron request has
-// no cookies, so the upsert ran as `anon` and was silently denied for four
-// months. The CRON_SECRET check above is what authorises this call.
+// The app's own cron jobs no longer come through here — pingCronHealth() writes
+// to Postgres directly, which saves a serverless invocation and a network round
+// trip on every one of the ~960 cron runs a day. This route stays as the manual
+// escape hatch (backfilling a row, testing the pipeline from outside, letting a
+// job that runs off-platform report in) and shares the same write path, so the
+// two can't drift.
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -21,18 +21,17 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { job, status = "ok", details } = body as {
     job: string;
-    status?: string;
+    status?: "ok" | "error";
     details?: Record<string, unknown>;
   };
 
   if (!job) return NextResponse.json({ error: "job required" }, { status: 400 });
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from("cron_health").upsert(
-    { job, last_run_at: new Date().toISOString(), last_status: status, details: details ?? null },
-    { onConflict: "job" }
-  );
+  try {
+    await recordCronHealth(job, status, details);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true, job, status });
 }

@@ -1,14 +1,48 @@
-import { envStr } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/server";
+
+/**
+ * Write a cron job's last-run time and status.
+ *
+ * Throws on failure — callers decide what to do about it. pingCronHealth()
+ * swallows and logs; the /api/health/cron-ping route turns it into a 500.
+ *
+ * cron_health has RLS enabled with a SELECT-only policy (migration 00110) and
+ * no write policy, so this must use the service-role client.
+ */
+export async function recordCronHealth(
+  job: string,
+  status: "ok" | "error" = "ok",
+  details?: Record<string, unknown>
+) {
+  const { error } = await createAdminClient().from("cron_health").upsert(
+    {
+      job,
+      last_run_at: new Date().toISOString(),
+      last_status: status,
+      details: details ?? null,
+    },
+    { onConflict: "job" }
+  );
+
+  if (error) throw new Error(error.message);
+}
 
 /**
  * Notify the cron health tracker on job completion.
  * Call at the end of every cron route handler.
  *
- * Never throws — a failed ping must not fail the job that called it. But it is
- * no longer *silent*: a rejected ping is logged, because a monitoring call that
- * swallows its own failures reports "healthy" for a fleet that has stopped
- * running. Between 2026-04-22 and 2026-08-16 every ping here was rejected with
- * a 500 (RLS denied the write) and nothing surfaced it.
+ * Writes straight to Postgres. This used to POST to our own
+ * /api/health/cron-ping over the public URL, which meant every one of the ~960
+ * cron runs per day spent a second serverless invocation and a network round
+ * trip to reach a table in the database the caller was already talking to.
+ * Worse, it made the monitor depend on NEXT_PUBLIC_APP_URL being correct and on
+ * an HTTP response nobody inspected — which is precisely how a four-month
+ * backup outage stayed invisible. Fewer moving parts between the job and the
+ * row is the whole point.
+ *
+ * Never throws — a failed ping must not fail the job that called it — but it is
+ * not silent either. A monitoring call that swallows its own failures reports
+ * "healthy" for a fleet that has stopped running.
  */
 export async function pingCronHealth(
   job: string,
@@ -16,34 +50,11 @@ export async function pingCronHealth(
   details?: Record<string, unknown>
 ) {
   try {
-    const baseUrl = envStr("NEXT_PUBLIC_APP_URL") ?? envStr("APP_URL");
-    const secret = envStr("CRON_SECRET");
-    if (!baseUrl || !secret) {
-      console.warn(
-        `[cron-ping] skipped for "${job}" — ${!baseUrl ? "NEXT_PUBLIC_APP_URL/APP_URL" : "CRON_SECRET"} not set`
-      );
-      return;
-    }
-
-    const res = await fetch(`${baseUrl}/api/health/cron-ping`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify({ job, status, details }),
-    });
-
-    if (!res.ok) {
-      // Body may carry a Postgres/RLS message. It describes our own schema, not
-      // user data, so it is safe to log and is the fastest route to a cause.
-      const body = await res.text().catch(() => "<unreadable>");
-      console.error(
-        `[cron-ping] "${job}" ping rejected: HTTP ${res.status} ${body.slice(0, 300)}`
-      );
-    }
+    await recordCronHealth(job, status, details);
   } catch (err) {
-    console.error(`[cron-ping] "${job}" ping failed to send:`, err);
+    // The message describes our own schema, not user data, so it is safe to log
+    // and is the fastest route to a cause.
+    console.error(`[cron-ping] "${job}" health write failed:`, err);
   }
 }
 
