@@ -1,12 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { envStr } from "@/lib/env";
-import { pingCronHealth, withCronHealth } from "@/lib/cron-ping";
 
 /**
- * Regression tests for the two silent failures that hid a four-month backup
- * outage: env vars carrying a trailing newline, and a health ping that
- * swallowed rejections.
+ * Regression tests for the failures that hid a four-month backup outage: env
+ * vars carrying a trailing newline, and a health ping that reported success it
+ * had not verified.
  */
+
+const { upsertMock, fromMock } = vi.hoisted(() => {
+  const upsertMock = vi.fn();
+  const fromMock = vi.fn(() => ({ upsert: upsertMock }));
+  return { upsertMock, fromMock };
+});
+
+vi.mock("@/lib/supabase/server", () => ({
+  createAdminClient: () => ({ from: fromMock }),
+}));
+
+const { recordCronHealth, pingCronHealth, withCronHealth } = await import("@/lib/cron-ping");
 
 describe("envStr", () => {
   const ORIGINAL = { ...process.env };
@@ -34,101 +45,94 @@ describe("envStr", () => {
   });
 });
 
-describe("pingCronHealth", () => {
-  const ORIGINAL = { ...process.env };
-
+describe("recordCronHealth", () => {
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://twv-crm.vercel.app";
-    process.env.CRON_SECRET = "test-secret";
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    upsertMock.mockReset().mockResolvedValue({ error: null });
+    fromMock.mockClear();
   });
 
-  afterEach(() => {
-    process.env = { ...ORIGINAL };
-    vi.restoreAllMocks();
-  });
+  it("upserts the job row on the cron_health table", async () => {
+    await recordCronHealth("cron/db-backup", "ok", { tables: 209 });
 
-  it("builds a clean URL even when the base URL has a trailing newline", async () => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://twv-crm.vercel.app\n";
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await pingCronHealth("cron/db-backup", "ok");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "https://twv-crm.vercel.app/api/health/cron-ping"
-    );
-  });
-
-  it("logs when the ping is rejected instead of swallowing it", async () => {
-    // This is the exact failure that ran unnoticed from 2026-04-22: RLS denied
-    // the upsert, the route returned 500, and nothing surfaced it.
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'new row violates row-level security policy for table "cron_health"',
+    expect(fromMock).toHaveBeenCalledWith("cron_health");
+    const [row, opts] = upsertMock.mock.calls[0];
+    expect(row).toMatchObject({
+      job: "cron/db-backup",
+      last_status: "ok",
+      details: { tables: 209 },
     });
-    vi.stubGlobal("fetch", fetchMock);
+    expect(typeof row.last_run_at).toBe("string");
+    // Without onConflict the second run of any job would fail the primary key.
+    expect(opts).toEqual({ onConflict: "job" });
+  });
+
+  it("stores null rather than undefined when no details are given", async () => {
+    await recordCronHealth("cron/db-backup");
+    expect(upsertMock.mock.calls[0][0].details).toBeNull();
+  });
+
+  it("throws when the write is rejected, so callers can react", async () => {
+    upsertMock.mockResolvedValue({
+      error: { message: 'new row violates row-level security policy for table "cron_health"' },
+    });
+    await expect(recordCronHealth("cron/db-backup")).rejects.toThrow(/row-level security/);
+  });
+});
+
+describe("pingCronHealth", () => {
+  beforeEach(() => {
+    upsertMock.mockReset().mockResolvedValue({ error: null });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("records the run", async () => {
+    await pingCronHealth("cron/db-backup", "ok");
+    expect(upsertMock).toHaveBeenCalledOnce();
+  });
+
+  it("never throws when the write fails — a bad ping must not fail the job", async () => {
+    upsertMock.mockRejectedValue(new Error("connection terminated"));
+    await expect(pingCronHealth("cron/db-backup", "ok")).resolves.toBeUndefined();
+  });
+
+  it("logs the failure instead of swallowing it", async () => {
+    // The 2026-04-22 regression: the write was denied and nothing surfaced it,
+    // so the fleet looked healthy for four months.
+    upsertMock.mockResolvedValue({ error: { message: "permission denied" } });
 
     await pingCronHealth("cron/db-backup", "ok");
 
     expect(console.error).toHaveBeenCalled();
     const logged = (console.error as ReturnType<typeof vi.fn>).mock.calls[0].join(" ");
     expect(logged).toContain("cron/db-backup");
-    expect(logged).toContain("500");
-  });
-
-  it("never throws when the ping itself fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
-    await expect(pingCronHealth("cron/db-backup", "ok")).resolves.toBeUndefined();
-  });
-
-  it("skips and warns when CRON_SECRET is absent", async () => {
-    delete process.env.CRON_SECRET;
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    await pingCronHealth("cron/db-backup", "ok");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
   });
 });
 
 describe("withCronHealth", () => {
-  const ORIGINAL = { ...process.env };
-  let fetchMock: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://twv-crm.vercel.app";
-    process.env.CRON_SECRET = "test-secret";
-    fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    vi.stubGlobal("fetch", fetchMock);
+    upsertMock.mockReset().mockResolvedValue({ error: null });
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
-  afterEach(() => {
-    process.env = { ...ORIGINAL };
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  const pingBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+  const recorded = () => upsertMock.mock.calls[0][0];
 
   it("reports ok for a 2xx handler", async () => {
     const wrapped = withCronHealth("cron/test", async () => new Response("{}", { status: 200 }));
     const res = await wrapped(new Request("http://localhost"));
 
     expect(res.status).toBe(200);
-    expect(pingBody()).toMatchObject({ job: "cron/test", status: "ok" });
+    expect(recorded()).toMatchObject({ job: "cron/test", last_status: "ok" });
   });
 
   it("reports error for a non-2xx handler", async () => {
     const wrapped = withCronHealth("cron/test", async () => new Response("boom", { status: 500 }));
     await wrapped(new Request("http://localhost"));
 
-    expect(pingBody()).toMatchObject({ job: "cron/test", status: "error" });
+    expect(recorded()).toMatchObject({ job: "cron/test", last_status: "error" });
   });
 
   it("reports error and rethrows when the handler throws", async () => {
@@ -137,7 +141,7 @@ describe("withCronHealth", () => {
     });
 
     await expect(wrapped(new Request("http://localhost"))).rejects.toThrow("pool connect failed");
-    expect(pingBody()).toMatchObject({ job: "cron/test", status: "error" });
+    expect(recorded()).toMatchObject({ job: "cron/test", last_status: "error" });
   });
 
   it("does not report on 401 — an unauthorised probe is not a job run", async () => {
@@ -146,6 +150,6 @@ describe("withCronHealth", () => {
     const wrapped = withCronHealth("cron/test", async () => new Response("no", { status: 401 }));
     await wrapped(new Request("http://localhost"));
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(upsertMock).not.toHaveBeenCalled();
   });
 });
