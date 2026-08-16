@@ -135,7 +135,20 @@ function visibleRows(rows: QueryRow[], viewer: Viewer): Array<{ row: QueryRow; d
   });
 }
 
-async function loadStats(admin: SupabaseClient, viewer: Viewer): Promise<QueryStats> {
+/**
+ * Errors here are returned, not swallowed into zeros.
+ *
+ * `data ?? []` / `count ?? 0` turn a failed query into a page of empty stat
+ * cards at HTTP 200 — a broken Queries page that looks like an empty one. That
+ * masked a real outage once: when 00421 renamed billing_queries → queries, the
+ * pre-rename route's stats path kept answering 200 with 0/0/0 while the list
+ * path honestly 500'd, which read as a tab-specific bug rather than the
+ * route-wide schema mismatch it was.
+ */
+async function loadStats(
+  admin: SupabaseClient,
+  viewer: Viewer,
+): Promise<{ stats: QueryStats } | { error: string }> {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -148,13 +161,26 @@ async function loadStats(admin: SupabaseClient, viewer: Viewer): Promise<QuerySt
       .gte("resolved_at", weekAgo),
   ]);
 
+  if (openRes.error) return { error: openRes.error.message };
+  if (resolvedRes.error) return { error: resolvedRes.error.message };
+
+  // A head:true count that fails reports no .error at all — PostgREST answers
+  // 204 with no Content-Range and supabase-js leaves count null. So null is
+  // the only failure signal this query has, and it's an unambiguous one: a
+  // successful count: "exact" is always a number, 0 for an empty match.
+  if (resolvedRes.count === null) {
+    return { error: "Resolved-query count unavailable" };
+  }
+
   const open = visibleRows((openRes.data ?? []) as unknown as QueryRow[], viewer);
 
   return {
-    open: open.length,
-    awaiting_you: open.filter(({ row, def }) => computeAwaiting(row, def, viewer)).length,
-    overdue: open.filter(({ row }) => !!row.needed_by && row.needed_by < today).length,
-    resolved_this_week: resolvedRes.count ?? 0,
+    stats: {
+      open: open.length,
+      awaiting_you: open.filter(({ row, def }) => computeAwaiting(row, def, viewer)).length,
+      overdue: open.filter(({ row }) => !!row.needed_by && row.needed_by < today).length,
+      resolved_this_week: resolvedRes.count,
+    },
   };
 }
 
@@ -168,7 +194,9 @@ export async function GET(req: NextRequest) {
   const admin = createAdminClient();
 
   if (url.searchParams.get("stats") === "true") {
-    return NextResponse.json({ stats: await loadStats(admin, viewer) });
+    const result = await loadStats(admin, viewer);
+    if ("error" in result) return NextResponse.json({ error: result.error }, { status: 500 });
+    return NextResponse.json({ stats: result.stats });
   }
 
   const tab = (url.searchParams.get("tab") ?? "awaiting_me") as Tab;
