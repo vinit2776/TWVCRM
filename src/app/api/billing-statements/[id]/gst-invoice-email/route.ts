@@ -151,7 +151,7 @@ export async function POST(
       .then(({ data: signed }) => {
         if (!signed?.signedUrl) return;
         messaging
-          .invoiceDocument(customerPhone, customerName, invoiceNum, "", "https://theworkvilla.com", signed.signedUrl, id)
+          .invoiceDocument(customerPhone, customerName, invoiceNum, "", "https://theworkvilla.com", signed.signedUrl, { type: "billing_statement", id })
           .catch((e: unknown) => console.error("[messaging] GST invoice WA failed:", e));
       })
       .catch((e: unknown) => console.error("[messaging] GST invoice WA signed URL failed:", e));

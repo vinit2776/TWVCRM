@@ -280,7 +280,7 @@ export async function dispatchTallyInvoice(
         Math.round(totalAmount).toLocaleString("en-IN"),
         razorpayLinkUrl || "",
         pdfPublicUrl,
-        billingStatementId,
+        { type: "billing_statement", id: billingStatementId },
       ).catch((err: unknown) => console.error("[dispatch-tally] WhatsApp failed:", err));
     }
 

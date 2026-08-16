@@ -283,6 +283,20 @@ export async function POST(request: NextRequest) {
         } else if (msg.entity_type === "case" && msg.entity_id) {
           const { data: voCase } = await supabase.from("cases").select("lead_id").eq("id", msg.entity_id).single();
           leadId = voCase?.lead_id || null;
+        } else if (msg.entity_type === "proposal" && msg.entity_id) {
+          const { data: proposal } = await supabase.from("proposals").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = proposal?.lead_id || null;
+        } else if (msg.entity_type === "invoice" && msg.entity_id) {
+          const { data: inv } = await supabase.from("proforma_invoices").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = inv?.lead_id || null;
+        } else if (msg.entity_type === "contract_payment" && msg.entity_id) {
+          // contract_payments has no lead_id of its own — it hangs off a contract.
+          const { data: cp } = await supabase
+            .from("contract_payments")
+            .select("contract:contracts!contract_payments_contract_id_fkey(lead_id)")
+            .eq("id", msg.entity_id)
+            .single();
+          leadId = (cp as { contract?: { lead_id?: string } } | null)?.contract?.lead_id || null;
         }
 
         if (leadId) {

@@ -300,7 +300,8 @@ export async function POST(
         Number(invoice.total_amount).toLocaleString("en-IN"),
         paymentLinkUrl || "",
         pdfPublicUrl,
-        id
+        // [id] is a proforma_invoices row.
+        { type: "invoice", id },
       ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
     }
 

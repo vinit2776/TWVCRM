@@ -229,7 +229,7 @@ export async function POST(
           amountFormatted,
           dispatchResult.razorpayLinkUrl,
           invoicePdfUrl,
-          id
+          { type: "proposal", id }
         ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
 
         if (proposal.lead_id && dbUser?.id) {
