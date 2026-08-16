@@ -125,7 +125,7 @@
       "schedule": "0 */6 * * *"
     },
     {
-      "path": "/api/cron/billing-query-escalation",
+      "path": "/api/cron/query-escalation",
       "schedule": "0 */6 * * *"
     },
     {
