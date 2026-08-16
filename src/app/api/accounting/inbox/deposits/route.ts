@@ -176,5 +176,35 @@ export async function GET(request: NextRequest) {
     .eq("status", "paid").eq("accounted", false);
   const openCount = (openDeposits || []).filter(hasMoneyToAccount).length + (openTopups ?? 0);
 
+  // Open query counts, one grouped query per entity type rather than a fetch
+  // per row. A deposit row is a proposal (kind 'deposit') or a deposit_topup
+  // (kind 'topup'), so the two are counted separately and matched back by
+  // kind — the ids come from different tables and could otherwise collide.
+  const depositIds = rows.filter((r) => r.kind === "deposit").map((r) => r.id);
+  const topupIds = rows.filter((r) => r.kind === "topup").map((r) => r.id);
+
+  const [depositQueries, topupQueries] = await Promise.all([
+    depositIds.length
+      ? admin.from("queries").select("entity_id")
+          .eq("entity_type", "proposal_deposit").eq("status", "open").in("entity_id", depositIds)
+      : Promise.resolve({ data: [] as { entity_id: string }[] }),
+    topupIds.length
+      ? admin.from("queries").select("entity_id")
+          .eq("entity_type", "deposit_topup").eq("status", "open").in("entity_id", topupIds)
+      : Promise.resolve({ data: [] as { entity_id: string }[] }),
+  ]);
+
+  const countBy = (data: { entity_id: string }[] | null) => {
+    const map = new Map<string, number>();
+    for (const r of data || []) map.set(r.entity_id, (map.get(r.entity_id) ?? 0) + 1);
+    return map;
+  };
+  const depositCounts = countBy(depositQueries.data as { entity_id: string }[] | null);
+  const topupCounts = countBy(topupQueries.data as { entity_id: string }[] | null);
+
+  for (const row of rows) {
+    row.open_query_count = (row.kind === "deposit" ? depositCounts : topupCounts).get(row.id) ?? 0;
+  }
+
   return NextResponse.json({ tab, rows, open_count: openCount });
 }

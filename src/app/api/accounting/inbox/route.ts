@@ -766,7 +766,7 @@ export async function GET(req: NextRequest) {
   // already in hand — so run them concurrently instead of one after the
   // other. (Settlement itself stays sequential *within* the payments branch
   // since it needs the razorpay_payment_ids the payments query returns.)
-  const [bookingPaymentsMap, bookingUploadsMap] = await Promise.all([
+  const [bookingPaymentsMap, bookingUploadsMap, bookingQueryCounts] = await Promise.all([
     (async () => {
       const map = new Map<string, BookingPaymentConfirmation[]>();
       if (bookingIds.length === 0) return map;
@@ -847,6 +847,23 @@ export async function GET(req: NextRequest) {
       }
       return map;
     })(),
+    // Open query count per booking task — one grouped query for the whole
+    // page rather than a fetch per row, same as the statement badge above.
+    (async () => {
+      const map = new Map<string, number>();
+      if (bookingTaskIds.length === 0) return map;
+      const { data } = await supabase
+        .from("queries")
+        .select("entity_id")
+        .eq("entity_type", "booking_gst_task")
+        .in("entity_id", bookingTaskIds)
+        .eq("status", "open");
+      for (const r of data || []) {
+        const id = (r as { entity_id: string }).entity_id;
+        map.set(id, (map.get(id) ?? 0) + 1);
+      }
+      return map;
+    })(),
   ]);
 
   const bookingRows: BookingInboxRow[] = filteredBookingTasks.map((t) => {
@@ -875,6 +892,7 @@ export async function GET(req: NextRequest) {
     return {
       row_type: "booking" as const,
       task_id: t.id,
+      open_query_count: bookingQueryCounts.get(t.id) ?? 0,
       booking_id: t.booking?.id ?? "",
       booking_number: t.booking?.booking_number ?? null,
       booking_date: t.booking?.booking_date ?? null,

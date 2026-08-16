@@ -17,8 +17,10 @@ import type { UserRole } from "@/types";
  */
 export const QUERY_ENTITY_TYPES = [
   "billing_statement",
-  // Later PRs add: booking_gst_task, proposal_deposit, deposit_topup,
-  // vendor_bill, contract, purchase_order, purchase_request.
+  "booking_gst_task",
+  "proposal_deposit",
+  "deposit_topup",
+  // Later PRs add: vendor_bill, contract, purchase_order, purchase_request.
 ] as const;
 
 export type QueryEntityType = (typeof QUERY_ENTITY_TYPES)[number];
@@ -87,7 +89,12 @@ export interface QueryEntitySummary {
   id: string;
   /** Primary line: who this is about. e.g. "Bluescale Analytics" */
   title: string;
-  /** Secondary line: which record. e.g. "TWV-C-0112 · Open Desk" */
+  /**
+   * Extra context beyond the label and reference. Cards render these as
+   * `label · reference · subtitle`, so the subtitle must NOT repeat either —
+   * "Deposit top-up · TWV-C-0112 · TWV-C-0112 · Deposit top-up" is what you
+   * get when it does.
+   */
   subtitle: string;
   /** Rendered with formatCurrency when present. */
   amount: number | null;

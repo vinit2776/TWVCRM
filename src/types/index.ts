@@ -715,6 +715,9 @@ export interface DepositTopup {
 export interface DepositInboxRow {
   id: string;
   kind: "deposit" | "topup";
+  /** Open query thread count — drives the "Query" button badge. Set by
+   *  /api/accounting/inbox/deposits; see src/lib/queries/registry.ts. */
+  open_query_count?: number;
   party_name: string;
   contract_number?: string | null;
   proposal_number?: string | null;
