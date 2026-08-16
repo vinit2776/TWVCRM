@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 00421: cron_health cleanup
+-- Migration 00422: cron_health cleanup
 -- ============================================================
 -- Companion to the fix that made cron health pings actually write.
 --
