@@ -10,6 +10,7 @@ import {
   type HandoffState,
 } from "@/lib/tally-handoff";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/inbox-digest
@@ -57,7 +58,7 @@ interface DigestRow {
   } | null;
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -206,3 +207,5 @@ export async function GET(request: NextRequest) {
     aging_over_48h: agingOver48h,
   });
 }
+
+export const GET = withCronHealth("cron/inbox-digest", handler);

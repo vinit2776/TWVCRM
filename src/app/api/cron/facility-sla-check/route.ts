@@ -3,13 +3,14 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { sendPushToUsers } from "@/lib/push";
 import { notifyClaimSlaBreached } from "@/lib/facility-notifications";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/facility-sla-check
  * Runs every 6 hours (see vercel.json). Marks overdue issues as SLA-breached
  * and sends one digest email/push per recipient (not per issue).
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -193,3 +194,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ checked: issues.length, breached: issueIds.length, claim_breached: unclaimedBreached?.length ?? 0 });
 }
+
+export const GET = withCronHealth("cron/facility-sla-check", handler);

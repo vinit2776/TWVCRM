@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { revokeUnifiVoucher } from "@/lib/unifi";
 import { setUserActive } from "@/lib/cosec";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/contract-expiry
@@ -19,7 +20,7 @@ import { setUserActive } from "@/lib/cosec";
  * The cron only marks the status; it does NOT create renewal drafts
  * or block anything. That's handled by the renewal flow.
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   // Verify cron secret (Vercel sets this header)
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -242,3 +243,5 @@ export async function GET(request: NextRequest) {
     contracts: toExpire.map((c) => c.contract_number),
   });
 }
+
+export const GET = withCronHealth("cron/contract-expiry", handler);

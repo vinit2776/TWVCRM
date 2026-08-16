@@ -11,6 +11,7 @@ import {
 } from "@/lib/vo-renewal";
 import { generateDiscontinuationDrafts } from "@/lib/vo-discontinuation";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * VO Renewal cron — runs daily at 9:30 AM IST (4:00 AM UTC).
@@ -21,7 +22,7 @@ import { resend, EMAIL_FROM } from "@/lib/mailer";
  *   3. renewal_due cases past end_date → grace_period + final notice PI
  *   4. grace_period cases past grace_ends_at → lapsed + discontinuation drafts
  */
-export async function GET(request: Request) {
+async function handler(request: Request) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -469,3 +470,5 @@ async function openRenewalStatement(
 
   return { statementId, piNumber, totalAmount, dueDate, periodStart, periodEnd };
 }
+
+export const GET = withCronHealth("cron/vo-renewal", handler);

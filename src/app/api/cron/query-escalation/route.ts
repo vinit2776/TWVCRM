@@ -7,6 +7,8 @@ import { loadEntitySummaries, entityKey, entityLabel } from "@/lib/queries/serve
 import { queryUrl } from "@/lib/queries/notify";
 import type { QueryTargeting } from "@/lib/queries/types";
 
+import { withCronHealth } from "@/lib/cron-ping";
+
 /**
  * GET /api/cron/query-escalation
  *
@@ -44,7 +46,7 @@ interface EscalationRow {
   messages: Array<{ created_at: string; created_by: string }>;
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -142,3 +144,5 @@ export async function GET(request: NextRequest) {
     whatsapp_template_configured: !!WA_TEMPLATE_QUERY_ESCALATION,
   });
 }
+
+export const GET = withCronHealth("cron/query-escalation", handler);

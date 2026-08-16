@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { withCronHealth } from "@/lib/cron-ping";
 
 // Runs daily at 09:00 IST (03:30 UTC)
 // Finds payments due in next 7 days and sends reminder to accounts team
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -102,3 +103,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ notified: payments.length });
 }
+
+export const GET = withCronHealth("cron/lease-payment-reminders", handler);

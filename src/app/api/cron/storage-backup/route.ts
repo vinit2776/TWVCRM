@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { pingCronHealth } from "@/lib/cron-ping";
+import { envStr } from "@/lib/env";
 
 export const maxDuration = 300;
 
@@ -8,11 +9,11 @@ const BUCKETS = ["crm-documents", "vendor-invoices"];
 
 function getS3Client() {
   return new S3Client({
-    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    endpoint: `https://${envStr("B2_ENDPOINT")}`,
     region: "us-east-005",
     credentials: {
-      accessKeyId: process.env.B2_KEY_ID!,
-      secretAccessKey: process.env.B2_APPLICATION_KEY!,
+      accessKeyId: envStr("B2_KEY_ID")!,
+      secretAccessKey: envStr("B2_APPLICATION_KEY")!,
     },
   });
 }
@@ -76,6 +77,10 @@ export async function GET(request: NextRequest) {
   const s3 = getS3Client();
   const startedAt = Date.now();
   const results: Record<string, { synced: number; failed: number }> = {};
+  // First failure reason per bucket. The previous version swallowed the error
+  // entirely, so a run that failed all 24 vendor invoices still reported "ok"
+  // with no clue why.
+  const firstError: Record<string, string> = {};
 
   for (const bucket of BUCKETS) {
     const files = await listBucketFiles(bucket);
@@ -84,29 +89,52 @@ export async function GET(request: NextRequest) {
 
     for (const file of files) {
       const data = await downloadFile(bucket, file);
-      if (!data) { failed++; continue; }
+      if (!data) {
+        failed++;
+        firstError[bucket] ??= "download from Supabase Storage returned no body";
+        continue;
+      }
 
       try {
         await s3.send(new PutObjectCommand({
-          Bucket: process.env.B2_BUCKET || "twvcrmbackups",
+          Bucket: envStr("B2_BUCKET") || "twvcrmbackups",
           Key: `storage/${bucket}/${file}`,
           Body: data,
         }));
         synced++;
-      } catch {
+      } catch (err) {
         failed++;
+        firstError[bucket] ??= String(err).slice(0, 200);
       }
     }
 
     results[bucket] = { synced, failed };
     console.log(`[storage-backup] ${bucket}: ${synced} synced, ${failed} failed`);
+    if (failed > 0) {
+      console.error(`[storage-backup] ${bucket} first failure: ${firstError[bucket]}`);
+    }
   }
 
   const total = Object.values(results).reduce((s, r) => s + r.synced, 0);
+  const totalFailed = Object.values(results).reduce((s, r) => s + r.failed, 0);
   const durationMs = Date.now() - startedAt;
 
-  console.log(`[storage-backup] ✓ ${total} files total (${durationMs}ms)`);
-  await pingCronHealth("cron/storage-backup", "ok", { results, total_synced: total });
+  console.log(`[storage-backup] ${totalFailed ? "✗" : "✓"} ${total} synced, ${totalFailed} failed (${durationMs}ms)`);
 
-  return NextResponse.json({ ok: true, results, total_synced: total, duration_ms: durationMs });
+  // Report the real outcome. Hardcoding "ok" here is why 24 consecutive upload
+  // failures on 2026-04-21 looked like a healthy run.
+  await pingCronHealth("cron/storage-backup", totalFailed > 0 ? "error" : "ok", {
+    results,
+    total_synced: total,
+    total_failed: totalFailed,
+    ...(totalFailed > 0 ? { first_error: firstError } : {}),
+  });
+
+  return NextResponse.json({
+    ok: totalFailed === 0,
+    results,
+    total_synced: total,
+    total_failed: totalFailed,
+    duration_ms: durationMs,
+  });
 }
