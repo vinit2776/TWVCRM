@@ -105,12 +105,19 @@ export function AudiencePicker({ entityRoles, entityType, value, onChange, disab
               onClick={() => select(opt.key)}
               className="flex items-center gap-2 text-sm py-0.5 disabled:opacity-50 w-full text-left"
             >
+              {/* Ring + inner dot rather than a fat border: `border` and
+                  `border-[5px]` on the same element resolve by stylesheet
+                  order, not class order, so the thick-border version silently
+                  rendered at 1px and the selected option looked identical to
+                  the unselected ones. */}
               <span
                 aria-hidden
-                className={`h-3.5 w-3.5 rounded-full border flex-none ${
-                  active ? "border-[5px] border-foreground" : "border-muted-foreground/40"
+                className={`h-3.5 w-3.5 rounded-full border-2 flex-none grid place-items-center ${
+                  active ? "border-foreground" : "border-muted-foreground/40"
                 }`}
-              />
+              >
+                {active && <span className="h-1.5 w-1.5 rounded-full bg-foreground" />}
+              </span>
               <span className={active ? "font-medium" : ""}>{opt.label}</span>
               {opt.key === "all" && active && (
                 <span className="text-xs text-muted-foreground truncate">— {allLabel}</span>
