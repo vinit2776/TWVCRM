@@ -82,13 +82,22 @@ export async function GET() {
     // always empty and this endpoint reported "ok" for a fleet that had not
     // written a health row since April. Only job names and timestamps are
     // exposed below — `details` may carry connection strings and is not read.
-    const { data: cronRows } = await createAdminClient()
+    const { data: cronRows, error: cronError } = await createAdminClient()
       .from("cron_health")
       .select("job, last_run_at, last_status");
 
     const staleJobs: string[] = [];
     const failingJobs: string[] = [];
     const cronStatus: Record<string, { last_run_at: string; hours_ago: number; status: string }> = {};
+
+    // A failed read must not read as "no stale crons". Discarding this error
+    // would reproduce the exact bug this endpoint was just fixed for — an empty
+    // result reported as healthy — merely from a different cause. Not a 503:
+    // the DB ping above already passed, so "db unreachable" would misattribute it.
+    if (cronError) {
+      console.error("[health] cron_health read failed:", cronError.message);
+      staleJobs.push("cron_health:unreadable");
+    }
 
     for (const row of (cronRows ?? [])) {
       const hoursAgo = (Date.now() - new Date(row.last_run_at).getTime()) / 3_600_000;

@@ -31,8 +31,16 @@ function getPool() {
     host: envStr("BACKUP_DB_HOST"),
     port: parseInt(envStr("BACKUP_DB_PORT") || "5432"),
     user: envStr("BACKUP_DB_USER"),
-    // Not trimmed: a password may legitimately contain leading/trailing spaces.
-    password: process.env.BACKUP_DB_PASSWORD,
+    // Trimmed too. An earlier version deliberately left the password raw on the
+    // theory that a password may legitimately end in whitespace — but the same
+    // paste that put a newline on BACKUP_DB_HOST put one on the password, and
+    // the untrimmed value failed with:
+    //   28P01 password authentication failed for user "backup_user"
+    // Reproduced exactly: the stored credential authenticates, and the same
+    // credential with a trailing "\n" produces that error verbatim. Supabase
+    // generates alphanumeric passwords with no surrounding whitespace, so
+    // trimming can only help here.
+    password: envStr("BACKUP_DB_PASSWORD"),
     database: envStr("BACKUP_DB_NAME") || "postgres",
     ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
