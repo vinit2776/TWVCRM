@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { MessageCircleQuestion } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { QUERY_BUTTON_ACTIVE, QUERY_BUTTON_HAS_OPEN, QUERY_BUTTON_IDLE } from "@/lib/queries/theme";
 
 /**
  * The whole integration cost of putting queries on a new surface:
@@ -43,8 +44,16 @@ export function QueryButton({ entityType, entityId, openCount, className, onChan
   }, [entityType, entityId]);
 
   useEffect(() => {
-    if (openCount != null) setCount(openCount);
-  }, [openCount]);
+    // A caller that already has the count (list pages, batched with the row
+    // data) passes it in. A detail page has no such count, so fetch it once
+    // on mount — without this the badge could never appear and every record
+    // read as "Ask" no matter how many open threads it had.
+    if (openCount != null) {
+      setCount(openCount);
+      return;
+    }
+    void refresh();
+  }, [openCount, refresh]);
 
   const handleChanged = useCallback(() => {
     void refresh();
@@ -59,10 +68,9 @@ export function QueryButton({ entityType, entityId, openCount, className, onChan
         type="button"
         onClick={() => setExpanded((e) => !e)}
         className={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ${
-          hasOpen
-            ? "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100"
-            : "hover:bg-muted text-muted-foreground"
+          expanded ? QUERY_BUTTON_ACTIVE : hasOpen ? QUERY_BUTTON_HAS_OPEN : QUERY_BUTTON_IDLE
         }`}
+        aria-expanded={expanded}
       >
         <MessageCircleQuestion className="h-3.5 w-3.5" />
         {hasOpen ? `${count} open ${count === 1 ? "query" : "queries"}` : "Ask"}

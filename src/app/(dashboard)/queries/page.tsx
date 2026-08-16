@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { MessageCircleQuestion } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { isQueryUser } from "@/lib/queries/registry";
+import { QUERY_ACCENT_TEXT } from "@/lib/queries/theme";
 import { QueriesClient } from "@/components/queries/queries-client";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
@@ -36,7 +37,7 @@ export default async function QueriesPage({
     <div className="p-6 md:p-8 max-w-4xl">
       <PageBreadcrumb resetTo={{ label: "Queries" }} />
       <div className="flex items-center gap-3 mb-2">
-        <MessageCircleQuestion className="h-6 w-6 text-muted-foreground" aria-hidden />
+        <MessageCircleQuestion className={`h-6 w-6 ${QUERY_ACCENT_TEXT}`} aria-hidden />
         <h1 className="text-2xl font-semibold">Queries</h1>
       </div>
       <p className="text-sm text-muted-foreground mb-6">

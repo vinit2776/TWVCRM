@@ -20,7 +20,9 @@ export const QUERY_ENTITY_TYPES = [
   "booking_gst_task",
   "proposal_deposit",
   "deposit_topup",
-  // Later PRs add: vendor_bill, contract, purchase_order, purchase_request.
+  "vendor_bill",
+  "contract",
+  // PR 5 adds: purchase_order, purchase_request.
 ] as const;
 
 export type QueryEntityType = (typeof QUERY_ENTITY_TYPES)[number];

@@ -87,6 +87,7 @@ import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
+import { QueryButton } from "@/components/queries/query-button";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -541,6 +542,9 @@ export default function ContractDetailPage({
                 <span className="ml-2 inline-flex items-center gap-1 text-xs bg-muted px-1.5 py-0.5 rounded">{contract.location.name}</span>
               )}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="contract" entityId={contract.id} />
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
