@@ -131,10 +131,14 @@ ALTER TABLE queries
   ADD COLUMN needed_by         DATE,
   ADD COLUMN template_key      TEXT,
   ADD COLUMN last_nudged_at    TIMESTAMPTZ,
+  -- cardinality(), not array_length(): array_length('{}', 1) is NULL, and a
+  -- CHECK passes when its expression is NULL — so the array_length form
+  -- would let audience='roles' with no roles straight through while looking
+  -- like it guarded against it. cardinality('{}') is 0.
   ADD CONSTRAINT queries_audience_targets_present CHECK (
         audience = 'all'
-     OR (audience = 'roles' AND array_length(audience_roles,    1) >= 1)
-     OR (audience = 'users' AND array_length(audience_user_ids, 1) >= 1)
+     OR (audience = 'roles' AND cardinality(audience_roles)    >= 1)
+     OR (audience = 'users' AND cardinality(audience_user_ids) >= 1)
   );
 
 -- escalated_at (00419) is carried through the rename untouched — the
