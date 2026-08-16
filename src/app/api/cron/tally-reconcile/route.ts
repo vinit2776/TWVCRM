@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
     .limit(50);
 
   if (error) {
-    await pingCronHealth("tally-reconcile", "error", { error: error.message });
+    await pingCronHealth("cron/tally-reconcile", "error", { error: error.message });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
     console.error(`[tally-reconcile] ${stuckIrnList.length} statement(s) stuck in awaiting_irn for >${alarmHours}h`, stuckIrnList);
   }
 
-  await pingCronHealth("tally-reconcile", "ok", {
+  await pingCronHealth("cron/tally-reconcile", "ok", {
     candidates: candidates.length, delivered, failed, dry,
     stuck_irn: stuckIrnList.length,
   });

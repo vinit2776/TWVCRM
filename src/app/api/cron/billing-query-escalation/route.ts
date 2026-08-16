@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendWhatsApp } from "@/lib/whatsapp";
+import { withCronHealth } from "@/lib/cron-ping";
+
 import {
   BILLING_QUERY_ALERT_ROLES,
   resolveStatementSummary,
@@ -27,7 +29,7 @@ const ESCALATE_AFTER_HOURS = 48;
 const WA_TEMPLATE_BILLING_QUERY_ESCALATION =
   process.env.MSG91_WA_TEMPLATE_BILLING_QUERY_ESCALATION?.trim() || undefined;
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -113,3 +115,5 @@ export async function GET(request: NextRequest) {
     whatsapp_template_configured: !!WA_TEMPLATE_BILLING_QUERY_ESCALATION,
   });
 }
+
+export const GET = withCronHealth("cron/billing-query-escalation", handler);

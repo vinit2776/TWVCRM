@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { withCronHealth } from "@/lib/cron-ping";
 
 // Runs 28th of month at 10:00 IST (04:30 UTC)
 // Finds leases with next_escalation_date within 30 days,
 // auto-creates a 'scheduled' escalation row if none exists, notifies admin.
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -129,3 +130,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ created, total: leases.length });
 }
+
+export const GET = withCronHealth("cron/lease-escalation-check", handler);

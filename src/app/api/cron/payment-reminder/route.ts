@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
     .not("due_date", "is", null);
 
   if (error) {
-    await pingCronHealth("payment-reminder", "error", { error: error.message });
+    await pingCronHealth("cron/payment-reminder", "error", { error: error.message });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
@@ -168,7 +168,7 @@ export async function GET(request: NextRequest) {
   sent += other.sent; skipped += other.skipped; errors += other.errors;
 
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  await pingCronHealth("payment-reminder", errors > 0 ? "error" : "ok", { sent, skipped, errors });
+  await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", { sent, skipped, errors });
   return NextResponse.json({
     date: todayIst, dry,
     considered: (statements || []).length + other.considered,

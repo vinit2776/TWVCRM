@@ -217,7 +217,7 @@ export async function GET(request: NextRequest) {
     .not("due_date", "is", null);
 
   if (stmtErr || !statements?.length) {
-    await pingCronHealth("pending-payment-report", stmtErr ? "error" : "ok");
+    await pingCronHealth("cron/pending-payment-report", stmtErr ? "error" : "ok");
     if (stmtErr) return NextResponse.json({ error: stmtErr.message }, { status: 500 });
     return NextResponse.json({ sent: 0, message: "No pending statements — nothing to report" });
   }
@@ -319,7 +319,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!rows.length) {
-    await pingCronHealth("pending-payment-report", "ok");
+    await pingCronHealth("cron/pending-payment-report", "ok");
     return NextResponse.json({ sent: 0, message: "All pending amounts resolved — nothing to report" });
   }
 
@@ -566,7 +566,7 @@ export async function GET(request: NextRequest) {
     html,
   });
 
-  await pingCronHealth("pending-payment-report", mailErr ? "error" : "ok");
+  await pingCronHealth("cron/pending-payment-report", mailErr ? "error" : "ok");
 
   if (mailErr) {
     return NextResponse.json({ error: mailErr.message }, { status: 500 });

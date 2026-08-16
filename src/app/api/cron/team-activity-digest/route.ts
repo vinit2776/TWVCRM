@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { withCronHealth } from "@/lib/cron-ping";
 
 export const maxDuration = 60;
 
@@ -182,7 +183,7 @@ function buildPersonalDigestHtml(dateLabel: string, member: Member, baseUrl: str
   return emailWrapper("Your Activity Today", dateLabel, body);
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -316,3 +317,5 @@ export async function GET(request: NextRequest) {
     total_events: active.reduce((sum, m) => sum + m.count, 0),
   });
 }
+
+export const GET = withCronHealth("cron/team-activity-digest", handler);

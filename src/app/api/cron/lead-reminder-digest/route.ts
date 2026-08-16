@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
+import { withCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/cron/lead-reminder-digest
@@ -14,7 +15,7 @@ import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
  * was logged/rescheduled (see src/app/api/leads/[id]/activities/route.ts
  * and src/app/api/activities/[id]/route.ts).
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -143,3 +144,5 @@ export async function GET(request: NextRequest) {
     reminders: dueActivities.length,
   });
 }
+
+export const GET = withCronHealth("cron/lead-reminder-digest", handler);

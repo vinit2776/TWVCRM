@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!expired || expired.length === 0) {
-    await pingCronHealth("comp-request-expiry");
+    await pingCronHealth("cron/comp-request-expiry");
     return NextResponse.json({ expired: 0 });
   }
 
@@ -80,6 +80,6 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  await pingCronHealth("comp-request-expiry");
+  await pingCronHealth("cron/comp-request-expiry");
   return NextResponse.json({ expired: expired.length, ids: expiredIds });
 }

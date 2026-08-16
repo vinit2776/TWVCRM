@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!statements || statements.length === 0) {
-    await pingCronHealth("billing-proforma-dispatch");
+    await pingCronHealth("cron/billing-proforma-dispatch");
     return NextResponse.json({ dispatched: 0, message: "No pending finalized statements" });
   }
 
@@ -109,7 +109,7 @@ export async function GET(request: NextRequest) {
     results.push(...batchResults);
   }
 
-  await pingCronHealth("billing-proforma-dispatch");
+  await pingCronHealth("cron/billing-proforma-dispatch");
 
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok).length;
