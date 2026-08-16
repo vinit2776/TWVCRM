@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 /**
  * Billing Queries moved to /queries when the feature was generalised beyond
- * billing statements (see supabase/migrations/00420_generalise_queries.sql).
+ * billing statements (see supabase/migrations/00421_generalise_queries.sql).
  *
  * This redirect is NOT optional and shouldn't be deleted on a cleanup pass:
  * notification rows already delivered to users carry

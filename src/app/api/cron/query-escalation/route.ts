@@ -15,7 +15,7 @@ import type { QueryTargeting } from "@/lib/queries/types";
  * threshold" pattern as facility-sla-check, adapted to threads.
  *
  * Renamed from billing-query-escalation when queries were generalised beyond
- * billing statements (00420). Two behaviour changes came with that:
+ * billing statements (00421). Two behaviour changes came with that:
  *
  *   * It walks every entity type via the registry, not just statements.
  *   * It pages the thread's own audience rather than a fixed role list, so a
