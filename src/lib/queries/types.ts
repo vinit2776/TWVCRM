@@ -70,13 +70,25 @@ export interface QueryAuthor {
   role: string;
 }
 
+export interface QueryAttachment {
+  id: string;
+  file_name: string;
+  file_mime_type: string;
+  size_bytes: number | null;
+}
+
 export interface QueryMessage {
   id: string;
   event_type: QueryMessageEventType;
   body: string | null;
   created_by: QueryAuthor;
   created_at: string;
+  attachments?: QueryAttachment[];
 }
+
+/** Max files per message. Enough for "here are the three screenshots",
+ *  low enough that nobody dumps a folder into a conversation. */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 5;
 
 /**
  * Display-ready summary of whatever transaction a query hangs off, produced

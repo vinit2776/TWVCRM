@@ -8,6 +8,8 @@ import {
   logQueryAudit,
   threadParticipantIds,
 } from "@/lib/queries/server";
+import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
+import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import type { QueryKind, QueryThread } from "@/lib/queries/types";
 
 /**
@@ -27,12 +29,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if ("error" in auth) return auth.error;
   const { dbUser } = auth;
 
-  const payload = (await req.json().catch(() => ({}))) as { body?: string; resolve?: boolean };
+  let payload: { body?: string; resolve?: boolean };
+  let files: File[] = [];
+  try {
+    const parsed = await parseQueryRequest<typeof payload>(req);
+    payload = parsed.meta ?? {};
+    files = parsed.files;
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
+
   const messageBody = (payload.body ?? "").trim();
   const resolve = payload.resolve === true;
 
-  if (!resolve && !messageBody) {
-    return NextResponse.json({ error: "A message is required." }, { status: 400 });
+  // An attachment on its own is a legitimate reply — "here's the screenshot"
+  // needs no prose.
+  if (!resolve && !messageBody && files.length === 0) {
+    return NextResponse.json({ error: "A message or an attachment is required." }, { status: 400 });
   }
 
   const admin = createAdminClient();
@@ -67,14 +83,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  if (messageBody) {
-    const { error: msgErr } = await admin.from("query_messages").insert({
-      query_id: id,
-      event_type: "message",
-      body: messageBody,
-      created_by: dbUser.id,
-    });
+  let attachmentsFailed: string[] = [];
+
+  if (messageBody || files.length > 0) {
+    const { data: message, error: msgErr } = await admin
+      .from("query_messages")
+      .insert({
+        query_id: id,
+        event_type: "message",
+        // An attachment-only reply still needs a body row; the constraint
+        // requires non-empty text on 'message' events, so say what it is.
+        body: messageBody || "(attachment)",
+        created_by: dbUser.id,
+      })
+      .select("id")
+      .single();
     if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 });
+
+    if (files.length > 0) {
+      const result = await storeAttachments(admin, {
+        queryId: id,
+        messageId: message.id,
+        files,
+        uploadedBy: dbUser.id,
+      });
+      attachmentsFailed = result.failed;
+    }
   }
 
   if (resolve) {
@@ -142,5 +176,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, attachments_failed: attachmentsFailed });
 }

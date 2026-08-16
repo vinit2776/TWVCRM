@@ -10,6 +10,7 @@ import {
   logQueryAudit,
   threadParticipantIds,
 } from "@/lib/queries/server";
+import { ATTACHMENT_SELECT } from "@/lib/queries/attachments";
 import type { QueryAuthor, QueryKind, QueryMessage, QueryThread } from "@/lib/queries/types";
 
 /**
@@ -27,7 +28,8 @@ const THREAD_SELECT = `
   resolved_by:users!queries_resolved_by_fkey(id, full_name, role),
   messages:query_messages(
     id, event_type, body, created_at,
-    created_by:users!query_messages_created_by_fkey(id, full_name, role)
+    created_by:users!query_messages_created_by_fkey(id, full_name, role),
+    attachments:query_attachments!query_attachments_message_id_fkey(${ATTACHMENT_SELECT})
   )
 `;
 
