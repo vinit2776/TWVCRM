@@ -15,7 +15,7 @@
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MessageCircleQuestion } from "lucide-react";
-import { QueryThreadPanel } from "@/components/billing/query-thread-panel";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -1848,7 +1848,7 @@ const InboxRowItem = memo(function InboxRowItem({
       </div>
       {queryOpen && (
         <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
-          <QueryThreadPanel statementId={row.statement_id} onChanged={onQueryChanged} />
+          <QueryThreadPanel entityType="billing_statement" entityId={row.statement_id} onChanged={onQueryChanged} />
         </div>
       )}
       {expanded && canUpload && (

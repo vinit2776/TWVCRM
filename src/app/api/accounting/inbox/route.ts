@@ -333,17 +333,20 @@ export async function GET(req: NextRequest) {
       .eq("billing_statement_id", statementIds[0])
       .order("uploaded_at", { ascending: true }),
     noIds ? Promise.resolve({ data: null }) : supabase
-      .from("billing_queries")
-      .select("billing_statement_id")
-      .in("billing_statement_id", statementIds)
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
       .eq("status", "open"),
   ]);
 
-  // Open billing_queries count per statement — one grouped-in-JS count from
-  // a single batched query, same pattern as uploadByStatement below.
+  // Open query count per statement — one grouped-in-JS count from a single
+  // batched query, same pattern as uploadByStatement below. Scoped by
+  // entity_type since `queries` now spans every module (see
+  // src/lib/queries/registry.ts).
   const openQueryCountByStatement = new Map<string, number>();
   for (const r of openQueriesRes.data || []) {
-    const sid = (r as { billing_statement_id: string }).billing_statement_id;
+    const sid = (r as { entity_id: string }).entity_id;
     openQueryCountByStatement.set(sid, (openQueryCountByStatement.get(sid) ?? 0) + 1);
   }
 

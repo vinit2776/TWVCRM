@@ -28,7 +28,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/comp-request-expiry":     3 * HOUR,
   // every 6h
   "cron/facility-sla-check":      8,
-  "cron/billing-query-escalation": 8,
+  "cron/query-escalation":        8,
   // daily
   "petty-cash/day-book":          DAILY,
   "digest":                       DAILY,
