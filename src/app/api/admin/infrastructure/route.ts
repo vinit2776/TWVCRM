@@ -4,8 +4,12 @@ import { transporter } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+// Default to "" rather than asserting non-null: this module is evaluated during
+// `next build` page-data collection, where the env may be absent (e.g. a fresh
+// worktree with no .env.local). A bare `!` made the .replace() below throw and
+// failed the whole build. Missing env is handled at request time instead.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const SUPABASE_REF = SUPABASE_URL.replace("https://", "").replace(".supabase.co", "");
 
 const TABLES = [
@@ -61,6 +65,15 @@ export async function GET() {
 
   if (!dbUser || dbUser.role !== "admin") {
     return NextResponse.json({ error: "Only admins can access infrastructure data" }, { status: 403 });
+  }
+
+  // Fail loudly here instead of letting every downstream fetch() hit a malformed
+  // relative URL and surface as an unrelated-looking network error.
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    return NextResponse.json(
+      { error: "Infrastructure metrics unavailable: Supabase environment is not configured on this deployment." },
+      { status: 503 }
+    );
   }
 
   // ── 1. Supabase Prometheus Metrics ──
