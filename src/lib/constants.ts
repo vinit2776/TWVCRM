@@ -1813,6 +1813,15 @@ export const PR_STATUSES = [
 ] as const;
 export type PrStatus = (typeof PR_STATUSES)[number];
 
+/**
+ * Statuses in which a Material Request can still be edited in full (department,
+ * location, items, quantities, prices, AMC details). Once approved, the MR is a
+ * committed spend that budgets and POs are already derived from, so it becomes
+ * read-only — the remaining correction paths are the admin-only department fix
+ * (PATCH `correct_department`) and, for cancelled MRs, raising a fresh request.
+ */
+export const MR_EDITABLE_STATUSES: readonly PrStatus[] = ["draft", "submitted", "rejected"];
+
 export const PR_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   submitted: "Pending Approval",

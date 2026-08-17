@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 
@@ -44,6 +44,58 @@ const patchPrSchema = z.discriminatedUnion("action", [
   }),
 ]);
 
+/**
+ * Full pre-approval edit payload. Mirrors createPrSchema on POST /requests so the
+ * same form can create and edit, minus `submit` (PUT never changes status).
+ */
+const editPrItemSchema = z.object({
+  item_id: z.string().uuid().optional().nullable(),
+  item_name: z.string().min(1),
+  quantity: z.number().positive(),
+  unit: z.enum(ITEM_UNITS),
+  estimated_price: z.number().min(0).optional().nullable(),
+  notes: z.string().optional(),
+});
+
+const editPrSchema = z.object({
+  department: z.enum(PROCUREMENT_DEPARTMENTS),
+  location_id: z.string().uuid().optional().nullable(),
+  notes: z.string().optional(),
+  expenditure_type: z.enum(["operational", "amc"]).default("operational"),
+  items: z.array(editPrItemSchema).min(1, "At least one item is required"),
+
+  billable_contract_id: z.string().uuid().optional().nullable(),
+
+  service_item_name: z.string().optional().nullable(),
+  linked_asset_id: z.string().uuid().optional().nullable(),
+  amc_coverage_type: z.enum(["comprehensive", "labour_only"]).optional().nullable(),
+  amc_start_date: z.string().optional().nullable(),
+  amc_end_date: z.string().optional().nullable(),
+  amc_visits_covered: z.number().int().positive().optional().nullable(),
+  amc_contact_name: z.string().optional().nullable(),
+  amc_helpline_number: z.string().optional().nullable(),
+  amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
+  amc_escalation_name: z.string().optional().nullable(),
+  amc_escalation_phone: z.string().optional().nullable(),
+  amc_escalation2_name: z.string().optional().nullable(),
+  amc_escalation2_phone: z.string().optional().nullable(),
+  advance_amount: z.number().min(0).optional().nullable(),
+  advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
+  advance_notes: z.string().optional().nullable(),
+}).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
+  message: "billable_contract_id is required when department is 'reimbursement'",
+  path: ["billable_contract_id"],
+});
+
+/** AMC-only columns — always rewritten on edit so switching away from AMC clears them. */
+const AMC_FIELDS = [
+  "service_item_name", "linked_asset_id", "amc_coverage_type", "amc_start_date",
+  "amc_end_date", "amc_visits_covered", "amc_contact_name", "amc_helpline_number",
+  "amc_contact_email", "amc_escalation_name", "amc_escalation_phone",
+  "amc_escalation2_name", "amc_escalation2_phone", "advance_amount",
+  "advance_payment_mode", "advance_notes",
+] as const;
+
 /** Read approval threshold from app_settings, fall back to constant. */
 async function getApprovalThreshold(supabase: Awaited<ReturnType<typeof createClient>>): Promise<number> {
   const { data } = await supabase
@@ -83,7 +135,7 @@ export async function GET(
     supabase
       .from("purchase_requests")
       .select(
-        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, supporting_documents:reimbursement_supporting_documents(id))`
+        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate, standard_price)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, supporting_documents:reimbursement_supporting_documents(id))`
       )
       .eq("id", id)
       .single(),
@@ -479,6 +531,204 @@ export async function PATCH(
   if (action === "correct_department") {
     auditChanges["correction_reason"] = { old: null, new: parsed.data.reason };
   }
+  await logAudit(supabase, {
+    entityType: "purchase_request",
+    entityId: id,
+    action: "update",
+    performedBy: dbUser.id,
+    changes: auditChanges,
+  });
+
+  return NextResponse.json({ data: updated });
+}
+
+/**
+ * Full edit of a not-yet-approved MR — every field the create form captures.
+ *
+ * Mistakes at filing time (wrong department, wrong quantity, wrong item) used to be
+ * uncorrectable: only an admin could fix the department, and only prices could be
+ * touched, on rejected MRs alone. This lets whoever raised it fix it in place.
+ *
+ * Deliberate boundaries:
+ *  - Only `draft` / `submitted` / `rejected` MRs. Once approved, budgets and POs are
+ *    derived from the MR and editing it would silently change committed spend.
+ *  - Status is never changed here. A submitted MR stays in the approval queue with
+ *    the corrected values; the requester doesn't have to re-submit.
+ *  - Moving into or out of `reimbursement` stays admin-only, same as the
+ *    `correct_department` action — it redirects spend into or out of a
+ *    customer-billed bucket.
+ */
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  const { data: pr, error: fetchError } = await supabase
+    .from("purchase_requests")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (fetchError || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+  if (!MR_EDITABLE_STATUSES.includes(pr.status)) {
+    return NextResponse.json(
+      {
+        error:
+          "Only material requests that haven't been approved yet can be edited. " +
+          "An admin can still correct the department on an approved MR.",
+      },
+      { status: 422 }
+    );
+  }
+
+  const body = await request.json();
+  const parsed = editPrSchema.safeParse(body);
+  if (!parsed.success) {
+    const flat = parsed.error.flatten();
+    const msg = Object.entries(flat.fieldErrors)
+      .map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`)
+      .join("; ");
+    return NextResponse.json({ error: msg || "Invalid request data" }, { status: 400 });
+  }
+
+  const { items, ...prData } = parsed.data;
+  const newDepartment = prData.department;
+  const crossesReimbursement =
+    newDepartment !== pr.department &&
+    (newDepartment === "reimbursement" || pr.department === "reimbursement");
+
+  if (crossesReimbursement && dbUser.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only admins can move a material request into or out of Reimbursement" },
+      { status: 403 }
+    );
+  }
+
+  if (newDepartment === "reimbursement") {
+    const { data: contract } = await supabase
+      .from("contracts")
+      .select("id")
+      .eq("id", prData.billable_contract_id!)
+      .maybeSingle();
+    if (!contract) {
+      return NextResponse.json({ error: "Linked contract not found" }, { status: 404 });
+    }
+  }
+
+  // Moving away from reimbursement must not orphan invoices already issued to the customer.
+  if (pr.department === "reimbursement" && newDepartment !== "reimbursement") {
+    const { count: activeStatements } = await supabase
+      .from("billing_statements")
+      .select("*", { count: "exact", head: true })
+      .eq("source_pr_id", id)
+      .is("voided_at", null);
+    if (activeStatements && activeStatements > 0) {
+      return NextResponse.json({
+        error:
+          "This MR already has reimbursement invoice(s) issued to the customer. Void them first before changing the department.",
+      }, { status: 422 });
+    }
+  }
+
+  // Line items are replaced wholesale, so make sure none of them are already
+  // referenced by a PO. Pre-approval MRs can't have POs, but the FK would fail
+  // with an opaque database error rather than something the user can act on.
+  const { data: existingItems } = await supabase
+    .from("purchase_request_items")
+    .select("id")
+    .eq("pr_id", id);
+  const existingItemIds = (existingItems ?? []).map((it) => it.id as string);
+  if (existingItemIds.length > 0) {
+    const { count: linkedPoItems } = await supabase
+      .from("purchase_order_items")
+      .select("*", { count: "exact", head: true })
+      .in("pr_item_id", existingItemIds);
+    if (linkedPoItems && linkedPoItems > 0) {
+      return NextResponse.json(
+        { error: "This MR's items are already on a purchase order and can no longer be edited" },
+        { status: 422 }
+      );
+    }
+  }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const totalEstimated = round2(
+    items.reduce((sum, item) => sum + (item.estimated_price ? item.quantity * item.estimated_price : 0), 0)
+  );
+
+  // Insert the replacement rows before deleting the old ones — a failed insert
+  // then leaves the MR untouched rather than itemless.
+  const { data: insertedItems, error: insertError } = await supabase
+    .from("purchase_request_items")
+    .insert(
+      items.map((item) => ({
+        pr_id: id,
+        item_id: item.item_id || null,
+        item_name: item.item_name,
+        quantity: item.quantity,
+        unit: item.unit,
+        estimated_price: item.estimated_price ?? null,
+        total_estimated: item.estimated_price ? round2(item.quantity * item.estimated_price) : null,
+        notes: item.notes || null,
+      }))
+    )
+    .select("id");
+  if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
+
+  if (existingItemIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("purchase_request_items")
+      .delete()
+      .in("id", existingItemIds);
+    if (deleteError) {
+      // Roll back the rows we just added so the MR isn't left with both sets.
+      await supabase
+        .from("purchase_request_items")
+        .delete()
+        .in("id", (insertedItems ?? []).map((it) => it.id as string));
+      return NextResponse.json({ error: deleteError.message }, { status: 500 });
+    }
+  }
+
+  const isAmc = newDepartment === "amc";
+  const updatePayload: Record<string, unknown> = {
+    department: newDepartment,
+    location_id: prData.location_id || null,
+    notes: prData.notes || null,
+    // Derived server-side rather than trusted from the client — the two must never drift.
+    expenditure_type: isAmc ? "amc" : "operational",
+    billable_contract_id: newDepartment === "reimbursement" ? prData.billable_contract_id : null,
+    total_estimated_amount: totalEstimated,
+  };
+  // Rewrite every AMC column each time so switching away from AMC clears stale values.
+  for (const field of AMC_FIELDS) {
+    const value = prData[field];
+    updatePayload[field] = isAmc && value !== undefined && value !== "" ? value : null;
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from("purchase_requests")
+    .update(updatePayload)
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+  const auditChanges = diffChanges(
+    pr as Record<string, unknown>,
+    { ...pr, ...updatePayload } as Record<string, unknown>
+  );
+  auditChanges["line_items"] = { old: `${existingItemIds.length} item(s)`, new: `${items.length} item(s)` };
   await logAudit(supabase, {
     entityType: "purchase_request",
     entityId: id,
