@@ -28,7 +28,7 @@ async function runGenerators(
   const mode: GenMode = opts.mode ?? "both";
   const empty = (err?: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: err ? [err] : [],
-    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   });
 
   let rent: GenerateResult = empty();
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     dry_run: dryRun,
     month: rent.month,
     year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, cycle_skipped: rent.cycleSkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
     usage_statements: { generated: usage.generated, skipped: usage.skipped, superseded: usage.superseded, already_sent: usage.alreadySent, preview: usage.preview },
     errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
     statement_ids: [...rent.statementIds, ...usage.statementIds],
@@ -143,10 +143,10 @@ async function notifyBillingRun(
       <br/><br/>Update the lead record to enable auto-send next month.
     </div>` : "";
 
-  const quarterlyHtml = rent.quarterlySkipped.length > 0 ? `
+  const cycleSkippedHtml = rent.cycleSkipped.length > 0 ? `
     <p style="color:#666;font-size:12px;">
-      ${rent.quarterlySkipped.length} quarterly contract${rent.quarterlySkipped.length > 1 ? "s" : ""} not billed this cycle (expected — not their billing month):
-      ${rent.quarterlySkipped.join(", ")}
+      ${rent.cycleSkipped.length} advance-billed contract${rent.cycleSkipped.length > 1 ? "s" : ""} not billed this run (expected — quarterly/half-yearly/yearly contracts bill only in their anchor month):
+      ${rent.cycleSkipped.join(", ")}
     </p>` : "";
 
   const errorHtml = [...rent.errors, ...usage.errors].length > 0 ? `
@@ -173,7 +173,7 @@ async function notifyBillingRun(
         </table>
         ${noContactHtml}
         ${errorHtml}
-        ${quarterlyHtml}
+        ${cycleSkippedHtml}
         ${usage.generated > 0 ? `
         <div style="text-align:center;margin:24px 0;">
           <a href="${appUrl}/billing?tab=statements&type=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>

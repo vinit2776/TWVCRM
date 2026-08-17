@@ -143,6 +143,19 @@ export async function processDispatchRun(runId: string): Promise<DispatchProcess
             continue;
           }
 
+          // Advance-billed contract that isn't due this run. Previously this
+          // fell through and the job was marked "sent" with nothing dispatched,
+          // which read as a successful send in the run panel.
+          if (genResult.cycleSkipped?.includes(job.contract_number as string)) {
+            await admin.from("billing_dispatch_jobs").update({
+              status: "skipped",
+              completed_at: new Date().toISOString(),
+              error_suggestion: "Bills in advance — not due this month.",
+            }).eq("id", jid);
+            batch.skipped++;
+            continue;
+          }
+
           if (genResult.errors?.length > 0) {
             throw new Error(genResult.errors[0]);
           }
