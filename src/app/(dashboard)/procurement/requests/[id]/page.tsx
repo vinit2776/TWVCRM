@@ -24,7 +24,7 @@ import { MaterialRequestQuotations } from "@/components/procurement/material-req
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
 import {
-  PR_STATUS_LABELS, PR_STATUS_COLORS,
+  PR_STATUS_LABELS, PR_STATUS_COLORS, MR_EDITABLE_STATUSES,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
   PROCUREMENT_APPROVAL_THRESHOLDS,
   PO_STATUS_LABELS, PO_STATUS_COLORS,
@@ -333,6 +333,10 @@ export default function PurchaseRequestDetailPage() {
   if (!pr) return null;
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
+  // Everything on an MR stays editable until it's approved — see MR_EDITABLE_STATUSES.
+  const canEditRequest =
+    MR_EDITABLE_STATUSES.includes(pr.status) &&
+    ["admin", "manager", "office_admin"].includes(userRole);
   const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
@@ -365,7 +369,9 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
-              {userRole === "admin" && !["cancelled", "rejected"].includes(pr.status) && (
+              {/* Quick department fix for approved MRs. Before approval the full
+                  "Edit Request" editor covers this, so don't offer two paths. */}
+              {userRole === "admin" && !canEditRequest && !["cancelled", "rejected"].includes(pr.status) && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -412,6 +418,16 @@ export default function PurchaseRequestDetailPage() {
               onClick={() => router.push(`/procurement/orders?pr_id=${pr.id}`)}
             >
               <ShoppingCart className="h-4 w-4 mr-1" /> View Orders
+            </Button>
+          )}
+          {canEditRequest && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => router.push(`/procurement/requests/${pr.id}/edit`)}
+              disabled={actionLoading}
+            >
+              <Pencil className="h-4 w-4 mr-1" /> Edit Request
             </Button>
           )}
           {pr.status === "draft" && (
