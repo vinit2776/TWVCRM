@@ -21,9 +21,6 @@ import {
   Printer,
   Search,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -442,12 +439,6 @@ export default function BillingPage() {
   const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
   const [recordPaymentBalance, setRecordPaymentBalance]         = useState<number | null>(null);
 
-  // ── Void Statement dialog ────────────────────────────────────────────────
-  const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
-  const [voidStatementId, setVoidStatementId]     = useState<string | null>(null);
-  const [voidReason, setVoidReason]               = useState("");
-  const [voidSubmitting, setVoidSubmitting]       = useState(false);
-
   // ── Contract list for filter dropdowns ───────────────────────────────────
   const [contractFilters, setContractFilters] = useState<ContractFilter[]>([]);
 
@@ -620,36 +611,6 @@ export default function BillingPage() {
       if (res.ok) { toast.success("Statement finalized"); fetchStatements(); fetchData(); }
       else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to finalize"); }
     } catch { toast.error("Failed to finalize statement"); }
-  };
-
-  const handleVoidStatement = async () => {
-    if (!voidStatementId || !voidReason.trim()) return;
-    setVoidSubmitting(true);
-    try {
-      const res = await fetch(`/api/billing-statements/${voidStatementId}/void`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ void_reason: voidReason.trim() }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        toast.success(json.message || "Statement voided and replacement draft created");
-        setVoidDialogOpen(false);
-        setVoidStatementId(null);
-        setVoidReason("");
-        fetchStatements();
-        fetchData();
-      } else if (json.issuance_channel === "tally") {
-        // Tally-issued invoice — can't be plain-voided. Open the statement's
-        // own detail view to cancel it via the credit-note upload dialog
-        // (see credit-note-upload-dialog.tsx), which needs the full statement
-        // (amount, payment status, Tally invoice number) this dialog doesn't have.
-        toast.error("This invoice was issued by Tally — open its details to cancel it via credit note.");
-      } else {
-        toast.error(json.error || "Failed to void statement");
-      }
-    } catch { toast.error("Failed to void statement"); }
-    setVoidSubmitting(false);
   };
 
   const handleSendProforma = async (id: string) => {
@@ -1259,51 +1220,6 @@ export default function BillingPage() {
         balanceDue={recordPaymentBalance}
         onSuccess={() => { fetchStatements(); fetchData(); }}
       />
-
-      {/* Void Statement Dialog */}
-      <Dialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <X className="h-5 w-5" />
-              Void & Re-issue Statement
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-              <p className="font-medium mb-1">This will:</p>
-              <ul className="list-disc pl-4 space-y-0.5 text-xs">
-                <li>Mark the current statement as <strong>voided</strong></li>
-                <li>Un-link all usage charges so they can be re-billed</li>
-                <li>Create a new <strong>draft</strong> statement with the same billing data</li>
-              </ul>
-              <p className="mt-2 text-xs">Blocked if any payments have been recorded against this statement.</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Reason for voiding *</Label>
-              <Textarea
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                placeholder="e.g., Wrong charges included, incorrect tax rate, duplicate invoice…"
-                rows={3}
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => setVoidDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1"
-                disabled={voidSubmitting || !voidReason.trim()}
-                onClick={handleVoidStatement}
-              >
-                {voidSubmitting ? "Voiding…" : "Void & Create Draft"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
