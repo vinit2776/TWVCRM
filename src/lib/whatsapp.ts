@@ -259,6 +259,21 @@ export interface SendDocumentOptions {
   entityId?: string;
 }
 
+/**
+ * What a GST invoice document message is about.
+ *
+ * The union is closed on purpose: the delivery webhook resolves the customer's
+ * lead by branching on entity_type, so a value it doesn't handle silently
+ * loses the lead attribution rather than failing loudly. Adding a member here
+ * means adding a branch in src/app/api/webhooks/whatsapp/route.ts.
+ */
+export type InvoiceDocumentEntity =
+  | { type: "billing_statement"; id: string }
+  | { type: "proposal"; id: string }
+  | { type: "invoice"; id: string }
+  | { type: "contract_payment"; id: string }
+  | { type: "case"; id: string };
+
 export interface SendResult {
   success: boolean;
   requestId?: string;
@@ -909,7 +924,17 @@ export const messaging = {
     totalAmount: string,
     paymentLink: string,
     pdfUrl: string,
-    proposalId: string
+    /**
+     * What this invoice actually hangs off. Explicit rather than assumed:
+     * this wrapper used to hardcode entity_type "proposal" while five callers
+     * passed billing_statement, proforma_invoice and contract_payment ids into
+     * it. The delivery webhook resolves the lead by branching on entity_type,
+     * so every one of those messages fell through to no lead at all and logged
+     * no activity — and an audit of them had to guess which table each id
+     * belonged to. vo-renewal.ts bypassed this wrapper entirely to work around
+     * it. Pass the truth here.
+     */
+    entity: InvoiceDocumentEntity
   ) {
     return sendWhatsAppDocument({
       to,
@@ -917,8 +942,8 @@ export const messaging = {
       documentUrl: pdfUrl,
       documentFilename: `${invoiceNumber.replace(/\//g, "-")}.pdf`,
       params: [customerName, invoiceNumber, totalAmount, paymentLink],
-      entityType: "proposal",
-      entityId: proposalId,
+      entityType: entity.type,
+      entityId: entity.id,
     });
   },
 
