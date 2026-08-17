@@ -34,6 +34,7 @@ import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } f
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
+import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -164,6 +165,7 @@ interface ReceivableRow {
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
+  payments: PaymentDetail[];
   contract: Contract | null;
   proposal?: ProposalRef | null;
   invoice?: InvoiceRef | null;
@@ -255,6 +257,8 @@ export default function AccountsReceivablePage() {
 
   // Record-payment dialog state (form lives in RecordPaymentDialog)
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
+  // "Payment received" detail dialog — opened from a partially-paid row's Paid amount.
+  const [paymentDetailRow, setPaymentDetailRow] = useState<ReceivableRow | null>(null);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
 
@@ -743,7 +747,11 @@ export default function AccountsReceivablePage() {
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
                         <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">
-                          {r.amount_paid > 0 ? formatCurrency(r.amount_paid) : "—"}
+                          {r.amount_paid > 0 ? (
+                            <button onClick={() => setPaymentDetailRow(r)} className="hover:underline" title="View payment detail">
+                              {formatCurrency(r.amount_paid)}
+                            </button>
+                          ) : "—"}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.balance_due)}</td>
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
@@ -808,6 +816,16 @@ export default function AccountsReceivablePage() {
         summary={otherSummary}
         canRecordPayment={canRecordPayment}
         onRecorded={load}
+      />
+
+      <PaymentDetailDialog
+        row={paymentDetailRow && {
+          ...paymentDetailRow,
+          partyNumber: partyOf(paymentDetailRow).number,
+          partyCustomerName: customerName(partyOf(paymentDetailRow).lead),
+        }}
+        onClose={() => setPaymentDetailRow(null)}
+        onOpenHistory={openHistory}
       />
 
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>

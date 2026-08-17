@@ -10,13 +10,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog";
-import { Loader2, FileDown, History, CheckCircle2, IndianRupee, CreditCard, Hash, Calendar, User, StickyNote } from "lucide-react";
+import { Loader2, FileDown, History, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 
 interface Lead {
   id: string;
@@ -41,17 +39,6 @@ interface CaseRef {
   client_phone?: string | null;
   bill_to?: "aggregator" | "client" | null;
   aggregator?: AggregatorRef | null;
-}
-
-interface PaymentDetail {
-  id: string;
-  amount: number;
-  payment_date: string;
-  payment_mode: string;
-  payment_reference: string | null;
-  razorpay_payment_id: string | null;
-  notes: string | null;
-  recorded_by_user: { id: string; full_name: string } | null;
 }
 
 interface PaidRow {
@@ -273,83 +260,15 @@ export function PaidStatementsPanel({
         )}
       </div>
 
-      <Dialog open={!!detailRow} onOpenChange={(o) => !o && setDetailRow(null)}>
-        <DialogContent className="max-w-md">
-          {detailRow && (() => {
-            const party = partyOf(detailRow);
-            const payment = detailRow.payments[0] ?? null;
-            const pdfHref = detailRow.gst_invoice_number
-              ? `/api/billing-statements/${detailRow.id}/gst-invoice-pdf`
-              : `/api/billing-statements/${detailRow.id}/proforma-pdf`;
-            const isRazorpayAuto = payment?.payment_mode === "razorpay" && !payment.recorded_by_user;
-            return (
-              <>
-                <DialogHeader>
-                  <DialogTitle>Payment received</DialogTitle>
-                  <div className="text-xs text-muted-foreground">{party.number} · {customerName(party.lead)}</div>
-                </DialogHeader>
-
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="text-2xl font-semibold">{formatCurrency(detailRow.total_amount)}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {detailRow.statement_number} · <span className="capitalize">{detailRow.statement_type}</span> · {formatDate(detailRow.period_start)} – {formatDate(detailRow.period_end)}
-                  </div>
-                </div>
-
-                {payment ? (
-                  <table className="w-full text-sm">
-                    <tbody>
-                      <tr>
-                        <td className="py-1.5 text-muted-foreground"><CreditCard className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Mode</td>
-                        <td className="py-1.5 text-right capitalize">{payment.payment_mode.replace(/_/g, " ")}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 text-muted-foreground"><Hash className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Reference</td>
-                        <td className="py-1.5 text-right font-mono text-xs">{payment.razorpay_payment_id || payment.payment_reference || "—"}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 text-muted-foreground"><Calendar className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Paid on</td>
-                        <td className="py-1.5 text-right">{formatDate(payment.payment_date)}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 text-muted-foreground"><User className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Recorded by</td>
-                        <td className="py-1.5 text-right">{isRazorpayAuto ? "Captured via Razorpay" : payment.recorded_by_user?.full_name || "—"}</td>
-                      </tr>
-                      {payment.notes && (
-                        <tr>
-                          <td className="py-1.5 text-muted-foreground align-top"><StickyNote className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Notes</td>
-                          <td className="py-1.5 text-right text-muted-foreground">{payment.notes}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="text-sm text-muted-foreground py-2">No payment record found — this statement may predate offline payment tracking.</div>
-                )}
-
-                {detailRow.payments.length > 1 && (
-                  <div className="text-xs text-muted-foreground -mt-2">
-                    +{detailRow.payments.length - 1} earlier payment{detailRow.payments.length - 1 === 1 ? "" : "s"} — see full history.
-                  </div>
-                )}
-
-                <DialogFooter className="gap-2 sm:gap-2">
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={pdfHref} target="_blank"><IndianRupee className="h-3.5 w-3.5 mr-1" />View Invoice</Link>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => { onOpenHistory(detailRow); setDetailRow(null); }}
-                  >
-                    <History className="h-3.5 w-3.5 mr-1" />Full history
-                  </Button>
-                </DialogFooter>
-              </>
-            );
-          })()}
-        </DialogContent>
-      </Dialog>
+      <PaymentDetailDialog
+        row={detailRow && {
+          ...detailRow,
+          partyNumber: partyOf(detailRow).number,
+          partyCustomerName: customerName(partyOf(detailRow).lead),
+        }}
+        onClose={() => setDetailRow(null)}
+        onOpenHistory={onOpenHistory}
+      />
     </div>
   );
 }
