@@ -1008,6 +1008,9 @@ export default function ContractDetailPage({
             prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
             billingCycle={contract.billing_cycle}
             nextBillingDate={contract.next_billing_date}
+            startDate={contract.start_date}
+            endDate={contract.end_date}
+            createdAt={contract.created_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
