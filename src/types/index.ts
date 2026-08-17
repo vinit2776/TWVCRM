@@ -662,12 +662,21 @@ export interface DepositAdjustment {
   reversed_by_name?: string;
 }
 
+/** Why `available` is 0 — drives the greyed-out explanation on the
+ *  "Adjustment against deposit" option. NULL when there is a balance. */
+export type DepositUnavailableReason =
+  | "no_proposal"
+  | "deposit_pending"
+  | "no_deposit"
+  | "fully_committed";
+
 export interface DepositBalance {
   source_contract_id: string;
   source_proposal_id: string | null;
   deposit_collected: number;
   committed: number;
   available: number;
+  unavailable_reason: DepositUnavailableReason | null;
 }
 
 export type DepositTopupStatus = "pending" | "paid" | "reversed" | "cancelled";
