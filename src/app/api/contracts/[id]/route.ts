@@ -3,7 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
+import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
@@ -140,6 +140,11 @@ export async function PATCH(
     );
   }
 
+  // Set when an attributed ad-hoc invoice stands in for the proposal's own
+  // pro-rata payment at activation. Merged into the audit entry below, which is
+  // built after this block.
+  let prorataSatisfiedByInvoice: string | null = null;
+
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
     // Validate transition is allowed
@@ -203,8 +208,30 @@ export async function PATCH(
           }, { status: 400 });
         }
 
+        // The pro-rata / first invoice isn't always collected through the
+        // proposal's own Razorpay link — NEFT, a delta-seat expansion, or a
+        // corrected amount often gets billed through an ad-hoc invoice instead.
+        // A paid ad-hoc invoice explicitly attributed to this contract as the
+        // first invoice settles the same obligation, so it satisfies the gate.
+        // Only ACTIVATION_UNBLOCKING_PURPOSE counts: an unrelated paid ad-hoc
+        // charge attributed to the contract must never open this gate.
+        let prorataInvoice: { invoice_number: string; total_amount: number } | null = null;
+        if (proposal.payment_status !== "paid") {
+          const { data: attributed } = await supabase
+            .from("proforma_invoices")
+            .select("invoice_number, total_amount")
+            .eq("contract_id", id)
+            .eq("attribution_purpose", ACTIVATION_UNBLOCKING_PURPOSE)
+            .eq("status", "paid")
+            .limit(1)
+            .maybeSingle();
+          prorataInvoice = attributed ?? null;
+        }
+
         const missing: string[] = [];
-        if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
+        if (proposal.payment_status !== "paid" && !prorataInvoice) {
+          missing.push("pro-rata / first invoice payment");
+        }
         const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
         if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
@@ -212,6 +239,12 @@ export async function PATCH(
           return NextResponse.json({
             error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
           }, { status: 400 });
+        }
+
+        // Record which invoice stood in for the proposal payment, so the
+        // activation is explainable later without re-deriving it.
+        if (prorataInvoice) {
+          prorataSatisfiedByInvoice = `${prorataInvoice.invoice_number} (${prorataInvoice.total_amount})`;
         }
       }
       // For mid-month renewals: pro-rata must be paid before activation.
@@ -282,6 +315,9 @@ export async function PATCH(
     // If admin used the payment override, record the reason explicitly in the audit trail
     if (body.payment_override_reason && body.status === "active") {
       auditChanges["payment_override_reason"] = { old: null, new: body.payment_override_reason };
+    }
+    if (prorataSatisfiedByInvoice) {
+      auditChanges["prorata_satisfied_by_invoice"] = { old: null, new: prorataSatisfiedByInvoice };
     }
     logAudit(supabase, {
       entityType: "contract",

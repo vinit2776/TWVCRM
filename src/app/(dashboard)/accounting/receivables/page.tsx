@@ -30,7 +30,10 @@ import {
 import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } from "@/lib/constants";
+import {
+  ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead,
+  ADHOC_ATTRIBUTION_PURPOSE_LABELS, type AdhocAttributionPurpose,
+} from "@/lib/constants";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
@@ -70,6 +73,8 @@ interface InvoiceRef {
   lead?: Lead;
   primary_head?: string | null;
   internal_notes?: string | null;
+  attribution_purpose?: AdhocAttributionPurpose | null;
+  attributed_contract?: { id: string; contract_number: string } | null;
 }
 
 interface AggregatorRef {
@@ -723,6 +728,24 @@ export default function AccountsReceivablePage() {
                             >
                               {ACCOUNTING_HEAD_LABELS[r.invoice.primary_head as AccountingHead] || r.invoice.primary_head}
                             </Badge>
+                          )}
+                          {/* An ad-hoc invoice billing a contract charge stays owned by the
+                              invoice (party is the lead), so surface the contract it was
+                              attributed to — otherwise the link is invisible here. */}
+                          {r.invoice?.attributed_contract && (
+                            <Link
+                              href={`/contracts/${r.invoice.attributed_contract.id}`}
+                              className="inline-block mt-1 ml-1"
+                              title={
+                                r.invoice.attribution_purpose
+                                  ? `Attributed as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[r.invoice.attribution_purpose]}`
+                                  : undefined
+                              }
+                            >
+                              <Badge variant="outline" className="text-[10px] border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                                → {r.invoice.attributed_contract.contract_number}
+                              </Badge>
+                            </Link>
                           )}
                         </td>
                         <td className="px-4 py-3 text-xs whitespace-nowrap">

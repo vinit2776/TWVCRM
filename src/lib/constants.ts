@@ -2331,6 +2331,34 @@ export const ACCOUNTING_HEAD_COLORS: Record<AccountingHead, string> = {
   other_income: "bg-gray-100 text-gray-800 border-gray-200",
 };
 
+// What an ad-hoc invoice attributed to a contract is understood to cover.
+// Mirrors the proforma_invoices_attribution_purpose_check constraint (00426).
+export const ADHOC_ATTRIBUTION_PURPOSES = [
+  "prorata_first_invoice",
+  "monthly_rent",
+  "other",
+] as const;
+
+export type AdhocAttributionPurpose = (typeof ADHOC_ATTRIBUTION_PURPOSES)[number];
+
+export const ADHOC_ATTRIBUTION_PURPOSE_LABELS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice: "Pro-rata / first invoice",
+  monthly_rent: "Monthly rent",
+  other: "Other contract charge",
+};
+
+export const ADHOC_ATTRIBUTION_PURPOSE_DESCRIPTIONS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice:
+    "The partial first month or first invoice for this contract. Once paid, this satisfies the activation payment gate.",
+  monthly_rent: "A regular monthly charge billed ad hoc instead of through a billing statement.",
+  other: "Belongs to this contract, but is neither the first invoice nor monthly rent.",
+};
+
+// The only purpose that may unblock contract activation. Keeping this as a
+// named constant rather than an inline string makes the blast radius of the
+// activation gate greppable.
+export const ACTIVATION_UNBLOCKING_PURPOSE: AdhocAttributionPurpose = "prorata_first_invoice";
+
 export const ACCOUNTING_HEAD_GST: Record<
   AccountingHead,
   { taxable: boolean; defaultRate: number }
