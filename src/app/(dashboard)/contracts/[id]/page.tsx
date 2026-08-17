@@ -48,6 +48,7 @@ import { ContractDepositSection } from "@/components/contracts/contract-deposit-
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
 import { ContractDepositTopupsSection } from "@/components/contracts/contract-deposit-topups-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
+import { ContractAttributedInvoicesSection } from "@/components/contracts/contract-attributed-invoices-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
@@ -947,6 +948,13 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+          />
+
+          {/* Ad-hoc lead invoices attributed to this contract */}
+          <ContractAttributedInvoicesSection
+            contractId={id}
+            currentUserRole={userRole ?? ""}
+            onAttributionChanged={() => fetchContract(false)}
           />
 
           {/* Agreement Details Card */}
