@@ -1,0 +1,21 @@
+-- Add 'discarded' to the billing_statement_status enum.
+--
+-- A draft statement is the only lifecycle state with no exit: it can be
+-- edited or finalized, never removed. A draft generated against the wrong
+-- contract/period — or a void-replacement draft that is no longer wanted
+-- because the contract was cancelled — has to sit there forever, and because
+-- generateDraftStatements skips any contract that already has a row for the
+-- period (src/lib/billing.ts), that stale draft also blocks the month from
+-- ever being regenerated correctly.
+--
+-- 'discarded' is the exit. Soft, not a DELETE: other rows point at statements
+-- (contracts.prorata_billing_statement_id, billing_statements.voided_statement_id),
+-- and nothing else in this schema is ever hard-deleted — the row is the record
+-- of what was wrong.
+--
+-- Note: ALTER TYPE ... ADD VALUE is additive and irreversible (Postgres has no
+-- DROP VALUE), and the new value cannot be used in the same transaction that
+-- adds it. Kept in its own migration with no subsequent use — the columns land
+-- in 00429.
+
+ALTER TYPE billing_statement_status ADD VALUE IF NOT EXISTS 'discarded';

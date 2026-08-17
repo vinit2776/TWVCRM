@@ -658,12 +658,18 @@ export async function generateMonthlyStatements(
 
   if (!contracts || contracts.length === 0) return result;
 
-  // 3. Find existing statements for this period to skip duplicates
+  // 3. Find existing statements for this period to skip duplicates.
+  //    Voided and discarded rows don't count as coverage — a voided statement
+  //    leaves a replacement draft behind (which does count, and blocks here),
+  //    and a discarded draft is an explicit "this shouldn't exist", so both
+  //    must leave the period free to regenerate. Without this filter the
+  //    discard would be cosmetic: the row would still hold the month hostage.
   const contractIds = contracts.map((c) => c.id as string);
   const { data: existingStatements } = await supabase
     .from("billing_statements")
     .select("contract_id")
     .in("contract_id", contractIds)
+    .not("status", "in", "(voided,discarded)")
     .gte("period_start", firstOfMonth)
     .lte("period_start", lastOfMonth);
 
@@ -1158,6 +1164,9 @@ export async function generateRentProformas(
     .in("contract_id", contractIds)
     .in("statement_type", ["rent", "combined"])
     .is("voided_at", null)
+    // A discarded draft is not a covering statement — leaving it in would put
+    // it in `supersedable` and have this run void an already-thrown-away row.
+    .neq("status", "discarded")
     .or(`and(prepaid_month.eq.${prepaid.month},prepaid_year.eq.${prepaid.year}),and(statement_type.eq.combined,period_start.eq.${firstOfTargetMonth},prepaid_month.is.null)`);
 
   const alreadySent = new Set<string>();

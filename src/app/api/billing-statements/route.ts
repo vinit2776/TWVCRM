@@ -125,7 +125,10 @@ export async function POST(request: NextRequest) {
       .from("billing_statements")
       .select("id, statement_number, status")
       .eq("period_start", result.data.period_start)
-      .neq("status", "voided");
+      // Voided and discarded rows aren't live coverage — either would
+      // otherwise block an operator from re-creating the statement they
+      // just threw away.
+      .not("status", "in", "(voided,discarded)");
 
     if (result.data.contract_id) {
       dupQuery = dupQuery.eq("contract_id", result.data.contract_id);

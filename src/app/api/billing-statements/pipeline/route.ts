@@ -54,7 +54,11 @@ export async function GET(request: NextRequest) {
     .from("billing_statements")
     .select("status, payment_status, accounted, gst_invoice_number, proforma_sent_at, total_amount")
     .gte("period_start", periodStart)
-    .lte("period_end", periodEnd);
+    .lte("period_end", periodEnd)
+    // Discarded drafts never entered the pipeline — counting them as drafts
+    // would show work outstanding that nobody intends to do. (Voided rows do
+    // stay: they were real documents, and have their own stage.)
+    .neq("status", "discarded");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

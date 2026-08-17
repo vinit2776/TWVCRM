@@ -134,7 +134,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
       if (!res.ok) throw new Error(json.error || "Failed");
       // The API may not have period_start filter — fall back to client-side filter just in case.
       const rows: RentStmt[] = (json.data || []).filter((s: RentStmt) =>
-        !s.voided_at && s.period_start >= start && s.period_start <= end,
+        !s.voided_at && s.status !== "discarded" && s.period_start >= start && s.period_start <= end,
       );
       setRentStmts(rows);
     } catch (e) {

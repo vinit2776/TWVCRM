@@ -509,16 +509,24 @@ export const BILLING_STATEMENT_STATUSES = [
   "exported",
 ] as const;
 
+// voided and discarded are terminal states reached through the void/discard
+// routes rather than the normal progression, so they are not offered as
+// choices in BILLING_STATEMENT_STATUSES — but rows in those states still need
+// a badge wherever an unfiltered list surfaces them.
 export const BILLING_STATEMENT_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   finalized: "Finalized",
   exported: "Exported",
+  voided: "Voided",
+  discarded: "Discarded",
 };
 
 export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
   finalized: "bg-blue-100 text-blue-800",
   exported: "bg-green-100 text-green-800",
+  voided: "bg-red-100 text-red-800",
+  discarded: "bg-gray-100 text-gray-500 line-through",
 };
 
 // ==========================================
