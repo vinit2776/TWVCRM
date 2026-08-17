@@ -164,6 +164,13 @@ export async function processDispatchRun(runId: string): Promise<DispatchProcess
             throw new Error("No contact info — no email or phone on file");
           }
 
+          // Statement was raised and finalized but never reached the client.
+          // Fail the job so it retries and stays visible in the run panel
+          // rather than reporting as a successful send.
+          if (genResult.notDelivered?.includes(job.contract_number as string)) {
+            throw new Error("Statement raised but dispatch failed — client never received it");
+          }
+
           statementId = genResult.statementIds?.[0] ?? null;
 
           if (statementId) {

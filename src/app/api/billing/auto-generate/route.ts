@@ -28,7 +28,7 @@ async function runGenerators(
   const mode: GenMode = opts.mode ?? "both";
   const empty = (err?: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: err ? [err] : [],
-    statementIds: [], noContact: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   });
 
   let rent: GenerateResult = empty();
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     dry_run: dryRun,
     month: rent.month,
     year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, cycle_skipped: rent.cycleSkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, not_delivered: rent.notDelivered, cycle_skipped: rent.cycleSkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
     usage_statements: { generated: usage.generated, skipped: usage.skipped, superseded: usage.superseded, already_sent: usage.alreadySent, preview: usage.preview },
     errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
     statement_ids: [...rent.statementIds, ...usage.statementIds],
@@ -143,6 +143,13 @@ async function notifyBillingRun(
       <br/><br/>Update the lead record to enable auto-send next month.
     </div>` : "";
 
+  const notDeliveredHtml = rent.notDelivered.length > 0 ? `
+    <div style="background:#f8d7da;border:1px solid #f5c2c7;border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px;color:#842029;">
+      ⚠️ ${rent.notDelivered.length} proforma${rent.notDelivered.length > 1 ? "s were" : " was"} raised but never reached the client:
+      <strong>${rent.notDelivered.join(", ")}</strong>
+      <br/><br/>These are finalized, so no later billing run will retry them. Resend each one from its statement.
+    </div>` : "";
+
   const cycleSkippedHtml = rent.cycleSkipped.length > 0 ? `
     <p style="color:#666;font-size:12px;">
       ${rent.cycleSkipped.length} advance-billed contract${rent.cycleSkipped.length > 1 ? "s" : ""} not billed this run (expected — quarterly/half-yearly/yearly contracts bill only in their anchor month):
@@ -173,6 +180,7 @@ async function notifyBillingRun(
         </table>
         ${noContactHtml}
         ${errorHtml}
+        ${notDeliveredHtml}
         ${cycleSkippedHtml}
         ${usage.generated > 0 ? `
         <div style="text-align:center;margin:24px 0;">

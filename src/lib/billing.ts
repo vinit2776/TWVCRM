@@ -77,6 +77,11 @@ export interface GenerateResult {
   statementIds: string[];
   /** Contract numbers skipped because lead has no email AND no phone/mobile. */
   noContact: string[];
+  /** Contract numbers whose statement was raised and finalized but never
+   *  reached the client (dispatch failed for a reason other than no-contact).
+   *  These need a manual resend — the idempotency partition treats a finalized
+   *  statement as already-sent, so no later run picks them back up. */
+  notDelivered: string[];
   /** Contract numbers skipped by the advance-cycle billing gate — quarterly /
    *  half-yearly / yearly contracts whose next_billing_date doesn't fall in the
    *  prepaid month (expected, not errors). */
@@ -717,7 +722,7 @@ export async function generateMonthlyStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [], statementIds: [],
-    noContact: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   if (!contracts || contracts.length === 0) return result;
@@ -1182,7 +1187,7 @@ export async function generateRentProformas(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts: include any contract that starts before/during the prepaid month
@@ -1615,14 +1620,32 @@ export async function generateRentProformas(
         result.noContact.push(contractNumber);
       }
 
-      // Was the proforma actually delivered? Only true when a channel produced
-      // something the client can act on (email sent OR a payment link exists).
-      // A no-contact or failed dispatch must NOT count as delivered — otherwise
-      // the cycle anchor advances and the unbilled cycle is skipped forever.
-      const delivered =
-        dispatchResult.success &&
-        !dispatchResult.noContact &&
-        (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
+      // Was the statement actually handed off? Only then may the cycle anchor
+      // move — advancing past a cycle nobody was told about skips it forever.
+      //
+      // Two shapes of "handed off", one per billing mode:
+      //   • Tally handoff v2 + gst_direct — the CRM deliberately sends nothing;
+      //     routing the statement to /accounting/inbox for accounts to issue in
+      //     Tally IS the delivery. The stubbed dispatchResult carries no email
+      //     and no payment link, so the channel test below would read it as a
+      //     failed send and pin the anchor forever — an advance-billed
+      //     gst_direct contract would bill one cycle and then silently stop.
+      //   • Everything else — a channel must have produced something the client
+      //     can act on (an email went out, or a payment link exists).
+      const delivered = handoff.skipLegacyDispatch
+        ? true
+        : dispatchResult.success &&
+          !dispatchResult.noContact &&
+          (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
+
+      // Raised but never reached the client (dispatch threw, Razorpay refused,
+      // email bounced at send time). The statement IS finalized, so the
+      // idempotency partition will treat it as already-sent and no later run
+      // will retry it — that needs to be visible, not swallowed by a success
+      // count. noContact is reported separately; this covers every other cause.
+      if (!delivered && !dispatchResult.noContact) {
+        result.notDelivered.push(contractNumber);
+      }
 
       // ── 8. Move next_billing_date past what we just billed ──────────────
       // Derived from the period actually billed, not incremented from the old
@@ -1688,7 +1711,7 @@ export async function generateUsageStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts

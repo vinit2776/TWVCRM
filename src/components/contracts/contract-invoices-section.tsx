@@ -306,11 +306,18 @@ export function ContractInvoicesSection({
         return;
       }
       const noContact: string[] = json.rent_proformas?.no_contact ?? [];
+      const notDelivered: string[] = json.rent_proformas?.not_delivered ?? [];
       const errors: string[] = json.errors ?? [];
       if (errors.length > 0) {
         toast.error(errors[0]);
       } else if (noContact.length > 0) {
-        toast.error("Proforma created but not sent — no email or phone on file for this client.");
+        toast.error("Proforma raised but not sent — no email or phone on file for this client.");
+      } else if (notDelivered.length > 0) {
+        // Never report this as sent: the statement is finalized, so no billing
+        // run will retry it. It needs a manual resend from the statement itself.
+        toast.error("Proforma raised but the send failed — resend it from the statement below.", {
+          duration: 10000,
+        });
       } else if ((json.rent_proformas?.generated ?? 0) > 0) {
         toast.success("Proforma raised and sent to the client");
       } else {
