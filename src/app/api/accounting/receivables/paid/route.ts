@@ -37,6 +37,8 @@ export async function GET(req: NextRequest) {
     .select(`
       id, statement_number, statement_type, period_start, period_end, total_amount,
       gst_invoice_number, updated_at,
+      status, payment_status, accounted, proforma_sent_at, pi_cancelled_at,
+      proforma_viewed_at, gst_invoice_viewed_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)
@@ -111,10 +113,21 @@ export async function GET(req: NextRequest) {
 
   const statementIds = (statements || []).map((s) => s.id as string);
   const paidInfoByStatement = new Map<string, { paid_on: string; payment_mode: string }>();
+  // Full payment trail per statement — powers the "Payment received" detail
+  // dialog (amount, reference, who recorded it), most recent first.
+  const paymentsByStatement = new Map<string, Array<{
+    id: string; amount: number; payment_date: string; payment_mode: string;
+    payment_reference: string | null; razorpay_payment_id: string | null;
+    notes: string | null; recorded_by_user: { id: string; full_name: string } | null;
+  }>>();
   if (statementIds.length > 0) {
     const { data: payments } = await supabase
       .from("billing_payments")
-      .select("billing_statement_id, payment_date, payment_mode, created_at")
+      .select(`
+        billing_statement_id, id, amount, payment_date, payment_mode, created_at,
+        payment_reference, razorpay_payment_id, notes,
+        recorded_by_user:users!billing_payments_recorded_by_fkey(id, full_name)
+      `)
       .in("billing_statement_id", statementIds)
       .order("created_at", { ascending: true });
 
@@ -126,6 +139,18 @@ export async function GET(req: NextRequest) {
       paidInfoByStatement.set(sid, { paid_on: p.payment_date as string, payment_mode: p.payment_mode as string });
       if (!modesByStatement.has(sid)) modesByStatement.set(sid, new Set());
       modesByStatement.get(sid)!.add(p.payment_mode as string);
+
+      if (!paymentsByStatement.has(sid)) paymentsByStatement.set(sid, []);
+      paymentsByStatement.get(sid)!.unshift({
+        id: p.id as string,
+        amount: p.amount as number,
+        payment_date: p.payment_date as string,
+        payment_mode: p.payment_mode as string,
+        payment_reference: p.payment_reference as string | null,
+        razorpay_payment_id: p.razorpay_payment_id as string | null,
+        notes: p.notes as string | null,
+        recorded_by_user: (p.recorded_by_user as unknown as { id: string; full_name: string } | null) ?? null,
+      });
     }
     for (const [sid, info] of paidInfoByStatement) {
       const modes = modesByStatement.get(sid);
@@ -139,6 +164,7 @@ export async function GET(req: NextRequest) {
       ...s,
       paid_on: info?.paid_on ?? null,
       payment_mode: info?.payment_mode ?? null,
+      payments: paymentsByStatement.get(s.id as string) ?? [],
     };
   });
 
