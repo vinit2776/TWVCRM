@@ -73,13 +73,35 @@ export const EMAIL_REPLY_TO = "billing@theworkvilla.com";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function trackEmail(success: boolean) {
+/**
+ * Record one email against the daily sent/failed counters.
+ *
+ * Must be awaited. supabase-js query builders are lazy thenables — the request
+ * is only issued when .then() is called — so the previous
+ *
+ *     void client.rpc("increment_email_count", ...)
+ *
+ * discarded the builder without ever executing it. The counter silently stopped
+ * on 2026-04-12, the day before that line was introduced, and every email since
+ * went unrecorded. Awaiting also matters on Vercel: a floating promise can be
+ * frozen with the function once the response returns.
+ *
+ * `success` means the email was ultimately delivered by *some* transport, not
+ * that the first attempt worked — a message rescued by the Resend fallback is a
+ * sent email, not a failed one.
+ */
+async function trackEmail(success: boolean) {
   try {
     const client = createAdminClient();
     const today = new Date().toISOString().slice(0, 10);
-    void client.rpc("increment_email_count", { p_date: today, p_success: success });
-  } catch {
-    // non-fatal
+    const { error } = await client.rpc("increment_email_count", {
+      p_date: today,
+      p_success: success,
+    });
+    if (error) console.error("[mailer] email counter update failed:", error.message);
+  } catch (err) {
+    // Never let telemetry fail a send.
+    console.error("[mailer] email counter update failed:", err);
   }
 }
 
@@ -172,23 +194,27 @@ export const resend = {
       if (smtpUser && smtpPass) {
         try {
           const result = await sendViaSMTP(params);
-          trackEmail(true);
+          await trackEmail(true);
           return result;
         } catch (smtpErr) {
           const smtpMessage = smtpErr instanceof Error ? smtpErr.message : String(smtpErr);
           console.error("SMTP failed, trying Resend fallback:", smtpMessage);
-          trackEmail(false);
 
           // ── Fallback: Resend SDK ──────────────────────────────────────────
+          // The counter is recorded on the outcome, not here: an email rescued
+          // by this fallback was delivered, and counting it as failed would
+          // make the fallback look like the thing going wrong.
           try {
             const fallbackResult = await sendViaResend(params);
             if (!fallbackResult.error) {
               console.warn("Email delivered via Resend fallback (SMTP was down)");
             }
+            await trackEmail(!fallbackResult.error);
             return fallbackResult;
           } catch (resendErr) {
             const resendMessage = resendErr instanceof Error ? resendErr.message : String(resendErr);
             console.error("Resend fallback also failed:", resendMessage);
+            await trackEmail(false);
             return {
               data: null,
               error: { message: `SMTP: ${smtpMessage} | Resend: ${resendMessage}`, name: "all_transports_failed" },
@@ -200,12 +226,11 @@ export const resend = {
       // ── No SMTP configured: use Resend directly ─────────────────────────
       try {
         const result = await sendViaResend(params);
-        if (result.error) trackEmail(false);
-        else trackEmail(true);
+        await trackEmail(!result.error);
         return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        trackEmail(false);
+        await trackEmail(false);
         return { data: null, error: { message, name: "resend_error" } };
       }
     },
