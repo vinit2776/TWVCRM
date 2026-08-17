@@ -321,6 +321,11 @@ export interface Proposal {
   payment_received_at?: string;
   payment_amount?: number;
   payment_reference?: string;
+  payment_medium?: string; // neft | rtgs | upi | cheque | cash | razorpay
+  payment_screenshot_url?: string;
+  payment_internal_notes?: string | null; // internal-only — never shown to the customer
+  payment_recorded_by?: string; // user id of who manually recorded this payment
+  payment_shortfall_approved_by?: string; // admin/manager who approved a ≤10% shortfall
   // Security deposit
   security_deposit_months?: number;
   security_deposit_amount?: number;

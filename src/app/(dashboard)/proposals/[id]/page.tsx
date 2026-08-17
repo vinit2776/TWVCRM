@@ -98,6 +98,19 @@ export default function ProposalDetailPage({
   const [manualPayShortfallApproved, setManualPayShortfallApproved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Manual recording of the monthly / pro-rata first invoice. Separate state
+  // from the deposit's manualPay* above — both dialogs live on this page and
+  // sharing state would let one dialog inherit the other's half-typed values.
+  const [monthlyPayDialogOpen, setMonthlyPayDialogOpen] = useState(false);
+  const [monthlyPayAmount, setMonthlyPayAmount] = useState("");
+  const [monthlyPayRef, setMonthlyPayRef] = useState("");
+  const [monthlyPayMedium, setMonthlyPayMedium] = useState("");
+  const [monthlyPayNotes, setMonthlyPayNotes] = useState("");
+  const [monthlyPayFile, setMonthlyPayFile] = useState<File | null>(null);
+  const [monthlyPaySubmitting, setMonthlyPaySubmitting] = useState(false);
+  const [monthlyPayShortfallApproved, setMonthlyPayShortfallApproved] = useState(false);
+  const monthlyPayFileInputRef = useRef<HTMLInputElement>(null);
+
   // Apply deposit credit dialog (admin/manager — deposit held from a prior contract)
   const [depositCreditOpen, setDepositCreditOpen] = useState(false);
   const [depositCreditAmount, setDepositCreditAmount] = useState("");
@@ -589,6 +602,64 @@ export default function ProposalDetailPage({
       toast.error("Unexpected error recording payment");
     } finally {
       setManualPaySubmitting(false);
+    }
+  };
+
+  const handleMonthlyPaySubmit = async () => {
+    const amt = parseFloat(monthlyPayAmount);
+    if (!amt || amt <= 0) {
+      toast.error("Enter a valid amount.");
+      return;
+    }
+    if (monthlyPayNotes.trim().length < 10) {
+      toast.error("Add an internal note of at least 10 characters.");
+      return;
+    }
+    const expected = Number(proposal?.total_amount || 0);
+    if (expected > 0 && amt < expected) {
+      const shortfall = (expected - amt) / expected;
+      if (shortfall > 0.10) {
+        toast.error("Amount is more than 10% below the expected total. Cannot record.");
+        return;
+      }
+      if (!monthlyPayShortfallApproved) {
+        toast.error("Please check the shortfall approval box before submitting.");
+        return;
+      }
+    }
+    setMonthlyPaySubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("amount", String(amt));
+      if (monthlyPayRef.trim()) fd.append("reference", monthlyPayRef.trim());
+      if (monthlyPayMedium) fd.append("payment_medium", monthlyPayMedium);
+      if (monthlyPayNotes.trim()) fd.append("notes", monthlyPayNotes.trim());
+      if (monthlyPayFile) fd.append("payment_proof", monthlyPayFile);
+      if (monthlyPayShortfallApproved) fd.append("shortfall_approved", "true");
+
+      const res = await fetch(`/api/proposals/${id}/payment`, { method: "POST", body: fd });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(
+          json.deposit_settled
+            ? "Payment recorded. The linked contract can now be activated."
+            : "Payment recorded. The security deposit is still outstanding."
+        );
+        setMonthlyPayDialogOpen(false);
+        setMonthlyPayAmount("");
+        setMonthlyPayRef("");
+        setMonthlyPayMedium("");
+        setMonthlyPayNotes("");
+        setMonthlyPayFile(null);
+        setMonthlyPayShortfallApproved(false);
+        fetchProposal();
+      } else {
+        toast.error(json.error || "Failed to record payment");
+      }
+    } catch {
+      toast.error("Unexpected error recording payment");
+    } finally {
+      setMonthlyPaySubmitting(false);
     }
   };
 
@@ -1348,6 +1419,36 @@ export default function ProposalDetailPage({
                           <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
                         </div>
                       )}
+                      {proposal.payment_medium && (
+                        <div className="flex justify-between">
+                          <span className="text-green-700">Mode</span>
+                          <span className="text-xs uppercase text-green-800">{proposal.payment_medium}</span>
+                        </div>
+                      )}
+                      {/* Only set by the manual route — makes a hand-recorded
+                          payment distinguishable from a Razorpay-collected one. */}
+                      {proposal.payment_recorded_by && (
+                        <div className="flex items-start gap-1.5 rounded border border-green-200 bg-white/60 px-2 py-1.5 text-xs text-green-800">
+                          <Banknote className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span>
+                            Recorded manually
+                            {proposal.payment_received_at && ` on ${formatDate(proposal.payment_received_at)}`}
+                            {proposal.payment_screenshot_url && (
+                              <>
+                                {" · "}
+                                <a
+                                  href={proposal.payment_screenshot_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  view proof
+                                </a>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -1416,6 +1517,25 @@ export default function ProposalDetailPage({
                       </Button>
                     </>
                   )}
+
+                  {/* Manual record — for payments that never touch the Razorpay
+                      link (NEFT, cheque, cash). Without this the only way past
+                      the contract activation gate is the admin override. */}
+                  {proposal.payment_status !== "paid" &&
+                    ["admin", "manager", "accounts"].includes(currentUser?.role || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-blue-300 text-blue-700 hover:bg-blue-100"
+                        onClick={() => {
+                          setMonthlyPayAmount(String(proposal.total_amount ?? ""));
+                          setMonthlyPayDialogOpen(true);
+                        }}
+                      >
+                        <Banknote className="mr-2 h-3.5 w-3.5" />
+                        Record Payment Received
+                      </Button>
+                    )}
                 </CardContent>
               </Card>
             );
@@ -1973,6 +2093,217 @@ export default function ProposalDetailPage({
               >
                 {manualPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {manualPaySubmitting ? "Saving…" : "Mark as Paid & Notify Customer"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Record the monthly / pro-rata first invoice payment (bank transfer) */}
+      <Dialog open={monthlyPayDialogOpen} onOpenChange={setMonthlyPayDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="h-5 w-5 text-blue-600" />
+              Record Payment Received
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — Monthly / Pro-rata Charge
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {(() => {
+              const expectedAmt = Number(proposal.total_amount || 0);
+              const enteredAmt = parseFloat(monthlyPayAmount) || 0;
+              const shortfall =
+                expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt
+                  ? (expectedAmt - enteredAmt) / expectedAmt
+                  : 0;
+              const canApproveShortfall = ["admin", "manager"].includes(currentUser?.role || "");
+              return (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mrp-amount">
+                      Amount Received (₹) <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="mrp-amount"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={monthlyPayAmount}
+                      onChange={(e) => {
+                        setMonthlyPayAmount(e.target.value);
+                        setMonthlyPayShortfallApproved(false);
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Expected: ₹{expectedAmt.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+
+                  {shortfall > 0.10 && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> below the expected
+                      total (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}). Minimum
+                      acceptable is ₹{Math.ceil(expectedAmt * 0.9).toLocaleString("en-IN")}. Cannot record.
+                    </div>
+                  )}
+
+                  {shortfall > 0 && shortfall <= 0.10 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                      <p className="text-xs text-amber-800">
+                        ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> less than expected
+                        (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}).{" "}
+                        {canApproveShortfall
+                          ? "Check the box below to approve this shortfall."
+                          : "Only a manager or admin can approve a shortfall."}
+                      </p>
+                      {canApproveShortfall && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={monthlyPayShortfallApproved}
+                            onChange={(e) => setMonthlyPayShortfallApproved(e.target.checked)}
+                            className="h-4 w-4 rounded border-amber-400 accent-amber-600"
+                          />
+                          <span className="text-xs font-medium text-amber-900">
+                            I approve accepting ₹{enteredAmt.toLocaleString("en-IN")} as full settlement
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="mrp-medium">Payment Mode</Label>
+                <select
+                  id="mrp-medium"
+                  value={monthlyPayMedium}
+                  onChange={(e) => setMonthlyPayMedium(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                >
+                  <option value="">Select mode</option>
+                  <option value="neft">NEFT</option>
+                  <option value="rtgs">RTGS</option>
+                  <option value="upi">UPI</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="cash">Cash</option>
+                  <option value="razorpay">Razorpay</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mrp-ref">Reference / UTR</Label>
+                <Input
+                  id="mrp-ref"
+                  value={monthlyPayRef}
+                  onChange={(e) => setMonthlyPayRef(e.target.value)}
+                  placeholder="UTR or transaction ID"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="mrp-notes">
+                Internal Note (for Accounts) <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="mrp-notes"
+                value={monthlyPayNotes}
+                onChange={(e) => setMonthlyPayNotes(e.target.value)}
+                placeholder="Where this money came from and how it was already invoiced — never shown to the customer"
+                rows={2}
+              />
+              <CheckAccountingNoteButton
+                note={monthlyPayNotes}
+                accountingHead="Membership Fee"
+                context={`${proposal.proposal_number} — monthly / pro-rata charge`}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Payment Proof (screenshot / PDF)</Label>
+              <input
+                ref={monthlyPayFileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setMonthlyPayFile(e.target.files?.[0] || null)}
+              />
+              {monthlyPayFile ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="truncate text-muted-foreground">{monthlyPayFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMonthlyPayFile(null);
+                      if (monthlyPayFileInputRef.current) monthlyPayFileInputRef.current.value = "";
+                    }}
+                    className="ml-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => monthlyPayFileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload proof of payment
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">Optional — JPEG, PNG or PDF, max 10 MB</p>
+            </div>
+
+            {/* Out-of-order money is normal, so this warns rather than blocks. */}
+            {proposal.deposit_payment_status !== "paid" &&
+              Number(proposal.security_deposit_months || 0) > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  The security deposit is still outstanding. You can record this payment, but the
+                  linked contract stays blocked from activation until the deposit is settled too.
+                </div>
+              )}
+
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              No email is sent to the customer — this is an internal record.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setMonthlyPayDialogOpen(false)}
+                disabled={monthlyPaySubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleMonthlyPaySubmit}
+                disabled={
+                  monthlyPaySubmitting ||
+                  monthlyPayNotes.trim().length < 10 ||
+                  (() => {
+                    const expectedAmt = Number(proposal.total_amount || 0);
+                    const enteredAmt = parseFloat(monthlyPayAmount) || 0;
+                    if (expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt) {
+                      const shortfall = (expectedAmt - enteredAmt) / expectedAmt;
+                      if (shortfall > 0.10) return true;
+                      if (shortfall > 0 && !monthlyPayShortfallApproved) return true;
+                    }
+                    return false;
+                  })()
+                }
+              >
+                {monthlyPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {monthlyPaySubmitting ? "Saving…" : "Mark as Paid"}
               </Button>
             </div>
           </div>
