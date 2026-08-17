@@ -580,6 +580,18 @@ export interface Contract {
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;
+  // Deposit ledger — owned by the contract from activation onward (snapshotted
+  // from the linked proposal at that moment; see contracts/[id]/route.ts).
+  // The proposal only bridges the commercial gap until activation — once
+  // active, top-ups/adjustments/corrections all read and write these fields,
+  // never the proposal's. Mirrors the equivalent fields on Proposal below.
+  security_deposit_amount?: number;
+  deposit_payment_status?: string; // "not_required" | "pending" | "paid"
+  deposit_payment_amount?: number;
+  deposit_payment_reference?: string;
+  deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
+  deposit_payment_received_at?: string;
+  deposit_internal_notes?: string | null;
   // Renewal communication
   renewal_reminder_sent_at?: string | null;
   renewal_reminder_count?: number;
@@ -634,7 +646,10 @@ export type DepositAdjustmentStatus = "pending_approval" | "approved" | "rejecte
 export interface DepositAdjustment {
   id: string;
   contract_id: string;
-  source_proposal_id: string;
+  source_contract_id: string;
+  // Informational/back-compat only since the contract-owned-deposits migration —
+  // the balance math keys off source_contract_id now, this is no longer read.
+  source_proposal_id?: string | null;
   billing_statement_id: string;
   billing_payment_id?: string | null;
   amount: number;
@@ -662,12 +677,21 @@ export interface DepositAdjustment {
   reversed_by_name?: string;
 }
 
+/** Why `available` is 0 — drives the greyed-out explanation on the
+ *  "Adjustment against deposit" option. NULL when there is a balance. */
+export type DepositUnavailableReason =
+  | "no_proposal"
+  | "deposit_pending"
+  | "no_deposit"
+  | "fully_committed";
+
 export interface DepositBalance {
   source_contract_id: string;
   source_proposal_id: string | null;
   deposit_collected: number;
   committed: number;
   available: number;
+  unavailable_reason: DepositUnavailableReason | null;
 }
 
 export type DepositTopupStatus = "pending" | "paid" | "reversed" | "cancelled";
@@ -677,7 +701,10 @@ export type DepositTopupCollectionMethod = "razorpay_link" | "manual";
 export interface DepositTopup {
   id: string;
   contract_id: string;
-  source_proposal_id: string;
+  source_contract_id: string;
+  // Informational/back-compat only since the contract-owned-deposits migration —
+  // the balance math keys off source_contract_id now, this is no longer read.
+  source_proposal_id?: string | null;
   amount: number;
   category: DepositTopupCategory;
   category_note?: string | null;

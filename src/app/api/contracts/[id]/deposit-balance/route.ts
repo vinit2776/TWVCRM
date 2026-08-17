@@ -31,6 +31,7 @@ export async function GET(
     deposit_collected: 0,
     committed: 0,
     available: 0,
+    unavailable_reason: "no_deposit",
   };
 
   return NextResponse.json({ data: balance });
