@@ -26,6 +26,14 @@ export interface PaymentDetail {
   recorded_by_user: { id: string; full_name: string } | null;
 }
 
+/** "tds_deduction" needs its acronym capitalized correctly — everything else
+ *  is just underscore-to-space (relies on the `capitalize` CSS class for casing). */
+export function formatPaymentMode(mode: string | null): string {
+  if (!mode) return "—";
+  if (mode === "tds_deduction") return "TDS Deduction";
+  return mode.replace(/_/g, " ");
+}
+
 export interface PaymentDetailRow {
   id: string;
   statement_number: string;
@@ -82,7 +90,7 @@ export function PaymentDetailDialog({
                   <tbody>
                     <tr>
                       <td className="py-1.5 text-muted-foreground"><CreditCard className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Mode</td>
-                      <td className="py-1.5 text-right capitalize">{payment.payment_mode.replace(/_/g, " ")}</td>
+                      <td className="py-1.5 text-right capitalize">{formatPaymentMode(payment.payment_mode)}</td>
                     </tr>
                     <tr>
                       <td className="py-1.5 text-muted-foreground"><Hash className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Reference</td>

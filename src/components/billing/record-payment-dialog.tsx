@@ -61,6 +61,9 @@ export function RecordPaymentDialog({
   const [tdsEnabled, setTdsEnabled] = useState(false);
   const [tdsSection, setTdsSection] = useState("194I");
   const [tdsAmount, setTdsAmount]   = useState("");
+  // TDS-only entry: no cash in this entry at all — e.g. cash was recorded
+  // earlier and the TDS certificate is being declared separately now.
+  const [tdsOnly, setTdsOnly] = useState(false);
 
   // Adjustment against deposit — available balance gates whether the mode
   // is offered at all; a request over that balance splits the remainder
@@ -81,6 +84,7 @@ export function RecordPaymentDialog({
       setTdsEnabled(false);
       setTdsSection("194I");
       setTdsAmount("");
+      setTdsOnly(false);
       setNotifyCustomer(false);
       setRemainderMode("neft");
       setRemainderReference("");
@@ -165,7 +169,9 @@ export function RecordPaymentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!statementId || !amount || Number(amount) <= 0) {
+    const tdsAmt = tdsEnabled ? Math.max(0, Number(tdsAmount) || 0) : 0;
+
+    if (!statementId || (!tdsOnly && (!amount || Number(amount) <= 0))) {
       toast.error("Amount must be positive");
       return;
     }
@@ -175,7 +181,6 @@ export function RecordPaymentDialog({
       return;
     }
 
-    const tdsAmt = tdsEnabled ? Math.max(0, Number(tdsAmount) || 0) : 0;
     if (tdsEnabled && tdsAmt <= 0) {
       toast.error("Enter the TDS amount deducted by the client");
       return;
@@ -189,10 +194,10 @@ export function RecordPaymentDialog({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        amount: Number(amount),
+        amount: tdsOnly ? 0 : Number(amount),
         payment_date: date,
-        payment_mode: mode,
-        payment_reference: reference.trim() || undefined,
+        payment_mode: tdsOnly ? "tds_deduction" : mode,
+        payment_reference: tdsOnly ? undefined : (reference.trim() || undefined),
         notes: notes.trim() || undefined,
         tds_amount:  tdsAmt,
         tds_section: tdsEnabled ? tdsSection : null,
@@ -240,13 +245,20 @@ export function RecordPaymentDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>{isDepositMode ? "Amount to settle (₹)" : "Amount received (₹)"}</Label>
-              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 15000" />
+              <Input
+                type="number"
+                value={tdsOnly ? "0" : amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="e.g. 15000"
+                disabled={tdsOnly}
+              />
             </div>
             <div className="space-y-2">
               <Label>Payment Date</Label>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
           </div>
+          {!tdsOnly && (
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Payment Mode</Label>
@@ -266,6 +278,7 @@ export function RecordPaymentDialog({
               </div>
             )}
           </div>
+          )}
           <div className="space-y-2">
             <Label>Notes (optional)</Label>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
@@ -336,6 +349,17 @@ export function RecordPaymentDialog({
 
             {tdsEnabled && (
               <div className="px-3 pb-3 pt-1 space-y-3 border-t">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <Checkbox
+                    checked={tdsOnly}
+                    onCheckedChange={(v) => {
+                      const checked = v === true;
+                      setTdsOnly(checked);
+                      setAmount(checked ? "0" : (balanceDue !== null && balanceDue > 0 ? String(balanceDue) : ""));
+                    }}
+                  />
+                  TDS-only entry — no cash received with this deduction
+                </label>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs">TDS section *</Label>
@@ -376,6 +400,11 @@ export function RecordPaymentDialog({
                     {settles ? " ✓ settles invoice" : ""}
                   </div>
                 )}
+                {tdsOnly && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Mode auto-set to &quot;TDS Deduction&quot; — no bank/UTR reference needed since no cash moved.
+                  </p>
+                )}
                 <p className="text-[11px] text-muted-foreground">
                   Invoice settles as: cash received + TDS deducted = invoice total. Tally receipt splits bank + TDS ledger + party.
                 </p>
@@ -387,7 +416,7 @@ export function RecordPaymentDialog({
           <Button onClick={handleSubmit} disabled={submitting} className="w-full">
             {submitting
               ? (isDepositMode ? "Submitting…" : "Recording…")
-              : (isDepositMode ? "Submit for Approval" : "Record Payment")}
+              : (isDepositMode ? "Submit for Approval" : tdsOnly ? "Record TDS-only Entry" : "Record Payment")}
           </Button>
         </div>
       </DialogContent>

@@ -37,6 +37,9 @@ type TdsReceivableRow = {
   client_name: string;
   pan_number: string | null;
   tds_certificate_path: string | null;
+  certificate_status: "received" | "pending" | "overdue";
+  certificate_reminder_count: number;
+  last_certificate_reminder_sent_at: string | null;
 };
 
 // ── Monthly grouping helper ─────────────────────────────────────
@@ -78,12 +81,14 @@ function TdsReceivablePanel() {
   const [rows, setRows] = useState<TdsReceivableRow[]>([]);
   const [summary, setSummary] = useState<{
     grand_total: number; by_section: Record<string, number>; count: number;
+    certificates_pending: number; certificates_overdue: number;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [quarter, setQuarter] = useState<string>("all");
   const [year, setYear] = useState(String(currentFyYear()));
   const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [chasingId, setChasingId] = useState<string | null>(null);
   const pendingUploadRowId = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -166,6 +171,23 @@ function TdsReceivablePanel() {
     window.open(json.data.download_url, "_blank", "noopener,noreferrer");
   }
 
+  async function chaseCertificate(rowId: string) {
+    setChasingId(rowId);
+    try {
+      const res = await fetch(`/api/tds/receivable/${rowId}/chase-certificate`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to send reminder"); return; }
+      toast.success("Reminder sent to the client");
+      setRows((prev) => prev.map((r) =>
+        r.id === rowId
+          ? { ...r, certificate_reminder_count: json.data.certificate_reminder_count, last_certificate_reminder_sent_at: json.data.last_certificate_reminder_sent_at }
+          : r
+      ));
+    } finally {
+      setChasingId(null);
+    }
+  }
+
   function toggleMonth(key: string) {
     setCollapsedMonths((prev) => {
       const next = new Set(prev);
@@ -187,6 +209,20 @@ function TdsReceivablePanel() {
           <p className="text-sm text-muted-foreground mt-0.5">
             TDS clients deduct on our invoices before paying. Use this to reconcile against Form 26AS.
           </p>
+          {summary && (summary.certificates_pending > 0 || summary.certificates_overdue > 0) && (
+            <div className="flex items-center gap-2 mt-2">
+              {summary.certificates_overdue > 0 && (
+                <Badge className="bg-red-100 text-red-800 border-red-200">
+                  {summary.certificates_overdue} certificate{summary.certificates_overdue !== 1 ? "s" : ""} overdue
+                </Badge>
+              )}
+              {summary.certificates_pending > 0 && (
+                <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+                  {summary.certificates_pending} pending
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
         {summary && summary.grand_total > 0 && (
           <div className="text-right shrink-0">
@@ -327,6 +363,28 @@ function TdsReceivablePanel() {
                             <td className="px-3 py-2.5 text-right font-semibold text-teal-700">{formatCurrency(r.tds_amount)}</td>
                             <td className="px-3 py-2.5 text-right text-muted-foreground">{formatCurrency(r.amount)}</td>
                             <td className="px-3 py-2.5">
+                              <div className="flex items-center gap-2 mb-1">
+                                {r.certificate_status === "received" ? (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">Received</span>
+                                ) : r.certificate_status === "overdue" ? (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-800">Overdue</span>
+                                ) : (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">Pending</span>
+                                )}
+                                {r.certificate_status !== "received" && (
+                                  chasingId === r.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                                  ) : (
+                                    <button
+                                      onClick={() => chaseCertificate(r.id)}
+                                      title={r.last_certificate_reminder_sent_at ? `Last chased ${formatDate(r.last_certificate_reminder_sent_at)}` : "Send a reminder email"}
+                                      className="text-[10px] border rounded-full px-2 py-0.5 text-muted-foreground hover:text-teal-700 hover:border-teal-300"
+                                    >
+                                      Chase{r.certificate_reminder_count > 0 ? ` (${r.certificate_reminder_count})` : ""}
+                                    </button>
+                                  )
+                                )}
+                              </div>
                               {uploadingId === r.id ? (
                                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading…

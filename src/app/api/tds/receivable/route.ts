@@ -29,6 +29,20 @@ function currentFyYear(): number {
   return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
 }
 
+// A certificate not yet uploaded within 45 days of the payment is flagged
+// "overdue" — a tunable placeholder, not a cited compliance deadline. Below
+// that it's just "pending" (normal — Form 16A issuance lags the deduction).
+const CERTIFICATE_OVERDUE_DAYS = 45;
+
+function certificateStatus(
+  hasCertificate: boolean,
+  paymentDate: string
+): "received" | "pending" | "overdue" {
+  if (hasCertificate) return "received";
+  const days = Math.floor((Date.now() - Date.parse(paymentDate + "T00:00:00Z")) / 86400000);
+  return days >= CERTIFICATE_OVERDUE_DAYS ? "overdue" : "pending";
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -67,6 +81,8 @@ export async function GET(request: NextRequest) {
       payment_mode,
       payment_reference,
       tds_certificate_path,
+      certificate_reminder_count,
+      last_certificate_reminder_sent_at,
       billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
         id,
         statement_number,
@@ -82,7 +98,9 @@ export async function GET(request: NextRequest) {
             first_name,
             last_name,
             company,
-            pan_number
+            pan_number,
+            email,
+            billing_emails
           )
         )
       )
@@ -103,6 +121,7 @@ export async function GET(request: NextRequest) {
     const clientName = lead?.company
       || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim()
       || "—";
+    const clientEmails: string[] = Array.from(new Set([lead?.email, ...(lead?.billing_emails || [])].filter(Boolean)));
 
     return {
       id:               p.id,
@@ -113,6 +132,10 @@ export async function GET(request: NextRequest) {
       payment_mode:     p.payment_mode,
       payment_reference: p.payment_reference ?? null,
       tds_certificate_path: p.tds_certificate_path ?? null,
+      certificate_status: certificateStatus(!!p.tds_certificate_path, p.payment_date),
+      certificate_reminder_count: p.certificate_reminder_count ?? 0,
+      last_certificate_reminder_sent_at: p.last_certificate_reminder_sent_at ?? null,
+      client_emails:    clientEmails,
       statement_number: stmt?.statement_number ?? null,
       invoice_number:   stmt?.gst_invoice_number ?? null,
       period_start:     stmt?.period_start ?? null,
@@ -127,10 +150,14 @@ export async function GET(request: NextRequest) {
   // Section-level summary for the header cards
   const sectionTotals: Record<string, number> = {};
   let grandTotal = 0;
+  let pendingCount = 0;
+  let overdueCount = 0;
   for (const r of rows) {
     const sec = r.tds_section ?? "Unknown";
     sectionTotals[sec] = (sectionTotals[sec] || 0) + r.tds_amount;
     grandTotal += r.tds_amount;
+    if (r.certificate_status === "pending") pendingCount++;
+    if (r.certificate_status === "overdue") overdueCount++;
   }
 
   return NextResponse.json({
@@ -139,6 +166,8 @@ export async function GET(request: NextRequest) {
       grand_total: grandTotal,
       by_section: sectionTotals,
       count: rows.length,
+      certificates_pending: pendingCount,
+      certificates_overdue: overdueCount,
     },
     period: { fy_year: fyYear, quarter, date_from: dateFrom, date_to: dateTo },
   });

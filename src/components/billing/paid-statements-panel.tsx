@@ -14,7 +14,7 @@ import { Loader2, FileDown, History, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
-import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
+import { PaymentDetailDialog, formatPaymentMode, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 
 interface Lead {
   id: string;
@@ -222,7 +222,7 @@ export function PaidStatementsPanel({
                     <div className="text-xs text-muted-foreground mt-1">{r.paid_on ? formatDate(r.paid_on) : "—"}</div>
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.total_amount)}</td>
-                  <td className="px-4 py-3 text-xs capitalize whitespace-nowrap">{r.payment_mode ? r.payment_mode.replace(/_/g, " ") : "—"}</td>
+                  <td className="px-4 py-3 text-xs capitalize whitespace-nowrap">{formatPaymentMode(r.payment_mode)}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <BillingLifecycleStatus
                       status={r.status}

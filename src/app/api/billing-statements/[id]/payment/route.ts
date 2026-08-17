@@ -51,7 +51,12 @@ export async function POST(
   const tdsAmount  = Math.max(0, Number(body.tds_amount) || 0);
   const tdsSection = (typeof body.tds_section === "string" && body.tds_section.trim()) ? body.tds_section.trim() : null;
 
-  if (!amount || amount <= 0) return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
+  // A TDS-only entry (amount = 0) is allowed when a TDS deduction is
+  // declared alongside it — e.g. cash was recorded earlier and the TDS
+  // certificate arrives separately. Otherwise amount must be positive.
+  const numericAmount = Number(amount) || 0;
+  if (numericAmount < 0) return NextResponse.json({ error: "Amount cannot be negative" }, { status: 400 });
+  if (numericAmount === 0 && tdsAmount <= 0) return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
   if (!payment_date) return NextResponse.json({ error: "Payment date is required" }, { status: 400 });
   if (!payment_mode) return NextResponse.json({ error: "Payment mode is required" }, { status: 400 });
 

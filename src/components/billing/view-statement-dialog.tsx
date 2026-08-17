@@ -863,7 +863,11 @@ export function ViewStatementDialog({
                     <div className="rounded-md border divide-y text-sm">
                       {payments.map((p) => {
                         const isRazorpay = p.payment_mode === "razorpay" || !!p.razorpay_payment_id;
-                        const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
+                        const modeLabel = isRazorpay
+                          ? "Razorpay"
+                          : p.payment_mode === "tds_deduction"
+                            ? "TDS Deduction"
+                            : (p.payment_mode?.toUpperCase() || "—");
                         const settled = Number(p.amount) + Number(p.tds_amount || 0);
                         return (
                           <div key={p.id} className="flex items-center justify-between px-3 py-2">
