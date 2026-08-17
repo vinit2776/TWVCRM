@@ -39,12 +39,31 @@ jobs:
             parts[parts.length - 1] = String(parseInt(parts[parts.length - 1], 10) + 1);
             pkg.version = parts.join('.');
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+
+            // Keep package-lock.json in step. This step edits package.json by
+            // hand rather than running \`npm version\`, so nothing was updating
+            // the lockfile — it drifted a little further behind on every bump,
+            // which made its version field useless as a deploy marker and
+            // produced a spurious one-line diff for anyone who ran
+            // \`npm install\` locally. npm records the version in two places.
+            const lockPath = 'package-lock.json';
+            if (fs.existsSync(lockPath)) {
+              const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+              lock.version = pkg.version;
+              if (lock.packages && lock.packages['']) {
+                lock.packages[''].version = pkg.version;
+              }
+              // Same shape npm itself writes, so this only ever touches the
+              // two version lines and never reformats the file.
+              fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+            }
+
             console.log('Bumped to', pkg.version);
           "
 
       - name: Commit and push
         run: |
           NEW_VERSION=$(node -p "require('./package.json').version")
-          git add package.json
+          git add package.json package-lock.json
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin main
