@@ -133,6 +133,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
 
+  // Cancelling an invoice is restricted to admin/manager/accounts server-side
+  // (api/invoices/[id]/cancel) — mirror that here so the action isn't offered
+  // to roles that would only get a 403.
+  const [userRole, setUserRole] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
+  }, []);
+  const canCancelInvoice = ["admin", "manager", "accounts"].includes(userRole ?? "");
+
   // Newest non-terminal proposal — where the deposit link lives. Proposals
   // come back newest-first, so this is just the first one that isn't
   // rejected/expired; falls back to the newest overall if all are terminal.
@@ -626,7 +635,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Overdue
                               </DropdownMenuItem>
                             )}
-                            {["draft", "sent", "overdue"].includes(inv.status) && (
+                            {canCancelInvoice && ["draft", "sent", "overdue"].includes(inv.status) && (
                               <DropdownMenuItem
                                 onClick={() => handleCancelInvoice(inv)}
                                 className="text-red-600"
