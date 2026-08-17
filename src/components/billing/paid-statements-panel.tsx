@@ -335,7 +335,7 @@ export function PaidStatementsPanel({
 
                 <DialogFooter className="gap-2 sm:gap-2">
                   <Button variant="outline" size="sm" asChild>
-                    <Link href={pdfHref} target="_blank"><IndianRupee className="h-3.5 w-3.5 mr-1" />View statement</Link>
+                    <Link href={pdfHref} target="_blank"><IndianRupee className="h-3.5 w-3.5 mr-1" />View Invoice</Link>
                   </Button>
                   <Button
                     variant="outline"
