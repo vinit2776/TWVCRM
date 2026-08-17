@@ -353,7 +353,7 @@ type RenewalSplitResult = {
  * implies days nobody is contractually billable for) is left unbilled rather
  * than fabricated.
  */
-function computeRenewalSplitRentSegments(
+export function computeRenewalSplitRentSegments(
   cid: string,
   ownStartYmd: string,
   ownEndYmd: string,
@@ -572,6 +572,26 @@ function nextMonth(month: number, year: number): { month: number; year: number }
 
 /** Longest supported advance cycle (yearly), in months. */
 const MAX_BILLING_CYCLE_MONTHS = Math.max(...Object.values(BILLING_CYCLE_MONTHS));
+
+/**
+ * A contract's opening billing anchor: the first day of the first month it
+ * should be billed for.
+ *
+ * Start mid-month and the proposal's pro-rata invoice covers that partial
+ * month, so contract billing opens the following month. Start on the 1st and
+ * the start month itself is the first billed month.
+ *
+ * Always the 1st of a month, never the contract's start day. Billing periods
+ * are whole calendar months and the advance-cycle gate only reads which MONTH
+ * the anchor falls in — a day-of-month here is noise that reads as if it means
+ * something. It also must never be start + cycleMonths: that points at the
+ * SECOND cycle and silently skips billing the first one entirely.
+ */
+export function firstBillingAnchor(startYmd: string): string {
+  const [y, m, d] = startYmd.split("-").map(Number);
+  if (d === 1) return `${y}-${String(m).padStart(2, "0")}-01`;
+  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+}
 
 /** One calendar month's billing window — the unit rent is always priced in. */
 export interface MonthWindow {
@@ -1604,22 +1624,21 @@ export async function generateRentProformas(
         !dispatchResult.noContact &&
         (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
 
-      // ── 8. Advance the cycle's next_billing_date (only on confirmed delivery) ──
-      // Anchor on year+month and clamp the day to the target month's length so a
-      // 30th/31st billing day never drifts via JS Date month-overflow (e.g. Nov 30
-      // + 3 months would otherwise roll into March). Clamping keeps the anchor stable.
-      if (cycleMonths > 1 && delivered) {
-        const nbd = new Date(String(contract.next_billing_date) + "T00:00:00Z");
-        const origDay = nbd.getUTCDate();
-        const absMonth = nbd.getUTCMonth() + cycleMonths;
-        const targetYear = nbd.getUTCFullYear() + Math.floor(absMonth / 12);
-        const targetMonth = ((absMonth % 12) + 12) % 12;
-        const daysInTarget = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-        const clampedDay = Math.min(origDay, daysInTarget);
-        const advanced = new Date(Date.UTC(targetYear, targetMonth, clampedDay));
+      // ── 8. Move next_billing_date past what we just billed ──────────────
+      // Derived from the period actually billed, not incremented from the old
+      // value: the anchor becomes the first day of the first month NOT yet
+      // billed. That makes it self-correcting — a wrong or stale anchor is
+      // fixed by the next successful run instead of drifting further — and it
+      // can't double-advance if a run is repeated. This generator is the ONLY
+      // writer of next_billing_date; nothing downstream (statement confirm,
+      // GST invoice generation) may touch it, or the anchor drifts by a month
+      // per action and the advance-cycle gate starts pointing at the wrong
+      // quarter. Only on confirmed delivery — a no-contact or failed dispatch
+      // must not move the anchor past an unbilled cycle.
+      if (delivered) {
         await adminSupabase
           .from("contracts")
-          .update({ next_billing_date: advanced.toISOString().slice(0, 10) })
+          .update({ next_billing_date: addDaysToYmd(cycleLastYmd, 1) })
           .eq("id", cid);
       }
 

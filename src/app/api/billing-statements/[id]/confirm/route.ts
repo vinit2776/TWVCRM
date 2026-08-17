@@ -376,15 +376,14 @@ export async function POST(
     }
   }
 
-  // 11. Update contract.next_billing_date
-  if (contract.next_billing_date) {
-    const nextDate = new Date(contract.next_billing_date + "T00:00:00Z");
-    nextDate.setMonth(nextDate.getMonth() + 1);
-    await adminSupabase
-      .from("contracts")
-      .update({ next_billing_date: nextDate.toISOString().slice(0, 10) })
-      .eq("id", contract.id);
-  }
+  // 11. next_billing_date is deliberately NOT touched here.
+  // It used to be pushed forward one month on every confirm, regardless of the
+  // contract's billing cycle. For anything but a monthly contract that was
+  // wrong twice over: the rent generator had already moved the anchor by the
+  // full cycle when the proforma went out, and a +1 on top drifted it into a
+  // month that belongs to no cycle at all — which is what the advance-cycle
+  // gate reads to decide when the next quarter is due. The generator owns this
+  // field and derives it from the period it actually billed.
 
   // 12. Audit log
   logAudit(adminSupabase, {

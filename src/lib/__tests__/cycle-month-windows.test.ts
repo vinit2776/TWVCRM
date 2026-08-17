@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cycleMonthWindows } from "../billing";
+import { cycleMonthWindows, firstBillingAnchor } from "../billing";
 
 /**
  * cycleMonthWindows drives advance (quarterly / half-yearly / yearly) rent
@@ -53,5 +53,40 @@ describe("cycleMonthWindows", () => {
       const thisFirst = new Date(w[i].first + "T00:00:00Z");
       expect((thisFirst.getTime() - prevLast.getTime()) / 86400000).toBe(1);
     }
+  });
+});
+
+/**
+ * firstBillingAnchor seeds contracts.next_billing_date. The advance-cycle gate
+ * reads which MONTH it falls in to decide when a quarterly / half-yearly /
+ * yearly contract is due, so seeding it a cycle ahead silently skips billing
+ * the contract's first cycle.
+ */
+describe("firstBillingAnchor", () => {
+  it("a mid-month start opens billing on the 1st of the FOLLOWING month", () => {
+    // The partial start month is covered by the proposal's pro-rata invoice.
+    expect(firstBillingAnchor("2026-05-19")).toBe("2026-06-01");
+  });
+
+  it("a start on the 1st opens billing in that same month", () => {
+    expect(firstBillingAnchor("2026-06-01")).toBe("2026-06-01");
+  });
+
+  it("never returns the contract's start day — always the 1st", () => {
+    for (const start of ["2026-05-19", "2026-01-31", "2026-02-28", "2026-11-30"]) {
+      expect(firstBillingAnchor(start).endsWith("-01")).toBe(true);
+    }
+  });
+
+  it("wraps the year for a December start", () => {
+    expect(firstBillingAnchor("2026-12-15")).toBe("2027-01-01");
+    expect(firstBillingAnchor("2026-12-01")).toBe("2026-12-01");
+  });
+
+  it("does not skip a cycle — a quarterly contract's first anchor is one month out, not three", () => {
+    // The old seed was start + cycleMonths (19 May → 19 Aug), so a quarterly
+    // contract's June and July were never billed by anything.
+    expect(firstBillingAnchor("2026-05-19")).not.toBe("2026-08-19");
+    expect(firstBillingAnchor("2026-05-19")).toBe("2026-06-01");
   });
 });
