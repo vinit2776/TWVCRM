@@ -4,7 +4,7 @@ import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/lib/constants";
-import { generateMonthlyStatements } from "@/lib/billing";
+import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
@@ -432,17 +432,62 @@ export async function PATCH(
   if (body.status === "active" && oldContract.status !== "active") {
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
 
-    // Generate the current month's billing statement immediately. The monthly
-    // cron runs on the last day of each month at 21:00 IST — without this hook,
-    // contracts activated mid-month would have no bill until then.
-    // Idempotent: skips if a statement for this month already exists.
+    // Activation deliberately raises NO invoice.
+    //
+    // It used to call generateMonthlyStatements() — the legacy combined
+    // generator — on the reasoning that "contracts activated mid-month would
+    // have no bill until the cron". Under the proposal → contract split that
+    // reasoning no longer holds, and the hook actively caused the gap it was
+    // meant to prevent:
+    //   • The proposal already collected the deposit and the pro-rata for the
+    //     partial start month. There is nothing outstanding at activation.
+    //   • Contract billing starts at the first FULL month, which the month-end
+    //     rent run covers on its own.
+    //   • The hook anchored on the activation date rather than the contract, so
+    //     a contract activated after its own first billing month got a draft for
+    //     the month after ACTIVATION — and every month in between was billed by
+    //     nobody: the run had skipped it (not yet active), the hook jumped past
+    //     it. Four contracts lost their August 2026 rent this way.
+    //   • It emitted legacy `combined` statements that the rent + usage split
+    //     then had to void and supersede.
+    //
+    // What activation does instead is REPORT. Months already past their billing
+    // run with no rent statement are recorded on the audit trail and surfaced on
+    // the contract, for a person to decide about. Never auto-billed: rent is
+    // sometimes invoiced outside the CRM, and silently raising back-dated
+    // invoices against a customer is not a side effect a status change may have.
     try {
       const admin = createAdminClient();
-      await generateMonthlyStatements(admin, { contractId: id });
+      const { data: existing } = await admin
+        .from("billing_statements")
+        .select("statement_type, period_start, period_end, prepaid_month, prepaid_year, voided_at")
+        .eq("contract_id", id);
+
+      const missing = unbilledMonths({
+        startDate: oldContract.start_date as string,
+        endDate: oldContract.end_date as string,
+        createdAt: oldContract.created_at as string,
+        today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        statements: (existing ?? []) as RentCoverage[],
+      });
+
+      if (missing.length > 0) {
+        const label = missing.map((m) => `${String(m.month).padStart(2, "0")}/${m.year}`).join(", ");
+        logAudit(admin, {
+          entityType: "contract",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser?.id ?? null,
+          changes: {
+            unbilled_months_at_activation: { old: null, new: label },
+          },
+        });
+      }
     } catch (err) {
-      console.error("[contract-activate] auto-generate statement failed:", err);
-      // Non-fatal: activation still succeeds. Operator can use the
-      // "Generate Missing Bills" button in /billing to retry.
+      console.error("[contract-activate] unbilled-month check failed:", err);
+      // Non-fatal and non-blocking: this is a report, not a gate. The same
+      // check runs on the contract's Invoices card, so a failure here loses
+      // the audit entry, not the visibility.
     }
 
     // ── UniFi API voucher issuance (Nungambakkam LGF only) ───────────

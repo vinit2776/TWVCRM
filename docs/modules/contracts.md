@@ -412,7 +412,7 @@ Changed via PATCH with `billing_mode` field. Toggled in the `ContractInvoicesSec
 - Financials (items, subtotal, tax, discount) are always sourced from the linked proposal.
 
 ### Billing Statements (`src/lib/billing.ts`)
-- `generateMonthlyStatements(adminClient, { contractId })` is called on activation to generate the current month's first statement immediately (idempotent — skips if one already exists for the month).
+- Activation raises **no** invoice. It calls `unbilledMonths()` and, if any month is already past its billing run with no rent statement, records them on the audit trail as `unbilled_months_at_activation`. The same check drives the amber banner on the contract's Invoices card. Billing itself is left to the month-end rent run or the per-contract "Bill next cycle" action — activation must never send a customer a back-dated invoice as a side effect.
 - The monthly cron also calls this for all active contracts.
 
 ### Leads

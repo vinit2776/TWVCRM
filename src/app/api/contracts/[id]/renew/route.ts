@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
-import { firstBillingAnchor } from "@/lib/billing";
+import { firstBillingAnchor } from "@/lib/billing-months";
 
 /**
  * POST /api/contracts/[id]/renew
