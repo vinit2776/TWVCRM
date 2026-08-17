@@ -155,6 +155,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
 | Daily 09:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
+| Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 
 Billing generation logic is centralised in `src/lib/billing.ts` — used by both the cron and the manual trigger, and called on contract activation to generate the first statement immediately.
 
@@ -241,6 +242,15 @@ BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_D
 ```
 
 Razorpay keys are stored in the `app_settings` DB table, not env vars.
+
+**Not currently set anywhere** (the Gmail inbound pipeline has never run in any
+environment — see `docs/gmail-intake.md` before setting them):
+
+```
+GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN
+GMAIL_WATCH_EMAIL / GMAIL_PUBSUB_TOPIC
+GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
+```
 
 ## Module Map
 
