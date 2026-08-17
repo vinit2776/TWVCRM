@@ -130,6 +130,38 @@ export function daysOverdueFromDueDate(dueDateYmd: string): number {
   return Math.floor((todayMs - dueMs) / 86400000);
 }
 
+/** The delivery stamps a statement can carry, one per issuance path. */
+export interface DeliveryMarkers {
+  /** Proforma First — stamped by dispatchProforma only on a successful send. */
+  proforma_sent_at?: string | null;
+  /** GST Direct (CRM-issued) — stamped by dispatchGstDirect when the mail goes out. */
+  emailed_at?: string | null;
+  /** Tally-issued — stamped when accounts send the invoice from /accounting/inbox. */
+  tally_delivered_at?: string | null;
+}
+
+/**
+ * Did this statement actually reach the customer?
+ *
+ * Never infer delivery from `status`. A statement is finalized BEFORE it is
+ * dispatched, so a failed send (Razorpay down, mail rejected, a crash between
+ * the two) leaves a finalized, due-dated statement that the customer has never
+ * seen. Dunning on status alone chases people for an invoice they never got.
+ *
+ * Each issuance path stamps its own marker on success and leaves it NULL on
+ * failure, so the presence of any one of them is the only honest evidence:
+ *   • Proforma First      → proforma_sent_at
+ *   • GST Direct (CRM)    → emailed_at
+ *   • Tally-issued        → tally_delivered_at
+ *
+ * A statement with none of them is not necessarily lost — it may have been
+ * sent by hand outside the CRM — so callers must surface these rather than
+ * drop them silently. They need a human, not a reminder.
+ */
+export function hasReachedCustomer(s: DeliveryMarkers): boolean {
+  return Boolean(s.proforma_sent_at) || Boolean(s.emailed_at) || Boolean(s.tally_delivered_at);
+}
+
 /**
  * Refreshes the Razorpay link if expired/missing; returns a working URL or
  * null if Razorpay is disabled / call failed. Persists the new id+url on the
