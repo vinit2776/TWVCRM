@@ -604,6 +604,12 @@ export interface Contract {
   deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_received_at?: string;
   deposit_internal_notes?: string | null;
+  // Deposit refund — set when money has actually gone back to the customer.
+  // Excluded from the pooled balance (see get_deposit_available_balance);
+  // no UI writes these yet, they're a manual accounts lever for now.
+  deposit_refunded_amount?: number | null;
+  deposit_refunded_at?: string | null;
+  deposit_refund_reference?: string | null;
   // Renewal communication
   renewal_reminder_sent_at?: string | null;
   renewal_reminder_count?: number;
@@ -658,10 +664,11 @@ export type DepositAdjustmentStatus = "pending_approval" | "approved" | "rejecte
 export interface DepositAdjustment {
   id: string;
   contract_id: string;
+  // Informational/back-compat only since the pooled-customer-deposits migration —
+  // the balance math keys off source_lead_id now, neither of these is read.
   source_contract_id: string;
-  // Informational/back-compat only since the contract-owned-deposits migration —
-  // the balance math keys off source_contract_id now, this is no longer read.
   source_proposal_id?: string | null;
+  source_lead_id: string;
   billing_statement_id: string;
   billing_payment_id?: string | null;
   amount: number;
@@ -698,8 +705,12 @@ export type DepositUnavailableReason =
   | "fully_committed";
 
 export interface DepositBalance {
+  // Chain root of the CALLING contract — informational/back-compat only
+  // since the pooled-customer-deposits migration. The figures below are
+  // pooled across every contract of source_lead_id, not this chain.
   source_contract_id: string;
   source_proposal_id: string | null;
+  source_lead_id: string;
   deposit_collected: number;
   committed: number;
   available: number;
@@ -713,10 +724,11 @@ export type DepositTopupCollectionMethod = "razorpay_link" | "manual";
 export interface DepositTopup {
   id: string;
   contract_id: string;
+  // Informational/back-compat only since the pooled-customer-deposits migration —
+  // the balance math keys off source_lead_id now, neither of these is read.
   source_contract_id: string;
-  // Informational/back-compat only since the contract-owned-deposits migration —
-  // the balance math keys off source_contract_id now, this is no longer read.
   source_proposal_id?: string | null;
+  source_lead_id: string;
   amount: number;
   category: DepositTopupCategory;
   category_note?: string | null;
