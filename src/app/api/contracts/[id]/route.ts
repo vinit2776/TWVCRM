@@ -70,6 +70,7 @@ export async function PATCH(
   const allowedFields: Record<string, unknown> = {};
 
   if (body.status) allowedFields.status = body.status;
+  if (body.start_date) allowedFields.start_date = body.start_date;
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.notes !== undefined) allowedFields.notes = body.notes;
   if (body.termination_reason) allowedFields.termination_reason = body.termination_reason;
@@ -138,6 +139,23 @@ export async function PATCH(
       { error: "Only admins can override the payment requirement" },
       { status: 403 }
     );
+  }
+
+  // start_date is a placeholder until the linked proposal's pro-rata invoice
+  // is paid — editable while start_date_confirmed is false, locked once true
+  // (always true after activation). The admin payment_override_reason path
+  // (already gated to admin role above) can still push it through when
+  // locked, but only as part of the same request that activates the
+  // contract — it must not become a general-purpose bypass for editing
+  // start_date on a contract that's already active. (allowedFields.start_date
+  // was staged earlier, before oldContract was available to check.)
+  if (allowedFields.start_date !== undefined) {
+    const overrideUnlocksThisRequest = !!body.payment_override_reason && body.status === "active";
+    if (oldContract.start_date_confirmed && !overrideUnlocksThisRequest) {
+      return NextResponse.json({
+        error: "Start date is locked — the linked proposal's pro-rata invoice has already been paid. Use the admin override while activating to change it.",
+      }, { status: 400 });
+    }
   }
 
   // Set when an attributed ad-hoc invoice stands in for the proposal's own
@@ -287,7 +305,7 @@ export async function PATCH(
       if (!isRenewal && oldContract.proposal_id) {
         const { data: depositSnapshot } = await supabase
           .from("proposals")
-          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes")
+          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -301,6 +319,35 @@ export async function PATCH(
           allowedFields.deposit_payment_received_at = depositSnapshot.deposit_payment_received_at;
           allowedFields.deposit_internal_notes = depositSnapshot.deposit_internal_notes;
         }
+
+        // Lock start_date to the paid pro-rata invoice's occupation date —
+        // once payment has actually been collected against a specific date,
+        // that date is authoritative and the placeholder entered earlier no
+        // longer is. Admin overrides skip the re-derivation and keep
+        // whatever start_date this same request explicitly set (or the
+        // existing value if it didn't), consistent with the payment gate
+        // bypass above.
+        if (!body.payment_override_reason) {
+          const lockedStartDate = depositSnapshot?.occupation_start_date || oldContract.start_date;
+          if (lockedStartDate !== oldContract.start_date) {
+            allowedFields.start_date = lockedStartDate;
+            // phase_start_date (the rate-escalation clock anchor) defaults to
+            // start_date at creation but is independently editable — only
+            // re-sync it here if it was never moved off that default.
+            if (oldContract.phase_start_date === oldContract.start_date) {
+              allowedFields.phase_start_date = lockedStartDate;
+            }
+          }
+        }
+      }
+
+      // start_date is locked from this point on — no route allows editing it
+      // once active. Renewals are out of scope for this: their draft
+      // start_date is managed entirely by the renewal edit-terms flow, and
+      // start_date_confirmed already defaults to true for them.
+      if (!isRenewal) {
+        allowedFields.start_date_confirmed = true;
+        allowedFields.start_date_locked_at = now;
       }
 
       allowedFields.activated_at = now;

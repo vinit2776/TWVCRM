@@ -971,6 +971,10 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            proposalId={contract.proposal_id}
+            proposalNumber={contract.proposal?.proposal_number}
+            prorataPaymentStatus={contract.proposal?.payment_status}
+            prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
@@ -1412,9 +1416,16 @@ export default function ContractDetailPage({
                 <span>{contract.tenure_months} months</span>
               </div>
               <Separator />
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Start Date</span>
-                <span>{formatDate(contract.start_date)}</span>
+                <span className="flex items-center gap-2">
+                  {formatDate(contract.start_date)}
+                  {contract.start_date_confirmed === false && (
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                      Pending pro-rata payment
+                    </Badge>
+                  )}
+                </span>
               </div>
               <Separator />
               <div className="flex justify-between">

@@ -1,4 +1,4 @@
-import jsPDF from "jspdf";
+import jsPDF, { GState } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
@@ -1773,6 +1773,27 @@ export function generateMembershipAgreementPDF(
     doc.setFontSize(6);
     doc.setTextColor(200, 230, 220);
     doc.text(`Page ${i} of ${totalPageCount}  |  ${COMPANY_WEBSITE}`, pw / 2, ph - 4, { align: "center" });
+  }
+
+  // ================================================================
+  // DRAFT watermark — every page, until start_date is locked in
+  // (i.e. the proposal's pro-rata invoice is paid and the occupation
+  // date is firm). See supabase/migrations/00503_contract_start_date_confirmation.sql.
+  // ================================================================
+  if (!contract.start_date_confirmed) {
+    for (let i = 1; i <= totalPageCount; i++) {
+      doc.setPage(i);
+      const ph = doc.internal.pageSize.getHeight();
+      const pw = doc.internal.pageSize.getWidth();
+
+      doc.saveGraphicsState();
+      doc.setGState(new GState({ opacity: 0.15 }));
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(90);
+      doc.setTextColor(200, 30, 30);
+      doc.text("DRAFT", pw / 2, ph / 2, { align: "center", angle: 45 });
+      doc.restoreGraphicsState();
+    }
   }
 
   return doc;
