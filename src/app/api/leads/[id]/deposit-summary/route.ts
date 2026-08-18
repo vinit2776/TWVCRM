@@ -26,7 +26,7 @@ export async function GET(
 
   const { data: contracts, error } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from")
+    .select("id, contract_number, status, security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from, start_date, end_date, tenure_months")
     .eq("lead_id", leadId)
     .order("created_at");
 
@@ -68,6 +68,9 @@ export async function GET(
       : 0,
     refunded: Number(c.deposit_refunded_amount || 0),
     is_renewal_child: !!c.deposit_carried_from,
+    start_date: c.start_date,
+    end_date: c.end_date,
+    tenure_months: c.tenure_months,
   }));
 
   return NextResponse.json({

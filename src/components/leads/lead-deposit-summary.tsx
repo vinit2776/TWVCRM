@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { ShieldCheck, Loader2 } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { CONTRACT_STATUS_LABELS } from "@/lib/constants";
 
 interface ContractBreakdownRow {
@@ -25,6 +25,9 @@ interface ContractBreakdownRow {
   collected: number;
   refunded: number;
   is_renewal_child: boolean;
+  start_date: string | null;
+  end_date: string | null;
+  tenure_months: number | null;
 }
 
 interface DepositSummary {
@@ -91,19 +94,27 @@ export function LeadDepositSummary({ leadId }: Props) {
         {multiContract && (
           <div className="border-t pt-2 space-y-1">
             {data.contracts.map((c) => (
-              <div key={c.contract_id} className="flex items-center justify-between text-[11px]">
-                <span className="text-muted-foreground">
-                  {c.contract_number}
-                  {c.is_renewal_child && <span className="ml-1 text-[10px]">(renewal, carries forward)</span>}
-                  <span className="ml-1 text-[10px]">
-                    · {CONTRACT_STATUS_LABELS[c.status as keyof typeof CONTRACT_STATUS_LABELS] || c.status}
+              <div key={c.contract_id} className="space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-muted-foreground">
+                    {c.contract_number}
+                    {c.is_renewal_child && <span className="ml-1 text-[10px]">(renewal, carries forward)</span>}
+                    <span className="ml-1 text-[10px]">
+                      · {CONTRACT_STATUS_LABELS[c.status as keyof typeof CONTRACT_STATUS_LABELS] || c.status}
+                    </span>
                   </span>
-                </span>
-                <span className="tabular-nums">
-                  {c.required > 0 ? `required ${formatCurrency(c.required)}` : "—"}
-                  {c.collected > 0 && <> · collected <strong className="text-foreground">{formatCurrency(c.collected)}</strong></>}
-                  {c.refunded > 0 && <> · refunded {formatCurrency(c.refunded)}</>}
-                </span>
+                  <span className="tabular-nums">
+                    {c.required > 0 ? `required ${formatCurrency(c.required)}` : "—"}
+                    {c.collected > 0 && <> · collected <strong className="text-foreground">{formatCurrency(c.collected)}</strong></>}
+                    {c.refunded > 0 && <> · refunded {formatCurrency(c.refunded)}</>}
+                  </span>
+                </div>
+                {c.start_date && c.end_date && (
+                  <div className="text-[10px] text-muted-foreground/70">
+                    {formatDate(c.start_date)} → {formatDate(c.end_date)}
+                    {c.tenure_months ? ` (${c.tenure_months} mo)` : ""}
+                  </div>
+                )}
               </div>
             ))}
           </div>
