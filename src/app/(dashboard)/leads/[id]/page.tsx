@@ -712,7 +712,7 @@ export default function LeadDetailPage({
               line graph shows monthly revenue trend. Auto-hides
               gracefully when there are no payments. */}
           <LeadBillingSnippet leadId={id} />
-          <LeadDepositSummary leadId={id} />
+          <LeadDepositSummary leadId={id} currentUserRole={userRole ?? undefined} />
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
