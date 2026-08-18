@@ -32,6 +32,8 @@ interface Statement {
   razorpay_payment_link_url: string | null;
   finalized_at: string | null;
   pi_cancelled_at: string | null;
+  contract_id: string | null;
+  contract?: { id: string; contract_number: string } | null;
 }
 
 const STATEMENT_STATUS_LABELS: Record<string, string> = {
@@ -76,11 +78,29 @@ interface ContractInvoicesSectionProps {
   contractId: string;
   billingMode?: 'proforma_first' | 'gst_direct' | null;
   contractStatus?: string;
+  /** Enables the "All for this customer" scope — omit and only this contract's rows show. */
+  leadId?: string | null;
+  /**
+   * Part of a renewal chain (has a parent, or a renewal of its own). Billing
+   * continuity matters most here — a renewal's own history starts mid-stream —
+   * so the customer-wide scope is the default for these.
+   */
+  isRenewalChain?: boolean;
 }
 
-export function ContractInvoicesSection({ contractId, billingMode, contractStatus }: ContractInvoicesSectionProps) {
+export function ContractInvoicesSection({
+  contractId,
+  billingMode,
+  contractStatus,
+  leadId,
+  isRenewalChain,
+}: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
+  const canShowCustomerScope = !!leadId;
+  const [scope, setScope] = useState<'contract' | 'customer'>(
+    canShowCustomerScope && isRenewalChain ? 'customer' : 'contract'
+  );
   const [savingMode, setSavingMode] = useState(false);
   const [currentMode, setCurrentMode] = useState<'proforma_first' | 'gst_direct'>(billingMode || 'proforma_first');
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -95,34 +115,58 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
   }, [billingMode]);
 
   const refreshStatements = () => {
-    return fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
+    // Customer scope keys on lead_id so the history stays continuous across a
+    // renewal chain (and any other contract the same customer holds) — statements
+    // are filed per contract, so a contract_id filter alone starts mid-stream.
+    const query = scope === 'customer' && leadId
+      ? `lead_id=${leadId}`
+      : `contract_id=${contractId}`;
+    return fetch(`/api/billing-statements?${query}&limit=100`)
       .then((r) => r.json())
       .then((d) => setStatements((d.data || []) as Statement[]))
       .catch(() => setStatements([]));
   };
 
   useEffect(() => {
+    setLoading(true);
     refreshStatements().finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractId, scope, leadId]);
+
+  useEffect(() => {
     fetch("/api/me")
       .then((r) => r.json())
       .then((d) => setUserRole(d.role ?? null))
       .catch(() => setUserRole(null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contractId]);
+  }, []);
+
+  // Chronological by billed period — the point of the customer scope is reading
+  // the billing history in order, which created_at (the API's default) doesn't give
+  // once statements from several contracts are interleaved.
+  const visibleStatements = useMemo(
+    () => [...statements].sort((a, b) => b.period_start.localeCompare(a.period_start)),
+    [statements]
+  );
+
+  const isOwnRow = (s: Statement) => (s.contract_id ?? null) === contractId;
 
   // Proformas still open under the old Proforma First flow — switching to
   // GST Direct only affects future cycles, so these are left behind unless
   // resolved via the GST override (convert-to-gst-early).
+  // Restricted to THIS contract even in customer scope: the billing-mode switch
+  // and the GST override both act on this contract, so offering another
+  // contract's proformas here would apply the override to the wrong contract.
   const pendingUnpaidStatements = useMemo(
     () =>
       statements.filter(
         (s) =>
+          (s.contract_id ?? null) === contractId &&
           s.status === "finalized" &&
           s.payment_status !== "paid" &&
           !s.gst_invoice_number &&
           !s.pi_cancelled_at
       ),
-    [statements]
+    [statements, contractId]
   );
 
   const applyModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
@@ -187,6 +231,30 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
         <CardTitle className="text-base flex items-center gap-2">
           <Receipt className="h-4 w-4 text-muted-foreground" />
           Monthly Invoices
+          {canShowCustomerScope && (
+            <div className="ml-2 inline-flex rounded-md border overflow-hidden">
+              <button
+                onClick={() => setScope('contract')}
+                className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                  scope === 'contract'
+                    ? 'bg-[#015E65] text-white'
+                    : 'bg-background text-muted-foreground hover:bg-muted/30'
+                }`}
+              >
+                This contract
+              </button>
+              <button
+                onClick={() => setScope('customer')}
+                className={`px-2 py-0.5 text-[11px] font-medium transition-colors border-l ${
+                  scope === 'customer'
+                    ? 'bg-[#015E65] text-white'
+                    : 'bg-background text-muted-foreground hover:bg-muted/30'
+                }`}
+              >
+                All for this customer
+              </button>
+            </div>
+          )}
         </CardTitle>
         <Link href={`/billing?contract_id=${contractId}`}>
           <Button variant="ghost" size="sm">
@@ -248,6 +316,9 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
               <thead>
                 <tr className="border-b text-xs text-muted-foreground">
                   <th className="text-left font-medium pb-2 pr-4">Period</th>
+                  {scope === 'customer' && (
+                    <th className="text-left font-medium pb-2 pr-4">Contract</th>
+                  )}
                   <th className="text-left font-medium pb-2 pr-4">Proforma #</th>
                   <th className="text-right font-medium pb-2 pr-4">Amount</th>
                   <th className="text-left font-medium pb-2 pr-4">Status</th>
@@ -257,11 +328,36 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {statements.map((s) => (
-                  <tr key={s.id} className="hover:bg-muted/30 transition-colors">
+                {visibleStatements.map((s) => (
+                  <tr
+                    key={s.id}
+                    className={`hover:bg-muted/30 transition-colors ${
+                      scope === 'customer' && !isOwnRow(s) ? 'text-muted-foreground' : ''
+                    }`}
+                  >
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}
                     </td>
+                    {scope === 'customer' && (
+                      <td className="py-2.5 pr-4 whitespace-nowrap">
+                        {s.contract?.contract_number ? (
+                          isOwnRow(s) ? (
+                            <Badge variant="outline" className="text-[10px] bg-[#015E65]/10 text-[#015E65] border-[#015E65]/30">
+                              {s.contract.contract_number}
+                            </Badge>
+                          ) : (
+                            <Link
+                              href={`/contracts/${s.contract_id}`}
+                              className="text-[10px] font-mono hover:underline"
+                            >
+                              {s.contract.contract_number}
+                            </Link>
+                          )
+                        ) : (
+                          <span className="text-[10px] italic">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="py-2.5 pr-4">
                       <Link
                         href={`/api/billing-statements/${s.id}/proforma-pdf`}

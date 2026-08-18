@@ -209,6 +209,9 @@ export type RenewalDraftPricing = {
   tax_percentage: number | null;
   phase_start_date: string | null;
   seats: number | null;
+  status: string;
+  billing_mode: string | null;
+  contract_number: string;
 };
 
 /**
@@ -229,7 +232,7 @@ async function fetchActiveRenewalDraftsByParentId(
 
   const { data } = await supabase
     .from("contracts")
-    .select("id, parent_contract_id, start_date, end_date, total_amount, subtotal, tax_percentage, phase_start_date, seats, renewal_sequence")
+    .select("id, parent_contract_id, contract_number, status, billing_mode, start_date, end_date, total_amount, subtotal, tax_percentage, phase_start_date, seats, renewal_sequence")
     .in("parent_contract_id", parentIds)
     .neq("status", "rejected")
     .order("renewal_sequence", { ascending: false });
@@ -239,11 +242,46 @@ async function fetchActiveRenewalDraftsByParentId(
       map.set(row.parent_contract_id, {
         id: row.id, start_date: row.start_date, end_date: row.end_date,
         total_amount: row.total_amount, subtotal: row.subtotal, tax_percentage: row.tax_percentage,
-        phase_start_date: row.phase_start_date, seats: row.seats,
+        phase_start_date: row.phase_start_date, seats: row.seats, status: row.status,
+        billing_mode: row.billing_mode, contract_number: row.contract_number,
       });
     }
   }
   return map;
+}
+
+/**
+ * Which contract a prepaid month's rent statement should be FILED against —
+ * as opposed to which terms price it (that's computeRenewalSplitRentSegments).
+ *
+ * Normally the contract being billed. But when a renewal_in_progress parent's
+ * own term ended before the prepaid month even starts, the whole month is
+ * priced at the renewal's escalated terms, so the statement belongs to the
+ * renewal — not to a contract whose term is over. Filing it on the parent sent
+ * the client an invoice referencing a contract number that no longer governed
+ * the period, and hid the row from the renewal's own invoice list.
+ *
+ * Split months stay on the parent: one statement carries one contract_id, and
+ * the PDF already labels both rate segments (see buildSegmentedRentLineItems).
+ *
+ * Only a renewal the client has actually been given qualifies — "draft" isn't
+ * billable yet, and an "active" renewal is in the billing loop under its own
+ * id, so redirecting to it would double-bill.
+ */
+export function rentStatementContractId(
+  parentId: string,
+  parentEndYmd: string,
+  draft: RenewalDraftPricing | undefined,
+  prepaidFirstYmd: string,
+  prepaidLastYmd: string
+): string {
+  if (!draft) return parentId;
+  if (draft.status !== "sent" && draft.status !== "accepted") return parentId;
+  // Parent still covers part of the month → split month, keep it on the parent.
+  if (parentEndYmd >= prepaidFirstYmd) return parentId;
+  // Renewal doesn't overlap the month at all → nothing to reattribute.
+  if (draft.start_date > prepaidLastYmd || draft.end_date < prepaidFirstYmd) return parentId;
+  return draft.id;
 }
 
 // ── Day-precise rate-phase boundaries ──────────────────────────────────────
@@ -350,7 +388,7 @@ type RenewalSplitResult = {
  * implies days nobody is contractually billable for) is left unbilled rather
  * than fabricated.
  */
-function computeRenewalSplitRentSegments(
+export function computeRenewalSplitRentSegments(
   cid: string,
   ownStartYmd: string,
   ownEndYmd: string,
@@ -999,6 +1037,13 @@ export async function generateMonthlyStatements(
           line_items: lineItems,
           prepaid_month: prepaid.month,
           prepaid_year: prepaid.year,
+          // Explicit, not NULL: both idempotency queries in the rent and usage
+          // generators filter statement_type IN ('rent','combined') /
+          // ('usage','combined'). A NULL-typed statement was invisible to them,
+          // so a draft created here (e.g. by the contract-activation hook) was
+          // neither superseded nor counted as covering — it lingered alongside
+          // the real one. This row is a combined rent + usage statement.
+          statement_type: "combined",
         })
         .select("id")
         .single();
@@ -1144,6 +1189,34 @@ export async function generateRentProformas(
 
   const contractIds = contracts.map((c) => c.id as string);
 
+  // We need an admin client for dispatchProforma (bypasses RLS for the update step)
+  const adminSupabase = createAdminClient();
+
+  // Renewal drafts for renewal_in_progress parents — their escalated terms
+  // supersede the parent's stale pre-renewal rate once end_date has lapsed, and
+  // once it has lapsed for the WHOLE prepaid month the statement is filed
+  // against the renewal itself. Both are needed before the idempotency query
+  // below, so a statement already filed on a renewal is still found.
+  const renewalInProgressIds = (contracts as Array<{ id: string; status: string }>)
+    .filter((c) => c.status === "renewal_in_progress")
+    .map((c) => c.id);
+  const renewalDraftByParentId = await fetchActiveRenewalDraftsByParentId(adminSupabase, renewalInProgressIds);
+  const draftIds = [...renewalDraftByParentId.values()].map((d) => d.id);
+
+  // parent id → the renewal its rent statement is filed against (only when
+  // reattributed; contracts billing under their own id are absent from the map).
+  const rentTargetByParentId = new Map<string, string>();
+  for (const c of contracts as Array<{ id: string; status: string; end_date: string }>) {
+    const draft = c.status === "renewal_in_progress" ? renewalDraftByParentId.get(c.id) : undefined;
+    const target = rentStatementContractId(c.id, c.end_date, draft, prepaidFirstOfMonth, prepaidLastOfMonth);
+    if (target !== c.id) rentTargetByParentId.set(c.id, target);
+  }
+  // Reverse lookup so a covering statement found under a renewal's id is
+  // attributed to the parent's slot in the loop below.
+  const parentIdByRentTarget = new Map<string, string>(
+    [...rentTargetByParentId].map(([parentId, targetId]) => [targetId, parentId])
+  );
+
   // Idempotency, partitioned by client-impact:
   //   (1) alreadySent — a covering statement was actually dispatched to the client
   //       (proforma_sent_at IS NOT NULL), or paid, or GST-issued. NEVER touch
@@ -1161,7 +1234,9 @@ export async function generateRentProformas(
   const { data: coveringStmts } = await supabase
     .from("billing_statements")
     .select("id, contract_id, statement_number, prepaid_month, prepaid_year, period_start, statement_type, status, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
-    .in("contract_id", contractIds)
+    // Reattributed renewals included: a statement filed against a renewal must
+    // still count as covering its parent's slot, or the next run bills it twice.
+    .in("contract_id", [...contractIds, ...[...rentTargetByParentId.values()]])
     .in("statement_type", ["rent", "combined"])
     .is("voided_at", null)
     // A discarded draft is not a covering statement — leaving it in would put
@@ -1181,18 +1256,18 @@ export async function generateRentProformas(
     // failed but was later retried. Status is the authoritative guard here.
     const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0
       || s.status === "finalized" || s.status === "exported";
+    // Both maps are keyed by the id the loop below iterates (the parent's),
+    // even when the statement itself is filed against the renewal.
+    const loopKey = parentIdByRentTarget.get(s.contract_id) ?? s.contract_id;
     if (wasSentOrPaid) {
-      alreadySent.add(s.contract_id);
-    } else if (!supersedable.has(s.contract_id)) {
+      alreadySent.add(loopKey);
+    } else if (!supersedable.has(loopKey)) {
       // Take the first (typically only) unsent covering statement to supersede
-      supersedable.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+      supersedable.set(loopKey, { id: s.id, statement_number: s.statement_number });
     }
   }
   // If a contract has BOTH a sent statement and an unsent one, the sent one wins — drop from supersedable
   for (const cid of alreadySent) supersedable.delete(cid);
-
-  // We need an admin client for dispatchProforma (bypasses RLS for the update step)
-  const adminSupabase = createAdminClient();
 
   // Pre-fetch ALL contract_addons for the full billing run in one query, then
   // index by contract_id in a Map — eliminates the N+1 per-contract query that
@@ -1220,14 +1295,6 @@ export async function generateRentProformas(
     contracts as Array<{ id: string; location_id?: string | null }>
   );
 
-  // Pre-fetch renewal drafts for renewal_in_progress parents — their escalated
-  // terms supersede the parent's stale pre-renewal rate once end_date has lapsed.
-  const renewalInProgressIds = (contracts as Array<{ id: string; status: string }>)
-    .filter((c) => c.status === "renewal_in_progress")
-    .map((c) => c.id);
-  const renewalDraftByParentId = await fetchActiveRenewalDraftsByParentId(adminSupabase, renewalInProgressIds);
-  const draftIds = [...renewalDraftByParentId.values()].map((d) => d.id);
-
   // Pre-fetch tiered rate phases, for contracts using tiered pricing
   // (includes renewal draft ids so escalated tiered contracts resolve correctly)
   const ratePhasesByContract = await fetchRatePhasesByContract(adminSupabase, [...contractIds, ...draftIds]);
@@ -1243,6 +1310,13 @@ export async function generateRentProformas(
     // (whole month at own rate, whole month at draft rate, or a genuine
     // split when the parent's end_date lands mid-month).
     const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
+    // Where this month's statement gets filed — resolved once so the dry-run
+    // preview names the same contract the live run would write to.
+    const rentContractId = rentTargetByParentId.get(cid) ?? cid;
+    const isReattributed = rentContractId !== cid;
+    const rentContractNumber = isReattributed
+      ? (renewalDraft?.contract_number ?? contractNumber)
+      : contractNumber;
 
     try {
       // ── 1. Quarterly gate ───────────────────────────────────────────────
@@ -1356,7 +1430,7 @@ export async function generateRentProformas(
           ...addonLineItems,
         ];
         result.preview.push({
-          contract_number: contractNumber,
+          contract_number: rentContractNumber,
           customer_name: customerName,
           type: "rent",
           period_label: monthLabel(prepaid.month, prepaid.year),
@@ -1416,10 +1490,12 @@ export async function generateRentProformas(
       }];
 
       // ── 5. Insert statement as draft ────────────────────────────────────
+      // contract_id is the renewal's when the parent's term ended before this
+      // month began — see rentStatementContractId (resolved above the dry run).
       const { data: stmt, error: insertErr } = await adminSupabase
         .from("billing_statements")
         .insert({
-          contract_id:         cid,
+          contract_id:         rentContractId,
           lead_id:             contract.lead_id,
           period_start:        prepaidFirstOfMonth,
           period_end:          prepaidLastOfMonth,
@@ -1463,7 +1539,13 @@ export async function generateRentProformas(
 
       // ── 7. Dispatch (Razorpay + PDF + email) ────────────────────────────
       // GST Direct contracts skip the proforma step and issue a tax invoice immediately.
-      const isGstDirect = (contract.billing_mode as string | null) === "gst_direct";
+      // Follow the billing mode of the contract the statement is FILED against —
+      // a reattributed renewal may have been switched to GST Direct while the
+      // lapsed parent still reads proforma_first.
+      const effectiveBillingMode = ((isReattributed
+        ? renewalDraft?.billing_mode
+        : contract.billing_mode) ?? contract.billing_mode) as "proforma_first" | "gst_direct" | null;
+      const isGstDirect = effectiveBillingMode === "gst_direct";
       // For GST Direct, update the due_date to period_start + 7 before dispatch
       if (isGstDirect) {
         const [py, pm, pd] = prepaidFirstOfMonth.split("-").map(Number);
@@ -1478,7 +1560,7 @@ export async function generateRentProformas(
       const handoff = await handleStatementFinalized(
         adminSupabase,
         stmtId,
-        (contract.billing_mode as "proforma_first" | "gst_direct" | null) ?? null,
+        effectiveBillingMode,
         "monthly_billing_cron",
       );
 

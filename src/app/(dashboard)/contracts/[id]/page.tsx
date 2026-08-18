@@ -971,6 +971,8 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            leadId={contract.lead_id}
+            isRenewalChain={!!(contract.is_renewal || contract.parent_contract_id || renewalDraft)}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
