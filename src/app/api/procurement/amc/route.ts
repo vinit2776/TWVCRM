@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
 
 function getCurrentFY(date = new Date()): number {
   const month = date.getMonth() + 1;
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
     .from("purchase_orders")
     .select(`
       id, po_number, po_type, status, amc_status,
+      billing_cycle, cycle_count, unit_cost_per_cycle,
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
       locations(id, name),
       purchase_requests(id, pr_number, department, expenditure_type),
       purchase_order_items(id, item_name, unit),
-      vendor_bills(id, payment_status),
+      vendor_bills(id, payment_status, approval_status),
       linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code)
     `)
     .order("created_at", { ascending: false });
@@ -74,7 +76,17 @@ export async function GET(request: NextRequest) {
       r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today
     );
     const { vendor_bills: bills, ...rest } = r;
-    return { ...rest, amc_status: computed, payment_state: computePaymentState(bills) };
+    // Rejected bills do not consume a billing cycle — that cycle is still unbilled.
+    // Matches the cap enforced when a bill is created.
+    const liveBills = (bills ?? []).filter(
+      (b: { approval_status?: string | null }) => b.approval_status !== "rejected"
+    );
+    return {
+      ...rest,
+      amc_status: computed,
+      payment_state: computePaymentState(bills),
+      bills_raised: liveBills.length,
+    };
   });
 
   // Apply filters
@@ -95,7 +107,7 @@ export async function GET(request: NextRequest) {
     const currentFY = getCurrentFY();
     const { fyStart, fyEnd } = getFYWindow(currentFY);
 
-    const [{ data: budgetRow }, { data: committed, error: committedError }, { data: provisional }] = await Promise.all([
+    const [{ data: budgetRow }, committedTotal, { data: provisional }] = await Promise.all([
       supabase
         .from("department_budgets")
         .select("monthly_budget, is_active, notes")
@@ -104,13 +116,7 @@ export async function GET(request: NextRequest) {
         .eq("financial_year", currentFY)
         .is("location_id", null)
         .maybeSingle(),
-      supabase
-        .from("purchase_requests")
-        .select("id, total_estimated_amount")
-        .eq("expenditure_type", "amc")
-        .gte("created_at", fyStart)
-        .lte("created_at", fyEnd)
-        .in("status", ["approved", "partially_ordered", "po_created"]),
+      computeAmcCommitted(supabase, fyStart, fyEnd),
       supabase
         .from("purchase_requests")
         .select("total_estimated_amount")
@@ -119,31 +125,8 @@ export async function GET(request: NextRequest) {
         .lte("created_at", fyEnd)
         .eq("status", "submitted"),
     ]);
-    if (committedError) console.error("[amc] committed spend query failed:", committedError.message);
-
-    // Cancelling a PO does not move its request out of 'approved', so a request
-    // whose every PO was cancelled would otherwise still count as committed spend.
-    const committedRequests = committed ?? [];
-    const { data: committedPos, error: committedPosError } = committedRequests.length
-      ? await supabase
-          .from("purchase_orders")
-          .select("pr_id, status")
-          .in("pr_id", committedRequests.map((r) => r.id))
-      : { data: [], error: null };
-    if (committedPosError) console.error("[amc] committed PO query failed:", committedPosError.message);
-
-    const fullyCancelledPrIds = new Set<string>();
-    for (const req of committedRequests) {
-      const pos = (committedPos ?? []).filter((po) => po.pr_id === req.id);
-      if (pos.length > 0 && pos.every((po) => po.status === "cancelled")) {
-        fullyCancelledPrIds.add(req.id);
-      }
-    }
 
     const annualBudget = budgetRow?.monthly_budget ? Number(budgetRow.monthly_budget) : null;
-    const committedTotal = committedRequests
-      .filter((r) => !fullyCancelledPrIds.has(r.id))
-      .reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
     const provisionalTotal = (provisional ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
 
     budgetSummary = {
