@@ -3,6 +3,7 @@
 import { CheckCircle2, Circle, XCircle, Clock } from "lucide-react";
 import Link from "next/link";
 import type { Contract } from "@/types";
+import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
 
 interface Props {
   contract: Contract;
@@ -95,8 +96,24 @@ export function ContractLifecycle({ contract }: Props) {
         actor: null,
       });
     }
+  } else if ((CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
+    // Post-activation with no proposal linked (legacy/hand-entered contract)
+    // — the contract owns its own deposit snapshot now (see the activation
+    // handler in contracts/[id]/route.ts and the historical backfill), so
+    // this is no longer a gap to warn about; show the real deposit state.
+    const depositRequired = !!(contract.security_deposit_months && Number(contract.security_deposit_months) > 0);
+    const depositPaid = contract.deposit_payment_status === "paid";
+    if (depositRequired) {
+      stages.push({
+        key: "contract_deposit",
+        label: "Security Deposit Collected",
+        date: contract.deposit_payment_received_at,
+        state: depositPaid ? "done" : "active",
+        actor: null,
+      });
+    }
   } else if (!["draft"].includes(contract.status)) {
-    // No proposal linked — warn unless still a draft
+    // No proposal linked, still pre-activation — warn unless still a draft
     stages.push({
       key: "no_proposal",
       label: "No Proposal Linked",

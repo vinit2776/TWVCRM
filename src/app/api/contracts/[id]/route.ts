@@ -278,6 +278,31 @@ export async function PATCH(
         }
       }
 
+      // Snapshot the proposal's deposit fields onto the contract at the
+      // moment of activation — after this, the contract owns its own
+      // deposit ledger and never needs the proposal join again. Skipped for
+      // renewals (deposit_carried_from already resolves to the ancestor's
+      // own snapshot) and decoupled from payment_override_reason so an
+      // admin-override activation still gets whatever the proposal has.
+      if (!isRenewal && oldContract.proposal_id) {
+        const { data: depositSnapshot } = await supabase
+          .from("proposals")
+          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes")
+          .eq("id", oldContract.proposal_id)
+          .single();
+
+        if (depositSnapshot) {
+          allowedFields.security_deposit_amount = depositSnapshot.security_deposit_amount;
+          allowedFields.security_deposit_months = depositSnapshot.security_deposit_months;
+          allowedFields.deposit_payment_status = depositSnapshot.deposit_payment_status;
+          allowedFields.deposit_payment_amount = depositSnapshot.deposit_payment_amount;
+          allowedFields.deposit_payment_reference = depositSnapshot.deposit_payment_reference;
+          allowedFields.deposit_payment_medium = depositSnapshot.deposit_payment_medium;
+          allowedFields.deposit_payment_received_at = depositSnapshot.deposit_payment_received_at;
+          allowedFields.deposit_internal_notes = depositSnapshot.deposit_internal_notes;
+        }
+      }
+
       allowedFields.activated_at = now;
       allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {

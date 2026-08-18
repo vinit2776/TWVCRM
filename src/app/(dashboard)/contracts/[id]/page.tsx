@@ -520,7 +520,12 @@ export default function ContractDetailPage({
     );
   }
 
-  const securityDeposit = (contract.security_deposit_months ?? 3) * (contract.subtotal ?? contract.total_amount);
+  // Prefer the contract's own snapshotted amount (populated at activation —
+  // a negotiated deposit can differ from the months × rate formula) and
+  // fall back to the formula only pre-activation, when nothing's snapshotted yet.
+  const securityDeposit = contract.security_deposit_amount
+    ? contract.security_deposit_amount
+    : (contract.security_deposit_months ?? 3) * (contract.subtotal ?? contract.total_amount);
 
   return (
     <div className="space-y-6">
@@ -873,6 +878,20 @@ export default function ContractDetailPage({
                       <p className="font-medium">{formatCurrency(securityDeposit)}</p>
                       <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
                     </>
+                  ) : (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status) ? (
+                    // Post-activation: the contract owns its own deposit snapshot now
+                    // (see contracts/[id]/route.ts) — no proposal dependency, so this
+                    // works for legacy/no-proposal contracts too.
+                    contract.deposit_payment_status === "paid" ? (
+                      <>
+                        <p className="font-medium">
+                          {formatCurrency(Number(contract.deposit_payment_amount || contract.security_deposit_amount || securityDeposit))}
+                        </p>
+                        <p className="text-[10px] text-green-600 mt-0.5">✓ Received</p>
+                      </>
+                    ) : (
+                      <p className="font-medium text-amber-600">Pending</p>
+                    )
                   ) : linkedProposal?.deposit_payment_status === "paid" ? (
                     <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block hover:underline">
                       <p className="font-medium">
@@ -920,10 +939,13 @@ export default function ContractDetailPage({
             onPhasesUpdated={() => fetchContract(false)}
           />
 
-          {/* Security Deposit Snapshot */}
-          {linkedProposal && (
+          {/* Security Deposit Snapshot — renders pre-activation off the linked
+              proposal, or post-activation off the contract's own snapshot
+              even when no proposal is (or ever was) linked. */}
+          {(linkedProposal || (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) && (
             <ContractDepositSection
               proposal={linkedProposal}
+              contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
             />
           )}
