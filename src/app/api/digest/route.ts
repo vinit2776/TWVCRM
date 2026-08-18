@@ -23,19 +23,27 @@ export async function GET(request: Request) {
 
   // Comparison dates
   const todayDate = new Date(todayIST + "T00:00:00Z");
-  const lastWeekDate = new Date(todayDate.getTime() - 7 * 86400000);
-  const lastYearDate = new Date(todayDate);
-  lastYearDate.setFullYear(lastYearDate.getFullYear() - 1);
-
-  const lastWeek = lastWeekDate.toISOString().slice(0, 10);
-  const lastYear = lastYearDate.toISOString().slice(0, 10);
 
   // Week-to-date: Monday of the current IST week → today
   const dayOfWeek = todayDate.getUTCDay(); // 0=Sun, 1=Mon … 6=Sat
   const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const weekStart = new Date(todayDate.getTime() - daysFromMonday * 86400000)
-    .toISOString()
-    .slice(0, 10);
+  const weekStartDate = new Date(todayDate.getTime() - daysFromMonday * 86400000);
+  const weekStart = weekStartDate.toISOString().slice(0, 10);
+
+  // "Last Week" / "Last Year" must be genuinely comparable to "This Week"
+  // (a week-to-date range, not a full 7-day week) — so shift the exact same
+  // Monday→today window back by 7 days / 1 year, rather than diffing a
+  // single day against a range (previously: today-7d vs. this week's WTD,
+  // which understated "last week" by ~10x on non-Monday runs).
+  const lastWeekStart = new Date(weekStartDate.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+  const lastWeekEnd = new Date(todayDate.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+
+  const lastYearStartDate = new Date(weekStartDate);
+  lastYearStartDate.setFullYear(lastYearStartDate.getFullYear() - 1);
+  const lastYearEndDate = new Date(todayDate);
+  lastYearEndDate.setFullYear(lastYearEndDate.getFullYear() - 1);
+  const lastYearStart = lastYearStartDate.toISOString().slice(0, 10);
+  const lastYearEnd = lastYearEndDate.toISOString().slice(0, 10);
 
   const supabase = await createAdminClient();
 
@@ -66,8 +74,8 @@ export async function GET(request: Request) {
   // Aggregate data for 3 date windows + week-to-date
   const [today, lw, ly, wtd] = await Promise.all([
     fetchMetrics(supabase, todayIST),
-    fetchMetrics(supabase, lastWeek),
-    fetchMetrics(supabase, lastYear),
+    fetchMetricsRange(supabase, lastWeekStart, lastWeekEnd),
+    fetchMetricsRange(supabase, lastYearStart, lastYearEnd),
     fetchMetricsRange(supabase, weekStart, todayIST),
   ]);
 
@@ -432,7 +440,7 @@ function formatPaymentMethod(mode: string | null): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function leadName(lead: any): string | null {
   if (!lead) return null;
-  return [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || null;
+  return lead.company || [lead.first_name, lead.last_name].filter(Boolean).join(" ") || null;
 }
 
 /**
@@ -450,7 +458,7 @@ function billingStatementOwner(statement: any): { number: string; customer: stri
   if (statement?.booking?.booking_number) {
     return {
       number: statement.booking.booking_number,
-      customer: leadName(statement.booking.lead) || statement.booking.guest_name || statement.booking.guest_company || "—",
+      customer: leadName(statement.booking.lead) || statement.booking.guest_company || statement.booking.guest_name || "—",
     };
   }
   if (statement?.proposal?.proposal_number) {
@@ -460,7 +468,7 @@ function billingStatementOwner(statement: any): { number: string; customer: stri
     return { number: `${statement.invoice.invoice_number} (invoice)`, customer: leadName(statement.invoice.lead) || "—" };
   }
   if (statement?.case?.case_number) {
-    return { number: `${statement.case.case_number} (VO case)`, customer: statement.case.client_name || statement.case.client_company_name || "—" };
+    return { number: `${statement.case.case_number} (VO case)`, customer: statement.case.client_company_name || statement.case.client_name || "—" };
   }
   return { number: `— (statement ${statement?.statement_number || "?"})`, customer: "—" };
 }
@@ -535,7 +543,7 @@ async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ tra
     }),
     ...bookingRows.map((r) => ({
       number: r.booking?.booking_number || "—",
-      customer: leadName(r.booking?.lead) || r.booking?.guest_name || r.booking?.guest_company || "—",
+      customer: leadName(r.booking?.lead) || r.booking?.guest_company || r.booking?.guest_name || "—",
       method: formatPaymentMethod(r.payment_mode),
       amount: Number(r.amount || 0),
       createdAt: r.created_at,
