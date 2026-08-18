@@ -762,9 +762,15 @@ export default function ContractDetailPage({
                 </Link>
               </div>
               {contract.deposit_carried_from && (
-                <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
-                  Deposit carried over
-                </Badge>
+                Number(contract.deposit_shortfall || 0) > 0 ? (
+                  <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
+                    Deposit shortfall: {formatCurrency(Number(contract.deposit_shortfall || 0))}
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
+                    Deposit pooled
+                  </Badge>
+                )
               )}
               {contract.escalation_waived && (
                 <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
@@ -876,7 +882,7 @@ export default function ContractDetailPage({
                   ) : contract.deposit_carried_from ? (
                     <>
                       <p className="font-medium">{formatCurrency(securityDeposit)}</p>
-                      <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Pooled with customer</p>
                     </>
                   ) : (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status) ? (
                     // Post-activation: the contract owns its own deposit snapshot now
@@ -948,6 +954,7 @@ export default function ContractDetailPage({
               contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
               leadId={contract.lead_id || undefined}
+              depositShortfall={contract.deposit_shortfall}
             />
           )}
 
@@ -1287,7 +1294,7 @@ export default function ContractDetailPage({
                 {contract.deposit_carried_from && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Deposit</span>
-                    <span className="text-xs text-green-700">Carried from parent</span>
+                    <span className="text-xs text-green-700">Pooled with customer</span>
                   </div>
                 )}
                 {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
