@@ -248,6 +248,11 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   expired: "bg-orange-100 text-orange-800",
 };
 
+// Content edits (line items, pricing, terms) are only allowed in these
+// statuses — enforced server-side in PATCH /api/proposals/[id]; mirrored
+// here so the Edit action only renders where it will actually be accepted.
+export const PROPOSAL_EDITABLE_STATUSES = ["draft", "sent", "viewed", "rejected"] as const;
+
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 
 export const INVOICE_STATUS_LABELS: Record<string, string> = {
