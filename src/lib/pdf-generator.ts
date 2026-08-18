@@ -1188,7 +1188,7 @@ export function generateMembershipAgreementPDF(
   contract: Contract,
   lead?: Partial<Lead>,
   location?: Partial<Location>,
-  options?: { applyCompanyStamp?: boolean; stampRef?: string }
+  options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }
 ): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1776,11 +1776,16 @@ export function generateMembershipAgreementPDF(
   }
 
   // ================================================================
-  // DRAFT watermark — every page, until start_date is locked in
-  // (i.e. the proposal's pro-rata invoice is paid and the occupation
-  // date is firm). See supabase/migrations/00503_contract_start_date_confirmation.sql.
+  // DRAFT watermark — every page, forced on until start_date is locked
+  // in (i.e. the proposal's pro-rata invoice is paid and the occupation
+  // date is firm). Once locked, it's off by default but callers can
+  // still opt back in via options.watermarkDraft (e.g. a manual
+  // "include watermark" toggle) — that option has no effect while
+  // unconfirmed, it can only ever add the watermark back, never remove
+  // the forced one. See supabase/migrations/00503_contract_start_date_confirmation.sql.
   // ================================================================
-  if (!contract.start_date_confirmed) {
+  const showWatermark = !contract.start_date_confirmed || !!options?.watermarkDraft;
+  if (showWatermark) {
     for (let i = 1; i <= totalPageCount; i++) {
       doc.setPage(i);
       const ph = doc.internal.pageSize.getHeight();
