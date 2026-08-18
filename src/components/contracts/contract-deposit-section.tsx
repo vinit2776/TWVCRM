@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, ShieldCheck, ShieldAlert, ShieldOff } from "lucide-react";
+import { ExternalLink, ShieldCheck, ShieldAlert, ShieldOff, Users } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
 
@@ -22,15 +23,41 @@ interface DepositProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   contract?: any;
   depositCarriedFrom?: string | null;
+  leadId?: string;
 }
 
 // Once a contract activates, its own deposit columns (snapshotted from the
 // proposal at that moment — see contracts/[id]/route.ts) become the source
 // of truth and the contract never needs the proposal join again. Before
 // that, the proposal is still the one collecting the deposit.
-export function ContractDepositSection({ proposal, contract, depositCarriedFrom }: DepositProps) {
+//
+// The balance shown here is this contract's OWN collection — accurate on
+// its own, since a contract's own history doesn't change. But since
+// 00502_pooled_customer_deposits.sql, the ACTUAL available balance is
+// pooled across every contract the customer holds. When they have more
+// than one, a small pointer (not a number) links to the consolidated view.
+export function ContractDepositSection({ proposal, contract, depositCarriedFrom, leadId }: DepositProps) {
   const isActivated = !!contract?.status && (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
   const source = isActivated ? contract : proposal;
+
+  const [siblingCount, setSiblingCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!leadId) return;
+    fetch(`/api/leads/${leadId}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => setSiblingCount(j.data?.contracts?.length ?? null))
+      .catch(() => setSiblingCount(null));
+  }, [leadId]);
+
+  const siblingPointer = leadId && siblingCount && siblingCount > 1 ? (
+    <a
+      href={`/leads/${leadId}#security-deposit`}
+      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 mt-2"
+    >
+      <Users className="h-3 w-3" />
+      This customer has {siblingCount} contracts — see the consolidated deposit on their profile
+    </a>
+  ) : null;
 
   if (!source) return null;
 
@@ -52,6 +79,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom 
             <Badge className="bg-green-100 text-green-800 border-green-200">Carried Forward</Badge>
             <span>Deposit from parent contract — no new collection required.</span>
           </div>
+          {siblingPointer}
         </CardContent>
       </Card>
     );
@@ -75,6 +103,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom 
               </span>
             )}
           </div>
+          {siblingPointer}
         </CardContent>
       </Card>
     );
@@ -160,6 +189,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom 
             {" "}({source.security_deposit_months}× monthly fee) — not yet collected.
           </div>
         )}
+        {siblingPointer}
       </CardContent>
     </Card>
   );

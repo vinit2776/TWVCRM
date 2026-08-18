@@ -947,6 +947,7 @@ export default function ContractDetailPage({
               proposal={linkedProposal}
               contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
+              leadId={contract.lead_id || undefined}
             />
           )}
 
