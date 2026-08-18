@@ -883,6 +883,10 @@ export async function generateRentProformas(
       let isSplitMonth = false;
       let isProratedOrSplit = false;
       let hasRenewalSplit = false;
+      // True once any month of this statement was priced on the RENEWAL's terms
+      // rather than the parent's own — i.e. rent for a period that belongs to
+      // the renewal contract, billed here because the renewal is not active yet.
+      let billedForRenewal = false;
       let maxSegmentsInAMonth = 0;
 
       for (const w of windows) {
@@ -925,6 +929,7 @@ export async function generateRentProformas(
         if (split.segments.length > 1) isSplitMonth = true;
         if (split.segments.length > 1 || split.segments[0].days < w.days) isProratedOrSplit = true;
         if (split.isRenewalSplit) hasRenewalSplit = true;
+        if (split.draftSegments.length > 0) billedForRenewal = true;
         maxSegmentsInAMonth = Math.max(maxSegmentsInAMonth, split.segments.length);
 
         // ── 4. Recurring add-ons, prorated within this month ───────────────
@@ -1082,6 +1087,10 @@ export async function generateRentProformas(
           line_items:          lineItems,
           prepaid_month:       prepaid.month,
           prepaid_year:        prepaid.year,
+          // Attribution, not ownership: the statement stays this contract's for
+          // accounting and GST, but the rent inside it is the renewal's. Without
+          // it the renewal's history reads as unbilled for months it was paid for.
+          billed_on_behalf_of_contract_id: billedForRenewal && renewalDraft ? renewalDraft.id : null,
         })
         .select("id")
         .single();

@@ -23,6 +23,8 @@ import { StatementLifecycleBadge, StatementQuickActions } from "@/components/acc
 interface Statement {
   id: string;
   statement_number: string;
+  contract_id: string | null;
+  billed_on_behalf_of_contract_id: string | null;
   statement_type: string;
   prepaid_month: number | null;
   prepaid_year: number | null;
@@ -152,8 +154,11 @@ export function ContractInvoicesSection({
     setCurrentMode(billingMode || 'proforma_first');
   }, [billingMode]);
 
+  // Chain-wide: the unbilled-month check needs the parent's statements too (a
+  // renewal's opening months are billed there while it awaits activation). The
+  // table below still lists only this contract's own statements.
   const refreshStatements = () => {
-    return fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
+    return fetch(`/api/billing-statements?contract_id=${contractId}&include_chain=1&limit=200`)
       .then((r) => r.json())
       .then((d) => setStatements((d.data || []) as Statement[]))
       .catch(() => setStatements([]));
@@ -182,19 +187,26 @@ export function ContractInvoicesSection({
       .catch(() => setProrataStatement(null));
   }, [proposalId]);
 
+  // Only this contract's own statements belong in the invoice table — an
+  // ancestor's rows are fetched for the coverage check, not for display.
+  const ownStatements = useMemo(
+    () => statements.filter((s) => !s.contract_id || s.contract_id === contractId),
+    [statements, contractId],
+  );
+
   // Proformas still open under the old Proforma First flow — switching to
   // GST Direct only affects future cycles, so these are left behind unless
   // resolved via the GST override (convert-to-gst-early).
   const pendingUnpaidStatements = useMemo(
     () =>
-      statements.filter(
+      ownStatements.filter(
         (s) =>
           s.status === "finalized" &&
           s.payment_status !== "paid" &&
           !s.gst_invoice_number &&
           !s.pi_cancelled_at
       ),
-    [statements]
+    [ownStatements]
   );
 
   const applyModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
@@ -259,8 +271,10 @@ export function ContractInvoicesSection({
       startDate, endDate, createdAt,
       today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
       statements,
+      contractId,
     });
-  }, [startDate, endDate, createdAt, statements]);
+  }, [startDate, endDate, createdAt, statements, contractId]);
+
 
   // A rent run bills the month AFTER the month it targets, so to bill the cycle
   // this contract is actually due for, target the month before its billing
@@ -500,7 +514,7 @@ export function ContractInvoicesSection({
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : statements.length === 0 ? (
+        ) : ownStatements.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">
             No invoices generated yet. Statements are created automatically each month after contract activation.
           </p>
@@ -519,7 +533,7 @@ export function ContractInvoicesSection({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {statements.map((s) => (
+                {ownStatements.map((s) => (
                   <tr key={s.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}

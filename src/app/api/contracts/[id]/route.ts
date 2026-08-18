@@ -5,6 +5,7 @@ import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/lib/constants";
 import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
+import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 
@@ -430,10 +431,14 @@ export async function PATCH(
     // invoices against a customer is not a side effect a status change may have.
     try {
       const admin = createAdminClient();
+      // The whole renewal chain, not just this row: a renewal's opening months
+      // are billed on its parent while it awaits activation, so checking one
+      // contract in isolation reports paid months as unbilled.
+      const chain = await renewalChainContractIds(admin, id);
       const { data: existing } = await admin
         .from("billing_statements")
-        .select("statement_type, period_start, period_end, prepaid_month, prepaid_year, voided_at")
-        .eq("contract_id", id);
+        .select("contract_id, billed_on_behalf_of_contract_id, statement_type, period_start, period_end, prepaid_month, prepaid_year, voided_at")
+        .in("contract_id", chain);
 
       const missing = unbilledMonths({
         startDate: oldContract.start_date as string,
@@ -441,6 +446,7 @@ export async function PATCH(
         createdAt: oldContract.created_at as string,
         today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
         statements: (existing ?? []) as RentCoverage[],
+        contractId: id,
       });
 
       if (missing.length > 0) {

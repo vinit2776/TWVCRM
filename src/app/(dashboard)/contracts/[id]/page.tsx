@@ -1399,6 +1399,25 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
+                {/* The renewal's term has started but the contract isn't live.
+                    Until it is activated the run cannot bill it, so this
+                    (ended) contract gets charged for the new term instead —
+                    right customer and amount, wrong contract. */}
+                {contract.status === "renewal_in_progress" && renewalDraft?.start_date &&
+                  renewalDraft.status !== "active" &&
+                  renewalDraft.start_date <= new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10) && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                    <p className="font-semibold">
+                      ⚠️ {renewalDraft.contract_number} started {formatDate(renewalDraft.start_date)} but isn&apos;t active
+                    </p>
+                    <p>
+                      Until it&apos;s activated, month-end billing charges <strong>this</strong> contract
+                      for the renewal period — even though its term ended {formatDate(contract.end_date)}.
+                      Activate the renewal before the next billing run.
+                    </p>
+                  </div>
+                )}
+
                 {contract.status === "renewal_in_progress" && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
                     <p className="font-semibold">⏳ Renewal in Progress</p>

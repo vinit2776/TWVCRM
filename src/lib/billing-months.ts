@@ -39,6 +39,12 @@ export interface RentCoverage {
   prepaid_month?: number | null;
   prepaid_year?: number | null;
   voided_at?: string | null;
+  /** The contract this statement was raised against. Only needed when the
+   *  caller passes statements from more than one contract (a renewal chain). */
+  contract_id?: string | null;
+  /** Set when the rent inside this statement belongs to a different contract —
+   *  a renewal billed on its parent while awaiting activation. */
+  billed_on_behalf_of_contract_id?: string | null;
 }
 
 const ymOf = (ymd: string): BillingMonth => ({ year: +ymd.slice(0, 4), month: +ymd.slice(5, 7) });
@@ -83,6 +89,35 @@ function monthsCoveredByStatement(s: RentCoverage): BillingMonth[] {
 }
 
 /**
+ * Does a statement from somewhere in the renewal chain count as coverage for
+ * THIS contract?
+ *
+ * Own statements always do. A relative's statement does only when the rent in
+ * it belongs here — otherwise a parent's own earlier months would mask genuine
+ * gaps in the renewal.
+ */
+function countsTowards(
+  s: RentCoverage,
+  contractId: string | undefined,
+  startDate: string,
+): boolean {
+  // Caller passed a single contract's statements — nothing to disambiguate.
+  if (!contractId || !s.contract_id) return true;
+  if (s.contract_id === contractId) return true;
+
+  // Explicitly attributed here by the generator.
+  if (s.billed_on_behalf_of_contract_id === contractId) return true;
+  // Attributed somewhere else.
+  if (s.billed_on_behalf_of_contract_id) return false;
+
+  // Untagged — either it predates the billed_on_behalf column or the caller
+  // didn't select it. Fall back to the period: a parent cannot legitimately
+  // bill ITSELF for a period starting on or after its renewal's start date, so
+  // that rent was this contract's.
+  return s.period_start >= startDate;
+}
+
+/**
  * Months this contract should already have been billed rent for, but wasn't.
  *
  * The window is deliberately conservative at both ends, because a false alarm
@@ -107,7 +142,18 @@ export function unbilledMonths(opts: {
   createdAt: string;
   /** Today, as YYYY-MM-DD in IST. */
   today: string;
+  /**
+   * Statements to count as coverage. For a renewal, pass the whole chain —
+   * the contract's own statements AND its ancestors'. A renewal's opening
+   * months are routinely billed on the parent: while the parent is still
+   * `renewal_in_progress` and the renewal is not yet active, the parent is the
+   * only billable contract, so the run charges it at the renewal's rate for
+   * days past its own end_date. Looking at one contract in isolation reports
+   * those months as unbilled when they have in fact been invoiced and paid.
+   */
   statements: RentCoverage[];
+  /** This contract's id — required only when `statements` spans a chain. */
+  contractId?: string;
 }): BillingMonth[] {
   const ownFirst = ymOf(firstBillingAnchor(opts.startDate));
   const firstRunnable = monthAfter(ymOf(opts.createdAt.slice(0, 10)));
@@ -121,6 +167,7 @@ export function unbilledMonths(opts: {
 
   const covered = new Set<number>();
   for (const s of opts.statements) {
+    if (!countsTowards(s, opts.contractId, opts.startDate)) continue;
     for (const m of monthsCoveredByStatement(s)) covered.add(monthKey(m));
   }
 

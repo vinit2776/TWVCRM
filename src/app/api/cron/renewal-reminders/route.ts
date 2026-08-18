@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
@@ -94,7 +95,11 @@ async function handler(request: NextRequest) {
   }
 
   if (!contracts || contracts.length === 0) {
-    return NextResponse.json({ message: "No reminders to send", sent: 0 });
+    // The drift pass is independent of the customer reminder ladder — a
+    // renewal can be drifting long after its parent stopped qualifying for
+    // reminders, so it must run even when there is nothing to remind about.
+    const drift = await reportRenewalDrift(admin);
+    return NextResponse.json({ message: "No reminders to send", sent: 0, drift });
   }
 
   // Check which of these already have a renewal draft in progress
@@ -289,11 +294,110 @@ async function handler(request: NextRequest) {
     }
   }
 
+  const drift = await reportRenewalDrift(admin);
+
   return NextResponse.json({
     message: `Sent ${sentCount} renewal reminder(s)`,
     sent: sentCount,
     details: results,
+    drift,
   });
+}
+
+/**
+ * Staff alert: renewals whose start date is here (or gone) while the contract
+ * is still not active.
+ *
+ * This is the gap that put August 2026 rent on four expired contracts. The
+ * customer-facing ladder above deliberately stops once a renewal draft exists —
+ * from the customer's side the renewal is handled. But a draft is not a live
+ * contract: until it is activated the parent stays the only billable row, so
+ * the month-end run charges the OLD contract at the new rate for a period the
+ * new contract should own. Nothing was watching that window.
+ *
+ * Internal only — nothing is sent to the customer, and no billing is changed.
+ */
+async function reportRenewalDrift(supabase: SupabaseClient) {
+  const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const today = todayIst.toISOString().slice(0, 10);
+  const horizon = new Date(todayIst.getTime() + 3 * 86400000).toISOString().slice(0, 10);
+
+  // Renewals whose term is starting (or has started) but which are not live.
+  const { data: drifting, error } = await supabase
+    .from("contracts")
+    .select("id, contract_number, status, start_date, parent_contract_id")
+    .not("parent_contract_id", "is", null)
+    .not("status", "in", "(active,rejected,terminated,renewed,expired)")
+    .lte("start_date", horizon)
+    .order("start_date", { ascending: true });
+
+  if (error || !drifting || drifting.length === 0) return { drifting: 0, contracts: [] as string[] };
+
+  const parentIds = [...new Set(drifting.map((c) => c.parent_contract_id as string))];
+  const { data: parents } = await supabase
+    .from("contracts")
+    .select("id, contract_number, end_date, status")
+    .in("id", parentIds);
+  const parentById = new Map((parents ?? []).map((p) => [p.id as string, p]));
+
+  const rows = drifting.map((c) => {
+    const parent = parentById.get(c.parent_contract_id as string);
+    const daysLate = Math.floor(
+      (Date.parse(today + "T00:00:00Z") - Date.parse((c.start_date as string) + "T00:00:00Z")) / 86400000,
+    );
+    return {
+      contract_number: c.contract_number as string,
+      status: c.status as string,
+      start_date: c.start_date as string,
+      days_late: daysLate,
+      parent_number: (parent?.contract_number as string) ?? "—",
+      parent_end: (parent?.end_date as string) ?? "—",
+    };
+  });
+
+  const overdue = rows.filter((r) => r.days_late >= 0);
+
+  try {
+    await resend.emails.send({
+      from: EMAIL_FROM,
+      to: ["admin@theworkvilla.com"],
+      replyTo: EMAIL_REPLY_TO,
+      subject: overdue.length > 0
+        ? `⚠️ ${overdue.length} renewal(s) past their start date and still not active`
+        : `${rows.length} renewal(s) starting within 3 days — not yet active`,
+      html: `
+        <div style="font-family:system-ui,sans-serif;max-width:640px;">
+          <h2 style="color:#015E65;margin-bottom:4px;">Renewals awaiting activation</h2>
+          <p style="color:#555;font-size:13px;margin-top:0;">
+            Until a renewal is activated it cannot be billed, so the month-end run charges the
+            <strong>previous</strong> contract for the new term. Activate these before the next
+            billing run to keep the rent on the right contract.
+          </p>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <tr style="background:#f0fdfa;">
+              <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #99f6e4;">Renewal</th>
+              <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #99f6e4;">Starts</th>
+              <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #99f6e4;">Status</th>
+              <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #99f6e4;">Replaces</th>
+            </tr>
+            ${rows.map((r) => `
+              <tr>
+                <td style="padding:8px 12px;border-bottom:1px solid #eee;">${r.contract_number}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #eee;">
+                  ${r.start_date}${r.days_late >= 0 ? ` <strong style="color:#b91c1c;">(${r.days_late}d late)</strong>` : ""}
+                </td>
+                <td style="padding:8px 12px;border-bottom:1px solid #eee;">${r.status}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #eee;">${r.parent_number} (ended ${r.parent_end})</td>
+              </tr>`).join("")}
+          </table>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error("[renewal-reminders] drift alert failed:", err);
+  }
+
+  return { drifting: rows.length, overdue: overdue.length, contracts: rows.map((r) => r.contract_number) };
 }
 
 export const GET = withCronHealth("cron/renewal-reminders", handler);
