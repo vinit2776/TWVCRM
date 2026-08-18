@@ -58,6 +58,10 @@ const LeadBillingSnippet = dynamic(
   () => import("@/components/leads/lead-billing-snippet").then((m) => m.LeadBillingSnippet),
   { ssr: false }
 );
+const LeadDepositSummary = dynamic(
+  () => import("@/components/leads/lead-deposit-summary").then((m) => m.LeadDepositSummary),
+  { ssr: false }
+);
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
@@ -708,6 +712,7 @@ export default function LeadDetailPage({
               line graph shows monthly revenue trend. Auto-hides
               gracefully when there are no payments. */}
           <LeadBillingSnippet leadId={id} />
+          <LeadDepositSummary leadId={id} />
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
