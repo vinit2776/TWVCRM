@@ -314,6 +314,13 @@ export interface Proposal {
   created_at: string;
   updated_at: string;
   occupation_start_date?: string;
+  // Date the pro-rata invoice was actually paid — enriched by GET
+  // /api/proposals, null until paid. Prefers payment_received_at (the
+  // generic-link/manual-record path that also gates contract activation),
+  // falling back to the GST invoice's own billing_statements payment date.
+  // Distinct from occupation_start_date, which is just the date proration
+  // was calculated from.
+  prorata_paid_date?: string | null;
   // Payment tracking (Razorpay)
   payment_status?: string; // "pending" | "paid"
   razorpay_payment_link_id?: string;
