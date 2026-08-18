@@ -153,7 +153,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
-| Daily 09:30 IST | `/api/digest` | Email digest |
+| Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 

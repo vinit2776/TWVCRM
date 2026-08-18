@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -112,6 +113,10 @@ export default function ContractDetailPage({
   const [stampPreviewPdfBase64, setStampPreviewPdfBase64] = useState<string | null>(null);
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  // Manual override for the agreement PDF's DRAFT watermark — only exposed
+  // once start_date is confirmed (see generateMembershipAgreementPDF). While
+  // unconfirmed, the watermark is always forced on regardless of this value.
+  const [includeDraftWatermark, setIncludeDraftWatermark] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
@@ -270,12 +275,13 @@ export default function ContractDetailPage({
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      { watermarkDraft: includeDraftWatermark }
     );
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string }): Promise<string> => {
+  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }): Promise<string> => {
     if (!contract) return "";
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
@@ -292,6 +298,13 @@ export default function ContractDetailPage({
     }
     return btoa(binary);
   };
+
+  // Email dialog calls onGeneratePDF() with no arguments — thread the
+  // watermark toggle through as a closure instead of a call-site option, so
+  // handleGeneratePDFBase64 stays generic for the stamp/e-sign call sites
+  // (which never honor the manual toggle — see the watermarkDraft option's
+  // doc comment in generateMembershipAgreementPDF).
+  const handleGeneratePDFForEmail = () => handleGeneratePDFBase64({ watermarkDraft: includeDraftWatermark });
 
   const handleOpenEmailDialog = () => {
     setEmailDialogOpen(true);
@@ -706,6 +719,17 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {/* Watermark is forced on until start_date locks — this toggle only
+              matters (and only appears) once it has, for Download PDF + Email. */}
+          {contract.start_date_confirmed && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground border rounded-md px-2.5 cursor-pointer select-none">
+              <Checkbox
+                checked={includeDraftWatermark}
+                onCheckedChange={(v) => setIncludeDraftWatermark(!!v)}
+              />
+              Include DRAFT watermark
+            </label>
+          )}
           {contract.is_renewal && contract.parent_contract_id && (
             <Button
               variant="outline"
@@ -978,6 +1002,10 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            proposalId={contract.proposal_id}
+            proposalNumber={contract.proposal?.proposal_number}
+            prorataPaymentStatus={contract.proposal?.payment_status}
+            prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
@@ -1419,9 +1447,16 @@ export default function ContractDetailPage({
                 <span>{contract.tenure_months} months</span>
               </div>
               <Separator />
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Start Date</span>
-                <span>{formatDate(contract.start_date)}</span>
+                <span className="flex items-center gap-2">
+                  {formatDate(contract.start_date)}
+                  {contract.start_date_confirmed === false && (
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                      Pending pro-rata payment
+                    </Badge>
+                  )}
+                </span>
               </div>
               <Separator />
               <div className="flex justify-between">
@@ -2028,7 +2063,7 @@ export default function ContractDetailPage({
         documentNumber={contract.contract_number}
         leadEmail={contract.lead?.email}
         contractIsRenewal={!!(contract.is_renewal && contract.parent_contract_id)}
-        onGeneratePDF={handleGeneratePDFBase64}
+        onGeneratePDF={handleGeneratePDFForEmail}
         onSuccess={fetchContract}
       />
 

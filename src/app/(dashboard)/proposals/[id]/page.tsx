@@ -49,11 +49,13 @@ import {
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
+  PROPOSAL_EDITABLE_STATUSES,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
@@ -77,6 +79,7 @@ export default function ProposalDetailPage({
   const router = useRouter();
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editProposalOpen, setEditProposalOpen] = useState(false);
 
   // Current user (rep) profile for PDF/email attribution
   const { user: currentUser } = useCurrentUser();
@@ -154,11 +157,42 @@ export default function ProposalDetailPage({
   const [gstCc, setGstCc] = useState("");
   const [gstPreview, setGstPreview] = useState<{
     subject: string; html: string; to: string[]; invoiceNumber: string | null;
+    items: { description: string; qty: number; unit_price: number; amount: number }[];
     proratedSubtotal: number; taxAmount: number; totalAmount: number;
     daysRemaining: number; daysInMonth: number; prorationFactor: number;
     periodLabel: string; startLabel: string; endLabel: string;
     razorpayUrl: string | null; previous_occupation_start_date: string | null;
   } | null>(null);
+  // Editable copy of the previewed line items — only sent to the server
+  // (as items_override) once the staff member actually changes something,
+  // so the untouched path keeps the normal auto-prorated PDF breakdown.
+  const [gstItems, setGstItems] = useState<{ description: string; qty: number; unit_price: number }[]>([]);
+  const [gstItemsDirty, setGstItemsDirty] = useState(false);
+  const gstItemsTotal = gstItems.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
+  // Live figures for the summary cards once the table has been edited —
+  // mirrors calcGst() in src/lib/tax.ts so the displayed total matches what
+  // send-invoice will actually charge.
+  const gstLiveSubtotal = gstItemsDirty ? gstItemsTotal : (gstPreview?.proratedSubtotal ?? 0);
+  const gstLiveTaxPct = Number(proposal?.tax_percentage || 18);
+  const gstLiveTax = gstItemsDirty
+    ? Math.round(gstLiveSubtotal * gstLiveTaxPct / 100 * 100) / 100
+    : (gstPreview?.taxAmount ?? 0);
+  const gstLiveTotal = gstItemsDirty
+    ? Math.round((gstLiveSubtotal + gstLiveTax) * 100) / 100
+    : (gstPreview?.totalAmount ?? 0);
+
+  const updateGstItem = (index: number, field: "description" | "qty" | "unit_price", value: string | number) => {
+    setGstItems((prev) => prev.map((it, i) => (i === index ? { ...it, [field]: value } : it)));
+    setGstItemsDirty(true);
+  };
+  const addGstItem = () => {
+    setGstItems((prev) => [...prev, { description: "", qty: 1, unit_price: 0 }]);
+    setGstItemsDirty(true);
+  };
+  const removeGstItem = (index: number) => {
+    setGstItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
+    setGstItemsDirty(true);
+  };
 
   const fetchProposal = useCallback(async () => {
     setLoading(true);
@@ -477,6 +511,8 @@ export default function ProposalDetailPage({
       : new Date().toISOString().slice(0, 10);
     setGstDate(initialDate);
     setGstPreview(null);
+    setGstItems([]);
+    setGstItemsDirty(false);
     setGstIsRevise(forRevise);
     setGstCc((proposal?.lead?.billing_emails || []).join(", "));
     setGstDialogOpen(true);
@@ -497,6 +533,10 @@ export default function ProposalDetailPage({
       const json = await res.json();
       if (res.ok) {
         setGstPreview(json);
+        setGstItems((json.items || []).map((i: { description: string; qty: number; unit_price: number }) => ({
+          description: i.description, qty: i.qty, unit_price: i.unit_price,
+        })));
+        setGstItemsDirty(false);
       } else {
         toast.error(json.error || "Failed to generate preview");
       }
@@ -509,6 +549,11 @@ export default function ProposalDetailPage({
 
   const handleSendGstInvoice = async () => {
     if (!gstDate) { toast.error("Date is required"); return; }
+    const validGstItems = gstItems.filter((i) => i.description.trim() && Number(i.qty) > 0);
+    if (gstItemsDirty && validGstItems.length === 0) {
+      toast.error("Add at least one line item with a description and quantity");
+      return;
+    }
     setGstSending(true);
     try {
       const ccList = Array.from(new Set(
@@ -517,7 +562,11 @@ export default function ProposalDetailPage({
       const res = await fetch(`/api/proposals/${id}/send-invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ occupation_start_date: gstDate, additionalCc: ccList }),
+        body: JSON.stringify({
+          occupation_start_date: gstDate,
+          additionalCc: ccList,
+          ...(gstItemsDirty ? { items_override: validGstItems } : {}),
+        }),
       });
       const json = await res.json();
       if (res.ok) {
@@ -903,6 +952,16 @@ export default function ProposalDetailPage({
               </DropdownMenu>
             );
           })()}
+          {(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(proposal.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditProposalOpen(true)}
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -1642,6 +1701,19 @@ export default function ProposalDetailPage({
         </div>
       </div>
 
+      {/* Edit Proposal Dialog */}
+      {editProposalOpen && proposal.lead_id && (
+        <ProposalForm
+          leadId={proposal.lead_id}
+          leadLocationId={proposal.location_id}
+          open={editProposalOpen}
+          onOpenChange={setEditProposalOpen}
+          onSuccess={fetchProposal}
+          proposalId={proposal.id}
+          initialProposal={proposal}
+        />
+      )}
+
       {/* Booking Confirmation Dialog (accept flow) */}
       {bookingConfirmOpen && (
         <BookingConfirmationDialog
@@ -1862,12 +1934,68 @@ export default function ProposalDetailPage({
                   <p className="font-semibold text-foreground">{gstPreview.daysRemaining}/{gstPreview.daysInMonth} days</p>
                 </div>
                 <div className="rounded-md border bg-muted/30 px-3 py-2">
-                  <p className="text-muted-foreground">Subtotal</p>
-                  <p className="font-semibold text-foreground">₹{gstPreview.proratedSubtotal.toLocaleString("en-IN")}</p>
+                  <p className="text-muted-foreground">Subtotal{gstItemsDirty && " (edited)"}</p>
+                  <p className="font-semibold text-foreground">₹{gstLiveSubtotal.toLocaleString("en-IN")}</p>
                 </div>
                 <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-                  <p className="text-muted-foreground">Total Payable</p>
-                  <p className="font-bold text-primary">₹{gstPreview.totalAmount.toLocaleString("en-IN")}</p>
+                  <p className="text-muted-foreground">Total Payable{gstItemsDirty && " (edited)"}</p>
+                  <p className="font-bold text-primary">₹{gstLiveTotal.toLocaleString("en-IN")}</p>
+                </div>
+              </div>
+
+              {/* Editable line items — amount override / added-removed lines.
+                  Untouched, these mirror the auto-prorated proposal items;
+                  edited, they're sent as items_override on Send. */}
+              <div className="rounded-md border">
+                <div className="grid grid-cols-12 gap-2 px-3 py-1.5 text-[11px] font-medium text-muted-foreground border-b bg-muted/30">
+                  <div className="col-span-6">Description</div>
+                  <div className="col-span-2">Qty</div>
+                  <div className="col-span-3">Rate</div>
+                  <div className="col-span-1" />
+                </div>
+                <div className="divide-y">
+                  {gstItems.map((item, idx) => (
+                    <div key={idx} className="grid grid-cols-12 gap-2 px-3 py-1.5 items-center">
+                      <Input
+                        className="col-span-6 h-7 text-xs"
+                        value={item.description}
+                        onChange={(e) => updateGstItem(idx, "description", e.target.value)}
+                      />
+                      <Input
+                        className="col-span-2 h-7 text-xs"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={item.qty}
+                        onChange={(e) => updateGstItem(idx, "qty", Number(e.target.value) || 0)}
+                      />
+                      <Input
+                        className="col-span-3 h-7 text-xs"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unit_price}
+                        onChange={(e) => updateGstItem(idx, "unit_price", Number(e.target.value) || 0)}
+                      />
+                      <button
+                        type="button"
+                        className="col-span-1 flex justify-center text-muted-foreground hover:text-destructive disabled:opacity-30"
+                        onClick={() => removeGstItem(idx)}
+                        disabled={gstItems.length <= 1}
+                        title="Remove line"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between px-3 py-1.5 border-t bg-muted/10">
+                  <button type="button" className="text-xs text-primary hover:underline" onClick={addGstItem}>
+                    + Add line
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    Line total: ₹{gstItemsTotal.toLocaleString("en-IN")}
+                  </span>
                 </div>
               </div>
 
@@ -1884,7 +2012,7 @@ export default function ProposalDetailPage({
 
               {gstIsRevise && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <strong>Revise & Resend:</strong> A new GST invoice number will be issued and a fresh email (with the new PDF) will be sent to the customer. The previous invoice will not be automatically cancelled.
+                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new GST invoice number and send a fresh email (with the new PDF) to the customer.
                 </div>
               )}
 

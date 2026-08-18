@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2 } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,7 @@ import {
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
+  PROPOSAL_EDITABLE_STATUSES,
   INVOICE_STATUS_LABELS,
   ACCOUNTING_HEAD_LABELS,
   ACCOUNTING_HEAD_COLORS,
@@ -115,6 +116,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
+  const [editingProposal, setEditingProposal] = useState<(Proposal & { lead?: Lead }) | null>(null);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<(ProformaInvoice & { lead?: Lead }) | null>(null);
 
@@ -433,6 +435,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </DropdownMenuItem>
+                            {(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(p.status) && (
+                              <DropdownMenuItem onClick={() => setEditingProposal(p)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleDownloadProposalPDF(p)}>
                               <Download className="mr-2 h-4 w-4" />
@@ -660,9 +668,16 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       <ProposalForm
         leadId={leadId}
         leadLocationId={leadLocationId}
-        open={proposalFormOpen}
-        onOpenChange={setProposalFormOpen}
+        open={proposalFormOpen || !!editingProposal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProposalFormOpen(false);
+            setEditingProposal(null);
+          }
+        }}
         onSuccess={handleSuccess}
+        proposalId={editingProposal?.id}
+        initialProposal={editingProposal ?? undefined}
       />
       <InvoiceForm
         leadId={leadId}
