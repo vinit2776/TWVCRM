@@ -51,7 +51,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
 
   const siblingPointer = leadId && siblingCount && siblingCount > 1 ? (
     <a
-      href={`/leads/${leadId}#security-deposit`}
+      href={`/leads/${leadId}?tab=activities#security-deposit`}
       className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 mt-2"
     >
       <Users className="h-3 w-3" />
