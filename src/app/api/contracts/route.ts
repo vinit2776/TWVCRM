@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { getProrataPaidDate } from "@/lib/proposals";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -147,7 +148,14 @@ export async function POST(request: NextRequest) {
   // occupation_start_date is authoritative — use it instead of whatever the
   // form submitted, and lock it immediately. Otherwise the form value stands
   // as a placeholder (start_date_confirmed = false) until activation.
-  const proRataAlreadyPaid = proposal.payment_status === "paid";
+  //
+  // "Paid" is checked via getProrataPaidDate rather than a plain
+  // payment_status === "paid" comparison: the GST-invoice-paid-via-its-own-
+  // billing_statement path never mirrors back to proposals.payment_status,
+  // so relying on that field alone would leave a contract marked
+  // unconfirmed (and PDF-watermarked) even though the customer already paid.
+  const proRataPaidDate = await getProrataPaidDate(supabase, d.proposal_id);
+  const proRataAlreadyPaid = !!proRataPaidDate;
   const resolvedStartDateStr = proRataAlreadyPaid && proposal.occupation_start_date
     ? (proposal.occupation_start_date as string)
     : d.start_date;
