@@ -636,6 +636,10 @@ export interface Contract {
   // Tiered rate phases
   phase_start_date?: string | null;
   rate_phases?: ContractRatePhase[];
+  // start_date is a placeholder until the linked proposal's pro-rata invoice
+  // is paid — see supabase/migrations/00503_contract_start_date_confirmation.sql
+  start_date_confirmed?: boolean;
+  start_date_locked_at?: string | null;
 }
 
 export interface ContractRatePhase {

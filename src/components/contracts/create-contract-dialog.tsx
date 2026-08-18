@@ -721,6 +721,11 @@ export function CreateContractDialog({
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {selectedProposal?.prorata_paid_date
+                    ? "The pro-rata invoice is already paid — this date will be locked to it on activation."
+                    : "Placeholder until the proposal's pro-rata invoice is paid. It will be locked to that invoice's occupation date when the contract is activated."}
+                </p>
                 {selectedProposal?.prorata_paid_date && startDate !== selectedProposal.prorata_paid_date && (
                   <p className="text-xs text-amber-600 flex items-start gap-1">
                     <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />

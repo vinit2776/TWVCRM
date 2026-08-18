@@ -7,6 +7,13 @@
       "runtimeArgs": ["-c", "cd \"/Users/vinitchordia/Dev Projects/twv-crm\" && PATH=/opt/homebrew/bin:$PATH npm run dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "twv-crm-contract-start-date",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "cd \"/Users/vinitchordia/Dev Projects/twv-crm-contract-start-date\" && PATH=/opt/homebrew/bin:$PATH npm run dev"],
+      "port": 3201,
+      "autoPort": true
     }
   ]
 }
