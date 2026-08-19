@@ -959,6 +959,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  How often the vendor invoices — enter the cost for one {CYCLE_UNIT_LABEL[amcBillingCycle]} below, not the whole contract.
+                </p>
               </div>
 
               <div className="space-y-1.5">
@@ -1008,6 +1011,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   </span>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     This is the figure counted against the AMC budget.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    After approval this becomes {amcCycleCount} separate vendor invoices — one per{" "}
+                    {CYCLE_UNIT_LABEL[amcBillingCycle]}, each needing its own service report before it can be paid.
                   </p>
                 </div>
               )}

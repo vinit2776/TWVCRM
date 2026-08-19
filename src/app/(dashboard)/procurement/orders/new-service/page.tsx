@@ -483,7 +483,8 @@ function NewServicePOForm() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      How often the vendor invoices for this contract.
+                      How often the vendor invoices. Each cycle needs its own service
+                      report and invoice before it can be paid.
                     </p>
                   </div>
                   {amcBillingCycle !== "yearly" && (

@@ -31,6 +31,7 @@ import {
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { ServiceBillingSteps } from "@/components/procurement/service-billing-steps";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
@@ -1026,20 +1027,33 @@ export default function PurchaseOrderDetailPage() {
           {po.po_type === "service" && po.status === "ordered" && (() => {
             const invoicedIds = new Set((po.vendor_bills ?? []).map((b) => b.service_report_id).filter(Boolean));
             const uninvoiced = (po.po_service_reports ?? []).filter((sr) => !invoicedIds.has(sr.id));
+            const cycleCap = Number(po.cycle_count ?? 0);
+            const allCyclesBilled = cycleCap > 0 && (po.vendor_bills?.length ?? 0) >= cycleCap;
+            // The reason a disabled button is disabled has to be readable without
+            // hovering — new users otherwise read it as the feature being broken.
+            const blockedReason = allCyclesBilled
+              ? `All ${cycleCap} cycles invoiced`
+              : uninvoiced.length === 0
+                ? "Log a service report first"
+                : null;
             return (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setInvDate(today);
-                  setInvAmount(String(po.unit_cost_per_cycle || ""));
-                  setActionDialog("add_invoice");
-                }}
-                disabled={uninvoiced.length === 0}
-                title={uninvoiced.length === 0 ? "Record a service report before uploading an invoice" : undefined}
-              >
-                <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
-              </Button>
+              <div className="flex flex-col items-end gap-0.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setInvDate(today);
+                    setInvAmount(String(po.unit_cost_per_cycle || ""));
+                    setActionDialog("add_invoice");
+                  }}
+                  disabled={blockedReason !== null}
+                >
+                  <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
+                </Button>
+                {blockedReason && (
+                  <span className="text-[11px] text-muted-foreground">{blockedReason}</span>
+                )}
+              </div>
             );
           })()}
           {po.status === "invoice_received" && (
@@ -1243,6 +1257,17 @@ export default function PurchaseOrderDetailPage() {
                 <p className="text-muted-foreground mb-0.5">Invoices Filed</p>
                 <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
               </div>
+            </div>
+
+            <div className="mt-4">
+              <ServiceBillingSteps
+                billingCycle={po.billing_cycle ?? null}
+                cycleCount={po.cycle_count ?? null}
+                unitCostPerCycle={po.unit_cost_per_cycle ?? null}
+                reportsFiled={po.po_service_reports?.length ?? 0}
+                invoicesFiled={po.vendor_bills?.length ?? 0}
+                isOrdered={po.status === "ordered"}
+              />
             </div>
           </CardContent>
         </Card>

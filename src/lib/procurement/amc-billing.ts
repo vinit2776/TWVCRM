@@ -125,3 +125,32 @@ export function billingProgress(
     isComplete: billed >= cycleCount,
   };
 }
+
+/**
+ * Which billing step a service contract is currently on.
+ *
+ * Extracted from the UI so the multi-cycle cases can be tested — the system has
+ * no multi-cycle contract yet, so the panel's mid-contract states cannot be
+ * exercised in the browser.
+ *
+ * A report is "open" once filed but not yet invoiced; that is precisely what
+ * unlocks the invoice button, so it decides what the user should do next.
+ */
+export function serviceBillingStep(
+  reportsFiled: number,
+  invoicesFiled: number,
+  cycleCount: number | null | undefined
+): {
+  nextAction: "log_report" | "upload_invoice" | "none";
+  allBilled: boolean;
+  cyclesRemaining: number;
+} {
+  const total = cycleCount ?? 0;
+  const allBilled = total > 0 && invoicesFiled >= total;
+  const hasOpenReport = reportsFiled > invoicesFiled;
+  return {
+    nextAction: allBilled ? "none" : hasOpenReport ? "upload_invoice" : "log_report",
+    allBilled,
+    cyclesRemaining: Math.max(0, total - invoicesFiled),
+  };
+}

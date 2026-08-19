@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT } from "../procurement/amc-billing";
+import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep } from "../procurement/amc-billing";
 
 describe("cyclesBetween", () => {
   it("a standard financial year is 12 monthly cycles", () => {
@@ -111,5 +111,50 @@ describe("CYCLE_ITEM_UNIT", () => {
     for (const cycle of ["monthly", "quarterly", "half_yearly", "yearly"] as const) {
       expect(cycleFromUnit(CYCLE_ITEM_UNIT[cycle])).toBe(cycle);
     }
+  });
+});
+
+describe("serviceBillingStep", () => {
+  it("a fresh 12-month contract starts by asking for a service report", () => {
+    const s = serviceBillingStep(0, 0, 12);
+    expect(s.nextAction).toBe("log_report");
+    expect(s.allBilled).toBe(false);
+    expect(s.cyclesRemaining).toBe(12);
+  });
+
+  it("an open report switches the next action to the invoice", () => {
+    // Report filed but not yet invoiced — this is what enables the invoice button.
+    const s = serviceBillingStep(1, 0, 12);
+    expect(s.nextAction).toBe("upload_invoice");
+  });
+
+  it("mid-contract, it asks for the next cycle's report once the last is invoiced", () => {
+    const s = serviceBillingStep(4, 4, 12);
+    expect(s.nextAction).toBe("log_report");
+    expect(s.cyclesRemaining).toBe(8);
+  });
+
+  it("a fully billed contract asks for nothing further", () => {
+    const s = serviceBillingStep(12, 12, 12);
+    expect(s.nextAction).toBe("none");
+    expect(s.allBilled).toBe(true);
+    expect(s.cyclesRemaining).toBe(0);
+  });
+
+  it("never reports negative remaining cycles if over-billed", () => {
+    expect(serviceBillingStep(13, 13, 12).cyclesRemaining).toBe(0);
+  });
+
+  it("a single-cycle yearly contract behaves the same way", () => {
+    expect(serviceBillingStep(0, 0, 1).nextAction).toBe("log_report");
+    expect(serviceBillingStep(1, 0, 1).nextAction).toBe("upload_invoice");
+    expect(serviceBillingStep(1, 1, 1).allBilled).toBe(true);
+  });
+
+  it("treats an unknown cycle count as not-yet-billed rather than complete", () => {
+    // Legacy service POs predate cycle_count; they must not read as "fully billed".
+    const s = serviceBillingStep(0, 0, null);
+    expect(s.allBilled).toBe(false);
+    expect(s.nextAction).toBe("log_report");
   });
 });
