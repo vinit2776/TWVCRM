@@ -134,7 +134,17 @@ export async function GET(
     0
   );
 
-  const totalShortfall = contracts.reduce((sum, c) => sum + Number(c.deposit_shortfall || 0), 0);
+  // The aggregate Shortfall tile must equal Required − Available by
+  // construction, or the three tiles contradict each other on screen. It
+  // used to be summed from contracts.deposit_shortfall alone — a real
+  // column, but a narrower concept (only the renewal-escalation top-up
+  // amount). That undercounted whenever Required also included money owed
+  // for a completely uncollected contract (e.g. a second contract off a
+  // shared proposal that hasn't paid its own deposit at all — nothing to do
+  // with any renewal). The per-contract `shortfall` field below stays tied
+  // to the real deposit_shortfall column — that one still drives the
+  // "Collect Now" pre-fill for the renewal-escalation flow specifically.
+  const totalShortfall = Math.max(0, totalRequired - Number(balance.available || 0));
 
   const breakdown = contracts.map((c) => ({
     contract_id: c.id,
