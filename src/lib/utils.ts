@@ -167,6 +167,32 @@ export function generateId(): string {
 }
 
 /**
+ * Derives the real wall-clock duration (in hours) of a booking window from
+ * its start_time/end_time columns (format "HH:MM" or "HH:MM:SS").
+ *
+ * This is intentionally separate from `bookings.duration_hours`, which for
+ * daily-priced spaces stores "1" as a billing quantity (one day unit), not
+ * one hour — that column must never be read as a wall-clock duration.
+ * WiFi voucher validity and customer-facing duration displays should use
+ * this helper instead so a 10-hour day pass doesn't get a 2-hour voucher.
+ */
+export function bookingWindowHours(startTime: string, endTime: string): number {
+  const parse = (t: string): number => {
+    const [h, m, s] = t.split(":").map((n) => Number(n) || 0);
+    return h * 60 + m + (s || 0) / 60;
+  };
+  const startMin = parse(startTime);
+  let endMin = parse(endTime);
+  // Defensive: end-before-start (e.g. bad data, or midnight-crossing that
+  // isn't expected in this domain) — fall back to a full day rather than a
+  // negative or zero duration.
+  if (endMin <= startMin) {
+    endMin = startMin + 24 * 60;
+  }
+  return (endMin - startMin) / 60;
+}
+
+/**
  * Masks a voucher code for display, e.g. "81346-46018" -> "813**-****8"
  */
 export function maskVoucherCode(code: string): string {

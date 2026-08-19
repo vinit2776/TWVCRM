@@ -586,7 +586,12 @@ function NewBookingForm() {
           fetch(`/api/leads/${createdLeadId}/id-proof`, { method: "POST", body: fd })
             .catch(() => toast.warning("Booking created but ID proof upload failed. Please upload from the booking page."));
         }
-        if (bookingId) {
+        const willCollectPaymentNow = collectAdvancePayment && (advancePaymentMode === "upi" || advancePaymentMode === "razorpay");
+        if (bookingId && !willCollectPaymentNow) {
+          // Skip the create-time email when we're about to redirect to collect payment now —
+          // payment_status is still "pending" at this point, which would render a misleading
+          // "payment pending" confirmation. bookings/[id]/page.tsx sends the confirmation email
+          // instead, once the payment is actually recorded and the booking is fully paid.
           fetch(`/api/bookings/${bookingId}/email`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "confirmation" }) }).catch(() => {});
         }
         if (collectAdvancePayment && advancePaymentMode === "send_link" && bookingId) {

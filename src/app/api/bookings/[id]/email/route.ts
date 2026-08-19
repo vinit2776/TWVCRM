@@ -6,6 +6,7 @@ import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS, BOOKING_PAYM
 import { logEmailActivity } from "@/lib/audit";
 import { getLocationIncharges, getLocationInchargeUserIds } from "@/lib/location-incharges";
 import { sendPushToUsers } from "@/lib/push";
+import { bookingWindowHours } from "@/lib/utils";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
@@ -86,13 +87,13 @@ export async function POST(
   if (booking.customer_type === "walk_in" || booking.customer_type === "guest") {
     const { data: issuances } = await supabase
       .from("voucher_issuances")
-      .select("voucher:voucher_repository!voucher_issuances_voucher_id_fkey(voucher_code)")
+      .select("unifi_code, ruijie_code, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(voucher_code)")
       .eq("booking_id", id)
       .eq("is_active", true)
       .limit(1);
-    if (issuances?.[0]?.voucher) {
-      const v = issuances[0].voucher as unknown as { voucher_code: string };
-      voucherCode = v.voucher_code;
+    if (issuances?.[0]) {
+      const row = issuances[0] as unknown as { unifi_code?: string | null; ruijie_code?: string | null; voucher?: { voucher_code: string } | null };
+      voucherCode = row.voucher?.voucher_code ?? row.unifi_code ?? row.ruijie_code ?? null;
     }
   }
 
@@ -359,6 +360,12 @@ export async function POST(
 
   const startTime = formatTime(booking.start_time.slice(0, 5));
   const endTime = formatTime(booking.end_time.slice(0, 5));
+  // Customer-facing duration display must use the actual booking window, not
+  // booking.duration_hours — for daily-priced spaces that column stores "1"
+  // as a billing quantity (one day unit), not one hour, and would render a
+  // 10-hour day pass as "Duration: 1 hour(s)". The free-quota deduction below
+  // still uses duration_hours on purpose — do not change that one.
+  const displayDurationHours = roundHours(bookingWindowHours(booking.start_time, booking.end_time));
 
   // Build ICS
   const bookingDateObj = new Date(booking.booking_date + "T00:00:00");
@@ -374,7 +381,7 @@ export async function POST(
 
   const icsContent = generateICS({
     summary: `Meeting Room: ${spaceName} - The WorkVilla`,
-    description: `Booking: ${booking.booking_number}\nRoom: ${spaceName}\nDuration: ${roundHours(Number(booking.duration_hours))}hrs\nAmount: ${formatCurrency(booking.total_amount)}`,
+    description: `Booking: ${booking.booking_number}\nRoom: ${spaceName}\nDuration: ${displayDurationHours}hrs\nAmount: ${formatCurrency(booking.total_amount)}`,
     location: `${spaceName}, ${locationName}${locationAddress ? ", " + locationAddress : ""}`,
     startDate: startUTC,
     endDate: endUTC,
@@ -582,7 +589,7 @@ export async function POST(
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Location</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${locationName}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Date</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${formatDate(booking.booking_date)}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Time</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${startTime} - ${endTime}</td></tr>
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Duration</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${roundHours(Number(booking.duration_hours))} hour(s)</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Duration</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${displayDurationHours} hour(s)</td></tr>
           ${facilityList ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Facilities</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${facilityList}</td></tr>` : ""}
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${formatCurrency(booking.total_amount)}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;">Customer Type</td><td style="padding:10px 16px;color:#333;">${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type] || booking.customer_type}</td></tr>
