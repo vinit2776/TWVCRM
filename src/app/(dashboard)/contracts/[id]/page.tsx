@@ -245,10 +245,11 @@ export default function ContractDetailPage({
 
   const handleTerminate = async () => {
     if (!terminationReason.trim()) {
-      toast.error("Please provide a termination reason");
+      toast.error(contract?.status === "draft" ? "Please provide a reason" : "Please provide a termination reason");
       return;
     }
     setTerminating(true);
+    const wasDraft = contract?.status === "draft";
     const res = await fetch(`/api/contracts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -258,7 +259,7 @@ export default function ContractDetailPage({
       }),
     });
     if (res.ok) {
-      toast.success("Contract terminated");
+      toast.success(wasDraft ? "Draft cancelled" : "Contract terminated");
       setTerminateOpen(false);
       setTerminationReason("");
       fetchContract(false);
@@ -585,6 +586,17 @@ export default function ContractDetailPage({
             <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
+            </Button>
+          )}
+          {/* Draft was never sent/activated — nothing to unwind (no vouchers,
+              no billing, no customer commitment), so any admin/manager can
+              cancel it outright via the same draft -> terminated transition
+              the backend already allows. Reuses the Terminate dialog with
+              status-aware copy rather than a separate flow. */}
+          {contract.status === "draft" && ["admin", "manager"].includes(userRole ?? "") && (
+            <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Cancel Draft
             </Button>
           )}
           {contract.status === "sent" && (
@@ -1986,25 +1998,28 @@ export default function ContractDetailPage({
         </DialogContent>
       </Dialog>
 
-      {/* Terminate Dialog */}
+      {/* Terminate / Cancel Draft Dialog — same underlying draft/active ->
+          terminated transition, copy just adapts to which one this is. */}
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Terminate Contract</DialogTitle>
+            <DialogTitle>{contract.status === "draft" ? "Cancel Draft" : "Terminate Contract"}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to terminate contract {contract.contract_number}?
-              This action cannot be undone.
+              {contract.status === "draft"
+                ? `Are you sure you want to cancel draft contract ${contract.contract_number}? It was never sent or activated, so there's nothing to unwind — this just discards it.`
+                : `Are you sure you want to terminate contract ${contract.contract_number}?`}
+              {" "}This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="termination-reason">
-              Termination Reason <span className="text-destructive">*</span>
+              {contract.status === "draft" ? "Cancellation Reason" : "Termination Reason"} <span className="text-destructive">*</span>
             </Label>
             <Textarea
               id="termination-reason"
               value={terminationReason}
               onChange={(e) => setTerminationReason(e.target.value)}
-              placeholder="Please provide a reason for termination..."
+              placeholder={contract.status === "draft" ? "Please provide a reason for cancelling..." : "Please provide a reason for termination..."}
               rows={3}
             />
           </div>
@@ -2020,10 +2035,10 @@ export default function ContractDetailPage({
               {terminating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Terminating...
+                  {contract.status === "draft" ? "Cancelling..." : "Terminating..."}
                 </>
               ) : (
-                "Terminate"
+                contract.status === "draft" ? "Cancel Draft" : "Terminate"
               )}
             </Button>
           </DialogFooter>
