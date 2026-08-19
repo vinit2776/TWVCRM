@@ -2738,21 +2738,28 @@ function WifiVoucherCard({
 
   // Helper: renders a revoked issuance row (muted, struck-through code, no
   // Revoke/Resend affordances — this is history, not a live code).
+  // A Ruijie-issued code can be released from the booking but never actually
+  // switched off — Ruijie Cloud has no revocation endpoint. Such a row must not
+  // look identical to a genuinely dead code, or staff will tell a guest their
+  // access was cut when it is still working.
+  const isStillLiveAfterRevoke = (v: VoucherIssuance) =>
+    !!v.ruijie_voucher_uuid && !v.unifi_voucher_id && !v.voucher?.voucher_code;
+
   const renderRevokedRow = (v: VoucherIssuance, idx: number) => {
     const vid = v.id || `revoked-${idx}`;
     const isRevealed = revealedIds.has(vid);
     const code = voucherCodeOf(v);
     return (
-      <div key={vid} className="flex items-center justify-between rounded-md bg-muted/20 px-3 py-2 opacity-70">
+      <div className={`flex items-center justify-between rounded-md px-3 py-2 ${isStillLiveAfterRevoke(v) ? "bg-amber-50 border border-amber-200" : "bg-muted/20 opacity-70"}`} key={vid}>
         <div className="flex flex-col">
-          <span className="text-[10px] text-muted-foreground">
-            Revoked {v.revoked_at ? formatDateTime(v.revoked_at) : "—"}
+          <span className={`text-[10px] ${isStillLiveAfterRevoke(v) ? "text-amber-900" : "text-muted-foreground"}`}>
+            {isStillLiveAfterRevoke(v) ? "Released (still usable)" : "Revoked"} {v.revoked_at ? formatDateTime(v.revoked_at) : "—"}
             {v.revoke_reason ? ` · ${v.revoke_reason}` : ""}
           </span>
           {v.emailed_at && (
             <span
               className="text-[10px] text-muted-foreground flex items-center gap-0.5"
-              title={`Was emailed${v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} on ${formatDateTime(v.emailed_at)}. This code no longer works.`}
+              title={`Was emailed${v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} on ${formatDateTime(v.emailed_at)}. ${isStillLiveAfterRevoke(v) ? "This code may still work — Ruijie cannot revoke." : "This code no longer works."}`}
             >
               <Mail className="h-2.5 w-2.5" />
               Was emailed{v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} · {formatDateTime(v.emailed_at)}

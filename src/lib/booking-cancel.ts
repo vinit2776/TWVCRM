@@ -38,7 +38,15 @@ export interface CancelSideEffectOptions {
 }
 
 export interface CancelSideEffectResult {
+  /** Issuances released from the booking (includes ones we could not kill). */
   vouchersRevoked: number;
+  /**
+   * Ruijie-issued codes that were released on paper but are STILL USABLE on
+   * the network — the Ruijie Cloud API has no revocation endpoint, so they
+   * keep working until they expire on their own. Callers that report
+   * "vouchers revoked" to a human must mention this, or the message is false.
+   */
+  vouchersStillLive: number;
   usageChargeWaived: boolean;
   waitlistOffered: boolean;
 }
@@ -57,6 +65,7 @@ export async function executeBookingCancellationSideEffects(
 ): Promise<CancelSideEffectResult> {
   const result: CancelSideEffectResult = {
     vouchersRevoked: 0,
+    vouchersStillLive: 0,
     usageChargeWaived: false,
     waitlistOffered: false,
   };
@@ -69,17 +78,45 @@ export async function executeBookingCancellationSideEffects(
   try {
     const { data: issuances } = await supabase
       .from("voucher_issuances")
-      .select("id, voucher_id, unifi_voucher_id")
+      .select("id, voucher_id, unifi_voucher_id, ruijie_voucher_uuid")
       .eq("booking_id", booking.bookingId)
       .eq("is_active", true);
 
     if (issuances && issuances.length > 0) {
       const revokeNow = new Date().toISOString();
-      const issuanceIds = issuances.map((i: { id: string }) => i.id);
-      await supabase
-        .from("voucher_issuances")
-        .update({ is_active: false, revoked_at: revokeNow, revoke_reason: revokeReason })
-        .in("id", issuanceIds);
+
+      // Ruijie Cloud exposes no revocation endpoint, so a Ruijie code CANNOT be
+      // switched off — it stays usable until its own expiry. We still release the
+      // issuance from the booking, but the stored reason must say so, otherwise
+      // the CRM records a revocation that never happened and staff will tell a
+      // guest their access was cut when it wasn't. UniFi and repository codes are
+      // genuinely killed below, so they keep the normal reason.
+      const isRuijieOnly = (i: { unifi_voucher_id?: string | null; voucher_id?: string | null; ruijie_voucher_uuid?: string | null }) =>
+        !!i.ruijie_voucher_uuid && !i.unifi_voucher_id && !i.voucher_id;
+
+      const ruijieIds = issuances.filter(isRuijieOnly).map((i: { id: string }) => i.id);
+      const killableIds = issuances.filter((i: Parameters<typeof isRuijieOnly>[0]) => !isRuijieOnly(i)).map((i: { id: string }) => i.id);
+
+      if (killableIds.length > 0) {
+        await supabase
+          .from("voucher_issuances")
+          .update({ is_active: false, revoked_at: revokeNow, revoke_reason: revokeReason })
+          .in("id", killableIds);
+      }
+      if (ruijieIds.length > 0) {
+        await supabase
+          .from("voucher_issuances")
+          .update({
+            is_active: false,
+            revoked_at: revokeNow,
+            revoke_reason: `${revokeReason} — code NOT disabled: Ruijie has no revocation API, so it stays usable until it expires`,
+          })
+          .in("id", ruijieIds);
+        result.vouchersStillLive = ruijieIds.length;
+        console.warn(
+          `[booking-cancel] ${ruijieIds.length} Ruijie voucher(s) on booking ${booking.bookingId} released but still live — Ruijie has no revoke API.`
+        );
+      }
 
       // Revoke repository-based vouchers
       const voucherIds = issuances
