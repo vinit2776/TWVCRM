@@ -176,3 +176,82 @@ describe("unbilledMonths", () => {
     })).toEqual([]);
   });
 });
+
+/**
+ * Renewal chains. A renewal's opening months are routinely billed on the
+ * PARENT: while the parent is still `renewal_in_progress` and the renewal has
+ * not been activated, the parent is the only billable contract, so the run
+ * charges it at the renewal's rate for days past its own end_date.
+ *
+ * Fixtures are the real TWV-C-0031 -> TWV-C-0101 chain. The parent's term ended
+ * 28 Jul 2026; the renewal started 29 Jul but was not activated until 17 Aug,
+ * and the 3 Aug run billed August (Rs 35,457, paid, GST issued) on the parent.
+ * Judged on its own statements the renewal reads as owing August — it does not.
+ */
+const PARENT = "parent-uuid";
+const RENEWAL = "renewal-uuid";
+
+describe("unbilledMonths across a renewal chain", () => {
+  const renewalArgs = {
+    startDate: "2026-07-29",
+    endDate: "2027-06-28",
+    createdAt: "2026-07-07T12:05:05Z",
+    today: TODAY,
+    contractId: RENEWAL,
+  };
+
+  it("counts a parent statement explicitly tagged to this renewal", () => {
+    expect(unbilledMonths({
+      ...renewalArgs,
+      statements: [
+        { ...rent(2026, 7, "2026-07-29", "2026-07-31"), contract_id: RENEWAL },
+        { ...rent(2026, 8, "2026-08-01", "2026-08-31"), contract_id: PARENT,
+          billed_on_behalf_of_contract_id: RENEWAL },
+      ],
+    })).toEqual([]);
+  });
+
+  it("counts an untagged parent statement for a period after the renewal began", () => {
+    // The 8 statements already in production predate the tag. A parent cannot
+    // legitimately bill itself past its own term, so that rent was the renewal's.
+    expect(unbilledMonths({
+      ...renewalArgs,
+      statements: [
+        { ...rent(2026, 7, "2026-07-29", "2026-07-31"), contract_id: RENEWAL },
+        { ...rent(2026, 8, "2026-08-01", "2026-08-31"), contract_id: PARENT },
+      ],
+    })).toEqual([]);
+  });
+
+  it("does NOT let the parent's own pre-renewal months mask a real gap", () => {
+    // The parent's July (1–28 Jul, its own term) says nothing about August.
+    expect(unbilledMonths({
+      ...renewalArgs,
+      statements: [
+        { ...rent(2026, 7, "2026-07-01", "2026-07-28"), contract_id: PARENT },
+        { ...rent(2026, 7, "2026-07-29", "2026-07-31"), contract_id: RENEWAL },
+      ],
+    })).toEqual([{ year: 2026, month: 8 }]);
+  });
+
+  it("does not count a statement attributed to a different contract", () => {
+    expect(unbilledMonths({
+      ...renewalArgs,
+      statements: [
+        { ...rent(2026, 8, "2026-08-01", "2026-08-31"), contract_id: PARENT,
+          billed_on_behalf_of_contract_id: "some-other-contract" },
+      ],
+    })).toEqual([{ year: 2026, month: 8 }]);
+  });
+
+  it("without a contractId the caller's statements are taken at face value", () => {
+    // Back-compat: existing callers pass one contract's statements and no id.
+    expect(unbilledMonths({
+      startDate: "2026-07-29",
+      endDate: "2027-06-28",
+      createdAt: "2026-07-07T12:05:05Z",
+      today: TODAY,
+      statements: [rent(2026, 8, "2026-08-01", "2026-08-31")],
+    })).toEqual([]);
+  });
+});

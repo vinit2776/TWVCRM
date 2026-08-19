@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { createClient } from "@/lib/supabase/server";
 import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
@@ -22,6 +23,10 @@ export async function GET(request: NextRequest) {
   const proposalId    = searchParams.get("proposal_id");
   const status        = searchParams.get("status");
   const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ...
+  // Widen a contract_id filter to the whole renewal chain. A renewal's opening
+  // months are often billed on its parent while it awaits activation, so
+  // "everything billed for this contract" is a chain question, not a row one.
+  const includeChain  = searchParams.get("include_chain") === "1";
 
   const offset = (page - 1) * limit;
 
@@ -29,7 +34,13 @@ export async function GET(request: NextRequest) {
     .from("billing_statements")
     .select(SELECT_FIELDS, { count: "exact" });
 
-  if (contractId)    query = query.eq("contract_id", contractId);
+  if (contractId) {
+    if (includeChain) {
+      query = query.in("contract_id", await renewalChainContractIds(supabase, contractId));
+    } else {
+      query = query.eq("contract_id", contractId);
+    }
+  }
   if (bookingId)     query = query.eq("booking_id", bookingId);
   if (leadId)        query = query.eq("lead_id", leadId);
   if (caseId)        query = query.eq("case_id", caseId);
