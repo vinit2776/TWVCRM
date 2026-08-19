@@ -234,6 +234,7 @@ export async function POST(
           lead_id:     leadId,
           description: `Colour Print Overage: ${overageQty} pages (${periodLabel})`,
           quantity:    overageQty,
+          billed_quantity: overageQty,
           unit_price:  rate,
           total:       amount,
           charge_date: `${periodYear}-${String(periodMonth).padStart(2, "0")}-01`,

@@ -169,6 +169,7 @@ async function maybePostPooledUsageCharge(
     booking_charge_kind: "pooled_usage",
     description,
     quantity: actualHours,
+    billed_quantity: overageHours,
     unit_price: rate,
     total,
     gst_rate: gstRate,

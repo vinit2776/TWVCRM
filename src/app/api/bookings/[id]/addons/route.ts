@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { createAddonUsageCharge } from "@/lib/booking-addon-charges";
 
 const VALID_TYPES = ["extended_time", "service", "food_beverage", "other"] as const;
 
@@ -53,7 +54,7 @@ export async function POST(
   // only refresh `total_amount_with_gst` to reflect charges added/removed).
   const { data: booking, error: bErr } = await supabase
     .from("bookings")
-    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status, payment_status")
+    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status, payment_status, customer_type, contract_id, booking_number, booking_date")
     .eq("id", id).single();
   if (bErr || !booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
@@ -205,11 +206,57 @@ export async function POST(
     });
   }
 
+  // Contract-holder bookings are billed monthly via usage_charges, not paid
+  // at the counter — nothing else in the billing pipeline reads
+  // booking_addons (see src/lib/billing.ts / src/lib/pdf-generator.ts), so
+  // without this, add-ons on a contract-holder booking would silently never
+  // be invoiced (only bookings.total_amount_with_gst would reflect them,
+  // which nothing bills off of). Walk-in/guest bookings pay the booking
+  // total at the counter, so they need no charge row here.
+  const chargeWarnings: string[] = [];
+  if (booking.customer_type === "contract_holder" && booking.contract_id) {
+    const { data: contract } = await supabase
+      .from("contracts")
+      .select("id, lead_id")
+      .eq("id", booking.contract_id)
+      .single();
+
+    if (contract) {
+      for (const addon of addons ?? []) {
+        const charge = await createAddonUsageCharge(
+          supabase,
+          addon,
+          {
+            contract_id: contract.id,
+            booking_number: booking.booking_number,
+            booking_date: booking.booking_date,
+          },
+          contract.lead_id ?? null,
+          dbUser.id,
+        );
+        if (!charge) {
+          chargeWarnings.push(`Add-on "${addon.description}" was saved but could not be posted to billing — contact an admin.`);
+          continue;
+        }
+        logAudit(supabase, {
+          entityType: "usage_charge",
+          entityId: charge.id,
+          action: "create",
+          performedBy: dbUser.id,
+          changes: { record: { old: null, new: { booking_addon_id: addon.id, booking_id: id } } },
+        });
+      }
+    } else {
+      chargeWarnings.push("Add-ons were saved but could not be posted to billing — contract not found.");
+    }
+  }
+
   // Single-item legacy callers expect `{ data: <addon> }`. Multi-item callers
   // use `data` as the array. Always include `count` for clarity.
   return NextResponse.json({
     data: (addons?.length ?? 0) === 1 ? addons![0] : (addons ?? []),
     count: addons?.length ?? 0,
+    ...(chargeWarnings.length > 0 ? { warnings: chargeWarnings } : {}),
   }, { status: 201 });
 }
 

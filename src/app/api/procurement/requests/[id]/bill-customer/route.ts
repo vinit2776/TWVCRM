@@ -150,6 +150,7 @@ export async function POST(
       lead_id: contract.lead_id,
       description: item.description,
       quantity: item.quantity,
+      billed_quantity: item.quantity,
       unit_price: item.unit_price,
       total: item.total,
       charge_date: today,

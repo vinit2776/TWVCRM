@@ -108,6 +108,11 @@ export async function POST(request: NextRequest) {
   // Defaults to the client-supplied values; overwritten below when
   // contract_facility_id is set, since quota math is server-authoritative.
   let facilityQuantity  = result.data.quantity;
+  // billed_quantity: what the customer is actually charged for (must satisfy
+  // billed_quantity * unit_price == total). Defaults to quantity — only the
+  // facility-quota branch below diverges, since quantity there stays a
+  // consumption ledger while billed_quantity becomes the overage.
+  let facilityBilledQuantity = result.data.quantity;
   let facilityUnitPrice = result.data.unit_price;
   let facilityTotal     = Number(result.data.total);
   let facilityStatus    = "pending";
@@ -183,11 +188,15 @@ export async function POST(request: NextRequest) {
 
       if (overageQty > 0) {
         facilityQuantity = overageQty;
+        facilityBilledQuantity = overageQty;
         facilityUnitPrice = rate;
         facilityTotal = parseFloat((overageQty * rate).toFixed(2));
         facilityStatus = "pending";
       } else {
+        // Waived: nothing is charged, but quantity keeps the consumed
+        // amount so hoursConsumedSoFar-style ledgers stay accurate.
         facilityQuantity = requestedQty;
+        facilityBilledQuantity = 0;
         facilityUnitPrice = 0;
         facilityTotal = 0;
         facilityStatus = "waived";
@@ -226,6 +235,7 @@ export async function POST(request: NextRequest) {
       contract_facility_id: result.data.contract_facility_id ?? null,
       description: result.data.description,
       quantity: facilityQuantity,
+      billed_quantity: facilityBilledQuantity,
       unit_price: facilityUnitPrice,
       total: subtotal,
       gst_rate: gstRate,

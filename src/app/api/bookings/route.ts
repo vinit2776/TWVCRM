@@ -563,6 +563,7 @@ export async function POST(request: NextRequest) {
           lead_id:              contract.lead_id,
           description:          chargeDescription,
           quantity:             chargeQty,
+          billed_quantity:      chargeQty,
           unit_price:           effectiveRate,
           total:                totalAmount,
           charge_date:          input.booking_date,
