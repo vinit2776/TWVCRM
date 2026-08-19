@@ -7,6 +7,7 @@ import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/li
 import { generateMonthlyStatements } from "@/lib/billing";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 
 export async function GET(
   _request: NextRequest,
@@ -216,7 +217,7 @@ export async function PATCH(
 
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at")
+          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -251,7 +252,17 @@ export async function PATCH(
           missing.push("pro-rata / first invoice payment");
         }
         const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
-        if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+        // A proposal's collected deposit belongs to whichever contract first
+        // claims it (see the snapshot block below) — if a different contract
+        // already claimed it, this proposal's "paid" status doesn't cover
+        // this contract too. It needs its own separate deposit collection.
+        const depositClaimedByOther = !!proposal.deposit_claimed_by_contract_id
+          && proposal.deposit_claimed_by_contract_id !== id;
+        if (depositRequired && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
+          missing.push(depositClaimedByOther
+            ? "security deposit (already claimed by another contract activated from this same proposal — collect a separate deposit for this contract, or use the override with a clear reason)"
+            : "security deposit");
+        }
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
         if (missing.length > 0) {
           return NextResponse.json({
@@ -305,19 +316,36 @@ export async function PATCH(
       if (!isRenewal && oldContract.proposal_id) {
         const { data: depositSnapshot } = await supabase
           .from("proposals")
-          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date")
+          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
         if (depositSnapshot) {
-          allowedFields.security_deposit_amount = depositSnapshot.security_deposit_amount;
-          allowedFields.security_deposit_months = depositSnapshot.security_deposit_months;
-          allowedFields.deposit_payment_status = depositSnapshot.deposit_payment_status;
-          allowedFields.deposit_payment_amount = depositSnapshot.deposit_payment_amount;
-          allowedFields.deposit_payment_reference = depositSnapshot.deposit_payment_reference;
-          allowedFields.deposit_payment_medium = depositSnapshot.deposit_payment_medium;
-          allowedFields.deposit_payment_received_at = depositSnapshot.deposit_payment_received_at;
-          allowedFields.deposit_internal_notes = depositSnapshot.deposit_internal_notes;
+          // Nothing to claim (not_required/waived/still-pending) or already
+          // claimed by this same contract — no DB round-trip needed, this
+          // contract is entitled to the proposal's payment fields as-is.
+          let claimGranted =
+            depositSnapshot.deposit_payment_status !== "paid" ||
+            depositSnapshot.deposit_claimed_by_contract_id === id;
+
+          if (!claimGranted) {
+            // Paid, and not yet claimed by this contract — a proposal's
+            // collected deposit can only ever belong to one contract, so
+            // claim it atomically. WHERE ... IS NULL means only the request
+            // that actually wins a race (two contracts off the same
+            // proposal activating near-simultaneously) gets the update
+            // applied — a plain read-then-write here would let both win.
+            const admin = createAdminClient();
+            const { data: claimed } = await admin
+              .from("proposals")
+              .update({ deposit_claimed_by_contract_id: id })
+              .eq("id", oldContract.proposal_id)
+              .is("deposit_claimed_by_contract_id", null)
+              .select("id");
+            claimGranted = !!claimed && claimed.length > 0;
+          }
+
+          Object.assign(allowedFields, buildContractDepositSnapshot(depositSnapshot, claimGranted));
         }
 
         // Lock start_date to the paid pro-rata invoice's occupation date —

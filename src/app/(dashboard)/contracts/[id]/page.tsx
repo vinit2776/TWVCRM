@@ -624,7 +624,14 @@ export default function ContractDetailPage({
             const proposalMissing = !isRenewal && !contract.proposal_id;
             const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
-            const depositPaid = isRenewal || !depositRequired || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid");
+            // A proposal's collected deposit belongs to whichever contract first
+            // claims it at activation (see contracts/[id]/route.ts) — if a
+            // different contract already claimed it, this proposal's "paid"
+            // status doesn't cover this contract too.
+            const depositClaimedByOther = !!linkedProposal?.deposit_claimed_by_contract_id
+              && linkedProposal.deposit_claimed_by_contract_id !== contract.id;
+            const depositPaid = isRenewal || !depositRequired
+              || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             // Trust the ContractProrataSection's live billing-statement check over the
             // cached column once it reports in — the cache only syncs via the Razorpay
@@ -659,7 +666,13 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {proposalMissing && <p>• A proposal is linked to this contract</p>}
                     {!proposalMissing && !proposalPaid && <p>• Proposal payment collected</p>}
-                    {!proposalMissing && !depositPaid && <p>• Security deposit collected</p>}
+                    {!proposalMissing && !depositPaid && (
+                      <p>
+                        • {depositClaimedByOther
+                          ? "Security deposit — already claimed by another contract activated from this same proposal. Collect a separate deposit for this contract."
+                          : "Security deposit collected"}
+                      </p>
+                    )}
                     {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>

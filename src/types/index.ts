@@ -337,6 +337,10 @@ export interface Proposal {
   security_deposit_months?: number;
   security_deposit_amount?: number;
   deposit_payment_status?: string; // "not_required" | "pending" | "paid"
+  // Set once a contract activation claims this proposal's collected deposit —
+  // a proposal can spawn more than one contract, but the deposit belongs to
+  // only one of them. See contracts/[id]/route.ts's activation snapshot.
+  deposit_claimed_by_contract_id?: string | null;
   deposit_razorpay_link_id?: string;
   deposit_razorpay_link_url?: string;
   deposit_email_sent_at?: string;
