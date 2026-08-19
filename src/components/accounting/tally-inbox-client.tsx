@@ -17,7 +17,7 @@ import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } fro
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { toast } from "sonner";
@@ -1887,6 +1887,21 @@ const InboxRowItem = memo(function InboxRowItem({
 
 import type { BookingPaymentConfirmation } from "@/lib/tally-handoff";
 
+/**
+ * Hours to show beside a booking's time range. Prefers the real start/end
+ * window; falls back to `duration_hours` only when the times are missing
+ * (check-in/out-only rows). `duration_hours` is a billing day-unit ("1") for
+ * daily-priced spaces, so it must never be rendered as elapsed time on its own.
+ */
+function formatWindowHours(
+  startTime: string | null | undefined,
+  endTime: string | null | undefined,
+  durationHours: number | null | undefined
+): string {
+  const h = startTime && endTime ? bookingWindowHours(startTime, endTime) : Number(durationHours ?? 0);
+  return Number.isInteger(h) ? String(h) : h.toFixed(1).replace(/\.0$/, "");
+}
+
 function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
   const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2416,9 +2431,14 @@ function BookingInboxRowItem({
                 : row.check_in_at && row.check_out_at
                   ? `${new Date(row.check_in_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} – ${new Date(row.check_out_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}`
                   : "—"}
-              {row.duration_hours != null && (
-                <span className="text-muted-foreground ml-1">({row.duration_hours}h)</span>
-              )}
+              {/* Real elapsed window, not `duration_hours` — that column stores "1"
+                  as a billing day-unit for daily-priced spaces, so day passes
+                  used to read "09:30 – 18:30 (1h)" here. */}
+              {(row.start_time && row.end_time) || row.duration_hours != null ? (
+                <span className="text-muted-foreground ml-1">
+                  ({formatWindowHours(row.start_time, row.end_time, row.duration_hours)}h)
+                </span>
+              ) : null}
             </span>
           </div>
 
