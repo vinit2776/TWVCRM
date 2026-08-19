@@ -2168,7 +2168,10 @@ export interface AggregatorInvoiceLineItem {
 
 export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc" | "reimbursement";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
-export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton" | "hr";
+// Single source of truth is ITEM_UNITS in @/lib/constants — re-exported so the
+// two lists can never drift apart again.
+import type { ItemUnit } from "@/lib/constants";
+export type { ItemUnit };
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
 export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
