@@ -10,7 +10,7 @@
  * Per-mode behaviour:
  *   - UniFi: the code is actually deleted on the controller via
  *     revokeUnifiVoucher() before the issuance row is touched.
- *   - Ruijie: there is NO revoke endpoint on the Ruijie Cloud API (see
+ *   - Ruijie: the installed Ruijie device model has NO revoke capability (see
  *     src/lib/ruijie.ts header comment — this is a documented, permanent
  *     gap, not a TODO). Revoking here would silently mark the code inactive
  *     in the CRM while it keeps working on the controller — that would lie
@@ -92,7 +92,7 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Ruijie voucher revocation is not supported yet — the Ruijie Cloud API has no revoke endpoint. The code will remain active on the controller until it naturally expires.",
+          "This location's WiFi hardware cannot revoke vouchers — the Ruijie device model installed here has no revoke capability, so the code stays usable until it expires on its own. Nothing was changed.",
       },
       { status: 501 }
     );
