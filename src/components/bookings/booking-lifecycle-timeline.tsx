@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Booking } from "@/types";
+import { bookingWindowHours } from "@/lib/utils";
 
 // Currency formatting kept inline to avoid pulling utils into the
 // timeline (it's used in a sublabel for the Payment step).
@@ -234,6 +235,22 @@ function timeLeft(iso: string): string {
 // Main component
 // ---------------------------------------------------------------------------
 
+/**
+ * Human label for how long the booking runs.
+ *
+ * Deliberately derived from start_time/end_time rather than
+ * `bookings.duration_hours`: for daily-priced spaces that column stores "1"
+ * as a billing day-unit, not one hour, so a 9am–7pm day pass used to render
+ * as "1h slot". `duration_hours` stays untouched — billing, contract
+ * free-quota and utilisation analytics all depend on the day-unit meaning.
+ */
+function slotDurationLabel(booking: Booking): string {
+  const hours = bookingWindowHours(booking.start_time, booking.end_time);
+  // Trim float noise from minute-level windows (1.5 → "1.5", 2.0 → "2").
+  const pretty = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, "");
+  return booking.pricing_model === "daily" ? `${pretty}h day pass` : `${pretty}h slot`;
+}
+
 interface BookingLifecycleTimelineProps {
   booking: Booking;
   compRequest?: CompRequestData | null;
@@ -428,7 +445,7 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
         icon={<CalendarCheck className="h-3.5 w-3.5" />}
         label="Booked"
         timestamp={formatTs(booking.created_at)}
-        sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
+        sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${slotDurationLabel(booking)}`}
         actorName={booking.created_by_name}
       />
 

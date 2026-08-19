@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLocations } from "@/hooks/use-locations";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, bookingWindowHours } from "@/lib/utils";
 import {
   BOOKING_STATUSES, BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
   BOOKING_CUSTOMER_TYPES, BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_CUSTOMER_TYPE_COLORS,
@@ -75,7 +75,10 @@ function copyBookingDetails(b: Booking) {
     `Booking Confirmation - ${b.booking_number}`,
     ``,
     `Date: ${formatDate(b.booking_date)}`,
-    `Time: ${formatTime12(b.start_time)} - ${formatTime12(b.end_time)} (${b.duration_hours}h)`,
+    `Time: ${formatTime12(b.start_time)} - ${formatTime12(b.end_time)} (${(() => {
+      const h = bookingWindowHours(b.start_time, b.end_time);
+      return Number.isInteger(h) ? h : h.toFixed(1).replace(/\.0$/, "");
+    })()}h)`,
     `Space: ${b.space?.name || "—"}`,
     `Location: ${b.location?.name || "—"}`,
   ];
