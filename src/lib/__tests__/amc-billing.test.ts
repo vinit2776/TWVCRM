@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit } from "../procurement/amc-billing";
+import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT } from "../procurement/amc-billing";
 
 describe("cyclesBetween", () => {
   it("a standard financial year is 12 monthly cycles", () => {
     expect(cyclesBetween("2026-04-01", "2027-03-31", "monthly")).toBe(12);
   });
 
-  it("the same year is 4 quarterly cycles, or 1 yearly", () => {
+  it("the same year is 4 quarterly, 2 half-yearly, or 1 yearly cycle", () => {
     expect(cyclesBetween("2026-04-01", "2027-03-31", "quarterly")).toBe(4);
+    expect(cyclesBetween("2026-04-01", "2027-03-31", "half_yearly")).toBe(2);
     expect(cyclesBetween("2026-04-01", "2027-03-31", "yearly")).toBe(1);
   });
 
@@ -83,6 +84,7 @@ describe("cycleFromUnit", () => {
   it("maps the AMC line item's unit back to its billing frequency", () => {
     expect(cycleFromUnit("month")).toBe("monthly");
     expect(cycleFromUnit("quarter")).toBe("quarterly");
+    expect(cycleFromUnit("half_year")).toBe("half_yearly");
     expect(cycleFromUnit("year")).toBe("yearly");
   });
 
@@ -92,5 +94,22 @@ describe("cycleFromUnit", () => {
     expect(cycleFromUnit(null)).toBe("yearly");
     expect(cycleFromUnit(undefined)).toBe("yearly");
     expect(cycleFromUnit("nos")).toBe("yearly");
+  });
+});
+
+describe("CYCLE_ITEM_UNIT", () => {
+  it("stores the item_unit enum value, not the display noun", () => {
+    // "half-year" is a label; the DB enum only accepts "half_year". Writing the
+    // label would be rejected by the item_unit type.
+    expect(CYCLE_ITEM_UNIT.half_yearly).toBe("half_year");
+    expect(CYCLE_ITEM_UNIT.monthly).toBe("month");
+    expect(CYCLE_ITEM_UNIT.quarterly).toBe("quarter");
+    expect(CYCLE_ITEM_UNIT.yearly).toBe("year");
+  });
+
+  it("round-trips through cycleFromUnit for every cycle", () => {
+    for (const cycle of ["monthly", "quarterly", "half_yearly", "yearly"] as const) {
+      expect(cycleFromUnit(CYCLE_ITEM_UNIT[cycle])).toBe(cycle);
+    }
   });
 });

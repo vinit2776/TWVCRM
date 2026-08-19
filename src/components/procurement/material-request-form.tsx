@@ -27,7 +27,7 @@ import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -350,7 +350,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           item_id: null,
           item_name: serviceItemName.trim() || "Annual Maintenance Contract",
           quantity: amcCycleCount,
-          unit: CYCLE_UNIT_LABEL[amcBillingCycle] as ItemUnit,
+          unit: CYCLE_ITEM_UNIT[amcBillingCycle] as ItemUnit,
           estimated_price: amcPerCycleCost || null,
           notes: undefined,
         }]

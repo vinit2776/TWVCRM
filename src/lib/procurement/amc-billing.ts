@@ -20,6 +20,7 @@ export function cycleFromUnit(unit: string | null | undefined): ServicePoBilling
   switch (unit) {
     case "month": return "monthly";
     case "quarter": return "quarterly";
+    case "half_year": return "half_yearly";
     default: return "yearly";
   }
 }
@@ -28,6 +29,19 @@ export function cycleFromUnit(unit: string | null | undefined): ServicePoBilling
 export const CYCLE_UNIT_LABEL: Record<ServicePoBillingCycle, string> = {
   monthly: "month",
   quarterly: "quarter",
+  half_yearly: "half-year",
+  yearly: "year",
+};
+
+/**
+ * item_unit enum value for a cycle — what actually gets stored on the line item.
+ * Kept separate from CYCLE_UNIT_LABEL because the display noun ("half-year")
+ * is not a valid enum value ("half_year").
+ */
+export const CYCLE_ITEM_UNIT: Record<ServicePoBillingCycle, string> = {
+  monthly: "month",
+  quarterly: "quarter",
+  half_yearly: "half_year",
   yearly: "year",
 };
 
@@ -35,6 +49,7 @@ export const CYCLE_UNIT_LABEL: Record<ServicePoBillingCycle, string> = {
 export const CYCLE_COST_LABEL: Record<ServicePoBillingCycle, string> = {
   monthly: "Cost per Month",
   quarterly: "Cost per Quarter",
+  half_yearly: "Cost per Half-Year",
   yearly: "Annual Contract Value",
 };
 

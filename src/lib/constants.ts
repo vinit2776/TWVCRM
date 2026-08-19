@@ -1813,7 +1813,7 @@ export const ITEM_UNITS = [
   // Cubic
   "cft", "cbm",
   // Time & service
-  "hr", "day", "month", "quarter", "year", "manday", "visit",
+  "hr", "day", "month", "quarter", "half_year", "year", "manday", "visit",
   // Other
   "lumpsum", "kwh",
 ] as const;
@@ -1860,6 +1860,7 @@ export const ITEM_UNIT_LABELS: Record<ItemUnit, string> = {
   day: "Day",
   month: "Month",
   quarter: "Quarter",
+  half_year: "Half-Year",
   year: "Year",
   manday: "Man-day",
   visit: "Visit",
@@ -1876,7 +1877,7 @@ export const ITEM_UNIT_GROUPS: { label: string; units: readonly ItemUnit[] }[] =
   { label: "Length", units: ["inch", "feet", "metre", "rft", "rmt", "km"] },
   { label: "Area", units: ["sqft", "sqm"] },
   { label: "Cubic", units: ["cft", "cbm"] },
-  { label: "Time & Service", units: ["hr", "day", "month", "quarter", "year", "manday", "visit"] },
+  { label: "Time & Service", units: ["hr", "day", "month", "quarter", "half_year", "year", "manday", "visit"] },
   { label: "Other", units: ["lumpsum", "kwh"] },
 ];
 
@@ -2063,8 +2064,8 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   service: "Service",
 };
 
-// Service PO billing cycles (subset of contract BILLING_CYCLES — excludes half_yearly)
-export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "yearly"] as const;
+// Service PO billing cycles. Mirrors the contract-side BILLING_CYCLES.
+export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "half_yearly", "yearly"] as const;
 export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
 
 // PO Advance Payment
