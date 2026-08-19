@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
@@ -22,7 +22,8 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_EXAMPLES,
   PROCUREMENT_DEPARTMENT_COLORS,
-  ITEM_UNITS,
+  ITEM_UNIT_GROUPS,
+  ITEM_UNIT_LABELS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -1180,8 +1181,13 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {ITEM_UNITS.map((u) => (
-                          <SelectItem key={u} value={u}>{u}</SelectItem>
+                        {ITEM_UNIT_GROUPS.map((g) => (
+                          <SelectGroup key={g.label}>
+                            <SelectLabel>{g.label}</SelectLabel>
+                            {g.units.map((u) => (
+                              <SelectItem key={u} value={u}>{ITEM_UNIT_LABELS[u]}</SelectItem>
+                            ))}
+                          </SelectGroup>
                         ))}
                       </SelectContent>
                     </Select>

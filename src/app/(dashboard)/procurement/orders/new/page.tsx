@@ -10,13 +10,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
+import { ITEM_UNIT_GROUPS, ITEM_UNIT_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -726,8 +726,13 @@ function NewPurchaseOrderFormWithPr({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {ITEM_UNITS.map((u) => (
-                            <SelectItem key={u} value={u}>{u}</SelectItem>
+                          {ITEM_UNIT_GROUPS.map((g) => (
+                            <SelectGroup key={g.label}>
+                              <SelectLabel>{g.label}</SelectLabel>
+                              {g.units.map((u) => (
+                                <SelectItem key={u} value={u}>{ITEM_UNIT_LABELS[u]}</SelectItem>
+                              ))}
+                            </SelectGroup>
                           ))}
                         </SelectContent>
                       </Select>
