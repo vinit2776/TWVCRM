@@ -14,6 +14,7 @@
 
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
 
 export async function GET(
   _request: Request,
@@ -26,7 +27,7 @@ export async function GET(
 
   const { data: contracts, error } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from, deposit_shortfall, start_date, end_date, tenure_months")
+    .select("id, contract_number, status, proposal_id, security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_carried_from, deposit_shortfall, start_date, end_date, tenure_months")
     .eq("lead_id", leadId)
     .order("created_at");
 
@@ -88,6 +89,37 @@ export async function GET(
     ...contracts.filter((c) => c.status === "terminated").map((c) => c.id),
   ]);
 
+  // A contract's own security_deposit_amount is only populated at
+  // activation (see contracts/[id]/route.ts's activation snapshot) — at
+  // creation, only security_deposit_months is set. So a draft (or any
+  // pre-activation contract) always reads back 0 here today, even though
+  // its linked proposal already knows the real figure and the deposit must
+  // be collected before the contract can activate at all. Fall back to the
+  // proposal's own requirement for any contract that hasn't activated yet —
+  // each contract off a shared proposal needs its own full deposit (see
+  // 00504_proposal_deposit_single_claim.sql), so two drafts off the same
+  // proposal correctly each show the full amount, not a shared half.
+  const unactivatedProposalIds = Array.from(new Set(
+    contracts
+      .filter((c) => !(CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(c.status) && c.proposal_id)
+      .map((c) => c.proposal_id as string)
+  ));
+
+  const proposalRequirementById = new Map<string, number>();
+  if (unactivatedProposalIds.length > 0) {
+    const { data: proposalRows } = await supabase
+      .from("proposals")
+      .select("id, security_deposit_amount")
+      .in("id", unactivatedProposalIds);
+    (proposalRows ?? []).forEach((p) => proposalRequirementById.set(p.id, Number(p.security_deposit_amount || 0)));
+  }
+
+  const requiredAmountFor = (c: (typeof contracts)[number]) => {
+    const isActivated = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(c.status);
+    if (isActivated || !c.proposal_id) return Number(c.security_deposit_amount || 0);
+    return proposalRequirementById.get(c.proposal_id) ?? 0;
+  };
+
   // deposit_shortfall (renewal-escalation top-up, see renew/route.ts) is a
   // real outstanding ask tracked in its own column, separate from
   // security_deposit_amount — a carried-from renewal typically snapshots
@@ -95,7 +127,7 @@ export async function GET(
   // of its own, so without this the shortfall would be invisible here even
   // though it's genuinely still owed against the pool.
   const requiredFor = (c: (typeof contracts)[number]) =>
-    Number(c.security_deposit_amount || 0) + Number(c.deposit_shortfall || 0);
+    requiredAmountFor(c) + Number(c.deposit_shortfall || 0);
 
   const totalRequired = contracts.reduce(
     (sum, c) => (excludedFromRequiredIds.has(c.id) ? sum : sum + requiredFor(c)),
