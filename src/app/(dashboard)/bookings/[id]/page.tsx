@@ -11,7 +11,7 @@ import {
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
   StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send, DoorOpen, Building2,
-  Activity, ShieldAlert, ImageIcon, FileText,
+  Activity, ShieldAlert, ImageIcon, FileText, RotateCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,7 +80,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [booking, setBooking] = useState<Booking & { voucher_issuances?: { voucher?: { voucher_code: string }; is_active: boolean }[] } | null>(null);
+  const [booking, setBooking] = useState<Booking & {
+    voucher_seat_cap?: number;
+    voucher_issuances?: {
+      id?: string;
+      voucher?: { voucher_code: string } | null;
+      is_active: boolean;
+      issued_at?: string | null;
+      unifi_code?: string | null;
+      unifi_voucher_id?: string | null;
+      ruijie_code?: string | null;
+      ruijie_voucher_uuid?: string | null;
+      emailed_at?: string | null;
+      duration_minutes?: number | null;
+      seat_occupant_email?: string | null;
+      revoked_at?: string | null;
+      revoke_reason?: string | null;
+    }[]
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
@@ -126,7 +143,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
-  const [pinDelivery, setPinDelivery] = useState<{ whatsapp: string; sms: string; email: string } | null>(null);
+  const [pinDelivery, setPinDelivery] = useState<{ whatsapp: string; sms: string; email: string; at?: string } | null>(null);
   const [pinCopied, setPinCopied] = useState(false);
   const [accessLogs, setAccessLogs] = useState<Array<{
     id: string;
@@ -198,6 +215,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       const json = await bookingRes.json();
       setBooking(json.data || null);
       leadId = json.data?.lead_id ?? null;
+      // Populate delivery status for automatically-provisioned PINs (booking creation,
+      // payment webhook). null means no pin_delivery audit row exists yet — expected for
+      // historical bookings, so leave pinDelivery unset rather than rendering a false badge.
+      // A manual re-provision (provisionPin() below) sets pinDelivery itself right after
+      // this fetch resolves, so it always wins over what was loaded here.
+      const loadedPinDelivery = json.data?.pin_delivery as
+        { whatsapp: string; sms: string; email: string; at: string } | null | undefined;
+      if (loadedPinDelivery) setPinDelivery(loadedPinDelivery);
     }
     if (paymentsRes?.ok) {
       const pJson = await paymentsRes.json();
@@ -456,6 +481,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
     setActionLoading(false);
   };
+
+  // Fired when CollectPaymentDialog records a payment. The create-time confirmation
+  // email is skipped in new/page.tsx when the flow redirects here to collect payment
+  // (payment_status is still "pending" at create time), so this is where that
+  // confirmation actually goes out. Sent unconditionally: the email route derives
+  // payment state from the live booking_payments rows at send time, so it renders
+  // accurately whether the booking ended up paid, part-paid, or unpaid. Gating on
+  // "paid" here would leave an abandoned payment with no confirmation email at all,
+  // since the dialog also calls onSuccess when closed without recording anything.
+  const handlePaymentRecorded = useCallback(() => {
+    fetchBooking();
+    fetch(`/api/bookings/${id}/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "confirmation" }),
+    }).catch(() => {});
+  }, [fetchBooking, id]);
 
   const handleResendEmail = async () => {
     const res = await fetch(`/api/bookings/${id}/email`, {
@@ -1596,6 +1638,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                         <DeliveryBadge label="WhatsApp" status={pinDelivery.whatsapp} />
                         <DeliveryBadge label="SMS" status={pinDelivery.sms} />
                         <DeliveryBadge label="Email" status={pinDelivery.email} />
+                        {pinDelivery.at && (
+                          <span className="text-[10px] text-muted-foreground ml-0.5">
+                            {formatDateTime(pinDelivery.at)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </>
@@ -2255,7 +2302,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingId={booking.id}
         bookingReference={booking.booking_number || ""}
         totalAmount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
-        onSuccess={fetchBooking}
+        onSuccess={handlePaymentRecorded}
         upiId={upiId}
         upiQrCodePath={upiQrCodePath}
       />
@@ -2430,6 +2477,53 @@ interface VoucherIssuance {
   id?: string;
   is_active: boolean;
   voucher?: { voucher_code: string } | null;
+  issued_at?: string | null;
+  unifi_code?: string | null;
+  unifi_voucher_id?: string | null;
+  ruijie_code?: string | null;
+  ruijie_voucher_uuid?: string | null;
+  emailed_at?: string | null;
+  duration_minutes?: number | null;
+  seat_occupant_email?: string | null;
+  revoked_at?: string | null;
+  revoke_reason?: string | null;
+}
+
+// Renders a voucher's recorded validity window. Null for issuances created
+// before duration_minutes existed — those genuinely have no recorded validity.
+function formatVoucherValidity(minutes: number | null | undefined): string | null {
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return null;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} hour${h === 1 ? "" : "s"}`;
+  return `${h}h ${m}m`;
+}
+
+// Resolves an issuance's display code across the three backends —
+// repository (joined voucher.voucher_code), UniFi (unifi_code), Ruijie
+// (ruijie_code). Falls back to null when the code was never captured
+// locally (e.g. controller-generated code not persisted).
+function voucherCodeOf(v: VoucherIssuance): string | null {
+  return v.voucher?.voucher_code ?? v.unifi_code ?? v.ruijie_code ?? null;
+}
+
+// Shown at Ruijie locations (currently Nungambakkam Arcade). The Ruijie Cloud
+// API exposes no revocation endpoint, so a code cannot be cancelled once it is
+// issued — it stays usable until its own expiry. Staff need to know this BEFORE
+// they issue, because the usual "revoke and reissue" recovery is unavailable.
+function RuijieRevokeNotice() {
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+      <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
+      <p className="text-[11px] leading-relaxed text-amber-900">
+        <span className="font-medium">Vouchers can&rsquo;t be revoked at this location.</span>{" "}
+        The WiFi provider here (Ruijie) has no cancellation facility, so an issued code
+        stays usable until it expires on its own — it can&rsquo;t be switched off early or
+        replaced. Double-check the guest before issuing.
+      </p>
+    </div>
+  );
 }
 
 function WifiVoucherCard({
@@ -2437,38 +2531,122 @@ function WifiVoucherCard({
   existingIssuances,
   onIssued,
 }: {
-  booking: Booking;
+  booking: Booking & { voucher_seat_cap?: number };
   existingIssuances: VoucherIssuance[];
   onIssued: () => void;
 }) {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [requesting, setRequesting] = useState(false);
+  const [emailing, setEmailing] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [replacingId, setReplacingId] = useState<string | null>(null);
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
-  const activeIssuances = existingIssuances.filter((v) => v.is_active && v.voucher?.voucher_code);
+  // An issuance counts as "issued" regardless of whether we captured its
+  // code locally. Null codes only happen for issuances created before this
+  // route started persisting unifi_code/ruijie_code at issue time — those
+  // legacy rows are recoverable via the email endpoint's controller lookup.
+  const activeIssuances = existingIssuances.filter((v) => v.is_active);
+  // Revoked vouchers are kept visible as history (not filtered out) so staff
+  // can tell a customer "yes, that code was issued and revoked" instead of
+  // seeing no record at all. They never count toward the seat cap. Most
+  // recent first, capped to avoid the card growing unbounded on long bookings.
+  const REVOKED_HISTORY_LIMIT = 5;
+  const revokedIssuances = existingIssuances
+    .filter((v) => !v.is_active)
+    .sort((a, b) => {
+      const at = a.revoked_at ? new Date(a.revoked_at).getTime() : 0;
+      const bt = b.revoked_at ? new Date(b.revoked_at).getTime() : 0;
+      return bt - at;
+    });
+  const visibleRevoked = revokedIssuances.slice(0, REVOKED_HISTORY_LIMIT);
+  const hiddenRevokedCount = revokedIssuances.length - visibleRevoked.length;
+  // Ruijie Cloud has no revocation endpoint, so revoke / revoke-and-reissue
+  // genuinely cannot work at those locations — the server returns 501. Surface
+  // that up front instead of letting staff click into a failure, and make the
+  // consequence explicit: the code keeps working until it expires on its own.
+  const voucherMode = (booking as { location?: { wifi_voucher_mode?: string | null } }).location?.wifi_voucher_mode ?? null;
+  const canRevoke = voucherMode !== "ruijie_api";
 
-  const numAttendees = booking.num_attendees ?? null;
-  const defaultCount = numAttendees ? Math.ceil(numAttendees / 2) : 1;
-  const [issueCount, setIssueCount] = useState(defaultCount);
+  // Where voucher codes go. Email is currently the only delivery channel —
+  // MSG91 has no approved WhatsApp template for WiFi codes, so there is
+  // deliberately no WhatsApp/SMS send to report here.
+  const voucherRecipient =
+    booking.guest_email || (booking as { lead?: { email?: string | null } }).lead?.email || null;
 
   const isActive = ["confirmed", "checked_in"].includes(booking.status);
 
-  const handleRequestVouchers = async () => {
+  // Cap enforcement mirrors the server: a customer must never hold more
+  // vouchers than the seats they booked. voucher_seat_cap is additive on
+  // GET /api/bookings/{id}; when absent, treat as uncapped in the UI.
+  const seatCap = booking.voucher_seat_cap ?? null;
+  const atCap = seatCap != null && activeIssuances.length >= seatCap;
+
+  const issueOne = async (overrideReason?: string) => {
     setRequesting(true);
+    const body: { count: number; override_reason?: string } = { count: 1 };
+    if (overrideReason) body.override_reason = overrideReason;
     const res = await fetch(`/api/bookings/${booking.id}/vouchers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count: issueCount }),
+      body: JSON.stringify(body),
     });
     const json = await res.json();
     if (res.ok) {
-      toast.success(`${json.issued} WiFi voucher${json.issued !== 1 ? "s" : ""} issued`);
+      toast.success(
+        `${json.issued} WiFi voucher${json.issued !== 1 ? "s" : ""} issued${json.emailed ? " and emailed to the customer" : ""}`
+      );
+      // Auto-email is best-effort so it never blocks issuance — but staff must know
+      // when it didn't land, otherwise the code silently reaches nobody (the exact
+      // failure this fix exists to prevent). Prompt the manual resend instead.
+      if (json.emailed === false) {
+        toast.warning("Voucher issued, but the email did not go out — use \u201cResend\u201d, or check the customer has an email address on file.");
+      }
       if (json.shortfall > 0) {
         toast.warning(`${json.shortfall} voucher${json.shortfall !== 1 ? "s" : ""} could not be issued — stock is low.`);
       }
       onIssued();
+    } else if (res.status === 422) {
+      toast.error(json.error || `Seat cap reached — ${json.already_issued ?? activeIssuances.length} of ${json.seat_cap ?? seatCap} already issued.`);
+    } else if (res.status === 403) {
+      toast.error(json.error || "Only an admin can override the seat cap.");
     } else {
-      toast.error(json.error || "Failed to issue vouchers");
+      toast.error(json.error || "Failed to issue voucher");
     }
     setRequesting(false);
+  };
+
+  const handleIssueNew = async () => {
+    if (atCap) {
+      // Non-admins never see this affordance enabled — the button is
+      // disabled at the cap for them. Admins get an explicit, logged
+      // override path instead of a silent bypass.
+      if (userRole !== "admin") return;
+      const reason = window.prompt(
+        `All ${seatCap} seat${seatCap === 1 ? "" : "s"}' vouchers are already issued. Enter a reason to override the seat cap and issue one more:`
+      );
+      if (!reason || !reason.trim()) return;
+      await issueOne(reason.trim());
+      return;
+    }
+    await issueOne();
+  };
+
+  const handleEmailVouchers = async () => {
+    setEmailing(true);
+    const res = await fetch(`/api/bookings/${booking.id}/vouchers/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success(json.message || "Voucher emailed");
+      onIssued();
+    } else {
+      toast.error(json.error || "Failed to email vouchers");
+    }
+    setEmailing(false);
   };
 
   const toggleReveal = (id: string) => {
@@ -2486,8 +2664,139 @@ function WifiVoucherCard({
     );
   };
 
-  // No vouchers issued yet — show issue form
-  if (activeIssuances.length === 0) {
+  const handleRevoke = async (issuanceId: string) => {
+    const confirmed = window.confirm(
+      "Revoke this voucher? The customer's internet access on this code stops immediately."
+    );
+    if (!confirmed) return;
+    setRevokingId(issuanceId);
+    const res = await fetch(`/api/bookings/${booking.id}/vouchers/${issuanceId}/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast.success(json.message || "Voucher revoked");
+      onIssued();
+    } else {
+      // Ruijie locations return 501 (revocation not supported there yet) —
+      // and 409 for an already-revoked code, 502 on controller failure.
+      // Surface the server's message as-is rather than a generic failure.
+      toast.error(json.error || "Failed to revoke voucher");
+    }
+    setRevokingId(null);
+  };
+
+  const handleReplace = async (issuanceId: string) => {
+    const confirmed = window.confirm(
+      "Revoke & reissue this voucher? The current code stops working immediately and a new code will be emailed to the customer."
+    );
+    if (!confirmed) return;
+    setReplacingId(issuanceId);
+    const res = await fetch(`/api/bookings/${booking.id}/vouchers/${issuanceId}/replace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast.success(
+        json.emailed
+          ? "Voucher revoked — a new code was emailed to the customer"
+          : "Voucher revoked and reissued, but the email did not go out — use “Resend”."
+      );
+      onIssued();
+    } else {
+      // Ruijie returns 501 (not supported there yet), 409 if already revoked,
+      // 502 on controller failure — surface the server's message as-is.
+      toast.error(json.error || "Failed to revoke & reissue voucher");
+    }
+    setReplacingId(null);
+  };
+
+  const issueNewButton = (fullWidth: boolean) => (
+    <Button
+      size="sm"
+      variant={fullWidth ? "default" : "outline"}
+      className={fullWidth ? "flex-1" : "text-xs h-7 flex-1"}
+      onClick={handleIssueNew}
+      disabled={requesting || (atCap && userRole !== "admin")}
+      title={
+        atCap
+          ? userRole === "admin"
+            ? `All ${seatCap} seat${seatCap === 1 ? "’s" : "s’"} vouchers issued — override with a reason, or revoke one to issue another.`
+            : `All ${seatCap} seat${seatCap === 1 ? "’s" : "s’"} vouchers issued — revoke one to issue another.`
+          : undefined
+      }
+    >
+      {requesting
+        ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Issuing…</>
+        : <><Wifi className="h-3.5 w-3.5 mr-1" />Issue New</>}
+    </Button>
+  );
+
+  // Helper: renders a revoked issuance row (muted, struck-through code, no
+  // Revoke/Resend affordances — this is history, not a live code).
+  const renderRevokedRow = (v: VoucherIssuance, idx: number) => {
+    const vid = v.id || `revoked-${idx}`;
+    const isRevealed = revealedIds.has(vid);
+    const code = voucherCodeOf(v);
+    return (
+      <div key={vid} className="flex items-center justify-between rounded-md bg-muted/20 px-3 py-2 opacity-70">
+        <div className="flex flex-col">
+          <span className="text-[10px] text-muted-foreground">
+            Revoked {v.revoked_at ? formatDateTime(v.revoked_at) : "—"}
+            {v.revoke_reason ? ` · ${v.revoke_reason}` : ""}
+          </span>
+          {v.emailed_at && (
+            <span
+              className="text-[10px] text-muted-foreground flex items-center gap-0.5"
+              title={`Was emailed${v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} on ${formatDateTime(v.emailed_at)}. This code no longer works.`}
+            >
+              <Mail className="h-2.5 w-2.5" />
+              Was emailed{v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} · {formatDateTime(v.emailed_at)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {code === null ? (
+            <span className="text-xs text-muted-foreground italic">Code not recorded</span>
+          ) : isRevealed ? (
+            <span className="font-mono text-sm text-muted-foreground line-through tracking-wider">
+              {code}
+            </span>
+          ) : (
+            <button
+              onClick={() => toggleReveal(vid)}
+              className="text-xs text-muted-foreground hover:underline"
+            >
+              Tap to reveal
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const revokedHistorySection = revokedIssuances.length > 0 && (
+    <div className="space-y-1.5 pt-1">
+      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Previously issued</p>
+      <div className="space-y-1.5">
+        {visibleRevoked.map((v, idx) => renderRevokedRow(v, idx))}
+      </div>
+      {hiddenRevokedCount > 0 && (
+        <p className="text-[10px] text-muted-foreground">
+          + {hiddenRevokedCount} more revoked voucher{hiddenRevokedCount === 1 ? "" : "s"} not shown
+        </p>
+      )}
+    </div>
+  );
+
+  // No vouchers issued yet at all (neither active nor revoked) — show a
+  // single issue action. If any revoked ones exist, fall through to the
+  // full card so that history is visible instead of the empty state.
+  if (activeIssuances.length === 0 && revokedIssuances.length === 0) {
     if (!isActive) return null;
     return (
       <Card className="border-dashed">
@@ -2495,30 +2804,45 @@ function WifiVoucherCard({
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Wifi className="h-4 w-4" />
             <span>No WiFi vouchers issued yet</span>
+            {seatCap != null && (
+              <span className="ml-auto text-xs tabular-nums">0 of {seatCap} seat{seatCap === 1 ? "" : "s"} used</span>
+            )}
           </div>
+          {!canRevoke && <RuijieRevokeNotice />}
           <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground shrink-0">Vouchers:</label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={issueCount}
-              onChange={(e) => setIssueCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-              className="w-16 h-8 rounded-md border border-input bg-background px-2 text-sm text-center tabular-nums"
-            />
-            <Button
-              size="sm"
-              onClick={handleRequestVouchers}
-              disabled={requesting}
-              className="flex-1"
-            >
-              {requesting ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Issuing…</> : <><Wifi className="h-3.5 w-3.5 mr-1" />Issue {issueCount} Voucher{issueCount !== 1 ? "s" : ""}</>}
-            </Button>
+            {issueNewButton(true)}
           </div>
-          {numAttendees && numAttendees > 2 && (
+          {atCap && (
             <p className="text-[10px] text-muted-foreground">
-              {numAttendees} attendees → {defaultCount} voucher{defaultCount !== 1 ? "s" : ""} suggested (each covers 2 devices)
+              All {seatCap} seat{seatCap === 1 ? "’s" : "s’"} vouchers issued — revoke one to issue another.
+              {userRole === "admin" ? " Admins can override with a reason." : ""}
             </p>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (activeIssuances.length === 0) {
+    // All issued vouchers have been revoked — show history-only card, no
+    // active-row rendering, but still allow issuing a fresh one if active.
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Wifi className="h-4 w-4" />
+            WiFi Vouchers
+            <span className="ml-auto text-xs font-normal text-muted-foreground tabular-nums">
+              {seatCap != null ? `0 of ${seatCap} seat${seatCap === 1 ? "" : "s"} used` : "0 active"}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {revokedHistorySection}
+          {isActive && (
+            <div className="flex items-center gap-2 pt-1 border-t">
+              {issueNewButton(true)}
+            </div>
           )}
         </CardContent>
       </Card>
@@ -2533,7 +2857,9 @@ function WifiVoucherCard({
           <Wifi className="h-4 w-4" />
           WiFi Vouchers
           <span className="ml-auto text-xs font-normal text-muted-foreground tabular-nums">
-            {activeIssuances.length} issued
+            {seatCap != null
+              ? `${activeIssuances.length} of ${seatCap} seat${seatCap === 1 ? "" : "s"} used`
+              : `${activeIssuances.length} issued`}
           </span>
         </CardTitle>
       </CardHeader>
@@ -2542,31 +2868,97 @@ function WifiVoucherCard({
           {activeIssuances.map((v, idx) => {
             const vid = v.id || String(idx);
             const isRevealed = revealedIds.has(vid);
-            const code = v.voucher!.voucher_code;
+            const code = voucherCodeOf(v);
+            const issuedAtLabel = v.issued_at ? formatDateTime(v.issued_at) : null;
+            const validityLabel = formatVoucherValidity(v.duration_minutes);
             return (
               <div key={vid} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2">
-                <span className="text-xs text-muted-foreground">#{idx + 1}</span>
-                {isRevealed ? (
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-semibold tracking-wider">
-                      {code}
-                    </span>
-                    <button
-                      onClick={() => copyCode(code)}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                      title="Copy code"
+                <div className="flex flex-col">
+                  <span className="text-xs text-muted-foreground">#{idx + 1}</span>
+                  {issuedAtLabel && (
+                    <span className="text-[10px] text-muted-foreground">Issued {issuedAtLabel}</span>
+                  )}
+                  {validityLabel ? (
+                    <span className="text-[10px] text-muted-foreground">Valid for {validityLabel}</span>
+                  ) : (
+                    <span
+                      className="text-[10px] text-muted-foreground italic"
+                      title="Validity was not recorded for vouchers issued before this was tracked"
                     >
-                      <Copy className="h-3.5 w-3.5" />
+                      Validity not recorded
+                    </span>
+                  )}
+                  {v.emailed_at ? (
+                    <span
+                      className="text-[10px] text-green-700 flex items-center gap-0.5"
+                      title={`Sent by email${v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} on ${formatDateTime(v.emailed_at)}. Email is the only delivery channel for WiFi codes.`}
+                    >
+                      <Mail className="h-2.5 w-2.5" />
+                      Emailed{v.seat_occupant_email || voucherRecipient ? ` to ${v.seat_occupant_email || voucherRecipient}` : ""} · {formatDateTime(v.emailed_at)}
+                    </span>
+                  ) : (
+                    <span
+                      className="text-[10px] text-amber-700 flex items-center gap-0.5"
+                      title="This code has not been sent to the customer yet. Use \u201cResend\u201d below."
+                    >
+                      <Mail className="h-2.5 w-2.5" />Not sent to customer yet
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {code === null ? (
+                    <span
+                      className="text-xs text-muted-foreground italic"
+                      title="Voucher was generated on the WiFi controller but its code was not stored locally"
+                    >
+                      Code not recorded
+                    </span>
+                  ) : isRevealed ? (
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-semibold tracking-wider">
+                        {code}
+                      </span>
+                      <button
+                        onClick={() => copyCode(code)}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        title="Copy code"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => toggleReveal(vid)}
+                      className="text-xs text-primary hover:underline font-medium"
+                    >
+                      Tap to reveal
                     </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => toggleReveal(vid)}
-                    className="text-xs text-primary hover:underline font-medium"
-                  >
-                    Tap to reveal
-                  </button>
-                )}
+                  )}
+                  {v.id && canRevoke && (
+                    <button
+                      onClick={() => handleReplace(v.id!)}
+                      disabled={replacingId === v.id || revokingId === v.id}
+                      className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 shrink-0"
+                      title="Revoke & reissue — the current code stops working immediately and a new code is emailed to the customer"
+                    >
+                      {replacingId === v.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <RotateCw className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                  {v.id && canRevoke && (
+                    <button
+                      onClick={() => handleRevoke(v.id!)}
+                      disabled={revokingId === v.id || replacingId === v.id}
+                      className="text-destructive hover:text-destructive/80 transition-colors disabled:opacity-50 shrink-0"
+                      title="Revoke this voucher — internet access stops immediately"
+                    >
+                      {revokingId === v.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <X className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -2575,26 +2967,34 @@ function WifiVoucherCard({
           Each code supports 2 device logins · tap to reveal when needed
         </p>
 
-        {/* Issue more — only for active bookings */}
+        {!canRevoke && <RuijieRevokeNotice />}
+
+        {revokedHistorySection}
+
+        <Button
+          size="sm"
+          variant="secondary"
+          className="w-full text-xs h-7"
+          onClick={handleEmailVouchers}
+          disabled={emailing}
+        >
+          {emailing
+            ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Emailing…</>
+            : <><Mail className="h-3 w-3 mr-1" />{voucherRecipient ? `Resend to ${voucherRecipient}` : "Resend to customer"}</>}
+        </Button>
+
+        {/* Issue new — only for active bookings, hard-capped at seats booked */}
         {isActive && (
-          <div className="flex items-center gap-2 pt-1 border-t">
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={issueCount}
-              onChange={(e) => setIssueCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-              className="w-14 h-7 rounded-md border border-input bg-background px-2 text-xs text-center tabular-nums"
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-xs h-7 flex-1"
-              onClick={handleRequestVouchers}
-              disabled={requesting}
-            >
-              {requesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Plus className="h-3 w-3 mr-1" />Issue More</>}
-            </Button>
+          <div className="flex flex-col gap-1 pt-1 border-t">
+            <div className="flex items-center gap-2 pt-1">
+              {issueNewButton(false)}
+            </div>
+            {atCap && (
+              <p className="text-[10px] text-muted-foreground">
+                All {seatCap} seat{seatCap === 1 ? "’s" : "s’"} vouchers issued — revoke one to issue another.
+                {userRole === "admin" ? " Admins can override with a reason." : ""}
+              </p>
+            )}
           </div>
         )}
       </CardContent>

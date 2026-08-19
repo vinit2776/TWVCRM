@@ -163,9 +163,11 @@ export function CreateContractDialog({
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
       }
-      // Prefill start date from occupation date (set during GST invoice)
-      if (selectedProposal.occupation_start_date) {
-        setStartDate(selectedProposal.occupation_start_date);
+      // Prefill start date from when the pro-rata invoice was actually paid;
+      // fall back to the occupation date (set during GST invoice) if the
+      // pro-rata payment hasn't been recorded yet for some reason.
+      if (selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date) {
+        setStartDate(selectedProposal.prorata_paid_date || selectedProposal.occupation_start_date || "");
       }
       // Prefill security deposit months from proposal
       if (selectedProposal.security_deposit_months) {
@@ -719,6 +721,17 @@ export function CreateContractDialog({
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {selectedProposal?.prorata_paid_date
+                    ? "The pro-rata invoice is already paid — this date will be locked to it on activation."
+                    : "Placeholder until the proposal's pro-rata invoice is paid. It will be locked to that invoice's occupation date when the contract is activated."}
+                </p>
+                {selectedProposal?.prorata_paid_date && startDate !== selectedProposal.prorata_paid_date && (
+                  <p className="text-xs text-amber-600 flex items-start gap-1">
+                    <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                    Differs from the pro-rata invoice payment date ({new Date(selectedProposal.prorata_paid_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}).
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>

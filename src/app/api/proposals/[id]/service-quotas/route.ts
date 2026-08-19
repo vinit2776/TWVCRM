@@ -12,13 +12,14 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("proposal_service_quotas")
-    .select("monthly_quota, overage_rate, service:service_catalog(name, unit_label)")
+    .select("service_id, monthly_quota, overage_rate, service:service_catalog(name, unit_label)")
     .eq("proposal_id", id)
     .gt("monthly_quota", 0);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   type Row = {
+    service_id: string;
     monthly_quota: number;
     overage_rate: number;
     service: { name: string; unit_label: string } | null;
@@ -27,6 +28,7 @@ export async function GET(
   const mapped = (data as unknown as Row[])
     .filter((r) => r.service)
     .map((r) => ({
+      service_id: r.service_id,
       name: r.service!.name,
       unit_label: r.service!.unit_label,
       monthly_quota: r.monthly_quota,

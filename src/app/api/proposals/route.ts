@@ -55,25 +55,66 @@ export async function GET(request: NextRequest) {
   // One extra round-trip, reduced to "most recent per proposal_id" in JS —
   // same pattern as the paid-amount aggregation in receivables/route.ts.
   const proposalIds = (data || []).map((p) => p.id as string);
-  const latestByProposal = new Map<string, { handoff_state: string | null; payment_status: string }>();
+  const latestByProposal = new Map<string, { statement_id: string; handoff_state: string | null; payment_status: string }>();
   if (proposalIds.length > 0) {
     const { data: statements } = await supabase
       .from("billing_statements")
-      .select("proposal_id, handoff_state, payment_status, created_at")
+      .select("id, proposal_id, handoff_state, payment_status, created_at")
       .in("proposal_id", proposalIds)
       .order("created_at", { ascending: false });
     for (const s of statements || []) {
       const pid = s.proposal_id as string;
       if (!latestByProposal.has(pid)) {
-        latestByProposal.set(pid, { handoff_state: s.handoff_state as string | null, payment_status: s.payment_status as string });
+        latestByProposal.set(pid, { statement_id: s.id as string, handoff_state: s.handoff_state as string | null, payment_status: s.payment_status as string });
       }
     }
   }
 
-  const enriched = (data || []).map((p) => ({
-    ...p,
-    latest_billing_statement: latestByProposal.get(p.id as string) ?? null,
-  }));
+  // Pro-rata paid date — used by CreateContractDialog to default the contract
+  // start date to when the customer actually paid, not just the
+  // occupation_start_date the proration was calculated from.
+  //
+  // Two independent payment paths both count as "pro-rata paid" here:
+  //  1. proposals.payment_status/payment_received_at — set by the generic
+  //     proposal Razorpay link webhook AND by the manual /payment route
+  //     accounts uses after verifying a bank transfer against the GST
+  //     invoice. This is the same flag the "Monthly Charge Paid" lifecycle
+  //     step and the contract *activation* gate check, so it's authoritative
+  //     whenever it's set.
+  //  2. The GST invoice's own billing_statements row (created by
+  //     send-invoice) getting paid via its own Razorpay link — the payments
+  //     webhook only updates billing_statements.payment_status for this
+  //     path, never proposals.payment_status, so without this fallback a
+  //     contract created right after that payment (creation only requires
+  //     the deposit, not payment_status) would show no paid date at all.
+  const prorataPaidDateByStatement = new Map<string, string>();
+  const paidStatementIds = Array.from(latestByProposal.values())
+    .filter((v) => v.payment_status === "paid")
+    .map((v) => v.statement_id);
+  if (paidStatementIds.length > 0) {
+    const { data: payments } = await supabase
+      .from("billing_payments")
+      .select("billing_statement_id, payment_date")
+      .in("billing_statement_id", paidStatementIds)
+      .order("payment_date", { ascending: true });
+    for (const p of payments || []) {
+      const sid = p.billing_statement_id as string;
+      if (!prorataPaidDateByStatement.has(sid)) prorataPaidDateByStatement.set(sid, p.payment_date as string);
+    }
+  }
+
+  const enriched = (data || []).map((p) => {
+    const latestStatement = latestByProposal.get(p.id as string) ?? null;
+    const proposalLevelPaidDate = p.payment_status === "paid" && p.payment_received_at
+      ? (p.payment_received_at as string).slice(0, 10)
+      : null;
+    const statementPaidDate = latestStatement ? prorataPaidDateByStatement.get(latestStatement.statement_id) ?? null : null;
+    return {
+      ...p,
+      latest_billing_statement: latestStatement,
+      prorata_paid_date: proposalLevelPaidDate ?? statementPaidDate,
+    };
+  });
 
   return NextResponse.json({
     data: enriched,

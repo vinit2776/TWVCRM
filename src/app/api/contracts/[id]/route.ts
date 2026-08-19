@@ -7,6 +7,7 @@ import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/li
 import { generateMonthlyStatements } from "@/lib/billing";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 
 export async function GET(
   _request: NextRequest,
@@ -70,6 +71,7 @@ export async function PATCH(
   const allowedFields: Record<string, unknown> = {};
 
   if (body.status) allowedFields.status = body.status;
+  if (body.start_date) allowedFields.start_date = body.start_date;
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.notes !== undefined) allowedFields.notes = body.notes;
   if (body.termination_reason) allowedFields.termination_reason = body.termination_reason;
@@ -140,6 +142,23 @@ export async function PATCH(
     );
   }
 
+  // start_date is a placeholder until the linked proposal's pro-rata invoice
+  // is paid — editable while start_date_confirmed is false, locked once true
+  // (always true after activation). The admin payment_override_reason path
+  // (already gated to admin role above) can still push it through when
+  // locked, but only as part of the same request that activates the
+  // contract — it must not become a general-purpose bypass for editing
+  // start_date on a contract that's already active. (allowedFields.start_date
+  // was staged earlier, before oldContract was available to check.)
+  if (allowedFields.start_date !== undefined) {
+    const overrideUnlocksThisRequest = !!body.payment_override_reason && body.status === "active";
+    if (oldContract.start_date_confirmed && !overrideUnlocksThisRequest) {
+      return NextResponse.json({
+        error: "Start date is locked — the linked proposal's pro-rata invoice has already been paid. Use the admin override while activating to change it.",
+      }, { status: 400 });
+    }
+  }
+
   // Set when an attributed ad-hoc invoice stands in for the proposal's own
   // pro-rata payment at activation. Merged into the audit entry below, which is
   // built after this block.
@@ -198,7 +217,7 @@ export async function PATCH(
 
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at")
+          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -233,7 +252,17 @@ export async function PATCH(
           missing.push("pro-rata / first invoice payment");
         }
         const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
-        if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+        // A proposal's collected deposit belongs to whichever contract first
+        // claims it (see the snapshot block below) — if a different contract
+        // already claimed it, this proposal's "paid" status doesn't cover
+        // this contract too. It needs its own separate deposit collection.
+        const depositClaimedByOther = !!proposal.deposit_claimed_by_contract_id
+          && proposal.deposit_claimed_by_contract_id !== id;
+        if (depositRequired && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
+          missing.push(depositClaimedByOther
+            ? "security deposit (already claimed by another contract activated from this same proposal — collect a separate deposit for this contract, or use the override with a clear reason)"
+            : "security deposit");
+        }
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
         if (missing.length > 0) {
           return NextResponse.json({
@@ -287,20 +316,66 @@ export async function PATCH(
       if (!isRenewal && oldContract.proposal_id) {
         const { data: depositSnapshot } = await supabase
           .from("proposals")
-          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes")
+          .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, occupation_start_date, deposit_claimed_by_contract_id")
           .eq("id", oldContract.proposal_id)
           .single();
 
         if (depositSnapshot) {
-          allowedFields.security_deposit_amount = depositSnapshot.security_deposit_amount;
-          allowedFields.security_deposit_months = depositSnapshot.security_deposit_months;
-          allowedFields.deposit_payment_status = depositSnapshot.deposit_payment_status;
-          allowedFields.deposit_payment_amount = depositSnapshot.deposit_payment_amount;
-          allowedFields.deposit_payment_reference = depositSnapshot.deposit_payment_reference;
-          allowedFields.deposit_payment_medium = depositSnapshot.deposit_payment_medium;
-          allowedFields.deposit_payment_received_at = depositSnapshot.deposit_payment_received_at;
-          allowedFields.deposit_internal_notes = depositSnapshot.deposit_internal_notes;
+          // Nothing to claim (not_required/waived/still-pending) or already
+          // claimed by this same contract — no DB round-trip needed, this
+          // contract is entitled to the proposal's payment fields as-is.
+          let claimGranted =
+            depositSnapshot.deposit_payment_status !== "paid" ||
+            depositSnapshot.deposit_claimed_by_contract_id === id;
+
+          if (!claimGranted) {
+            // Paid, and not yet claimed by this contract — a proposal's
+            // collected deposit can only ever belong to one contract, so
+            // claim it atomically. WHERE ... IS NULL means only the request
+            // that actually wins a race (two contracts off the same
+            // proposal activating near-simultaneously) gets the update
+            // applied — a plain read-then-write here would let both win.
+            const admin = createAdminClient();
+            const { data: claimed } = await admin
+              .from("proposals")
+              .update({ deposit_claimed_by_contract_id: id })
+              .eq("id", oldContract.proposal_id)
+              .is("deposit_claimed_by_contract_id", null)
+              .select("id");
+            claimGranted = !!claimed && claimed.length > 0;
+          }
+
+          Object.assign(allowedFields, buildContractDepositSnapshot(depositSnapshot, claimGranted));
         }
+
+        // Lock start_date to the paid pro-rata invoice's occupation date —
+        // once payment has actually been collected against a specific date,
+        // that date is authoritative and the placeholder entered earlier no
+        // longer is. Admin overrides skip the re-derivation and keep
+        // whatever start_date this same request explicitly set (or the
+        // existing value if it didn't), consistent with the payment gate
+        // bypass above.
+        if (!body.payment_override_reason) {
+          const lockedStartDate = depositSnapshot?.occupation_start_date || oldContract.start_date;
+          if (lockedStartDate !== oldContract.start_date) {
+            allowedFields.start_date = lockedStartDate;
+            // phase_start_date (the rate-escalation clock anchor) defaults to
+            // start_date at creation but is independently editable — only
+            // re-sync it here if it was never moved off that default.
+            if (oldContract.phase_start_date === oldContract.start_date) {
+              allowedFields.phase_start_date = lockedStartDate;
+            }
+          }
+        }
+      }
+
+      // start_date is locked from this point on — no route allows editing it
+      // once active. Renewals are out of scope for this: their draft
+      // start_date is managed entirely by the renewal edit-terms flow, and
+      // start_date_confirmed already defaults to true for them.
+      if (!isRenewal) {
+        allowedFields.start_date_confirmed = true;
+        allowedFields.start_date_locked_at = now;
       }
 
       allowedFields.activated_at = now;

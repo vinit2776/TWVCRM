@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -23,7 +23,8 @@ import {
   ITEM_CATALOG_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
-  ITEM_UNITS,
+  ITEM_UNIT_GROUPS,
+  ITEM_UNIT_LABELS,
   ITEM_TYPES,
   ITEM_TYPE_LABELS,
   GST_RATES,
@@ -680,8 +681,13 @@ export default function CatalogPage() {
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {ITEM_UNITS.map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    {ITEM_UNIT_GROUPS.map((g) => (
+                      <SelectGroup key={g.label}>
+                        <SelectLabel>{g.label}</SelectLabel>
+                        {g.units.map((u) => (
+                          <SelectItem key={u} value={u}>{ITEM_UNIT_LABELS[u]}</SelectItem>
+                        ))}
+                      </SelectGroup>
                     ))}
                   </SelectContent>
                 </Select>

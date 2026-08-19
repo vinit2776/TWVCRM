@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -112,6 +113,10 @@ export default function ContractDetailPage({
   const [stampPreviewPdfBase64, setStampPreviewPdfBase64] = useState<string | null>(null);
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  // Manual override for the agreement PDF's DRAFT watermark — only exposed
+  // once start_date is confirmed (see generateMembershipAgreementPDF). While
+  // unconfirmed, the watermark is always forced on regardless of this value.
+  const [includeDraftWatermark, setIncludeDraftWatermark] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
@@ -270,12 +275,13 @@ export default function ContractDetailPage({
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
-      contract.location || undefined
+      contract.location || undefined,
+      { watermarkDraft: includeDraftWatermark }
     );
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string }): Promise<string> => {
+  const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }): Promise<string> => {
     if (!contract) return "";
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
@@ -292,6 +298,13 @@ export default function ContractDetailPage({
     }
     return btoa(binary);
   };
+
+  // Email dialog calls onGeneratePDF() with no arguments — thread the
+  // watermark toggle through as a closure instead of a call-site option, so
+  // handleGeneratePDFBase64 stays generic for the stamp/e-sign call sites
+  // (which never honor the manual toggle — see the watermarkDraft option's
+  // doc comment in generateMembershipAgreementPDF).
+  const handleGeneratePDFForEmail = () => handleGeneratePDFBase64({ watermarkDraft: includeDraftWatermark });
 
   const handleOpenEmailDialog = () => {
     setEmailDialogOpen(true);
@@ -611,7 +624,14 @@ export default function ContractDetailPage({
             const proposalMissing = !isRenewal && !contract.proposal_id;
             const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
-            const depositPaid = isRenewal || !depositRequired || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid");
+            // A proposal's collected deposit belongs to whichever contract first
+            // claims it at activation (see contracts/[id]/route.ts) — if a
+            // different contract already claimed it, this proposal's "paid"
+            // status doesn't cover this contract too.
+            const depositClaimedByOther = !!linkedProposal?.deposit_claimed_by_contract_id
+              && linkedProposal.deposit_claimed_by_contract_id !== contract.id;
+            const depositPaid = isRenewal || !depositRequired
+              || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             // Trust the ContractProrataSection's live billing-statement check over the
             // cached column once it reports in — the cache only syncs via the Razorpay
@@ -646,7 +666,13 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {proposalMissing && <p>• A proposal is linked to this contract</p>}
                     {!proposalMissing && !proposalPaid && <p>• Proposal payment collected</p>}
-                    {!proposalMissing && !depositPaid && <p>• Security deposit collected</p>}
+                    {!proposalMissing && !depositPaid && (
+                      <p>
+                        • {depositClaimedByOther
+                          ? "Security deposit — already claimed by another contract activated from this same proposal. Collect a separate deposit for this contract."
+                          : "Security deposit collected"}
+                      </p>
+                    )}
                     {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
@@ -706,6 +732,17 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {/* Watermark is forced on until start_date locks — this toggle only
+              matters (and only appears) once it has, for Download PDF + Email. */}
+          {contract.start_date_confirmed && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground border rounded-md px-2.5 cursor-pointer select-none">
+              <Checkbox
+                checked={includeDraftWatermark}
+                onCheckedChange={(v) => setIncludeDraftWatermark(!!v)}
+              />
+              Include DRAFT watermark
+            </label>
+          )}
           {contract.is_renewal && contract.parent_contract_id && (
             <Button
               variant="outline"
@@ -762,9 +799,15 @@ export default function ContractDetailPage({
                 </Link>
               </div>
               {contract.deposit_carried_from && (
-                <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
-                  Deposit carried over
-                </Badge>
+                Number(contract.deposit_shortfall || 0) > 0 ? (
+                  <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
+                    Deposit shortfall: {formatCurrency(Number(contract.deposit_shortfall || 0))}
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
+                    Deposit pooled
+                  </Badge>
+                )
               )}
               {contract.escalation_waived && (
                 <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
@@ -876,7 +919,7 @@ export default function ContractDetailPage({
                   ) : contract.deposit_carried_from ? (
                     <>
                       <p className="font-medium">{formatCurrency(securityDeposit)}</p>
-                      <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                      <p className="text-[10px] text-green-600 mt-0.5">✓ Pooled with customer</p>
                     </>
                   ) : (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status) ? (
                     // Post-activation: the contract owns its own deposit snapshot now
@@ -947,6 +990,8 @@ export default function ContractDetailPage({
               proposal={linkedProposal}
               contract={contract}
               depositCarriedFrom={contract.deposit_carried_from}
+              leadId={contract.lead_id || undefined}
+              depositShortfall={contract.deposit_shortfall}
             />
           )}
 
@@ -970,6 +1015,10 @@ export default function ContractDetailPage({
             contractId={id}
             billingMode={contract.billing_mode}
             contractStatus={contract.status}
+            proposalId={contract.proposal_id}
+            proposalNumber={contract.proposal?.proposal_number}
+            prorataPaymentStatus={contract.proposal?.payment_status}
+            prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
@@ -1286,7 +1335,7 @@ export default function ContractDetailPage({
                 {contract.deposit_carried_from && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground text-xs">Deposit</span>
-                    <span className="text-xs text-green-700">Carried from parent</span>
+                    <span className="text-xs text-green-700">Pooled with customer</span>
                   </div>
                 )}
                 {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
@@ -1411,9 +1460,16 @@ export default function ContractDetailPage({
                 <span>{contract.tenure_months} months</span>
               </div>
               <Separator />
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Start Date</span>
-                <span>{formatDate(contract.start_date)}</span>
+                <span className="flex items-center gap-2">
+                  {formatDate(contract.start_date)}
+                  {contract.start_date_confirmed === false && (
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                      Pending pro-rata payment
+                    </Badge>
+                  )}
+                </span>
               </div>
               <Separator />
               <div className="flex justify-between">
@@ -2020,7 +2076,7 @@ export default function ContractDetailPage({
         documentNumber={contract.contract_number}
         leadEmail={contract.lead?.email}
         contractIsRenewal={!!(contract.is_renewal && contract.parent_contract_id)}
-        onGeneratePDF={handleGeneratePDFBase64}
+        onGeneratePDF={handleGeneratePDFForEmail}
         onSuccess={fetchContract}
       />
 

@@ -32,8 +32,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { bookingWindowHours } from "@/lib/utils";
+import { sendBookingVoucherEmail, computeVoucherSeatCap } from "@/lib/booking-vouchers";
 import {
   createUnifiVoucher,
   siteConfigFromLocation,
@@ -44,6 +47,44 @@ import {
   isRuijieLocation,
   issueRuijieVoucher,
 } from "@/lib/ruijie";
+
+const voucherIssueBodySchema = z.object({
+  count: z.number().finite().optional(),
+  /**
+   * Only honored when the caller's role is admin — anyone else who sends a
+   * non-empty override_reason gets a 403 (see role check below). Lets an
+   * admin push past the seat cap for a legitimate exception, with an
+   * audited reason.
+   */
+  override_reason: z.string().trim().min(1).optional(),
+});
+
+type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Best-effort auto-send of freshly-issued codes to the customer. A delivery
+ * failure must never fail or roll back the issuance itself (bug: staff used
+ * to have to remember a separate "Send to customer" click, and when they
+ * forgot, the code silently never reached the customer).
+ */
+async function tryAutoEmailVouchers(
+  supabase: SupabaseServerClient,
+  bookingId: string,
+  senderName: string,
+  performedBy: string
+): Promise<boolean> {
+  try {
+    const result = await sendBookingVoucherEmail(supabase, {
+      bookingId,
+      senderName,
+      performedBy,
+    });
+    return result.ok;
+  } catch (err) {
+    console.error("[booking-vouchers] auto-email after issuance failed:", err);
+    return false;
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -57,7 +98,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
@@ -65,7 +106,7 @@ export async function POST(
   // Fetch booking
   const { data: booking, error: bookingErr } = await supabase
     .from("bookings")
-    .select("id, booking_date, customer_type, num_attendees, location_id, lead_id, contract_id, guest_email, duration_hours, status")
+    .select("id, booking_date, customer_type, num_attendees, location_id, space_id, lead_id, contract_id, guest_email, duration_hours, start_time, end_time, status, quantity, pricing_model")
     .eq("id", id)
     .single();
 
@@ -82,11 +123,30 @@ export async function POST(
     );
   }
 
-  // Parse optional count from request body
-  const body = await request.json().catch(() => ({}));
+  // Parse and validate the request body
+  const rawBody = await request.json().catch(() => ({}));
+  const parsedBody = voucherIssueBodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return NextResponse.json(
+      { error: "Invalid request body", details: parsedBody.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { count, override_reason } = parsedBody.data;
+
+  // override_reason is admin-only. Anyone else sending it gets a hard 403 —
+  // this is a privileged bypass of the seat cap, not a general "reason" field.
+  if (override_reason && dbUser.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only admins may override the voucher seat cap" },
+      { status: 403 }
+    );
+  }
+  const isOverride = !!override_reason && dbUser.role === "admin";
+
   const numAttendeesInt = bk.num_attendees ? Math.max(1, Number(bk.num_attendees)) : 1;
   const defaultCount = Math.ceil(numAttendeesInt / 2);
-  const requestedCount = body.count != null ? Math.max(1, Math.min(20, Math.floor(Number(body.count)))) : defaultCount;
+  const requestedCount = count != null ? Math.max(1, Math.min(20, Math.floor(count))) : defaultCount;
 
   // Count already-issued vouchers to set correct seat numbers
   const { data: existing } = await supabase
@@ -95,6 +155,42 @@ export async function POST(
     .eq("booking_id", id)
     .eq("is_active", true);
   const alreadyIssued = existing?.length ?? 0;
+
+  // Seat cap: daily-priced spaces cap on seats purchased (quantity), other
+  // pricing models cap on the space's capacity. See computeVoucherSeatCap.
+  const { data: spaceForCap } = bk.space_id
+    ? await supabase.from("spaces").select("capacity").eq("id", bk.space_id).single()
+    : { data: null };
+  const seatCap = computeVoucherSeatCap(bk, spaceForCap);
+  const remaining = Math.max(0, seatCap - alreadyIssued);
+
+  if (!isOverride && alreadyIssued + requestedCount > seatCap) {
+    return NextResponse.json(
+      {
+        error: `This booking has ${alreadyIssued} of ${seatCap} seats' vouchers issued. Revoke one before issuing another, or increase the booking's seats.`,
+        seat_cap: seatCap,
+        already_issued: alreadyIssued,
+        remaining,
+      },
+      { status: 422 }
+    );
+  }
+
+  if (isOverride) {
+    logAudit(supabase, {
+      entityType: "voucher",
+      entityId: id,
+      action: "cap_override",
+      performedBy: dbUser.id,
+      changes: {
+        reason: { old: null, new: override_reason },
+        seat_cap: { old: null, new: seatCap },
+        already_issued: { old: null, new: alreadyIssued },
+        requested_count: { old: null, new: requestedCount },
+        resulting_count: { old: null, new: alreadyIssued + requestedCount },
+      },
+    });
+  }
 
   // Fetch location to determine voucher mode
   const { data: location } = bk.location_id
@@ -110,7 +206,10 @@ export async function POST(
   // ──────────────────────────────────────────────────────────────────
   if (location && isUnifiLocation(location)) {
     const siteConfig = siteConfigFromLocation(location);
-    const durationHours = Number(bk.duration_hours || 1);
+    // bk.duration_hours is a billing quantity (for daily-priced spaces it is
+    // "1" meaning one day unit, NOT one hour) — never read it as a wall-clock
+    // duration. Derive the real booking window from start_time/end_time.
+    const durationHours = bookingWindowHours(bk.start_time, bk.end_time);
     // Duration = booking window in minutes + 60-minute buffer
     const durationMinutes = Math.ceil(durationHours * 60) + 60;
 
@@ -155,6 +254,8 @@ export async function POST(
         is_active: true,
         seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
         unifi_voucher_id: unifiId,
+        unifi_code: unifiCode,
+        duration_minutes: durationMinutes,
       });
 
       if (insertError) {
@@ -179,12 +280,20 @@ export async function POST(
       },
     });
 
+    const emailed = issuances.length > 0
+      ? await tryAutoEmailVouchers(supabase, id, dbUser.full_name || "TWV Team", dbUser.id)
+      : false;
+
     return NextResponse.json({
       issued: issuances.length,
       needed: requestedCount,
       shortfall: 0,
       codes,
       total_issued: alreadyIssued + issuances.length,
+      seat_cap: seatCap,
+      already_issued: alreadyIssued + issuances.length,
+      remaining: Math.max(0, seatCap - (alreadyIssued + issuances.length)),
+      emailed,
     });
   }
 
@@ -200,7 +309,9 @@ export async function POST(
       );
     }
 
-    const durationHours = Number(bk.duration_hours || 1);
+    // bk.duration_hours is a billing quantity, not a wall-clock duration —
+    // see the Unifi path above. Derive the real window from start/end time.
+    const durationHours = bookingWindowHours(bk.start_time, bk.end_time);
     const targetDays = durationHours / 24;
 
     const now = new Date();
@@ -224,6 +335,14 @@ export async function POST(
         );
       }
 
+      // Ruijie matches to the closest CRM_ package, so the granted validity
+      // can differ from the requested window — derive duration_minutes from
+      // the voucher's own issued/expiry timestamps rather than the request.
+      const ruijieDurationMs = new Date(issued.result.expiryTime).getTime() - now.getTime();
+      const ruijieDurationMinutes = Number.isFinite(ruijieDurationMs) && ruijieDurationMs > 0
+        ? Math.round(ruijieDurationMs / 60000)
+        : Math.round(targetDays * 24 * 60);
+
       const { error: insertError } = await supabase.from("voucher_issuances").insert({
         contract_id: bk.contract_id || null,
         voucher_id: null,
@@ -238,6 +357,7 @@ export async function POST(
         seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
         ruijie_voucher_uuid: issued.result.uuid,
         ruijie_code: issued.result.code,
+        duration_minutes: ruijieDurationMinutes,
       });
 
       if (insertError) {
@@ -262,13 +382,21 @@ export async function POST(
       },
     });
 
+    const emailed = issuances.length > 0
+      ? await tryAutoEmailVouchers(supabase, id, dbUser.full_name || "TWV Team", dbUser.id)
+      : false;
+
     return NextResponse.json({
       issued: issuances.length,
       needed: requestedCount,
       shortfall: 0,
       codes,
       total_issued: alreadyIssued + issuances.length,
+      seat_cap: seatCap,
+      already_issued: alreadyIssued + issuances.length,
+      remaining: Math.max(0, seatCap - (alreadyIssued + issuances.length)),
       match_warning: lastMatchWarning,
+      emailed,
     });
   }
 
@@ -276,7 +404,9 @@ export async function POST(
   // REPOSITORY PATH (existing logic)
   // ──────────────────────────────────────────────────────────────────
 
-  const durationHours = Number(bk.duration_hours || 1);
+  // bk.duration_hours is a billing quantity, not a wall-clock duration —
+  // see the Unifi path above. Derive the real window from start/end time.
+  const durationHours = bookingWindowHours(bk.start_time, bk.end_time);
   const isShortBooking = durationHours <= 3;
   const preferredValidity = isShortBooking ? 0.125 : 1;
   const fallbackValidity  = isShortBooking ? 1     : null;
@@ -336,6 +466,10 @@ export async function POST(
         valid_until: bk.booking_date,
         is_active: true,
         seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
+        // Repository vouchers carry a fixed validity_days set on the stock
+        // itself (not derived from the requested window) — convert that to
+        // minutes for the same duration_minutes column the other two modes use.
+        duration_minutes: Math.round(Number(v.validity_days ?? 1) * 24 * 60),
       }))
     ),
   ];
@@ -354,11 +488,19 @@ export async function POST(
     },
   });
 
+  const emailed = vouchers.length > 0
+    ? await tryAutoEmailVouchers(supabase, id, dbUser.full_name || "TWV Team", dbUser.id)
+    : false;
+
   return NextResponse.json({
     issued: vouchers.length,
     needed: requestedCount,
     shortfall: Math.max(0, requestedCount - vouchers.length),
     codes: vouchers.map((v) => v.voucher_code),
     total_issued: alreadyIssued + vouchers.length,
+    seat_cap: seatCap,
+    already_issued: alreadyIssued + vouchers.length,
+    remaining: Math.max(0, seatCap - (alreadyIssued + vouchers.length)),
+    emailed,
   });
 }

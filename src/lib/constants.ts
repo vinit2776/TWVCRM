@@ -248,6 +248,11 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   expired: "bg-orange-100 text-orange-800",
 };
 
+// Content edits (line items, pricing, terms) are only allowed in these
+// statuses — enforced server-side in PATCH /api/proposals/[id]; mirrored
+// here so the Edit action only renders where it will actually be accepted.
+export const PROPOSAL_EDITABLE_STATUSES = ["draft", "sent", "viewed", "rejected"] as const;
+
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 
 export const INVOICE_STATUS_LABELS: Record<string, string> = {
@@ -1785,8 +1790,95 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"] as const;
+/**
+ * Units of measure for procurement items (catalog, material requests, POs).
+ * Every value here must also exist in the Postgres `item_unit` enum — add new
+ * ones via a migration (`ALTER TYPE item_unit ADD VALUE IF NOT EXISTS ...`)
+ * before adding them here, or inserts fail with "invalid input value for enum".
+ * Order matters: it drives the grouped dropdown via ITEM_UNIT_GROUPS below.
+ */
+export const ITEM_UNITS = [
+  // Count & discrete
+  "piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle",
+  // Packaging
+  "packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder",
+  // Weight
+  "gram", "kg", "ton",
+  // Volume
+  "ml", "litre",
+  // Length
+  "inch", "feet", "metre", "rft", "rmt", "km",
+  // Area
+  "sqft", "sqm",
+  // Cubic
+  "cft", "cbm",
+  // Time & service
+  "hr", "day", "month", "quarter", "year", "manday", "visit",
+  // Other
+  "lumpsum", "kwh",
+] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+/** Display labels for units — the raw enum values are terse/lowercase. */
+export const ITEM_UNIT_LABELS: Record<ItemUnit, string> = {
+  piece: "Piece",
+  nos: "Nos",
+  pair: "Pair",
+  dozen: "Dozen",
+  set: "Set",
+  sheet: "Sheet",
+  ream: "Ream",
+  roll: "Roll",
+  bundle: "Bundle",
+  packet: "Packet",
+  sachet: "Sachet",
+  box: "Box",
+  carton: "Carton",
+  bag: "Bag",
+  bottle: "Bottle",
+  can: "Can",
+  tin: "Tin",
+  tube: "Tube",
+  drum: "Drum",
+  cylinder: "Cylinder",
+  gram: "Gram (g)",
+  kg: "Kilogram (kg)",
+  ton: "Tonne",
+  ml: "Millilitre (ml)",
+  litre: "Litre (L)",
+  inch: "Inch",
+  feet: "Feet",
+  metre: "Metre (m)",
+  rft: "Running Feet (Rft)",
+  rmt: "Running Metre (Rmt)",
+  km: "Kilometre (km)",
+  sqft: "Square Feet (Sqft)",
+  sqm: "Square Metre (Sqm)",
+  cft: "Cubic Feet (Cft)",
+  cbm: "Cubic Metre (Cbm)",
+  hr: "Hour",
+  day: "Day",
+  month: "Month",
+  quarter: "Quarter",
+  year: "Year",
+  manday: "Man-day",
+  visit: "Visit",
+  lumpsum: "Lumpsum",
+  kwh: "Unit (kWh)",
+};
+
+/** Grouped for the unit dropdown — 40+ flat options are unusable to scan. */
+export const ITEM_UNIT_GROUPS: { label: string; units: readonly ItemUnit[] }[] = [
+  { label: "Count", units: ["piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle"] },
+  { label: "Packaging", units: ["packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder"] },
+  { label: "Weight", units: ["gram", "kg", "ton"] },
+  { label: "Volume", units: ["ml", "litre"] },
+  { label: "Length", units: ["inch", "feet", "metre", "rft", "rmt", "km"] },
+  { label: "Area", units: ["sqft", "sqm"] },
+  { label: "Cubic", units: ["cft", "cbm"] },
+  { label: "Time & Service", units: ["hr", "day", "month", "quarter", "year", "manday", "visit"] },
+  { label: "Other", units: ["lumpsum", "kwh"] },
+];
 
 /** Vending machine drink types tracked on the Consumption > Beverages tab. A pure usage tally — not linked to ingredient stock. */
 export const BEVERAGE_TYPES = [

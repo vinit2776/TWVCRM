@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
-import type { ServiceCatalogItem } from "@/types";
+import type { ServiceCatalogItem, Proposal } from "@/types";
 
 interface ServiceQuotaRow {
   service_id: string;
@@ -35,6 +35,9 @@ interface ProposalFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  /** Present in edit mode — the proposal being edited. */
+  proposalId?: string;
+  initialProposal?: Proposal;
 }
 
 export function ProposalForm({
@@ -43,7 +46,10 @@ export function ProposalForm({
   open,
   onOpenChange,
   onSuccess,
+  proposalId,
+  initialProposal,
 }: ProposalFormProps) {
+  const isEditMode = Boolean(proposalId && initialProposal);
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
@@ -82,6 +88,63 @@ export function ProposalForm({
       })
       .catch(() => setCatalogLoaded(true));
   }, []);
+
+  // Prefill from the existing proposal when opened in edit mode; otherwise
+  // start from a blank form each time the create dialog is opened.
+  useEffect(() => {
+    if (!open) return;
+    if (initialProposal) {
+      setTitle(initialProposal.title || "");
+      setLocationId(initialProposal.location_id || leadLocationId || null);
+      setDescription(initialProposal.description || "");
+      setItems(
+        initialProposal.items?.length
+          ? initialProposal.items.map((i) => ({
+              description: i.description,
+              quantity: i.quantity,
+              unit: i.unit,
+              unit_price: i.unit_price,
+              total: i.total,
+            }))
+          : [{ description: "", quantity: 1, unit_price: 0, total: 0 }]
+      );
+      setTaxPercentage(initialProposal.tax_percentage ?? 18);
+      setDiscountPercentage(initialProposal.discount_percentage ?? 0);
+      setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
+      setTermsAndConditions(initialProposal.terms_and_conditions ?? DEFAULT_PROPOSAL_TERMS);
+      setNotes(initialProposal.notes ?? "");
+      const confRoom = (initialProposal.complimentary_items || []).find((i) => i.name === "Conference Room");
+      setConfRoomHours(confRoom?.quantity ?? 0);
+      setConfRoomOverageRate(confRoom?.price_per_unit ?? 0);
+      setDepositMonths(initialProposal.security_deposit_months ?? 0);
+      setDepositAmount(initialProposal.security_deposit_amount ?? 0);
+      // Preserve the exact stored deposit rather than silently recalculating
+      // it off the (possibly just-edited) subtotal.
+      setDepositOverridden((initialProposal.security_deposit_months ?? 0) > 0);
+    } else {
+      resetForm();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialProposal, leadLocationId]);
+
+  // Edit mode only — merge in the proposal's existing service quotas once
+  // the catalog has loaded (need service_id from the catalog to match rows).
+  useEffect(() => {
+    if (!open || !proposalId || !initialProposal || !catalogLoaded) return;
+    fetch(`/api/proposals/${proposalId}/service-quotas`)
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => {
+        const rows = (json.data || []) as { service_id: string; monthly_quota: number; overage_rate: number }[];
+        if (rows.length === 0) return;
+        setServiceQuotas((prev) =>
+          prev.map((sq) => {
+            const match = rows.find((r) => r.service_id === sq.service_id);
+            return match ? { ...sq, monthly_quota: match.monthly_quota, overage_rate: match.overage_rate } : sq;
+          })
+        );
+      })
+      .catch(() => {});
+  }, [open, proposalId, initialProposal, catalogLoaded]);
 
   // Compute subtotal for deposit auto-calculation
   const computedSubtotal = items
@@ -176,21 +239,21 @@ export function ProposalForm({
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
 
-    const res = await fetch("/api/proposals", {
-      method: "POST",
+    const res = await fetch(isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals", {
+      method: isEditMode ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
     setSubmitting(false);
     if (res.ok) {
-      toast.success("Proposal created successfully");
-      resetForm();
+      toast.success(isEditMode ? "Proposal updated successfully" : "Proposal created successfully");
+      if (!isEditMode) resetForm();
       onOpenChange(false);
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to create proposal");
+      toast.error(err?.error || (isEditMode ? "Failed to update proposal" : "Failed to create proposal"));
     }
   };
 
@@ -198,7 +261,7 @@ export function ProposalForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Proposal</DialogTitle>
+          <DialogTitle>{isEditMode ? "Edit Proposal" : "Create Proposal"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -457,7 +520,7 @@ export function ProposalForm({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Create Proposal
+              {isEditMode ? "Save Changes" : "Create Proposal"}
             </Button>
           </div>
         </form>

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { getProrataPaidDate } from "@/lib/proposals";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -142,10 +143,27 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
+  // start_date is a placeholder until the proposal's pro-rata invoice is
+  // actually paid. If it's already paid at creation time, the invoice's
+  // occupation_start_date is authoritative — use it instead of whatever the
+  // form submitted, and lock it immediately. Otherwise the form value stands
+  // as a placeholder (start_date_confirmed = false) until activation.
+  //
+  // "Paid" is checked via getProrataPaidDate rather than a plain
+  // payment_status === "paid" comparison: the GST-invoice-paid-via-its-own-
+  // billing_statement path never mirrors back to proposals.payment_status,
+  // so relying on that field alone would leave a contract marked
+  // unconfirmed (and PDF-watermarked) even though the customer already paid.
+  const proRataPaidDate = await getProrataPaidDate(supabase, d.proposal_id);
+  const proRataAlreadyPaid = !!proRataPaidDate;
+  const resolvedStartDateStr = proRataAlreadyPaid && proposal.occupation_start_date
+    ? (proposal.occupation_start_date as string)
+    : d.start_date;
+
   // End date: use the explicit end_date when the form supplies one (the
   // start/end-date picker). Otherwise derive it from start_date + tenure_months
   // minus 1 day — a contract starting Nov 1 for 11 months ends Sep 30.
-  const startDate = new Date(d.start_date);
+  const startDate = new Date(resolvedStartDateStr);
   let endDateStr: string;
   if (d.end_date) {
     endDateStr = d.end_date;
@@ -181,11 +199,15 @@ export async function POST(request: NextRequest) {
       total_amount: totalAmount,
       billing_cycle: d.billing_cycle,
       tenure_months: d.tenure_months,
-      start_date: d.start_date,
+      start_date: resolvedStartDateStr,
       end_date: endDateStr,
       // Tiered rate-phase clock anchor — defaults to start_date, same as the
       // one-time backfill for pre-existing contracts (see 00315 migration).
-      phase_start_date: d.start_date,
+      phase_start_date: resolvedStartDateStr,
+      // Placeholder until the proposal's pro-rata invoice is paid — see
+      // supabase/migrations/00503_contract_start_date_confirmation.sql.
+      start_date_confirmed: proRataAlreadyPaid,
+      start_date_locked_at: proRataAlreadyPaid ? new Date().toISOString() : null,
       next_billing_date: nextBillingDate.toISOString().split("T")[0],
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,
