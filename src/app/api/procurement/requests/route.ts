@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS } from "@/lib/constants";
 
 const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
   item_name: z.string().min(1),
   quantity: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
+  unit: z.enum(ITEM_UNITS),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
 });

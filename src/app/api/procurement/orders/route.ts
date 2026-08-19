@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { ITEM_UNITS } from "@/lib/constants";
 import { computeOrderedQtyMap, recalculatePrStatus } from "@/lib/procurement/pr-status";
 
 const createPoItemSchema = z.object({
@@ -9,7 +10,7 @@ const createPoItemSchema = z.object({
   item_id: z.string().uuid().nullish(),
   item_name: z.string().min(1),
   quantity_ordered: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
+  unit: z.enum(ITEM_UNITS),
   unit_price: z.number().min(0).nullish(),
   gst_rate: z.number().min(0).max(28).default(0),
   notes: z.string().nullish(),
