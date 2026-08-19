@@ -167,8 +167,8 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 | Action | Allowed Roles |
 |--------|--------------|
-| Approve vendor bills | `admin`, `manager` |
-| Record payments (vendor bills) | `accounts`, `admin`, `office_admin` — **only from Finance > Acc Payables** |
+| Approve vendor bills | `admin` only — a `manager` gets a 403 |
+| Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
 | Record petty cash | `accounts`, `admin`, `office_admin` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
 | Facility tickets | `fms`, `admin` |
@@ -176,7 +176,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Procurement → Payment Flow (strict separation)
 
-1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin`/`manager` approve/reject. **No payment recording here.**
+1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin` approves/rejects — `manager` cannot (`canApproveOrReject` in `src/app/api/procurement/bills/[id]/route.ts` is `role === "admin"`). **No payment recording here.**
 2. **Finance > Acc Payables** (`/accounting/vendor-payments/[id]`): `accounts`/`admin`/`office_admin` record payments on approved bills only. Uses `VendorEmailBanner` (`src/components/finance-intelligence/vendor-email-banner.tsx`) to prompt for missing vendor emails.
 
 ### Billing Statement Lifecycle
