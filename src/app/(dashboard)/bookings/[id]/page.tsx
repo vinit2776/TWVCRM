@@ -2508,6 +2508,24 @@ function voucherCodeOf(v: VoucherIssuance): string | null {
   return v.voucher?.voucher_code ?? v.unifi_code ?? v.ruijie_code ?? null;
 }
 
+// Shown at Ruijie locations (currently Nungambakkam Arcade). The Ruijie Cloud
+// API exposes no revocation endpoint, so a code cannot be cancelled once it is
+// issued — it stays usable until its own expiry. Staff need to know this BEFORE
+// they issue, because the usual "revoke and reissue" recovery is unavailable.
+function RuijieRevokeNotice() {
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+      <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
+      <p className="text-[11px] leading-relaxed text-amber-900">
+        <span className="font-medium">Vouchers can&rsquo;t be revoked at this location.</span>{" "}
+        The WiFi provider here (Ruijie) has no cancellation facility, so an issued code
+        stays usable until it expires on its own — it can&rsquo;t be switched off early or
+        replaced. Double-check the guest before issuing.
+      </p>
+    </div>
+  );
+}
+
 function WifiVoucherCard({
   booking,
   existingIssuances,
@@ -2543,6 +2561,13 @@ function WifiVoucherCard({
     });
   const visibleRevoked = revokedIssuances.slice(0, REVOKED_HISTORY_LIMIT);
   const hiddenRevokedCount = revokedIssuances.length - visibleRevoked.length;
+  // Ruijie Cloud has no revocation endpoint, so revoke / revoke-and-reissue
+  // genuinely cannot work at those locations — the server returns 501. Surface
+  // that up front instead of letting staff click into a failure, and make the
+  // consequence explicit: the code keeps working until it expires on its own.
+  const voucherMode = (booking as { location?: { wifi_voucher_mode?: string | null } }).location?.wifi_voucher_mode ?? null;
+  const canRevoke = voucherMode !== "ruijie_api";
+
   // Where voucher codes go. Email is currently the only delivery channel —
   // MSG91 has no approved WhatsApp template for WiFi codes, so there is
   // deliberately no WhatsApp/SMS send to report here.
@@ -2783,6 +2808,7 @@ function WifiVoucherCard({
               <span className="ml-auto text-xs tabular-nums">0 of {seatCap} seat{seatCap === 1 ? "" : "s"} used</span>
             )}
           </div>
+          {!canRevoke && <RuijieRevokeNotice />}
           <div className="flex items-center gap-2">
             {issueNewButton(true)}
           </div>
@@ -2908,7 +2934,7 @@ function WifiVoucherCard({
                       Tap to reveal
                     </button>
                   )}
-                  {v.id && (
+                  {v.id && canRevoke && (
                     <button
                       onClick={() => handleReplace(v.id!)}
                       disabled={replacingId === v.id || revokingId === v.id}
@@ -2920,7 +2946,7 @@ function WifiVoucherCard({
                         : <RotateCw className="h-3.5 w-3.5" />}
                     </button>
                   )}
-                  {v.id && (
+                  {v.id && canRevoke && (
                     <button
                       onClick={() => handleRevoke(v.id!)}
                       disabled={revokingId === v.id || replacingId === v.id}
@@ -2940,6 +2966,8 @@ function WifiVoucherCard({
         <p className="text-xs text-muted-foreground text-center">
           Each code supports 2 device logins · tap to reveal when needed
         </p>
+
+        {!canRevoke && <RuijieRevokeNotice />}
 
         {revokedHistorySection}
 
