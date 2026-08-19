@@ -57,15 +57,36 @@ export async function GET(
     deposit_collected: 0, committed: 0, available: 0, unavailable_reason: "no_deposit",
   };
 
-  // A renewal doesn't add a second deposit obligation — TWV-C-0111's own
-  // security_deposit_amount already reflects the full post-escalation
-  // requirement (deposit_shortfall is only the delta above the parent's).
-  // So a contract that another contract carries forward from (i.e. it has
-  // been renewed away) must drop out of the required total, or the chain's
-  // requirement gets counted twice.
+  // A renewal doesn't add a second deposit obligation — a carried-from
+  // child's own security_deposit_amount already reflects the full
+  // post-escalation requirement (deposit_shortfall is only the delta above
+  // the parent's). So once a parent has actually been superseded, it must
+  // drop out of the required total, or the chain's requirement gets counted
+  // twice. But per the house convention on CONTRACT_QUOTA_LOCKED_STATUSES
+  // (src/lib/constants.ts) — "the parent isn't superseded until the renewal
+  // draft is actually activated (status → renewed)" — a merely-drafted
+  // renewal pointing at a parent does NOT supersede it yet. A contract
+  // mid-renewal (`renewal_in_progress`) is still the customer's live
+  // contract and its own requirement is still owed. Only `status ===
+  // "renewed"` (the terminal state a parent reaches when its renewal
+  // actually activates) means the requirement has truly moved on — used for
+  // the "superseded by renewal" label, which implies a live successor.
   const supersededIds = new Set(
-    contracts.filter((c) => c.deposit_carried_from).map((c) => c.deposit_carried_from)
+    contracts.filter((c) => c.status === "renewed").map((c) => c.id)
   );
+
+  // A draft contract's own requirement stays counted for as long as the
+  // draft exists — cancelling one deletes the row outright (see DELETE
+  // /api/contracts/[id], draft-only), so it drops out of this query on its
+  // own without any status check here. Termination is the other way a
+  // requirement genuinely goes away: the customer relationship ended, so
+  // whatever was required is no longer owed (refunded or written off
+  // elsewhere) — unlike "renewed", there's no live successor to attribute
+  // it to, so it's excluded from the total but NOT tagged "superseded".
+  const excludedFromRequiredIds = new Set([
+    ...supersededIds,
+    ...contracts.filter((c) => c.status === "terminated").map((c) => c.id),
+  ]);
 
   // deposit_shortfall (renewal-escalation top-up, see renew/route.ts) is a
   // real outstanding ask tracked in its own column, separate from
@@ -77,7 +98,7 @@ export async function GET(
     Number(c.security_deposit_amount || 0) + Number(c.deposit_shortfall || 0);
 
   const totalRequired = contracts.reduce(
-    (sum, c) => (supersededIds.has(c.id) ? sum : sum + requiredFor(c)),
+    (sum, c) => (excludedFromRequiredIds.has(c.id) ? sum : sum + requiredFor(c)),
     0
   );
 

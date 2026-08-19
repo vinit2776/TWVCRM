@@ -121,7 +121,7 @@ export function LeadDepositSummary({ leadId, currentUserRole }: Props) {
                   </span>
                   <span className="tabular-nums flex items-center gap-2 shrink-0">
                     <span>
-                      {c.is_superseded
+                      {c.is_superseded || c.status === "terminated"
                         ? "—"
                         : c.required > 0 ? `required ${formatCurrency(c.required)}` : "—"}
                       {c.collected > 0 && <> · collected <strong className="text-foreground">{formatCurrency(c.collected)}</strong></>}
