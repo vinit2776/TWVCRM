@@ -52,14 +52,16 @@ export function ServiceBillingSteps({
       current: isOrdered && nextAction === "upload_invoice",
     },
     {
-      label: "Approval by admin or manager",
-      detail: "Reviewed on the vendor bill, not here.",
+      // Approve/reject on a vendor bill is admin-only in the API
+      // (canApproveOrReject === "admin"); managers cannot approve.
+      label: "Approval by an admin",
+      detail: "Reviewed on the vendor bill, not here. Managers cannot approve vendor bills.",
       done: false,
       current: false,
     },
     {
       label: "Payment from Finance › Acc Payables",
-      detail: "Only approved bills can be paid. Payments are never recorded on this page.",
+      detail: "Recorded by Accounts or an admin — Office Admin for petty cash only. Only approved bills can be paid, and never from this page.",
       done: false,
       current: false,
     },
