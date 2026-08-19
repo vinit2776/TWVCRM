@@ -6,6 +6,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 import { deleteUserFromDevice } from "@/lib/cosec";
+import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
 
 export const maxDuration = 30;
 
@@ -233,12 +234,19 @@ export async function GET(
 
   if (error) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
-  // Also fetch voucher issuances for this booking
+  // Also fetch voucher issuances for this booking — both active AND revoked.
+  // A revoked issuance is still a real support record (code was issued,
+  // emailed to the customer, then killed) and must stay visible on the
+  // booking page rather than vanishing entirely. Ordered by seat_number so
+  // the display groups by seat regardless of active/revoked status; within
+  // a seat, issued_at ascending keeps history (original -> replacement) in
+  // chronological order.
   const { data: vouchers } = await supabase
     .from("voucher_issuances")
     .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status)")
     .eq("booking_id", id)
-    .eq("is_active", true);
+    .order("seat_number", { ascending: true })
+    .order("issued_at", { ascending: true });
 
   // Fetch all feedback for this booking (staff + customer)
   const { data: allFeedbacks } = await supabase
@@ -308,6 +316,30 @@ export async function GET(
     await logView(supabase, { entityType: "booking", entityId: id, performedBy: dbUser.id });
   }
 
+  // Most recent PIN delivery outcome, if any (logged post-delivery by provision-booking-access.ts).
+  // Historical bookings / PINs provisioned before this logging change will have none — that's expected.
+  let pinDelivery: { whatsapp: string; sms: string; email: string; at: string } | null = null;
+  try {
+    const { data: deliveryAudit, error: deliveryError } = await supabase
+      .from("audit_trail")
+      .select("changes, created_at")
+      .eq("entity_type", "booking")
+      .eq("entity_id", id)
+      .not("changes->pin_delivery", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (deliveryError) {
+      console.error("Failed to fetch pin_delivery audit row:", deliveryError);
+    } else if (deliveryAudit?.changes?.pin_delivery?.new) {
+      const delivery = deliveryAudit.changes.pin_delivery.new as { whatsapp: string; sms: string; email: string };
+      pinDelivery = { ...delivery, at: deliveryAudit.created_at };
+    }
+  } catch (err) {
+    console.error("Failed to fetch pin_delivery audit row:", err);
+  }
+
   return NextResponse.json({
     data: {
       ...data,
@@ -319,6 +351,8 @@ export async function GET(
       checked_out_by_name: actorMap[data.checked_out_by] || null,
       cancelled_by_name: actorMap[data.cancelled_by] || null,
       quota_info: quotaInfo,
+      pin_delivery: pinDelivery,
+      voucher_seat_cap: computeVoucherSeatCap(data, data.space as { capacity?: number | null } | null),
     },
   });
 }

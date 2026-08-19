@@ -150,18 +150,6 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   // Store PIN in booking record
   await admin.from("bookings").update({ access_pin: pin }).eq("id", booking_id);
 
-  // Audit trail
-  logAudit(admin, {
-    entityType: "booking",
-    entityId: booking_id,
-    action: "update",
-    performedBy: "system",
-    changes: {
-      access_pin:        { old: null, new: "[provisioned]" },
-      devices_activated: { old: [], new: devicesToProvision.map(d => d.label) },
-    },
-  });
-
   // ── Format times for messages ────────────────────────────────────────────────
   const fmtTime = (t: string) => {
     const [h, m] = (t as string).split(":").map(Number);
@@ -263,6 +251,21 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   } else {
     console.info("[provision-booking-access] PIN provisioned and delivered for booking", booking_id);
   }
+
+  // Audit trail — logged after delivery completes so the per-channel outcome
+  // (whatsapp/sms/email) is captured alongside provisioning in a single row.
+  // Never log the actual PIN value — "[provisioned]" placeholder only.
+  logAudit(admin, {
+    entityType: "booking",
+    entityId: booking_id,
+    action: "update",
+    performedBy: "system",
+    changes: {
+      access_pin:        { old: null, new: "[provisioned]" },
+      devices_activated: { old: [], new: devicesToProvision.map(d => d.label) },
+      pin_delivery:      { old: null, new: delivery },
+    },
+  });
 
   return { ok: true, pin, devicesProvisioned: devicesToProvision.length, delivery };
 }
