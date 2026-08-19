@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
-      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle, advance_status, advance_amount")
+      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle, cycle_count, advance_status, advance_amount")
       .eq("id", parsed.data.po_id)
       .single();
 
@@ -168,6 +168,24 @@ export async function POST(request: NextRequest) {
         .eq("service_report_id", parsed.data.service_report_id);
       if (existingBillCount && existingBillCount > 0) {
         return NextResponse.json({ error: "An invoice has already been uploaded for this service report cycle" }, { status: 422 });
+      }
+
+      // A contract is only worth cycle_count x unit_cost_per_cycle in total, so it
+      // cannot carry more invoices than it has cycles. Without this, a 12-month AMC
+      // accepts a 13th monthly invoice — each one individually under the per-cycle
+      // ceiling, but together exceeding the PO. Cancelled bills free their cycle back up.
+      const cycleCap = Number(po.cycle_count ?? 0);
+      if (cycleCap > 0) {
+        const { count: liveBillCount } = await supabase
+          .from("vendor_bills")
+          .select("*", { count: "exact", head: true })
+          .eq("po_id", parsed.data.po_id)
+          .neq("approval_status", "rejected");
+        if ((liveBillCount ?? 0) >= cycleCap) {
+          return NextResponse.json({
+            error: `All ${cycleCap} billing cycle${cycleCap > 1 ? "s" : ""} on this purchase order have already been invoiced. Raise a new PO to bill beyond the contract term.`,
+          }, { status: 422 });
+        }
       }
     } else {
       // ── Goods PO: must have a delivery receipt ────────────────────────────

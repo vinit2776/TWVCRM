@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
 
 function getCurrentFY(date = new Date()): number {
   const month = date.getMonth() + 1;
@@ -48,15 +49,10 @@ export async function GET(request: NextRequest) {
 
     const annualBudget = Number(budget.monthly_budget);
 
-    // Committed: approved and beyond
-    const { data: committed, error: committedError } = await supabase
-      .from("purchase_requests")
-      .select("total_estimated_amount")
-      .eq("expenditure_type", "amc")
-      .gte("created_at", fyStart)
-      .lte("created_at", fyEnd)
-      .in("status", ["approved", "partially_ordered", "po_created"]);
-    if (committedError) console.error("[budget check] AMC committed spend query failed:", committedError.message);
+    // Committed: approved and beyond, excluding requests whose POs were all
+    // cancelled. Shared with the AMC register so the two cannot show different
+    // numbers for the same thing.
+    const committedTotal = await computeAmcCommitted(supabase, fyStart, fyEnd);
 
     // Provisional: submitted pending approval
     const { data: provisional } = await supabase
@@ -67,7 +63,6 @@ export async function GET(request: NextRequest) {
       .lte("created_at", fyEnd)
       .eq("status", "submitted");
 
-    const committedTotal = (committed ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
     const provisionalTotal = (provisional ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
     const projectedTotal = committedTotal + mrAmount;
     const isOverBudget = projectedTotal > annualBudget;

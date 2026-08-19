@@ -34,6 +34,7 @@ import {
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
@@ -395,6 +396,28 @@ export default function PurchaseRequestDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* An approved multi-cycle AMC is the point people get stuck: the request is
+            done, but nothing about it says the recurring invoices live on the PO. */}
+        {pr.department === "amc" && ["approved", "partially_ordered"].includes(pr.status) && (() => {
+          const amcItem = pr.purchase_request_items?.[0];
+          const cycle = cycleFromUnit(amcItem?.unit);
+          const cycles = Number(amcItem?.quantity ?? 1);
+          if (cycles <= 1) return null;
+          return (
+            <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
+              <p className="font-medium text-blue-900">
+                Next step: create the Purchase Order
+              </p>
+              <p className="text-xs text-blue-800 mt-0.5">
+                This is a {CYCLE_UNIT_LABEL[cycle]}ly contract — {cycles} payments of{" "}
+                {amcItem?.estimated_price ? formatCurrency(Number(amcItem.estimated_price)) : "the agreed amount"}{" "}
+                per {CYCLE_UNIT_LABEL[cycle]}. Service reports and vendor invoices are
+                recorded on the Purchase Order, once per {CYCLE_UNIT_LABEL[cycle]} — not on this request.
+              </p>
+            </div>
+          );
+        })()}
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">

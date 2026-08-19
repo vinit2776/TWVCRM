@@ -24,8 +24,10 @@ import {
   PROCUREMENT_DEPARTMENT_COLORS,
   ITEM_UNIT_GROUPS,
   ITEM_UNIT_LABELS,
+  SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
+import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -120,6 +122,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     pr?.amc_visits_covered != null ? String(pr.amc_visits_covered) : ""
   );
   // AMC has no line-item editor — its single synthesized item carries the annual amount.
+  // The AMC line item is the single source of truth for how a contract is paid:
+  // unit = frequency, quantity = cycle count, estimated_price = per-cycle cost.
+  const [amcBillingCycle, setAmcBillingCycle] = useState<ServicePoBillingCycle>(
+    cycleFromUnit(pr?.purchase_request_items?.[0]?.unit)
+  );
+  const [amcCycleCountOverride, setAmcCycleCountOverride] = useState<string>(() => {
+    const qty = pr?.purchase_request_items?.[0]?.quantity;
+    return qty && Number(qty) > 1 ? String(qty) : "";
+  });
   const [amcAnnualAmount, setAmcAnnualAmount] = useState(() => {
     if (pr?.department !== "amc") return "";
     const amt = pr.purchase_request_items?.[0]?.estimated_price ?? pr.total_estimated_amount;
@@ -318,18 +329,29 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     return sum;
   }, 0);
 
+  // ── AMC cycle maths ────────────────────────────────────────────────────────
+  // total_estimated_amount must always be the FULL contract commitment, because
+  // the AMC budget banner sums it. Storing a per-month figure there would make a
+  // monthly contract consume a twelfth of the budget it actually commits.
+  const amcDerivedCycles = cyclesBetween(amcStartDate, amcEndDate, amcBillingCycle);
+  const amcCycleCount =
+    amcCycleCountOverride.trim() !== "" && parseInt(amcCycleCountOverride) > 0
+      ? parseInt(amcCycleCountOverride)
+      : amcDerivedCycles ?? 1;
+  const amcPerCycleCost = parseFloat(amcAnnualAmount) || 0;
+  const amcContractTotal = contractTotal(amcPerCycleCost, amcCycleCount);
+
   const buildPayload = (submit?: boolean) => {
     // For AMC, synthesize a single line item from the AMC service block so the
     // items table stays consistent (every PR has ≥1 item).
     const isAmc = department === "amc";
-    const amount = parseFloat(amcAnnualAmount) || 0;
     const payloadItems = isAmc
       ? [{
           item_id: null,
           item_name: serviceItemName.trim() || "Annual Maintenance Contract",
-          quantity: 1,
-          unit: "year" as ItemUnit,
-          estimated_price: amount || null,
+          quantity: amcCycleCount,
+          unit: CYCLE_ITEM_UNIT[amcBillingCycle] as ItemUnit,
+          estimated_price: amcPerCycleCost || null,
           notes: undefined,
         }]
       : items.map((li) => ({
@@ -461,12 +483,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       if (!amcUnlimited && (!amcVisitsCovered || parseInt(amcVisitsCovered) <= 0))
         return "Enter the number of visits covered, or tick 'Unlimited visits'";
       const amt = parseFloat(amcAnnualAmount);
-      if (!amt || amt <= 0) return "Enter the annual AMC amount (pre-GST)";
+      if (!amt || amt <= 0) return `Enter the ${CYCLE_COST_LABEL[amcBillingCycle].toLowerCase()} (pre-GST)`;
+      if (amcCycleCountOverride.trim() !== "" && parseInt(amcCycleCountOverride) <= 0)
+        return "Number of cycles must be at least 1";
       if (!amcContactName.trim() || !amcHelpline.trim()) return "Primary contact name and helpline number are required";
       if (advanceRequired) {
         const adv = parseFloat(advanceAmount);
         if (!adv || adv <= 0) return "Advance amount must be greater than zero";
-        if (adv > amt) return "Advance amount cannot exceed the annual AMC amount";
+        // Advance is against the whole contract, not a single cycle.
+        if (adv > amcContractTotal) return "Advance amount cannot exceed the total AMC commitment";
         if (!advanceMode) return "Select an advance payment mode";
       }
       return null;
@@ -920,8 +945,28 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               </div>
 
               <div className="space-y-1.5">
+                <Label htmlFor="amc-billing-cycle">
+                  Payment Frequency <span className="text-red-500">*</span>
+                </Label>
+                <Select
+                  value={amcBillingCycle}
+                  onValueChange={(v) => setAmcBillingCycle(v as ServicePoBillingCycle)}
+                >
+                  <SelectTrigger id="amc-billing-cycle"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {SERVICE_PO_BILLING_CYCLES.map((c) => (
+                      <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  How often the vendor invoices — enter the cost for one {CYCLE_UNIT_LABEL[amcBillingCycle]} below, not the whole contract.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
                 <Label htmlFor="amc-amount">
-                  Annual Amount (pre-GST) <span className="text-red-500">*</span>
+                  {CYCLE_COST_LABEL[amcBillingCycle]} (pre-GST) <span className="text-red-500">*</span>
                 </Label>
                 <Input
                   id="amc-amount"
@@ -933,6 +978,46 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                   onChange={(e) => setAmcAnnualAmount(e.target.value)}
                 />
               </div>
+
+              {amcBillingCycle !== "yearly" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="amc-cycles">
+                    Number of {CYCLE_UNIT_LABEL[amcBillingCycle]}s
+                  </Label>
+                  <Input
+                    id="amc-cycles"
+                    type="number"
+                    min="1"
+                    step="1"
+                    // Derived from the contract period; overridable for irregular terms.
+                    placeholder={amcDerivedCycles ? String(amcDerivedCycles) : "Set the contract dates"}
+                    value={amcCycleCountOverride}
+                    onChange={(e) => setAmcCycleCountOverride(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {amcDerivedCycles
+                      ? `From the contract period: ${amcDerivedCycles}. Leave blank to use it.`
+                      : "Set the AMC start and end dates to derive this."}
+                  </p>
+                </div>
+              )}
+
+              {amcPerCycleCost > 0 && amcCycleCount > 1 && (
+                <div className="sm:col-span-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                  <span className="text-muted-foreground">Total commitment: </span>
+                  <span className="font-semibold">{formatCurrency(amcContractTotal)}</span>
+                  <span className="text-muted-foreground">
+                    {" "}({amcCycleCount} × {formatCurrency(amcPerCycleCost)} per {CYCLE_UNIT_LABEL[amcBillingCycle]})
+                  </span>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    This is the figure counted against the AMC budget.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    After approval this becomes {amcCycleCount} separate vendor invoices — one per{" "}
+                    {CYCLE_UNIT_LABEL[amcBillingCycle]}, each needing its own service report before it can be paid.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Vendor Contact Hierarchy */}
@@ -1438,10 +1523,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           {department === "amc" ? (
             <div>
-              <p className="text-sm text-muted-foreground">Annual AMC Amount</p>
+              <p className="text-sm text-muted-foreground">Total AMC Commitment</p>
               <p className="text-xl font-bold">
-                {amcAnnualAmount && parseFloat(amcAnnualAmount) > 0 ? formatCurrency(parseFloat(amcAnnualAmount)) : "—"}
+                {amcContractTotal > 0 ? formatCurrency(amcContractTotal) : "—"}
               </p>
+              {amcContractTotal > 0 && amcCycleCount > 1 && (
+                <p className="text-xs text-muted-foreground">
+                  {amcCycleCount} × {formatCurrency(amcPerCycleCost)} per {CYCLE_UNIT_LABEL[amcBillingCycle]}
+                </p>
+              )}
             </div>
           ) : (canSeePrices || items.some((li) => li.isCustom && li.estimated_price)) ? (
             <div>

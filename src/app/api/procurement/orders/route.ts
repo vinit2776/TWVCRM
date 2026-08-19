@@ -53,7 +53,7 @@ const createServicePoSchema = z.object({
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
   service_start_date: z.string().min(1, "Service start date is required"),
-  billing_cycle: z.enum(["monthly", "quarterly", "yearly"]),
+  billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   cycle_count: z.number().int().positive("Number of cycles must be at least 1"),
   unit_cost_per_cycle: z.number().positive("Cost per cycle must be greater than 0"),
   service_item_name: z.string().min(1, "Service description is required"),
@@ -381,7 +381,7 @@ export async function POST(request: NextRequest) {
     if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
 
     // Insert a single representative line item for the service
-    const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", yearly: "year" };
+    const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", half_yearly: "half_year", yearly: "year" };
     await supabase.from("purchase_order_items").insert({
       po_id: po.id,
       item_id: parsed.data.item_id ?? null,
