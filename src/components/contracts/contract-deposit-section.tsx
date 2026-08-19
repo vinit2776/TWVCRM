@@ -43,6 +43,7 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
 
   const [siblingCount, setSiblingCount] = useState<number | null>(null);
   const [pooledAvailable, setPooledAvailable] = useState<number | null>(null);
+  const [pooledShortfall, setPooledShortfall] = useState<number | null>(null);
   useEffect(() => {
     if (!leadId) return;
     fetch(`/api/leads/${leadId}/deposit-summary`)
@@ -50,17 +51,30 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
       .then((j) => {
         setSiblingCount(j.data?.contracts?.length ?? null);
         setPooledAvailable(j.data?.available ?? null);
+        setPooledShortfall(j.data?.total_shortfall ?? null);
       })
-      .catch(() => { setSiblingCount(null); setPooledAvailable(null); });
+      .catch(() => { setSiblingCount(null); setPooledAvailable(null); setPooledShortfall(null); });
   }, [leadId]);
 
+  // total_shortfall is Required − Available across every contract the
+  // customer holds (see deposit-summary/route.ts) — not just this one. It's
+  // worth surfacing here regardless of which branch below is rendering,
+  // since a contract that's itself fully paid can still belong to a
+  // customer who owes money elsewhere.
+  const hasPooledShortfall = pooledShortfall !== null && pooledShortfall > 0;
   const siblingPointer = leadId && siblingCount && siblingCount > 1 ? (
     <a
       href={`/leads/${leadId}?tab=activities#security-deposit`}
-      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 mt-2"
+      className={`flex items-center gap-1.5 text-xs underline underline-offset-2 mt-2 ${
+        hasPooledShortfall ? "text-amber-700 hover:text-amber-900" : "text-muted-foreground hover:text-foreground"
+      }`}
     >
       <Users className="h-3 w-3" />
-      This customer has {siblingCount} contracts — see the consolidated deposit on their profile
+      This customer has {siblingCount} contracts
+      {hasPooledShortfall && (
+        <> · <strong>{formatCurrency(pooledShortfall)} shortfall</strong></>
+      )}
+      {" "}— see the consolidated deposit on their profile
     </a>
   ) : null;
 
