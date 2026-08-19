@@ -2518,9 +2518,10 @@ function RuijieRevokeNotice() {
       <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
       <p className="text-[11px] leading-relaxed text-amber-900">
         <span className="font-medium">Vouchers can&rsquo;t be revoked at this location.</span>{" "}
-        The WiFi provider here (Ruijie) has no cancellation facility, so an issued code
-        stays usable until it expires on its own — it can&rsquo;t be switched off early or
-        replaced. Double-check the guest before issuing.
+        The Ruijie hardware installed here has no cancellation facility, so an issued
+        code stays usable until it expires on its own — it can&rsquo;t be switched off
+        early or replaced. This is a limitation of the device model, not a setting.
+        Double-check the guest before issuing.
       </p>
     </div>
   );

@@ -17,7 +17,7 @@
  *     UniFi voucher is then created with the same duration derivation
  *     (bookingWindowHours on start/end + 60min buffer) and quota (2
  *     devices) as the issue route.
- *   - Ruijie: there is NO revoke endpoint on the Ruijie Cloud API (see
+ *   - Ruijie: the installed Ruijie device model has NO revoke capability (see
  *     src/lib/ruijie.ts header comment) — replace is refused with 501,
  *     identical to the revoke route, and nothing is changed.
  *   - Repository: no controller involved. We reserve a replacement code
@@ -98,7 +98,7 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Ruijie voucher replacement is not supported yet — the Ruijie Cloud API has no revoke endpoint. The old code will remain active on the controller until it naturally expires.",
+          "This location's WiFi hardware cannot replace vouchers — revoking requires a revoke capability the Ruijie device model installed here does not have, so the existing code stays usable until it expires on its own. Nothing was changed. Issue an additional voucher instead if the guest needs a working code.",
       },
       { status: 501 }
     );
