@@ -4,6 +4,7 @@ import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatem
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
+import { rateDecimalsForLine } from "@/lib/billing-pdf-utils";
 import { drawCompanyStamp } from "@/lib/company-stamp";
 
 // TWV Brand Colors
@@ -23,13 +24,13 @@ const COMPANY_EMAIL = "contact@theworkvilla.com";
 const COMPANY_WEBSITE = "www.theworkvilla.com";
 const COMPANY_GST = "GST: 33AAACU4245J1ZF";
 
-function formatCurrencyPDF(amount: number): string {
+function formatCurrencyPDF(amount: number, maxFractionDigits = 2): string {
   // Use "Rs." instead of Unicode ₹ symbol — jsPDF's Helvetica cannot render ₹
   return (
     "Rs. " +
     new Intl.NumberFormat("en-IN", {
       minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
+      maximumFractionDigits: maxFractionDigits,
     }).format(amount)
   );
 }
@@ -487,7 +488,8 @@ function generatePDF(options: PDFOptions): jsPDF {
     item.description,
     String(item.quantity),
     item.unit || "",
-    formatCurrencyPDF(item.unit_price),
+    // Widen the rate only when 2 dp would not multiply back to the total (#498)
+    formatCurrencyPDF(item.unit_price, rateDecimalsForLine(item.quantity, item.unit_price, item.total)),
     formatCurrencyPDF(item.total),
   ]);
 
