@@ -83,7 +83,7 @@ export async function getBillVoidBlocker(
  * need to call getBillVoidBlocker first (though they may want to, to surface
  * the blocker message before attempting the write).
  *
- * Phase 2 (migration 00512_procurement_chain_cancellation.sql): this is now
+ * Phase 2 (migration 00516_procurement_chain_cancellation.sql): this is now
  * a thin wrapper that builds a one-bill cancellation plan and hands it to
  * `apply_procurement_cancellation`, the single writer for every
  * cancel/void/reversal write in procurement. The actual field-level writes

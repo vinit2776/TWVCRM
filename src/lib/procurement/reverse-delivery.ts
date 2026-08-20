@@ -261,7 +261,7 @@ export async function reverseDeliveryReceipt(
     return { ok: true };
   }
 
-  // disposition === "retain" (Phase 2, migration 00512): build a one-receipt
+  // disposition === "retain" (Phase 2, migration 00516): build a one-receipt
   // cancellation plan — resolving the same location/item fallback chains as
   // before — and hand the actual writes (decrement quantity_received,
   // reverse location_stock, stamp reversed_at/reversed_by/reversal_reason)

@@ -1,6 +1,6 @@
 -- Procurement chain cancellation — Phase 2
 --
--- Phase 1 (migration 00511, commit be094214) added the ability to void a
+-- Phase 1 (migration 00515, commit be094214) added the ability to void a
 -- single vendor bill and to reverse a single delivery receipt while
 -- retaining its row for history. Both of those Phase 1 helpers
 -- (src/lib/procurement/void-bill.ts, src/lib/procurement/reverse-delivery.ts)
@@ -244,7 +244,7 @@ BEGIN
       END IF;
     END LOOP;
 
-    -- Retain, never delete — Phase 1 (00511) established this: the receipt
+    -- Retain, never delete — Phase 1 (00515) established this: the receipt
     -- row survives as an auditable record that goods were genuinely
     -- received before the chain was cancelled.
     UPDATE po_delivery_receipts
