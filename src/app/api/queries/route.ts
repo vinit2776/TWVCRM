@@ -37,7 +37,8 @@ const THREAD_SELECT = `
   messages:query_messages(
     body, event_type, created_at, created_by,
     author:users!query_messages_created_by_fkey(id, full_name, role)
-  )
+  ),
+  payment_report:query_payment_reports!query_payment_reports_query_id_fkey(amount, status)
 `;
 
 interface QueryRow {
@@ -55,6 +56,7 @@ interface QueryRow {
   resolved_at: string | null;
   created_by: QueryAuthor;
   resolved_by: QueryAuthor | null;
+  payment_report: { amount: number; status: string } | Array<{ amount: number; status: string }> | null;
   messages: Array<{
     body: string | null;
     event_type: "message" | "resolved" | "reopened" | "retargeted";
@@ -118,6 +120,13 @@ function toListItem(
     resolved_at: row.resolved_at,
     needed_by: row.needed_by,
     entity: entitySummary,
+    // The claim, not the contract. Without this a payment report card reads
+    // "Acme Corp ₹59,000" — the contract's value — next to a ₹100 claim, and
+    // the number a skim-reader takes away is the wrong one.
+    reported_amount: (() => {
+      const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
+      return r ? Number(r.amount) : null;
+    })(),
     last_message: last
       ? { body: last.body, event_type: last.event_type, created_at: last.created_at }
       : null,

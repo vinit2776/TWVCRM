@@ -12,6 +12,7 @@ import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import { logAudit } from "@/lib/audit";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { formatDate } from "@/lib/utils";
 import {
   PAYMENT_REPORT_AUDIENCE_ROLES,
   PAYMENT_REPORT_ENTITY_TYPES,
@@ -126,6 +127,10 @@ export async function POST(req: NextRequest) {
   const entityType = String(body.entity_type ?? "").trim();
   const entityId = String(body.entity_id ?? "").trim();
   const note = typeof body.note === "string" ? body.note.trim() : "";
+  const claimedStatementId =
+    typeof body.claimed_statement_id === "string" && body.claimed_statement_id.trim()
+      ? body.claimed_statement_id.trim()
+      : null;
 
   if (!(PAYMENT_REPORT_ENTITY_TYPES as readonly string[]).includes(entityType)) {
     return NextResponse.json(
@@ -152,8 +157,34 @@ export async function POST(req: NextRequest) {
   if (entityErr) return NextResponse.json({ error: entityErr.message }, { status: 500 });
   if (!entityRow) return NextResponse.json({ error: `${def.label} not found` }, { status: 404 });
 
+  // Validate the claimed invoice belongs to what the report hangs off, so a
+  // mistyped id can't quietly point accounts at another customer's invoice.
+  let claimedStatementNumber: string | null = null;
+  if (claimedStatementId) {
+    const { data: stmt } = await admin
+      .from("billing_statements")
+      .select("id, statement_number, contract_id")
+      .eq("id", claimedStatementId)
+      .maybeSingle();
+    if (!stmt) {
+      return NextResponse.json({ error: "That invoice doesn't exist" }, { status: 400 });
+    }
+    const belongs =
+      entityType === "billing_statement" ? stmt.id === entityId : stmt.contract_id === entityId;
+    if (!belongs) {
+      return NextResponse.json(
+        { error: "That invoice belongs to a different contract" },
+        { status: 400 },
+      );
+    }
+    claimedStatementNumber = (stmt.statement_number as string | null) ?? null;
+  }
+
   const modeLabel = STATEMENT_PAYMENT_MODE_LABELS[fields.payment_mode] ?? fields.payment_mode;
-  const summaryLine = describeReport(fields, modeLabel);
+  // describeReport() keeps the ISO date for the audit trail, where an
+  // unambiguous machine-readable date is the point. The prose that people
+  // read gets a formatted one.
+  const summaryLine = describeReport(fields, modeLabel).replace(fields.paid_on, formatDate(fields.paid_on));
 
   // The thread's opening message reads as prose so the timeline is legible on
   // its own; the structured row below is what accounts actually filter and
@@ -161,6 +192,7 @@ export async function POST(req: NextRequest) {
   // submission rather than someone telling you something.
   const messageBody = [
     `Customer reports paying ${summaryLine}.`,
+    claimedStatementNumber ? `Against invoice ${claimedStatementNumber}.` : null,
     fields.payer_differs && fields.payer_name
       ? `Paid from a different account: ${fields.payer_name}.`
       : null,
@@ -213,6 +245,7 @@ export async function POST(req: NextRequest) {
       payment_reference: fields.payment_reference,
       payer_name: fields.payer_name,
       payer_differs: fields.payer_differs,
+      claimed_statement_id: claimedStatementId,
       created_by: dbUser.id,
     })
     .select("id")

@@ -161,6 +161,8 @@ export interface QueryListItem extends QueryTargeting {
    *  card renders "transaction no longer available" rather than failing. */
   entity: QueryEntitySummary | null;
   last_message: { body: string | null; event_type: QueryMessageEventType; created_at: string } | null;
+  /** The amount claimed, on 'payment_reported' threads only. Null elsewhere. */
+  reported_amount?: number | null;
   /** True when this viewer is the one expected to act next. Computed by
    *  isAwaitingUser() in audience.ts. */
   awaiting_viewer: boolean;
@@ -206,6 +208,9 @@ export interface QueryPaymentReport {
   payer_name: string | null;
   payer_differs: boolean;
   billing_payment_id: string | null;
+  /** The invoice the reporter was told this covers. Pre-selects allocation. */
+  claimed_statement_id: string | null;
+  claimed_statement: { id: string; statement_number: string | null } | null;
   resolution_note: string | null;
   reviewed_at: string | null;
   reviewed_by: QueryAuthor | null;

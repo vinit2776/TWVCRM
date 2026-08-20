@@ -58,8 +58,12 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
   // Statement allocation — only needed when the report hangs off a contract,
   // which is the common case: the reporter knew the customer, not the invoice.
   const [statements, setStatements] = useState<StatementOption[] | null>(null);
+  // Pre-selected from what the reporter was told. Accounts only ever see a
+  // bank credit with no invoice reference, so asking them to choose from
+  // scratch asks the one person in the loop who cannot know. Still editable:
+  // customers do name the wrong invoice.
   const [statementId, setStatementId] = useState<string | null>(
-    entityType === "billing_statement" ? entityId : null,
+    report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
   );
   const [recordOpen, setRecordOpen] = useState(false);
 
@@ -79,15 +83,15 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
         if (cancelled) return;
         const rows = json.data ?? [];
         setStatements(rows);
-        // One outstanding invoice is the overwhelmingly common shape — don't
-        // make accounts pick from a list of one.
-        if (rows.length === 1) setStatementId(rows[0].id);
+        // Only fall back to "the only open invoice" when the reporter didn't
+        // say. Their answer always wins over the guess.
+        if (rows.length === 1 && !report.claimed_statement_id) setStatementId(rows[0].id);
       } catch {
         if (!cancelled) setStatements([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [canReview, needsAllocation, entityId]);
+  }, [canReview, needsAllocation, entityId, report.claimed_statement_id]);
 
   const settle = useCallback(
     async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
@@ -140,6 +144,9 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
           {report.payer_differs && report.payer_name && (
             <Row label="Remitter" value={report.payer_name} emphasis />
           )}
+          {report.claimed_statement?.statement_number && (
+            <Row label="Against invoice" value={report.claimed_statement.statement_number} emphasis />
+          )}
           <Row
             label="Reported by"
             value={`${report.created_by.full_name} (${USER_ROLE_LABELS[report.created_by.role] ?? report.created_by.role})`}
@@ -168,7 +175,9 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
           <div className="space-y-2 border-t pt-2.5">
             {needsAllocation && (
               <div className="space-y-1">
-                <label className="text-[11px] font-medium">Allocate to invoice</label>
+                <label className="text-[11px] font-medium">
+                  {report.claimed_statement_id ? "Allocate to invoice — as reported" : "Allocate to invoice"}
+                </label>
                 {statements === null ? (
                   <div className="text-[11px] flex items-center gap-1.5 opacity-80">
                     <Loader2 className="h-3 w-3 animate-spin" /> Loading outstanding invoices…

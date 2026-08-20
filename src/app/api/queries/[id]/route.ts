@@ -34,7 +34,8 @@ const THREAD_SELECT = `
   payment_report:query_payment_reports!query_payment_reports_query_id_fkey(
     id, status, amount, paid_on, payment_mode, payment_reference,
     payer_name, payer_differs, billing_payment_id, resolution_note,
-    reviewed_at, created_at,
+    claimed_statement_id, reviewed_at, created_at,
+    claimed_statement:billing_statements!query_payment_reports_claimed_statement_id_fkey(id, statement_number),
     reviewed_by:users!query_payment_reports_reviewed_by_fkey(id, full_name, role),
     created_by:users!query_payment_reports_created_by_fkey(id, full_name, role)
   )

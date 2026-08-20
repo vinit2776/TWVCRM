@@ -299,10 +299,21 @@ function QueryCard({
             {overdue > 0 && <Pill tone="warning">Overdue · {overdue}d</Pill>}
             {!isResolved && <Pill tone="muted">→ {audienceText}</Pill>}
             <span className="font-medium text-sm">{item.entity?.title ?? "(transaction unavailable)"}</span>
-            {item.entity?.amount != null && (
-              <span className="text-sm text-muted-foreground tabular-nums">
-                {formatCurrency(item.entity.amount)}
-              </span>
+            {item.kind === "payment_reported" ? (
+              // The claim, never the contract value. Showing the entity's
+              // amount here would put "₹59,000" on a card about a ₹100
+              // payment, which is the number people would remember.
+              item.reported_amount != null && (
+                <span className="text-sm font-medium text-amber-800 tabular-nums">
+                  {formatCurrency(item.reported_amount)} claimed
+                </span>
+              )
+            ) : (
+              item.entity?.amount != null && (
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {formatCurrency(item.entity.amount)}
+                </span>
+              )
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">

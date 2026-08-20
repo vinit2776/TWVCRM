@@ -39,11 +39,27 @@ interface Props {
   partyLabel?: string | null;
   /** Prefills the amount when reporting against a specific invoice. */
   suggestedAmount?: number | null;
+  /**
+   * The invoice the reporter started from, pre-selected as what the payment
+   * covers. Reporting from an AR row is a strong signal — they clicked that
+   * invoice — but they can change it, because the customer may have named a
+   * different one.
+   */
+  defaultStatementId?: string | null;
+  /** Contract whose open invoices fill the picker. Null for statement-scoped reports. */
+  contractId?: string | null;
   onReported: () => void;
 }
 
+interface StatementOption {
+  id: string;
+  statement_number: string | null;
+  balance_due: number;
+}
+
 export function ReportPaymentDialog({
-  open, onOpenChange, entityType, entityId, partyLabel, suggestedAmount, onReported,
+  open, onOpenChange, entityType, entityId, partyLabel, suggestedAmount,
+  defaultStatementId, contractId, onReported,
 }: Props) {
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState(new Date().toISOString().slice(0, 10));
@@ -53,6 +69,8 @@ export function ReportPaymentDialog({
   const [payerName, setPayerName] = useState("");
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [statementId, setStatementId] = useState<string | null>(null);
+  const [statements, setStatements] = useState<StatementOption[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -65,7 +83,27 @@ export function ReportPaymentDialog({
     setPayerName("");
     setNote("");
     setFiles([]);
-  }, [open, suggestedAmount]);
+    setStatementId(defaultStatementId ?? null);
+  }, [open, suggestedAmount, defaultStatementId]);
+
+  /**
+   * Offer the contract's other open invoices, so a reporter told "we paid
+   * last month's" can say so.
+   *
+   * A 403 here is expected, not an error: this endpoint is gated to the roles
+   * that can see receivables, and reporting is open to everyone. Those
+   * reporters simply keep the invoice they started from — the picker
+   * disappears rather than the dialog breaking.
+   */
+  useEffect(() => {
+    if (!open || !contractId) { setStatements(null); return; }
+    let cancelled = false;
+    fetch(`/api/contracts/${encodeURIComponent(contractId)}/open-statements`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!cancelled) setStatements(j?.data ?? null); })
+      .catch(() => { if (!cancelled) setStatements(null); });
+    return () => { cancelled = true; };
+  }, [open, contractId]);
 
   async function submit() {
     if (!entityId) return;
@@ -85,6 +123,7 @@ export function ReportPaymentDialog({
       entity_type: entityType,
       entity_id: entityId,
       ...check.value,
+      claimed_statement_id: statementId ?? undefined,
       note: note.trim() || undefined,
     };
 
@@ -162,6 +201,29 @@ export function ReportPaymentDialog({
               />
             </div>
           </div>
+
+          {statements && statements.length > 0 && (
+            <div className="space-y-1">
+              <Label className="text-xs">Which invoice did they say this pays?</Label>
+              <Select
+                value={statementId ?? "unknown"}
+                onValueChange={(v) => setStatementId(v === "unknown" ? null : v)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {statements.map((st) => (
+                    <SelectItem key={st.id} value={st.id}>
+                      {st.statement_number ?? "Draft"} · {formatCurrency(st.balance_due)} due
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="unknown">They didn&apos;t say</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Accounts can&apos;t tell this from the bank credit — only you have the customer&apos;s message.
+              </p>
+            </div>
+          )}
 
           {/*
             The remitter block earns its prominence: a credit from an account

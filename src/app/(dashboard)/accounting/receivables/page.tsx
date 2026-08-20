@@ -933,6 +933,10 @@ export default function AccountsReceivablePage() {
             : null
         }
         suggestedAmount={reportRow?.balance_due ?? null}
+        // They clicked Report paid on this invoice's row, which is the
+        // strongest signal available for what the customer paid.
+        defaultStatementId={reportRow?.id ?? null}
+        contractId={reportRow?.contract?.id ?? null}
         onReported={load}
       />
 
