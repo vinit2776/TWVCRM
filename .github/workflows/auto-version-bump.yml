@@ -26,25 +26,45 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Pull latest main before bumping
-        run: git pull --rebase origin main
-
-      - name: Bump patch version
+      # A plain pull-then-push loses a race whenever a PR merges between the
+      # two — the ref has moved and GitHub rejects the push:
+      #
+      #   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
+      #     is at 3f6e0886 but expected c00748bf)
+      #
+      # It self-healed (the next merge's bump caught up) but left a red X on
+      # main each time, and a workflow that fails routinely is one people stop
+      # reading.
+      #
+      # Each attempt resets to the *freshly fetched* main and recomputes the
+      # bump from there, so a retry can never push a version derived from the
+      # state we started with. That's why this re-runs the script rather than
+      # force-pushing the commit it already built.
+      - name: Bump version and push
         run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            const parts = pkg.version.split('.');
-            // Support both 3-digit (1.0.90) and 4-digit (1.0.90.0) versioning
-            parts[parts.length - 1] = String(parseInt(parts[parts.length - 1], 10) + 1);
-            pkg.version = parts.join('.');
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-            console.log('Bumped to', pkg.version);
-          "
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
 
-      - name: Commit and push
-        run: |
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          git add package.json
-          git commit -m "chore: bump version to ${NEW_VERSION}"
-          git push origin main
+            NEW_VERSION=$(node .github/scripts/bump-version.mjs)
+            git add package.json package-lock.json
+
+            # Another run may already have bumped past us while we waited.
+            if git diff --cached --quiet; then
+              echo "Nothing to commit — main is already at ${NEW_VERSION}."
+              exit 0
+            fi
+
+            git commit --quiet -m "chore: bump version to ${NEW_VERSION}"
+
+            if git push --quiet origin main; then
+              echo "Pushed ${NEW_VERSION} on attempt ${attempt}."
+              exit 0
+            fi
+
+            echo "Push rejected on attempt ${attempt} — main moved. Recomputing from the new tip."
+            sleep $(( attempt * 3 ))
+          done
+
+          echo "::error::Version bump could not be pushed after 5 attempts."
+          exit 1

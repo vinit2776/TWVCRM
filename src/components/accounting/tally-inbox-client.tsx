@@ -15,8 +15,12 @@
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
+import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -30,7 +34,6 @@ import {
   type BookingHandoffState,
   type BookingInboxRow,
   type HandoffBucket,
-  type InboxPayment,
   type InboxResponse,
   type InboxRow,
 } from "@/lib/tally-handoff";
@@ -38,6 +41,7 @@ import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
+import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
@@ -194,6 +198,8 @@ function timeAgo(iso: string | null): string {
 }
 
 export function TallyInboxClient() {
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? "";
   const [data, setData] = useState<InboxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -793,6 +799,7 @@ export function TallyInboxClient() {
       onGstinUpdated={() => void refreshRow(row.statement_id)}
       onRecordPayment={() => openPayDialog(row)}
       onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
+      onQueryChanged={() => void refreshRow(row.statement_id)}
     />
   );
 
@@ -987,6 +994,9 @@ export function TallyInboxClient() {
                   onUploaded={() => void load()}
                   onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
                   onCancelUpload={() => setExpandedBookingId(null)}
+                  onVoided={() => void load()}
+                  onQueryChanged={() => void load()}
+                  currentUserRole={currentUserRole}
                 />
               ))}
             </ul>
@@ -1432,6 +1442,7 @@ const InboxRowItem = memo(function InboxRowItem({
   onGstinUpdated,
   onRecordPayment,
   onViewHistory,
+  onQueryChanged,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1448,6 +1459,7 @@ const InboxRowItem = memo(function InboxRowItem({
   onGstinUpdated: () => void;
   onRecordPayment: () => void;
   onViewHistory: () => void;
+  onQueryChanged: () => void;
 }) {
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
@@ -1458,6 +1470,7 @@ const InboxRowItem = memo(function InboxRowItem({
   const [paymentOpen, setPaymentOpen] = useState(
     row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
   );
+  const [queryOpen, setQueryOpen] = useState(false);
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -1705,6 +1718,12 @@ const InboxRowItem = memo(function InboxRowItem({
             <History className="h-3 w-3" />
             History
           </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this statement"
+          />
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -1819,6 +1838,11 @@ const InboxRowItem = memo(function InboxRowItem({
           )}
         </div>
       </div>
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel entityType="billing_statement" entityId={row.statement_id} onChanged={onQueryChanged} />
+        </div>
+      )}
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}
@@ -1827,15 +1851,17 @@ const InboxRowItem = memo(function InboxRowItem({
         />
       )}
       {paymentOpen && row.payments_received.length > 0 && (
-        <StatementPaymentPanel
-          payments={row.payments_received}
-          totalAmount={row.statement_total_amount}
-          nextStepMessage={
-            row.handoff_state === "pi_paid_awaiting_gst"
-              ? "Statement fully paid — issue the GST invoice in Tally, then upload it here."
-              : undefined
-          }
-        />
+        <div className="mx-3 mb-2 md:mx-4">
+          <StatementPaymentPanel
+            payments={row.payments_received}
+            totalAmount={row.statement_total_amount}
+            nextStepMessage={
+              row.handoff_state === "pi_paid_awaiting_gst"
+                ? "Statement fully paid — issue the GST invoice in Tally, then upload it here."
+                : undefined
+            }
+          />
+        </div>
       )}
     </li>
   );
@@ -1854,132 +1880,26 @@ const InboxRowItem = memo(function InboxRowItem({
   prev.sentConfirmed === next.sentConfirmed
 );
 
-// ── Billing statement payment panel ────────────────────────────────────────
-
-function StatementPaymentPanel({
-  payments,
-  totalAmount,
-  nextStepMessage,
-}: {
-  payments: InboxPayment[];
-  totalAmount: number;
-  nextStepMessage?: string;
-}) {
-  const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
-  const isFullyPaid = Math.abs(totalPaid - totalAmount) < 0.5;
-
-  return (
-    <div className="mx-3 mb-2 md:mx-4 p-3 rounded-lg bg-green-50 border border-green-200 text-xs">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-medium text-green-900 flex items-center gap-1.5">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Payment collected
-        </span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-          isFullyPaid
-            ? "bg-green-100 text-green-800 border-green-300"
-            : "bg-amber-100 text-amber-800 border-amber-200"
-        }`}>
-          {isFullyPaid ? "Fully paid" : `Partial · ${formatCurrency(totalPaid)} of ${formatCurrency(totalAmount)}`}
-        </span>
-      </div>
-      <div className="space-y-2">
-        {payments.map((p) => {
-          const txnDate = new Date(p.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-          const isRazorpay = !!p.razorpay_payment_id;
-          return (
-            <div key={p.id} className="rounded border border-green-200 bg-white/60 px-2.5 py-2 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-green-900 tabular-nums">{formatCurrency(p.amount)}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 border border-green-200 font-medium">
-                  {paymentModeLabel(p.payment_mode)}
-                </span>
-              </div>
-              {isRazorpay ? (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
-                  <span className="text-muted-foreground">Txn ID</span>
-                  <span className="font-mono text-green-800 break-all">{p.razorpay_payment_id}</span>
-                  <span className="text-muted-foreground">Transacted on</span>
-                  <span>{txnDate}</span>
-                  {p.settled === true ? (
-                    <>
-                      <span className="text-muted-foreground">Settled to bank</span>
-                      <span className="text-green-700 font-medium">
-                        {p.settled_at ? new Date(p.settled_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
-                      </span>
-                      {p.settlement_utr && (
-                        <>
-                          <span className="text-muted-foreground">Bank UTR</span>
-                          <span className="font-mono text-green-800">{p.settlement_utr}</span>
-                        </>
-                      )}
-                    </>
-                  ) : p.settled === false ? (
-                    <>
-                      <span className="text-muted-foreground">Settlement</span>
-                      <span className="text-amber-700">Pending — not yet settled to bank</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground">Settlement</span>
-                      <span className="text-muted-foreground italic">Not synced yet</span>
-                    </>
-                  )}
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
-                  <span className="text-muted-foreground">Date recorded</span>
-                  <span>{txnDate}</span>
-                  {p.payment_reference && (
-                    <>
-                      <span className="text-muted-foreground">Reference</span>
-                      <span className="font-mono text-green-800">{p.payment_reference}</span>
-                    </>
-                  )}
-                  {p.recorded_by_name && (
-                    <>
-                      <span className="text-muted-foreground">Recorded by</span>
-                      <span>{p.recorded_by_name}</span>
-                    </>
-                  )}
-                </div>
-              )}
-              {p.notes && (
-                <div className="text-[11px] text-green-800 border-t border-green-100 pt-1.5">
-                  <span className="text-muted-foreground">Notes: </span>
-                  {p.notes}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {nextStepMessage && (
-        <div className="mt-2 pt-2 border-t border-green-200 flex items-center gap-1.5 text-green-800">
-          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" aria-hidden />
-          {nextStepMessage}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Booking payment confirmation helpers ────────────────────────────────────
+// StatementPaymentPanel and paymentModeLabel now live in
+// @/components/billing/payment-collected-panel (shared with the ad-hoc
+// invoice payment popover on the lead page).
 
 import type { BookingPaymentConfirmation } from "@/lib/tally-handoff";
 
-function paymentModeLabel(mode: string): string {
-  const map: Record<string, string> = {
-    razorpay: "Razorpay",
-    upi: "UPI",
-    cash: "Cash",
-    card: "Card",
-    neft: "NEFT",
-    rtgs: "RTGS",
-    cheque: "Cheque",
-    bank_transfer: "Bank Transfer",
-  };
-  return map[mode.toLowerCase()] ?? mode;
+/**
+ * Hours to show beside a booking's time range. Prefers the real start/end
+ * window; falls back to `duration_hours` only when the times are missing
+ * (check-in/out-only rows). `duration_hours` is a billing day-unit ("1") for
+ * daily-priced spaces, so it must never be rendered as elapsed time on its own.
+ */
+function formatWindowHours(
+  startTime: string | null | undefined,
+  endTime: string | null | undefined,
+  durationHours: number | null | undefined
+): string {
+  const h = startTime && endTime ? bookingWindowHours(startTime, endTime) : Number(durationHours ?? 0);
+  return Number.isInteger(h) ? String(h) : h.toFixed(1).replace(/\.0$/, "");
 }
 
 function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
@@ -2302,6 +2222,9 @@ function BookingInboxRowItem({
   onUploaded,
   onInvoiceUploaded,
   onCancelUpload,
+  onVoided,
+  onQueryChanged,
+  currentUserRole,
 }: {
   row: BookingInboxRow;
   expanded: boolean;
@@ -2316,12 +2239,45 @@ function BookingInboxRowItem({
   onUploaded: () => void;
   onInvoiceUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancelUpload: () => void;
+  onVoided: () => void;
+  onQueryChanged: () => void;
+  currentUserRole: string;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [queryOpen, setQueryOpen] = useState(false);
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
   const [gstinError, setGstinError] = useState<string | null>(null);
+  const [voiding, setVoiding] = useState(false);
+  const [voidPromptOpen, setVoidPromptOpen] = useState(false);
+  const [voidReasonInput, setVoidReasonInput] = useState("");
+
+  const handleVoidConfirm = async () => {
+    const reason = voidReasonInput.trim();
+    if (!reason) return;
+    setVoiding(true);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${row.task_id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: reason }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || "Failed to void");
+        return;
+      }
+      toast.success("Booking task voided — excluded from the open worklist");
+      setVoidPromptOpen(false);
+      setVoidReasonInput("");
+      onVoided();
+    } catch {
+      toast.error("Failed to void — check your connection");
+    } finally {
+      setVoiding(false);
+    }
+  };
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -2475,9 +2431,14 @@ function BookingInboxRowItem({
                 : row.check_in_at && row.check_out_at
                   ? `${new Date(row.check_in_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} – ${new Date(row.check_out_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}`
                   : "—"}
-              {row.duration_hours != null && (
-                <span className="text-muted-foreground ml-1">({row.duration_hours}h)</span>
-              )}
+              {/* Real elapsed window, not `duration_hours` — that column stores "1"
+                  as a billing day-unit for daily-priced spaces, so day passes
+                  used to read "09:30 – 18:30 (1h)" here. */}
+              {(row.start_time && row.end_time) || row.duration_hours != null ? (
+                <span className="text-muted-foreground ml-1">
+                  ({formatWindowHours(row.start_time, row.end_time, row.duration_hours)}h)
+                </span>
+              ) : null}
             </span>
           </div>
 
@@ -2542,6 +2503,12 @@ function BookingInboxRowItem({
             Payment
             {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
+          <InboxQueryButton
+            open={queryOpen}
+            openCount={row.open_query_count}
+            onToggle={() => setQueryOpen((v) => !v)}
+            title="Raise or answer a question about this booking"
+          />
           {row.lead_id && row.lead_id_proof_path && (
             <a
               href={`/api/leads/${row.lead_id}/id-proof`}
@@ -2635,11 +2602,71 @@ function BookingInboxRowItem({
               ) : null}
             </div>
           )}
+          {currentUserRole === "admin" && !row.is_voided && !voidPromptOpen && (
+            <button
+              type="button"
+              onClick={() => setVoidPromptOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+              title="Exclude this booking's Tally task from the open worklist (test/bad data) — does not touch the booking or payment"
+            >
+              <X className="h-3 w-3" />
+              Void
+            </button>
+          )}
+          {voidPromptOpen && (
+            <div className="flex items-center gap-1.5 w-full">
+              <input
+                type="text"
+                autoFocus
+                value={voidReasonInput}
+                onChange={(e) => setVoidReasonInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleVoidConfirm();
+                  if (e.key === "Escape") { setVoidPromptOpen(false); setVoidReasonInput(""); }
+                }}
+                placeholder="Reason for voiding (required)…"
+                className="flex-1 text-xs border rounded px-2 py-1 bg-background"
+              />
+              <button
+                type="button"
+                onClick={handleVoidConfirm}
+                disabled={voiding || !voidReasonInput.trim()}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex-shrink-0"
+              >
+                {voiding ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm void"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setVoidPromptOpen(false); setVoidReasonInput(""); }}
+                className="text-xs px-2 py-1 rounded border hover:bg-muted flex-shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {row.is_voided && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200"
+              title={row.void_reason ? `Voided: ${row.void_reason}` : "Voided"}
+            >
+              Voided
+            </span>
+          )}
         </div>
       </div>
 
       {paymentOpen && (
         <BookingPaymentPanel confirmations={row.payment_confirmations} totalAmount={row.statement_total_amount} />
+      )}
+
+      {queryOpen && (
+        <div className="mx-3 mb-2 md:mx-4 border-t pt-2">
+          <QueryThreadPanel
+            entityType="booking_gst_task"
+            entityId={row.task_id}
+            onChanged={onQueryChanged}
+          />
+        </div>
       )}
 
       {expanded && canUpload && (

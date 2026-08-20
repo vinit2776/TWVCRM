@@ -5,8 +5,26 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, bookingWindowHours } from "@/lib/utils";
 import { Loader2, CalendarDays, ChevronDown, ChevronRight } from "lucide-react";
+
+/**
+ * Hours the booking actually entitles the guest to.
+ *
+ * `duration_hours` is NOT that for daily-priced spaces — it stores "1" as a
+ * billing day-unit, so a 9am-7pm day pass reads as one hour. Comparing actual
+ * attendance against it flagged day-pass guests as having overstayed when they
+ * were well inside their pass. Derive the real window from start/end instead.
+ *
+ * The aggregate "hours booked" totals elsewhere in this component deliberately
+ * keep summing `duration_hours`, because that is the unit the contract
+ * free-quota deduction bills in — changing them would make the displayed total
+ * disagree with what is actually charged.
+ */
+function entitledHours(b: { start_time: string; end_time: string; duration_hours: number; pricing_model?: string | null }): number {
+  if (b.pricing_model === "daily") return bookingWindowHours(b.start_time, b.end_time);
+  return Number(b.duration_hours);
+}
 
 interface BookingRow {
   id: string;
@@ -15,6 +33,7 @@ interface BookingRow {
   start_time: string;
   end_time: string;
   duration_hours: number;
+  pricing_model: string | null;
   status: string;
   payment_status: string;
   check_in_at: string | null;
@@ -79,7 +98,7 @@ function splitPooledCharge(booking: BookingRow, charge: ChargeRow): ChargeSplit[
   }
   const extraHoursNeeded = Math.max(
     0,
-    actualHoursCeil(booking.check_in_at, booking.check_out_at) - Number(booking.duration_hours)
+    actualHoursCeil(booking.check_in_at, booking.check_out_at) - entitledHours(booking)
   );
   const extraBilled = Math.min(billedHours, extraHoursNeeded);
   if (extraBilled === 0) {
@@ -234,7 +253,7 @@ export function ContractBookingsSection({ contractId }: { contractId: string }) 
       setLoading(true);
       const { data } = await supabase
         .from("bookings")
-        .select("id, booking_number, booking_date, start_time, end_time, duration_hours, status, payment_status, check_in_at, check_out_at, space:spaces!bookings_space_id_fkey(name)")
+        .select("id, booking_number, booking_date, start_time, end_time, duration_hours, pricing_model, status, payment_status, check_in_at, check_out_at, space:spaces!bookings_space_id_fkey(name)")
         .eq("contract_id", contractId)
         .order("booking_date", { ascending: false });
       const rows = (data ?? []) as unknown as BookingRow[];
@@ -399,7 +418,7 @@ export function ContractBookingsSection({ contractId }: { contractId: string }) 
 
                       {group.bookings.map((b) => {
                         const actual = b.check_in_at && b.check_out_at ? actualHours(b.check_in_at, b.check_out_at) : null;
-                        const overBooked = actual !== null && actual > Number(b.duration_hours);
+                        const overBooked = actual !== null && actual > entitledHours(b);
                         return (
                           <div
                             key={b.id}
@@ -432,7 +451,11 @@ export function ContractBookingsSection({ contractId }: { contractId: string }) 
                                 <span className="text-muted-foreground">—</span>
                               ) : (
                                 <>
-                                  <div className="text-xs text-muted-foreground">{formatHours(Number(b.duration_hours))} booked</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {b.pricing_model === "daily"
+                                      ? `Day pass (${formatHours(entitledHours(b))})`
+                                      : `${formatHours(Number(b.duration_hours))} booked`}
+                                  </div>
                                   {actual !== null && (
                                     <div className={`text-xs font-medium ${overBooked ? "text-amber-700" : "text-muted-foreground"}`}>
                                       {formatHours(actual)} actual

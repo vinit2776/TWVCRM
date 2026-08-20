@@ -4,6 +4,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
 import { summarizeAuditEvent } from "@/lib/audit-labels";
+import { queryEntityDef } from "@/lib/queries/registry";
+import { loadEntitySummaries, entityKey, entityLabel } from "@/lib/queries/server";
 
 export const maxDuration = 60;
 
@@ -23,19 +25,27 @@ export async function GET(request: Request) {
 
   // Comparison dates
   const todayDate = new Date(todayIST + "T00:00:00Z");
-  const lastWeekDate = new Date(todayDate.getTime() - 7 * 86400000);
-  const lastYearDate = new Date(todayDate);
-  lastYearDate.setFullYear(lastYearDate.getFullYear() - 1);
-
-  const lastWeek = lastWeekDate.toISOString().slice(0, 10);
-  const lastYear = lastYearDate.toISOString().slice(0, 10);
 
   // Week-to-date: Monday of the current IST week → today
   const dayOfWeek = todayDate.getUTCDay(); // 0=Sun, 1=Mon … 6=Sat
   const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const weekStart = new Date(todayDate.getTime() - daysFromMonday * 86400000)
-    .toISOString()
-    .slice(0, 10);
+  const weekStartDate = new Date(todayDate.getTime() - daysFromMonday * 86400000);
+  const weekStart = weekStartDate.toISOString().slice(0, 10);
+
+  // "Last Week" / "Last Year" must be genuinely comparable to "This Week"
+  // (a week-to-date range, not a full 7-day week) — so shift the exact same
+  // Monday→today window back by 7 days / 1 year, rather than diffing a
+  // single day against a range (previously: today-7d vs. this week's WTD,
+  // which understated "last week" by ~10x on non-Monday runs).
+  const lastWeekStart = new Date(weekStartDate.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+  const lastWeekEnd = new Date(todayDate.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+
+  const lastYearStartDate = new Date(weekStartDate);
+  lastYearStartDate.setFullYear(lastYearStartDate.getFullYear() - 1);
+  const lastYearEndDate = new Date(todayDate);
+  lastYearEndDate.setFullYear(lastYearEndDate.getFullYear() - 1);
+  const lastYearStart = lastYearStartDate.toISOString().slice(0, 10);
+  const lastYearEnd = lastYearEndDate.toISOString().slice(0, 10);
 
   const supabase = await createAdminClient();
 
@@ -66,8 +76,8 @@ export async function GET(request: Request) {
   // Aggregate data for 3 date windows + week-to-date
   const [today, lw, ly, wtd] = await Promise.all([
     fetchMetrics(supabase, todayIST),
-    fetchMetrics(supabase, lastWeek),
-    fetchMetrics(supabase, lastYear),
+    fetchMetricsRange(supabase, lastWeekStart, lastWeekEnd),
+    fetchMetricsRange(supabase, lastYearStart, lastYearEnd),
     fetchMetricsRange(supabase, weekStart, todayIST),
   ]);
 
@@ -76,7 +86,7 @@ export async function GET(request: Request) {
   const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations, storyboard, revenueBreakdown, yesterdayRevenueBreakdown, openQueries] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
@@ -85,6 +95,9 @@ export async function GET(request: Request) {
     fetchMetrics(supabase, yesterdayIST),
     fetchLocationBreakdown(supabase, yesterdayIST),
     fetchStoryboardHighlights(supabase, todayIST),
+    fetchRevenueBreakdown(supabase, todayIST),
+    fetchRevenueBreakdown(supabase, yesterdayIST),
+    fetchOpenQueries(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -96,7 +109,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables, storyboard, revenueBreakdown, yesterdayRevenueBreakdown, openQueries);
 
   // ?preview=1 renders the HTML without sending — used for local/staging QA so
   // testing against real (prod) data never fans out real emails to recipients.
@@ -406,6 +419,152 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
   });
 }
 
+interface RevenueTransaction {
+  number: string;
+  customer: string;
+  method: string;
+  amount: number;
+}
+
+const REVENUE_BREAKDOWN_LIMIT = 20;
+
+// Freeform payment_mode values differ slightly across contract_payments,
+// billing_payments, and booking_payments (e.g. "neft" vs "bank_transfer" vs
+// "other") — normalize to a readable label without coupling to any one
+// table's constants.ts label map, since none of them cover every value seen.
+function formatPaymentMethod(mode: string | null): string {
+  if (!mode) return "—";
+  const upper: Record<string, string> = { neft: "NEFT", rtgs: "RTGS", upi: "UPI" };
+  const lower = mode.toLowerCase();
+  if (upper[lower]) return upper[lower];
+  return lower.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function leadName(lead: any): string | null {
+  if (!lead) return null;
+  return lead.company || [lead.first_name, lead.last_name].filter(Boolean).join(" ") || null;
+}
+
+/**
+ * billing_statements.contract_id has been nullable since migration 00041 —
+ * a statement can instead be owned by booking_id/proposal_id/invoice_id/
+ * case_id (ad-hoc invoices, VO cases, etc. that never had a contract). Show
+ * whichever owner is actually set instead of a bare "no contract" dash, and
+ * resolve the customer name through that same owner.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function billingStatementOwner(statement: any): { number: string; customer: string } {
+  if (statement?.contract?.contract_number) {
+    return { number: statement.contract.contract_number, customer: leadName(statement.contract.lead) || "—" };
+  }
+  if (statement?.booking?.booking_number) {
+    return {
+      number: statement.booking.booking_number,
+      customer: leadName(statement.booking.lead) || statement.booking.guest_company || statement.booking.guest_name || "—",
+    };
+  }
+  if (statement?.proposal?.proposal_number) {
+    return { number: statement.proposal.proposal_number, customer: leadName(statement.proposal.lead) || "—" };
+  }
+  if (statement?.invoice?.invoice_number) {
+    return { number: `${statement.invoice.invoice_number} (invoice)`, customer: leadName(statement.invoice.lead) || "—" };
+  }
+  if (statement?.case?.case_number) {
+    return { number: `${statement.case.case_number} (VO case)`, customer: statement.case.client_company_name || statement.case.client_name || "—" };
+  }
+  return { number: `— (statement ${statement?.statement_number || "?"})`, customer: "—" };
+}
+
+/**
+ * Itemized transactions behind the day's "Revenue In" KPI (collections +
+ * bookings) — contract_payments and billing_payments both roll into
+ * "collections"; booking_payments is the "bookings" half.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ transactions: RevenueTransaction[]; total: number; truncated: number }> {
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+
+  const [cp, bp, bkp] = await Promise.all([
+    supabase
+      .from("contract_payments")
+      .select(`amount, payment_mode, created_at, contract:contracts!contract_payments_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      )`)
+      .eq("status", "verified")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    supabase
+      .from("billing_payments")
+      .select(`amount, payment_mode, created_at, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        statement_number,
+        contract:contracts!billing_statements_contract_id_fkey(contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
+        booking:bookings!billing_statements_booking_id_fkey(booking_number, guest_name, guest_company, lead:leads!bookings_lead_id_fkey(first_name, last_name, company)),
+        proposal:proposals!billing_statements_proposal_id_fkey(proposal_number, lead:leads!proposals_lead_id_fkey(first_name, last_name, company)),
+        invoice:proforma_invoices!billing_statements_invoice_id_fkey(invoice_number, lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)),
+        case:cases!billing_statements_case_id_fkey(case_number, client_name, client_company_name)
+      )`)
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    supabase
+      .from("booking_payments")
+      .select(`amount, payment_mode, created_at, booking:bookings!booking_payments_booking_id_fkey(
+        booking_number, guest_name, guest_company,
+        lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
+      )`)
+      .eq("status", "verified")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const contractRows = (cp.data || []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const billingRows = (bp.data || []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookingRows = (bkp.data || []) as any[];
+
+  const transactions: (RevenueTransaction & { createdAt: string })[] = [
+    ...contractRows.map((r) => ({
+      number: r.contract?.contract_number || "—",
+      customer: leadName(r.contract?.lead) || "—",
+      method: formatPaymentMethod(r.payment_mode),
+      amount: Number(r.amount || 0),
+      createdAt: r.created_at,
+    })),
+    ...billingRows.map((r) => {
+      const owner = billingStatementOwner(r.billing_statement);
+      return {
+        number: owner.number,
+        customer: owner.customer,
+        method: formatPaymentMethod(r.payment_mode),
+        amount: Number(r.amount || 0),
+        createdAt: r.created_at,
+      };
+    }),
+    ...bookingRows.map((r) => ({
+      number: r.booking?.booking_number || "—",
+      customer: leadName(r.booking?.lead) || r.booking?.guest_company || r.booking?.guest_name || "—",
+      method: formatPaymentMethod(r.payment_mode),
+      amount: Number(r.amount || 0),
+      createdAt: r.created_at,
+    })),
+  ];
+
+  transactions.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  const total = transactions.reduce((s, t) => s + t.amount, 0);
+  const truncated = Math.max(0, transactions.length - REVENUE_BREAKDOWN_LIMIT);
+
+  return {
+    transactions: transactions.slice(0, REVENUE_BREAKDOWN_LIMIT).map(({ number, customer, method, amount }) => ({ number, customer, method, amount })),
+    total,
+    truncated,
+  };
+}
+
 interface UnpaidBill {
   invoice_number: string;
   vendor_name: string;
@@ -434,6 +593,72 @@ interface AttentionItems {
   workOrdersSlaAtRisk: number;
   workOrdersOpenCritical: number;
   workOrderBreakdown: WorkOrderBreakdownRow[];
+}
+
+/**
+ * Open clarification threads, for the digest's Queries block.
+ *
+ * The digest is one org-wide email rather than a per-user one, so this is a
+ * standing count plus the worst offenders — not a personal to-do list. It's
+ * the tier that works today regardless of whether the WhatsApp escalation
+ * template has been approved: even with every other channel dark, an
+ * unanswered query surfaces here each morning.
+ */
+interface DigestQueries {
+  open: number;
+  overdue: number;
+  oldest: Array<{ label: string; days: number; askedBy: string }>;
+}
+
+const DIGEST_QUERY_LIMIT = 5;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchOpenQueries(supabase: any, date: string): Promise<DigestQueries> {
+  const { data } = await supabase
+    .from("queries")
+    .select(`
+      id, entity_type, entity_id, needed_by, created_at,
+      creator:users!queries_created_by_fkey(full_name)
+    `)
+    .eq("status", "open");
+
+  const rows = (data || []) as Array<{
+    entity_type: string;
+    entity_id: string;
+    needed_by: string | null;
+    created_at: string;
+    creator: { full_name: string } | null;
+  }>;
+  if (rows.length === 0) return { open: 0, overdue: 0, oldest: [] };
+
+  const today = Date.parse(`${date}T00:00:00Z`);
+  const overdueRows = rows.filter(
+    (r) => r.needed_by && Date.parse(`${r.needed_by}T00:00:00Z`) < today,
+  );
+
+  // Resolve display labels only for the handful actually shown.
+  const shown = [...rows]
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    .slice(0, DIGEST_QUERY_LIMIT);
+
+  const summaries = await loadEntitySummaries(
+    supabase,
+    shown.map((r) => ({ entity_type: r.entity_type, entity_id: r.entity_id })),
+  );
+
+  return {
+    open: rows.length,
+    overdue: overdueRows.length,
+    oldest: shown.map((r) => {
+      const def = queryEntityDef(r.entity_type);
+      const summary = summaries.get(entityKey(r.entity_type, r.entity_id)) ?? null;
+      return {
+        label: def ? entityLabel(def, summary) : "(unknown record)",
+        days: Math.max(0, Math.floor((today - Date.parse(r.created_at)) / 86400000)),
+        askedBy: r.creator?.full_name ?? "—",
+      };
+    }),
+  };
 }
 
 const OPEN_WORK_ORDER_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
@@ -498,7 +723,9 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workOrderRows = (workOrders.data || []) as any[];
-  const slaCutoff = new Date(`${date}T23:59:59Z`).getTime();
+  // `date` is an IST calendar date — an explicit "Z" (UTC) suffix would put
+  // the cutoff ~5.5h later than intended end-of-IST-day. Use the IST offset.
+  const slaCutoff = new Date(`${date}T23:59:59+05:30`).getTime();
   const woGroups = new Map<string, WorkOrderBreakdownRow>();
   let workOrdersSlaAtRisk = 0;
   let workOrdersOpenCritical = 0;
@@ -551,17 +778,22 @@ interface Portfolio {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchPortfolio(supabase: any): Promise<Portfolio> {
+  // `monthly_membership_fee` was never a real column on `contracts` — no
+  // migration creates it, so this select silently errored and always
+  // returned 0 rows (only `data` was destructured, `error` was ignored).
+  // The contract detail page's own "Monthly Fee" display resolves to
+  // `subtotal ?? total_amount` (see contracts/[id]/page.tsx) — use the same.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("monthly_membership_fee")
+    .select("subtotal, total_amount")
     .eq("status", "active");
 
   const rows = contracts || [];
   return {
     activeContracts: rows.length,
     totalMRR: rows.reduce(
-      (s: number, r: { monthly_membership_fee: number }) =>
-        s + Number(r.monthly_membership_fee || 0),
+      (s: number, r: { subtotal: number | null; total_amount: number | null }) =>
+        s + Number(r.subtotal ?? r.total_amount ?? 0),
       0
     ),
   };
@@ -830,10 +1062,14 @@ async function fetchExtended(supabase: any, date: string): Promise<ExtendedData>
     return { clientName, daysSince };
   });
 
-  // Team activity — aggregate by user
+  // Team activity — aggregate by user. Rows with created_by = null are
+  // system-generated (e.g. SMS delivery-status notes logged by the
+  // reminder cron), not unattributed staff work — exclude them rather than
+  // folding them into a misleading "Unknown" bucket next to real names.
   const teamMap: Record<string, number> = {};
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const row of (teamRaw.data || []) as any[]) {
+    if (!row.created_by) continue;
     const name = row.user?.full_name || "Unknown";
     teamMap[name] = (teamMap[name] || 0) + 1;
   }
@@ -984,7 +1220,27 @@ async function fetchStoryboardHighlights(supabase: any, date: string): Promise<S
 
   scored.sort((a, b) => b.score - a.score);
 
-  return scored
+  // A single bulk operation (e.g. a batch billing run touching a dozen
+  // statements at once) can otherwise monopolize every slot with the same
+  // entity_type, turning the storyline into one event repeated 5x instead of
+  // a spread of the day's highlights. Cap picks per type, then backfill any
+  // remaining slots from the overflow — so a genuinely quiet, single-type
+  // day still fills out to 5 rather than being artificially shrunk.
+  const MAX_PER_ENTITY_TYPE = 2;
+  const typeCounts = new Map<string, number>();
+  const diverse: typeof scored = [];
+  const overflow: typeof scored = [];
+  for (const item of scored) {
+    const count = typeCounts.get(item.row.entity_type) || 0;
+    if (count < MAX_PER_ENTITY_TYPE) {
+      diverse.push(item);
+      typeCounts.set(item.row.entity_type, count + 1);
+    } else {
+      overflow.push(item);
+    }
+  }
+
+  return [...diverse, ...overflow]
     .slice(0, 5)
     .sort((a, b) => new Date(a.row.created_at).getTime() - new Date(b.row.created_at).getTime())
     .map(({ row, amount }) => {
@@ -1133,6 +1389,36 @@ function kpiTile(label: string, value: string, sub?: string, accent?: boolean): 
     </td>`;
 }
 
+// Itemized transaction table used for both "Revenue In" (today) and
+// "Yesterday's Collections" breakdown cards — same shape, different title/day.
+function buildRevenueBreakdownCard(title: string, breakdown: { transactions: RevenueTransaction[]; total: number; truncated: number }): string {
+  if (breakdown.transactions.length === 0) return "";
+  return `
+    <div style="background:#f7fbfa;border:1px solid #d1fae5;border-radius:8px;padding:16px 18px;margin-bottom:24px;">
+      <p style="margin:0 0 12px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.4px;">${title}</p>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr style="background:#f7f8fa;">
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Contract / Booking #</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Customer</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Method</td>
+          <td style="padding:6px 8px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Amount</td>
+        </tr>
+        ${breakdown.transactions.map((t) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:${t.number.startsWith("—") ? "#999" : "#015E65"};font-weight:${t.number.startsWith("—") ? "400" : "600"};${t.number.startsWith("—") ? "font-style:italic;" : ""}">${t.number}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;">${t.customer}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;">${t.method}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;text-align:right;">${rupees(t.amount)}</td>
+        </tr>`).join("")}
+        <tr>
+          <td colspan="3" style="padding:8px;font-size:12px;font-weight:700;color:#015E65;text-align:right;">Total</td>
+          <td style="padding:8px;font-size:12px;font-weight:700;color:#015E65;text-align:right;border-top:2px solid #015E65;">${rupees(breakdown.total)}</td>
+        </tr>
+      </table>
+      ${breakdown.truncated > 0 ? `<p style="margin:8px 0 0;font-size:10px;color:#888;">+ ${breakdown.truncated} more transaction${breakdown.truncated > 1 ? "s" : ""} not shown — see Billing for the full list.</p>` : ""}
+    </div>`;
+}
+
 // Pipeline stage pill
 function stagePill(label: string, count: number, isWarn: boolean): string {
   const bg = isWarn ? "#fef3c7" : "#f0faf5";
@@ -1269,7 +1555,10 @@ function buildDigestHtml(
   portfolio: Portfolio,
   extended: ExtendedData,
   receivables: ReceivablesAging,
-  storyboard: StoryboardEvent[]
+  storyboard: StoryboardEvent[],
+  revenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number },
+  yesterdayRevenueBreakdown: { transactions: RevenueTransaction[]; total: number; truncated: number },
+  openQueries: DigestQueries
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
   const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
@@ -1305,6 +1594,12 @@ function buildDigestHtml(
       </table>
     </div>`;
 
+  // ── Yesterday's Collections — transaction breakdown ─────────────────────
+  const yesterdayRevenueBreakdownHtml = buildRevenueBreakdownCard(
+    `Yesterday's Collections &nbsp;·&nbsp; Transaction Breakdown`,
+    yesterdayRevenueBreakdown
+  );
+
   // ── KPI row ──────────────────────────────────────────────────────────────
   const stuckCount = extended.stuckProposals.length + extended.stuckNegotiations.length;
   const kpiHtml = `
@@ -1316,6 +1611,12 @@ function buildDigestHtml(
         ${kpiTile("Active Contracts", `${portfolio.activeContracts}`, `MRR ${rupees(portfolio.totalMRR)}`)}
       </tr>
     </table>`;
+
+  // ── Revenue In — transaction breakdown ──────────────────────────────────
+  const revenueBreakdownHtml = buildRevenueBreakdownCard(
+    `Revenue In &nbsp;·&nbsp; Transaction Breakdown`,
+    revenueBreakdown
+  );
 
   // ── Week to Date strip ────────────────────────────────────────────────────
   const wtdRevenue = wtd.collections + wtd.bookingRevenue;
@@ -1434,6 +1735,21 @@ function buildDigestHtml(
       </div>` : `<div style="margin-bottom:24px;"></div>`}
   ` : "";
 
+  // ── Open Queries ─────────────────────────────────────────────────────────
+  // The channel that always works. Even with WhatsApp escalation dark and
+  // every in-app notification ignored, an unanswered clarification surfaces
+  // here every morning.
+  const queriesHtml = openQueries.open > 0 ? `
+    ${sectionHeader(`Open Queries (${openQueries.open}${openQueries.overdue > 0 ? `, ${openQueries.overdue} overdue` : ""})`)}
+    <div style="background:${openQueries.overdue > 0 ? "#fffbeb" : "#f7f8fa"};border:1px solid ${openQueries.overdue > 0 ? "#fde68a" : "#e5e7eb"};border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+      ${openQueries.oldest.map(q => `
+        <p style="margin:3px 0;color:#333;font-size:13px;">
+          • <span style="font-weight:600;">${q.label}</span>
+          <span style="color:#888;">— asked by ${q.askedBy}, open ${q.days} day${q.days === 1 ? "" : "s"}</span>
+        </p>`).join("")}
+      <p style="margin:10px 0 0;"><a href="https://twv-crm.vercel.app/queries" style="color:#015E65;font-size:12px;font-weight:600;text-decoration:none;">Open Queries →</a></p>
+    </div>` : "";
+
   // ── Team Activity ──────────────────────────────────────────────────────
   const teamHtml = extended.teamActivity.length > 0 ? `
     <div style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
@@ -1486,25 +1802,6 @@ function buildDigestHtml(
     metricRow("POs Raised", `${today.posRaised} (${rupees(today.poAmount)})`, `${wtd.posRaised} (${rupees(wtd.poAmount)})`, `${lw.posRaised}`, `${ly.posRaised}`, today.posRaised, lw.posRaised),
   ].join("");
 
-  // ── Operations ──────────────────────────────────────────────────────────
-  const opsRows = [
-    metricRow("New Leads", `${today.newLeads}`, `${wtd.newLeads}`, `${lw.newLeads}`, `${ly.newLeads}`, today.newLeads, lw.newLeads),
-    metricRow("Won / Lost", `${today.leadsWon} / ${today.leadsLost}`, `${wtd.leadsWon} / ${wtd.leadsLost}`, `${lw.leadsWon} / ${lw.leadsLost}`, `${ly.leadsWon} / ${ly.leadsLost}`, today.leadsWon, lw.leadsWon),
-    metricRow("Activities Logged", `${today.activities}`, `${wtd.activities}`, `${lw.activities}`, `${ly.activities}`, today.activities, lw.activities),
-    metricRow("Tasks Completed", `${today.tasksCompleted}`, `${wtd.tasksCompleted}`, `${lw.tasksCompleted}`, `${ly.tasksCompleted}`, today.tasksCompleted, lw.tasksCompleted),
-    metricRow("Bookings", `${today.newBookings}`, `${wtd.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
-    metricRow("New Contracts", `${today.newContracts}`, `${wtd.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
-    metricRow("Support Tickets", `${today.supportTickets}`, `${wtd.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
-    metricRow(
-      "Work Orders (opened/closed)",
-      `${today.workOrdersOpened}/${today.workOrdersClosed}`,
-      `${wtd.workOrdersOpened}/${wtd.workOrdersClosed}`,
-      `${lw.workOrdersOpened}/${lw.workOrdersClosed}`,
-      `${ly.workOrdersOpened}/${ly.workOrdersClosed}`,
-      today.workOrdersOpened, lw.workOrdersOpened
-    ),
-  ].join("");
-
   // ── Center-wise ─────────────────────────────────────────────────────────
   // Same "only show centers with something to report" filter already used
   // for Yesterday's Collections (activeYesterdayLocations above) — most
@@ -1520,8 +1817,12 @@ function buildDigestHtml(
     </tr>`).join("");
 
   // ── Outstanding Client Invoices ─────────────────────────────────────────
+  // Separate scope from "Receivables Aging" above: that's finalized billing
+  // statements; this is proforma invoices (sent/overdue) — the two totals
+  // are not meant to reconcile, so say so to avoid reading as a contradiction.
   const clientInvHtml = extended.pendingClientInvoices.length > 0 ? `
     ${sectionHeader(`Outstanding Client Invoices (${extended.pendingClientInvoices.length})`)}
+    <p style="margin:-8px 0 12px;font-size:11px;color:#888;">Proforma invoices sent to clients — a separate total from the finalized billing statements in Receivables Aging above.</p>
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Client</td>
@@ -1593,8 +1894,14 @@ function buildDigestHtml(
     <!-- Yesterday's Collections -->
     ${yesterdayHtml}
 
+    <!-- Yesterday's Collections — Transaction Breakdown -->
+    ${yesterdayRevenueBreakdownHtml}
+
     <!-- KPI Snapshot -->
     ${kpiHtml}
+
+    <!-- Revenue In — Transaction Breakdown -->
+    ${revenueBreakdownHtml}
 
     <!-- Receivables Aging -->
     ${buildReceivablesAgingHtml(receivables)}
@@ -1617,6 +1924,9 @@ function buildDigestHtml(
     <!-- Work Orders by Location -->
     ${workOrderBreakdownHtml}
 
+    <!-- Open Queries -->
+    ${queriesHtml}
+
     <!-- Team Activity -->
     ${teamHtml}
 
@@ -1628,13 +1938,6 @@ function buildDigestHtml(
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       ${tableHeader()}
       ${financialRows}
-    </table>
-
-    <!-- Operations -->
-    ${sectionHeader("Operations")}
-    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
-      ${tableHeader()}
-      ${opsRows}
     </table>
 
     <!-- Center-wise -->

@@ -7,7 +7,7 @@ import {
   ClipboardList, Phone, Mail, AlertTriangle, CheckCircle2,
   XCircle, Clock, Loader2, Search, ChevronRight, RefreshCw,
   CalendarDays, Wrench, IndianRupee, Settings, ChevronDown, ChevronUp,
-  Zap, ShieldCheck, Headphones, Star, User,
+  Zap, ShieldCheck, Headphones, Star, User, Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import type { ServicePoBillingCycle } from "@/lib/constants";
+import { billingProgress, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import type { AmcStatus } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -53,6 +55,11 @@ interface AmcRow {
   linked_asset: { id: string; name: string; asset_code: string } | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
+  payment_state: "paid" | "partially_paid" | "unpaid" | "no_bill";
+  billing_cycle: ServicePoBillingCycle | null;
+  cycle_count: number | null;
+  unit_cost_per_cycle: number | null;
+  bills_raised: number;
 }
 
 const EVENT_TYPE_LABEL: Record<ServiceEvent["event_type"], string> = {
@@ -101,6 +108,15 @@ const AMC_STATUS_ICON: Record<AmcStatus, React.ReactNode> = {
   exhausted:<XCircle className="h-3.5 w-3.5" />,
   expired:  <XCircle className="h-3.5 w-3.5" />,
   terminated:<XCircle className="h-3.5 w-3.5" />,
+};
+
+// Contracts are listed regardless of payment state, so the unpaid cases carry a
+// badge — a signed AMC still needs tracking, but finance should see what is owed.
+const PAYMENT_STATE_BADGE: Record<AmcRow["payment_state"], { label: string; className: string } | null> = {
+  paid:           null,
+  partially_paid: { label: "Partially paid",  className: "bg-blue-50 text-blue-700 border-blue-200" },
+  unpaid:         { label: "Payment pending", className: "bg-amber-50 text-amber-700 border-amber-200" },
+  no_bill:        { label: "No bill yet",     className: "bg-gray-50 text-gray-600 border-gray-200" },
 };
 
 function daysRemaining(endDate: string | null): number | null {
@@ -384,6 +400,14 @@ export default function AmcRegisterPage() {
                           {AMC_STATUS_ICON[row.amc_status]}
                           {AMC_STATUS_LABELS[row.amc_status]}
                         </span>
+                        {PAYMENT_STATE_BADGE[row.payment_state] && (
+                          <span
+                            className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium ${PAYMENT_STATE_BADGE[row.payment_state]!.className}`}
+                          >
+                            <IndianRupee className="h-3 w-3" />
+                            {PAYMENT_STATE_BADGE[row.payment_state]!.label}
+                          </span>
+                        )}
                         {(missingContact || missingDates) && row.amc_status !== "expired" && (
                           <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
                             <AlertTriangle className="h-3 w-3" />
@@ -423,6 +447,26 @@ export default function AmcRegisterPage() {
                         )}
                       </div>
 
+                      {/* Billing progress — only meaningful for multi-cycle contracts */}
+                      {(() => {
+                        const progress = billingProgress(row.bills_raised, row.cycle_count, row.unit_cost_per_cycle);
+                        if (!progress || !row.billing_cycle) return null;
+                        const unit = CYCLE_UNIT_LABEL[row.billing_cycle];
+                        return (
+                          <div className="flex items-center gap-1.5 mt-2 text-xs">
+                            <Receipt className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className={progress.isComplete ? "text-emerald-700" : "text-muted-foreground"}>
+                              {progress.billed} of {progress.total} {unit}s billed
+                            </span>
+                            {!progress.isComplete && progress.remainingAmount > 0 && (
+                              <span className="text-muted-foreground">
+                                · {formatCurrency(progress.remainingAmount)} remaining
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
                       {/* Contract period */}
                       {(row.amc_start_date || row.amc_end_date) && (
                         <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
@@ -449,6 +493,13 @@ export default function AmcRegisterPage() {
                       <div className="text-sm font-semibold">
                         {formatCurrency(row.total_ordered_amount)}
                       </div>
+                      {/* A monthly contract reads as a lump sum without this. */}
+                      {row.billing_cycle && row.cycle_count && row.cycle_count > 1 && (
+                        <div className="text-xs text-muted-foreground">
+                          {formatCurrency(Number(row.unit_cost_per_cycle ?? 0))}/
+                          {CYCLE_UNIT_LABEL[row.billing_cycle]}
+                        </div>
+                      )}
                       <VisitsBar used={row.amc_visits_used} covered={row.amc_visits_covered} />
                     </div>
                   </div>
@@ -585,7 +636,7 @@ export default function AmcRegisterPage() {
 
       {/* Help note */}
       <p className="text-xs text-muted-foreground">
-        AMC contracts are service POs linked to an{" "}
+        AMC contracts are purchase orders linked to an{" "}
         <Link href="/procurement/requests" className="underline">AMC Material Request</Link>.
         Open any contract to log service events or update contact details.
       </p>

@@ -118,6 +118,8 @@ interface Statement {
   notes?: string;
   reminder_count?: number | null;
   voided_at?: string | null;
+  /** Set when this draft was created by voiding an earlier statement. */
+  voided_statement_id?: string | null;
   // Tally state (surfaced via TallyStatusBadge)
   issuance_channel?: string | null;
   lifecycle_stage?: string | null;
@@ -201,6 +203,11 @@ export function ViewStatementDialog({
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  // Discard-draft state
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [discardReason, setDiscardReason] = useState("");
+  const [discardSubmitting, setDiscardSubmitting] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -505,6 +512,40 @@ export function ViewStatementDialog({
     !!statement &&
     ["finalized", "exported"].includes(statement.status) &&
     userRole === "admin";
+
+  // Discard is void's draft-stage counterpart: the client has never seen a
+  // draft, so this is an internal cleanup rather than a cancellation, and it
+  // sits with everyone who runs billing rather than admin alone.
+  const canDiscard =
+    !!statement &&
+    statement.status === "draft" &&
+    ["admin", "manager", "accounts"].includes(userRole ?? "");
+
+  const handleDiscardStatement = async () => {
+    if (!statementId || !discardReason.trim()) return;
+    setDiscardSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/discard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discard_reason: discardReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Draft discarded");
+        setShowDiscardConfirm(false);
+        setDiscardReason("");
+        onStatusChange();
+        onOpenChange(false);
+      } else {
+        toast.error(json.error || "Failed to discard draft");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setDiscardSubmitting(false);
+    }
+  };
 
   const customerName = statement?.lead
     ? statement.lead.company || `${statement.lead.first_name} ${statement.lead.last_name}`
@@ -1464,6 +1505,60 @@ export function ViewStatementDialog({
                     <Trash2 className="mr-2 h-4 w-4" />
                   )}
                   {statement?.issuance_channel === "tally" ? "Confirm Cancel" : "Void & Create Draft"}
+                </Button>
+              </div>
+            </div>
+          )}
+          {/* Discard — drafts only, admin/manager/accounts */}
+          {canDiscard && !showDiscardConfirm && (
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+              onClick={() => setShowDiscardConfirm(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Discard Draft
+            </Button>
+          )}
+          {canDiscard && showDiscardConfirm && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-medium text-red-700">
+                {statement?.voided_statement_id
+                  ? "This replacement draft will be discarded. The voided original stays voided, and this period becomes free to regenerate."
+                  : "This draft will be discarded and the period freed up, so billing can regenerate it from scratch."}
+              </p>
+              <p className="text-xs text-red-600">
+                Usage charges, bookings and service usage on this draft go back to unbilled — they will be picked up by whatever bills this period next.
+              </p>
+              <Textarea
+                placeholder="Reason for discarding (required)"
+                value={discardReason}
+                onChange={(e) => setDiscardReason(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => { setShowDiscardConfirm(false); setDiscardReason(""); }}
+                  disabled={discardSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={handleDiscardStatement}
+                  disabled={discardSubmitting || !discardReason.trim()}
+                >
+                  {discardSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Discard Draft
                 </Button>
               </div>
             </div>

@@ -62,7 +62,6 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-  const authUserId = user.id;
   if (!["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -315,7 +314,7 @@ export async function POST(
     .from("gst_invoice_uploads")
     .insert({
       billing_statement_id: statement.id,
-      uploaded_by: authUserId,
+      uploaded_by: dbUser.id,
       tally_invoice_number: meta.tally_invoice_number,
       tally_invoice_series: meta.tally_invoice_series,
       irn: meta.irn,
@@ -326,7 +325,7 @@ export async function POST(
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
       name_check_status: "approved",
-      name_check_decided_by: authUserId,
+      name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })
     .select("id")
@@ -359,6 +358,22 @@ export async function POST(
       { error: `Invoice saved (id: ${insertedUpload.id}) but mirroring onto the statement failed: ${mirrorErr.message}. Refresh and check statement state.` },
       { status: 500 },
     );
+  }
+
+  // ── Also mirror the GST invoice number onto the linked ad-hoc invoice ─────
+  // (proforma_invoices) so it shows on the lead page. The mirror above only
+  // updates the accounting-side statement row — nothing previously kept the
+  // customer-facing invoice's gst_invoice_number in sync. Non-fatal: the
+  // upload itself already succeeded (PDF stored, statement updated); a failure
+  // here just means the lead page won't show the GST number until retried.
+  if (statement.invoice) {
+    const { error: invoiceMirrorErr } = await adminClient
+      .from("proforma_invoices")
+      .update({ gst_invoice_number: meta.tally_invoice_number })
+      .eq("id", statement.invoice.id);
+    if (invoiceMirrorErr) {
+      console.error("[upload-gst-invoice] proforma_invoices mirror failed (non-fatal):", invoiceMirrorErr);
+    }
   }
 
   // ── Transition handoff_state ─────────────────────────────────────────────
@@ -455,10 +470,17 @@ export async function POST(
     const nowYmd = nowIso.slice(0, 10);
 
     // ── Persist Razorpay link + due date ─────────────────────────────────────
+    // Resetting the ladder alongside due_date is load-bearing, not tidiness:
+    // the reminder cron picks a stage from days-overdue against due_date but
+    // gates it on reminder_count, so a stale count behind a fresh due date
+    // reads as "stage already sent" for every rung already fired and the
+    // statement stops being chased until days-overdue catches back up.
     await adminSupabase.from("billing_statements").update({
       razorpay_payment_link_id: rzpLinkId,
       razorpay_payment_link_url: rzpLinkUrl,
       due_date: nowYmd,
+      reminder_count: 0,
+      last_reminder_sent_at: null,
     }).eq("id", id);
 
     // ── Send email to customer ────────────────────────────────────────────────
@@ -546,6 +568,12 @@ export async function POST(
           emailed_at: nowIso,
           emailed_to: customerEmail,
         }).eq("id", id);
+        if (statement.invoice) {
+          await adminSupabase.from("proforma_invoices").update({
+            gst_invoice_sent_at: nowIso,
+            gst_invoice_sent_to: [customerEmail, ...ccEmails].join(", "),
+          }).eq("id", statement.invoice.id);
+        }
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
         // Log every recipient to billing_send_log — this is what actually feeds
         // the "Communications" timeline on the lead page (GET

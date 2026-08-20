@@ -145,6 +145,7 @@ export async function POST(
     deposit_payment_received_at: receivedAt,
     deposit_payment_screenshot_url: screenshotUrl,
     deposit_internal_notes: notes,
+    deposit_payment_recorded_by: actor.id,
     ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
   };
   const { error: updateError } = await supabase

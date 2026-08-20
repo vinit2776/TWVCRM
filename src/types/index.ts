@@ -314,6 +314,13 @@ export interface Proposal {
   created_at: string;
   updated_at: string;
   occupation_start_date?: string;
+  // Date the pro-rata invoice was actually paid — enriched by GET
+  // /api/proposals, null until paid. Prefers payment_received_at (the
+  // generic-link/manual-record path that also gates contract activation),
+  // falling back to the GST invoice's own billing_statements payment date.
+  // Distinct from occupation_start_date, which is just the date proration
+  // was calculated from.
+  prorata_paid_date?: string | null;
   // Payment tracking (Razorpay)
   payment_status?: string; // "pending" | "paid"
   razorpay_payment_link_id?: string;
@@ -321,10 +328,19 @@ export interface Proposal {
   payment_received_at?: string;
   payment_amount?: number;
   payment_reference?: string;
+  payment_medium?: string; // neft | rtgs | upi | cheque | cash | razorpay
+  payment_screenshot_url?: string;
+  payment_internal_notes?: string | null; // internal-only — never shown to the customer
+  payment_recorded_by?: string; // user id of who manually recorded this payment
+  payment_shortfall_approved_by?: string; // admin/manager who approved a ≤10% shortfall
   // Security deposit
   security_deposit_months?: number;
   security_deposit_amount?: number;
   deposit_payment_status?: string; // "not_required" | "pending" | "paid"
+  // Set once a contract activation claims this proposal's collected deposit —
+  // a proposal can spawn more than one contract, but the deposit belongs to
+  // only one of them. See contracts/[id]/route.ts's activation snapshot.
+  deposit_claimed_by_contract_id?: string | null;
   deposit_razorpay_link_id?: string;
   deposit_razorpay_link_url?: string;
   deposit_email_sent_at?: string;
@@ -333,6 +349,8 @@ export interface Proposal {
   deposit_payment_reference?: string;
   deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_screenshot_url?: string;
+  deposit_payment_recorded_by?: string; // user id of who manually recorded this deposit payment
+  deposit_payment_recorded_by_user?: { id: string; full_name: string } | null;
   deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
   // Internal-only note for accounts (why this deposit request/collection exists) — never sent to the customer.
   deposit_internal_notes?: string | null;
@@ -365,6 +383,7 @@ export interface Proposal {
   deposit_waiver_otp_expires?: string;
   deposit_waiver_verified_at?: string;
   deposit_waiver_verified_by?: string;
+  deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
 }
 
@@ -411,6 +430,13 @@ export interface ProformaInvoice {
   accounted?: boolean;
   accounted_at?: string;
   accounted_by?: string;
+  // Contract attribution — set when this ad-hoc invoice bills a contract charge
+  // collected outside the normal statement flow. See migration 00426.
+  contract_id?: string | null;
+  contract?: Contract;
+  attribution_purpose?: "prorata_first_invoice" | "monthly_rent" | "other" | null;
+  attributed_at?: string | null;
+  attributed_by?: string | null;
 }
 
 // ==========================================
@@ -564,6 +590,7 @@ export interface Contract {
   printer_department_id?: string;
   // Renewal chain
   parent_contract_id?: string | null;
+  parent_contract?: { id: string; contract_number: string } | null;
   is_renewal?: boolean;
   renewal_sequence?: number;
   // Escalation waiver
@@ -576,6 +603,24 @@ export interface Contract {
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;
+  // Deposit ledger — owned by the contract from activation onward (snapshotted
+  // from the linked proposal at that moment; see contracts/[id]/route.ts).
+  // The proposal only bridges the commercial gap until activation — once
+  // active, top-ups/adjustments/corrections all read and write these fields,
+  // never the proposal's. Mirrors the equivalent fields on Proposal below.
+  security_deposit_amount?: number;
+  deposit_payment_status?: string; // "not_required" | "pending" | "paid"
+  deposit_payment_amount?: number;
+  deposit_payment_reference?: string;
+  deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
+  deposit_payment_received_at?: string;
+  deposit_internal_notes?: string | null;
+  // Deposit refund — set when money has actually gone back to the customer.
+  // Excluded from the pooled balance (see get_deposit_available_balance);
+  // no UI writes these yet, they're a manual accounts lever for now.
+  deposit_refunded_amount?: number | null;
+  deposit_refunded_at?: string | null;
+  deposit_refund_reference?: string | null;
   // Renewal communication
   renewal_reminder_sent_at?: string | null;
   renewal_reminder_count?: number;
@@ -595,6 +640,10 @@ export interface Contract {
   // Tiered rate phases
   phase_start_date?: string | null;
   rate_phases?: ContractRatePhase[];
+  // start_date is a placeholder until the linked proposal's pro-rata invoice
+  // is paid — see supabase/migrations/00503_contract_start_date_confirmation.sql
+  start_date_confirmed?: boolean;
+  start_date_locked_at?: string | null;
 }
 
 export interface ContractRatePhase {
@@ -630,7 +679,11 @@ export type DepositAdjustmentStatus = "pending_approval" | "approved" | "rejecte
 export interface DepositAdjustment {
   id: string;
   contract_id: string;
-  source_proposal_id: string;
+  // Informational/back-compat only since the pooled-customer-deposits migration —
+  // the balance math keys off source_lead_id now, neither of these is read.
+  source_contract_id: string;
+  source_proposal_id?: string | null;
+  source_lead_id: string;
   billing_statement_id: string;
   billing_payment_id?: string | null;
   amount: number;
@@ -658,12 +711,25 @@ export interface DepositAdjustment {
   reversed_by_name?: string;
 }
 
+/** Why `available` is 0 — drives the greyed-out explanation on the
+ *  "Adjustment against deposit" option. NULL when there is a balance. */
+export type DepositUnavailableReason =
+  | "no_proposal"
+  | "deposit_pending"
+  | "no_deposit"
+  | "fully_committed";
+
 export interface DepositBalance {
+  // Chain root of the CALLING contract — informational/back-compat only
+  // since the pooled-customer-deposits migration. The figures below are
+  // pooled across every contract of source_lead_id, not this chain.
   source_contract_id: string;
   source_proposal_id: string | null;
+  source_lead_id: string;
   deposit_collected: number;
   committed: number;
   available: number;
+  unavailable_reason: DepositUnavailableReason | null;
 }
 
 export type DepositTopupStatus = "pending" | "paid" | "reversed" | "cancelled";
@@ -673,7 +739,11 @@ export type DepositTopupCollectionMethod = "razorpay_link" | "manual";
 export interface DepositTopup {
   id: string;
   contract_id: string;
-  source_proposal_id: string;
+  // Informational/back-compat only since the pooled-customer-deposits migration —
+  // the balance math keys off source_lead_id now, neither of these is read.
+  source_contract_id: string;
+  source_proposal_id?: string | null;
+  source_lead_id: string;
   amount: number;
   category: DepositTopupCategory;
   category_note?: string | null;
@@ -711,6 +781,9 @@ export interface DepositTopup {
 export interface DepositInboxRow {
   id: string;
   kind: "deposit" | "topup";
+  /** Open query thread count — drives the "Query" button badge. Set by
+   *  /api/accounting/inbox/deposits; see src/lib/queries/registry.ts. */
+  open_query_count?: number;
   party_name: string;
   contract_number?: string | null;
   proposal_number?: string | null;
@@ -937,7 +1010,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -1850,6 +1923,11 @@ export interface VoCase {
   client_city?: string;
   client_state?: string;
   client_pincode?: string;
+  // Authorized representative signing on the client's behalf
+  represented_by_name?: string;
+  represented_by_designation?: string;
+  represented_by_id_type?: 'pan' | 'aadhaar';
+  represented_by_id_number?: string;
   // Financials
   rate?: number;
   tenure_months: number;
@@ -2090,7 +2168,10 @@ export interface AggregatorInvoiceLineItem {
 
 export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc" | "reimbursement";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
-export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton" | "hr";
+// Single source of truth is ITEM_UNITS in @/lib/constants — re-exported so the
+// two lists can never drift apart again.
+import type { ItemUnit } from "@/lib/constants";
+export type { ItemUnit };
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
 export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
@@ -4040,3 +4121,39 @@ export interface ContractBillingMoratorium {
   authorized_by_user?: { full_name: string } | null;
 }
 
+
+/**
+ * One entry on a billing statement's unified history timeline.
+ *
+ * Built by GET /api/billing-statements/[id]/timeline, which merges six
+ * sources (lifecycle columns, send log, reminder sends, payments, GST
+ * uploads, audit trail) into a single chronological narrative. Prior to
+ * this the AR page only ever showed send events, so workflow overrides
+ * like "PI cancelled, GST issued early" were invisible — a GST invoice
+ * would appear against an unpaid bill with no visible explanation.
+ */
+export type StatementTimelineKind =
+  | "lifecycle"
+  | "send"
+  | "reminder"
+  | "payment"
+  | "gst"
+  | "audit";
+
+export interface StatementTimelineEvent {
+  id: string;
+  at: string;
+  kind: StatementTimelineKind;
+  label: string;
+  detail: string | null;
+  channel: string | null;
+  recipient: string | null;
+  /** sent | delivered | opened | failed | ok */
+  status: string | null;
+  error: string | null;
+  /** Resolved display name, or a sentinel like "Cron" / "System". */
+  actor: string | null;
+  amount: number | null;
+  /** Draws the eye to workflow overrides that explain otherwise-odd state. */
+  highlight: boolean;
+}

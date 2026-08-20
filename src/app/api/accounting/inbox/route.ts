@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
         )
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number,
+        id, invoice_number, title, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number, billing_emails
         )
@@ -218,6 +218,8 @@ export async function GET(req: NextRequest) {
     invoice: {
       id: string;
       invoice_number: string;
+      title: string | null;
+      internal_notes: string | null;
       lead: {
         id: string;
         first_name: string | null;
@@ -294,7 +296,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -330,7 +332,23 @@ export async function GET(req: NextRequest) {
       .select("id, tally_invoice_number, uploaded_at, uploaded_by, superseded_by")
       .eq("billing_statement_id", statementIds[0])
       .order("uploaded_at", { ascending: true }),
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
+      .eq("status", "open"),
   ]);
+
+  // Open query count per statement — one grouped-in-JS count from a single
+  // batched query, same pattern as uploadByStatement below. Scoped by
+  // entity_type since `queries` now spans every module (see
+  // src/lib/queries/registry.ts).
+  const openQueryCountByStatement = new Map<string, number>();
+  for (const r of openQueriesRes.data || []) {
+    const sid = (r as { entity_id: string }).entity_id;
+    openQueryCountByStatement.set(sid, (openQueryCountByStatement.get(sid) ?? 0) + 1);
+  }
 
   // gst_invoice_uploads.uploaded_by references auth.users(id), not
   // public.users(id) — no FK exists for Supabase to embed a join, so
@@ -557,6 +575,8 @@ export async function GET(req: NextRequest) {
         ? {
             id: s.invoice.id,
             invoice_number: s.invoice.invoice_number,
+            title: s.invoice.title,
+            internal_notes: s.invoice.internal_notes,
             lead: s.invoice.lead,
           }
         : null,
@@ -566,6 +586,7 @@ export async function GET(req: NextRequest) {
       latest_snapshot: snapshot,
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
+      open_query_count: openQueryCountByStatement.get(s.id) ?? 0,
       // New detail fields
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
@@ -628,6 +649,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id, handoff_state, updated_at, created_at,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      voided_at, void_reason,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst, total_amount, gst_amount, gst_rate,
         payment_status, payment_mode, payment_reference,
@@ -642,9 +664,11 @@ export async function GET(req: NextRequest) {
     `);
 
   if (tab === "closed") {
-    bookingTasksQuery = bookingTasksQuery.eq("handoff_state", "complete");
+    // Voided tasks surface here alongside genuinely complete ones — same
+    // "still visible in Archive" behavior billing_statements.voided_at gets.
+    bookingTasksQuery = bookingTasksQuery.or("handoff_state.eq.complete,voided_at.not.is.null");
   } else {
-    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete");
+    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete").is("voided_at", null);
   }
 
   const { data: bookingTaskData } = await bookingTasksQuery
@@ -658,6 +682,8 @@ export async function GET(req: NextRequest) {
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
     gst_invoice_sent_at: string | null;
+    voided_at: string | null;
+    void_reason: string | null;
     booking: {
       id: string;
       booking_number: string | null;
@@ -740,7 +766,7 @@ export async function GET(req: NextRequest) {
   // already in hand — so run them concurrently instead of one after the
   // other. (Settlement itself stays sequential *within* the payments branch
   // since it needs the razorpay_payment_ids the payments query returns.)
-  const [bookingPaymentsMap, bookingUploadsMap] = await Promise.all([
+  const [bookingPaymentsMap, bookingUploadsMap, bookingQueryCounts] = await Promise.all([
     (async () => {
       const map = new Map<string, BookingPaymentConfirmation[]>();
       if (bookingIds.length === 0) return map;
@@ -821,6 +847,23 @@ export async function GET(req: NextRequest) {
       }
       return map;
     })(),
+    // Open query count per booking task — one grouped query for the whole
+    // page rather than a fetch per row, same as the statement badge above.
+    (async () => {
+      const map = new Map<string, number>();
+      if (bookingTaskIds.length === 0) return map;
+      const { data } = await supabase
+        .from("queries")
+        .select("entity_id")
+        .eq("entity_type", "booking_gst_task")
+        .in("entity_id", bookingTaskIds)
+        .eq("status", "open");
+      for (const r of data || []) {
+        const id = (r as { entity_id: string }).entity_id;
+        map.set(id, (map.get(id) ?? 0) + 1);
+      }
+      return map;
+    })(),
   ]);
 
   const bookingRows: BookingInboxRow[] = filteredBookingTasks.map((t) => {
@@ -849,6 +892,7 @@ export async function GET(req: NextRequest) {
     return {
       row_type: "booking" as const,
       task_id: t.id,
+      open_query_count: bookingQueryCounts.get(t.id) ?? 0,
       booking_id: t.booking?.id ?? "",
       booking_number: t.booking?.booking_number ?? null,
       booking_date: t.booking?.booking_date ?? null,
@@ -906,6 +950,8 @@ export async function GET(req: NextRequest) {
         }
         return [];
       })(),
+      is_voided: !!t.voided_at,
+      void_reason: t.void_reason ?? null,
     };
   });
 

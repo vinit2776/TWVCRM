@@ -15,9 +15,11 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "sonner";
 import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, BILLING_CYCLE_MONTHS,
+  type ServicePoBillingCycle,
   PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
+import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import type { ProcurementVendor, FacilityAsset } from "@/types";
 
 function addMonths(dateStr: string, months: number): string {
@@ -67,6 +69,10 @@ function NewServicePOForm() {
   const fromMrId = searchParams.get("from_mr");
   const isAmcFromUrl = searchParams.get("amc") === "1" || !!fromMrId;
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
+  // AMC contracts may be paid monthly or quarterly. Default yearly so the
+  // single-payment contract — still the common case — is unchanged.
+  const [amcBillingCycle, setAmcBillingCycle] = useState<ServicePoBillingCycle>("yearly");
+  const [amcCycleCountOverride, setAmcCycleCountOverride] = useState("");
   const [sourceMrNumber, setSourceMrNumber] = useState<string | null>(null);
   const [amcContactExpanded, setAmcContactExpanded] = useState(true);
   const [termsExpanded, setTermsExpanded] = useState(false);
@@ -158,8 +164,16 @@ function NewServicePOForm() {
         if (pr.amc_end_date) setAmcEndDate(pr.amc_end_date);
         if (pr.amc_visits_covered == null) setAmcUnlimited(true);
         else setAmcVisitsCovered(String(pr.amc_visits_covered));
-        // Amount — MR annual amount is pre-GST
-        if (pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
+        // Frequency, cycle count and per-cycle cost all come off the MR's line item.
+        // total_estimated_amount is the whole commitment, so using it as the unit
+        // cost would multiply a monthly contract by its own cycle count.
+        const mrItem = pr.purchase_request_items?.[0];
+        setAmcBillingCycle(cycleFromUnit(mrItem?.unit));
+        if (mrItem?.quantity && Number(mrItem.quantity) > 1) {
+          setAmcCycleCountOverride(String(mrItem.quantity));
+        }
+        if (mrItem?.estimated_price) setUnitCost(String(mrItem.estimated_price));
+        else if (pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
         // Contacts
         if (pr.amc_contact_name) setAmcContactName(pr.amc_contact_name);
         if (pr.amc_helpline_number) setAmcHelpline(pr.amc_helpline_number);
@@ -188,8 +202,15 @@ function NewServicePOForm() {
   const totalAmount = cycleCountNum * unitCostNum;
   const gstAmount = Math.round(totalAmount * gstRateNum) / 100;
   const totalWithGst = totalAmount + gstAmount;
-  const amcGstAmount = Math.round(unitCostNum * gstRateNum) / 100;
-  const amcTotalWithGst = unitCostNum + amcGstAmount;
+  // AMC cycle maths — derived from the contract period, overridable for odd terms.
+  const amcDerivedCycles = cyclesBetween(amcStartDate, amcEndDate, amcBillingCycle);
+  const amcCycleCount =
+    amcCycleCountOverride.trim() !== "" && parseInt(amcCycleCountOverride) > 0
+      ? parseInt(amcCycleCountOverride)
+      : amcDerivedCycles ?? 1;
+  const amcContractTotal = contractTotal(unitCostNum, amcCycleCount);
+  const amcGstAmount = Math.round(amcContractTotal * gstRateNum) / 100;
+  const amcTotalWithGst = amcContractTotal + amcGstAmount;
 
   const cycleSchedule = (() => {
     if (!serviceStartDate || !billingCycle || cycleCountNum <= 0) return [];
@@ -241,8 +262,8 @@ function NewServicePOForm() {
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
           service_start_date: isAmc ? amcStartDate : serviceStartDate,
-          billing_cycle: isAmc ? "yearly" : billingCycle,
-          cycle_count: isAmc ? 1 : cycleCountNum,
+          billing_cycle: isAmc ? amcBillingCycle : billingCycle,
+          cycle_count: isAmc ? amcCycleCount : cycleCountNum,
           unit_cost_per_cycle: unitCostNum,
           gst_rate: gstRateNum,
           notes: notes.trim() || undefined,
@@ -449,7 +470,43 @@ function NewServicePOForm() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label>Annual Contract Value (₹) *</Label>
+                    <Label>Payment Frequency *</Label>
+                    <Select
+                      value={amcBillingCycle}
+                      onValueChange={(v) => setAmcBillingCycle(v as ServicePoBillingCycle)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {SERVICE_PO_BILLING_CYCLES.map((c) => (
+                          <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      How often the vendor invoices. Each cycle needs its own service
+                      report and invoice before it can be paid.
+                    </p>
+                  </div>
+                  {amcBillingCycle !== "yearly" && (
+                    <div className="space-y-1.5">
+                      <Label>Number of {CYCLE_UNIT_LABEL[amcBillingCycle]}s</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={amcCycleCountOverride}
+                        onChange={(e) => setAmcCycleCountOverride(e.target.value)}
+                        placeholder={amcDerivedCycles ? String(amcDerivedCycles) : "Set contract dates"}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {amcDerivedCycles
+                          ? `From the contract period: ${amcDerivedCycles}. Leave blank to use it.`
+                          : "Set the contract dates to derive this."}
+                      </p>
+                    </div>
+                  )}
+                  <div className="space-y-1.5">
+                    <Label>{CYCLE_COST_LABEL[amcBillingCycle]} (₹) *</Label>
                     <Input
                       type="number"
                       min="0.01"
@@ -458,7 +515,11 @@ function NewServicePOForm() {
                       onChange={(e) => setUnitCost(e.target.value)}
                       placeholder="0.00"
                     />
-                    <p className="text-xs text-muted-foreground">Total amount payable to vendor per year.</p>
+                    <p className="text-xs text-muted-foreground">
+                      {amcBillingCycle === "yearly"
+                        ? "Total amount payable to vendor per year."
+                        : `Amount the vendor invoices each ${CYCLE_UNIT_LABEL[amcBillingCycle]}.`}
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <Label>GST Rate</Label>
@@ -476,9 +537,15 @@ function NewServicePOForm() {
                 </div>
                 {unitCostNum > 0 && (
                   <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
+                    {amcCycleCount > 1 && (
+                      <div className="flex justify-between text-blue-700">
+                        <span>{amcCycleCount} × {formatCurrency(unitCostNum)} per {CYCLE_UNIT_LABEL[amcBillingCycle]}</span>
+                        <span />
+                      </div>
+                    )}
                     <div className="flex justify-between">
-                      <span>Annual Contract Value</span>
-                      <strong>{formatCurrency(unitCostNum)}</strong>
+                      <span>Contract Value</span>
+                      <strong>{formatCurrency(amcContractTotal)}</strong>
                     </div>
                     {gstRateNum > 0 && (
                       <div className="flex justify-between text-blue-700">

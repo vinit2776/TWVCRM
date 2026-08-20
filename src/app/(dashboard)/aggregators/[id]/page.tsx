@@ -24,6 +24,7 @@ import { AggregatorContactsTab } from "@/components/aggregators/aggregator-conta
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
 import { AggregatorBillingTab } from "@/components/aggregators/aggregator-billing-tab";
 import { AggregatorForm } from "@/components/aggregators/aggregator-form";
+import { AggregatorCasesTab } from "@/components/aggregators/aggregator-cases-tab";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
@@ -140,6 +141,7 @@ export default function AggregatorDetailPage({
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="cases">Cases</TabsTrigger>
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="rate-cards">Rate Cards</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
@@ -248,6 +250,17 @@ export default function AggregatorDetailPage({
               )}
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="cases" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Cases</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AggregatorCasesTab aggregatorId={id} />
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="contacts" className="mt-4">

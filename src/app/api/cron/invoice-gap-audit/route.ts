@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendPushToAll } from "@/lib/push";
+import { withCronHealth } from "@/lib/cron-ping";
+
 import {
   loadFinanceIntelligenceConfig,
   isFeatureEnabled,
@@ -28,7 +30,7 @@ import {
  * so we never flag a new vendor.
  */
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   // Auth: CRON_SECRET header
   const secret = request.headers.get("x-cron-secret") ?? request.headers.get("authorization")?.replace("Bearer ", "");
   if (secret !== process.env.CRON_SECRET) {
@@ -176,3 +178,5 @@ export async function GET(request: NextRequest) {
     gaps,
   });
 }
+
+export const GET = withCronHealth("cron/invoice-gap-audit", handler);

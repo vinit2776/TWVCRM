@@ -16,7 +16,13 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  *     Receivable and stops being dunned by the reminder cron.
  *
  * Body (JSON): { reason?: string }
+ *
+ * Roles: admin, manager, accounts — cancelling withdraws a document the client
+ * has already received, so it sits with the same people who can void a billing
+ * statement rather than with anyone who can create the invoice.
  */
+const CANCEL_ROLES = ["admin", "manager", "accounts"];
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -26,7 +32,14 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  if (!dbUser || !CANCEL_ROLES.includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin, manager or accounts can cancel an invoice" },
+      { status: 403 }
+    );
+  }
 
   const body = await request.json().catch(() => ({}));
   const reason = (body.reason as string | undefined)?.trim() || null;

@@ -17,7 +17,7 @@
  * read-and-record only.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,13 +27,20 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead } from "@/lib/constants";
+import {
+  ACCOUNTING_HEAD_LABELS, ACCOUNTING_HEAD_COLORS, type AccountingHead,
+  ADHOC_ATTRIBUTION_PURPOSE_LABELS, type AdhocAttributionPurpose,
+} from "@/lib/constants";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
+import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
+import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
+import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Lead {
@@ -67,6 +74,8 @@ interface InvoiceRef {
   lead?: Lead;
   primary_head?: string | null;
   internal_notes?: string | null;
+  attribution_purpose?: AdhocAttributionPurpose | null;
+  attributed_contract?: { id: string; contract_number: string } | null;
 }
 
 interface AggregatorRef {
@@ -156,10 +165,13 @@ interface ReceivableRow {
   last_reminder_sent_at: string | null;
   reminder_count: number;
   days_overdue: number | null;
+  /** Open query threads on this statement — drives the row's Query badge. */
+  open_query_count?: number;
   status: string;
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
+  payments: PaymentDetail[];
   contract: Contract | null;
   proposal?: ProposalRef | null;
   invoice?: InvoiceRef | null;
@@ -246,9 +258,13 @@ export default function AccountsReceivablePage() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("detail");
   const [canRecordPayment, setCanRecordPayment] = useState(false);
+  // Which row has its query thread expanded (one at a time).
+  const [queryRowId, setQueryRowId] = useState<string | null>(null);
 
   // Record-payment dialog state (form lives in RecordPaymentDialog)
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
+  // "Payment received" detail dialog — opened from a partially-paid row's Paid amount.
+  const [paymentDetailRow, setPaymentDetailRow] = useState<ReceivableRow | null>(null);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
 
@@ -262,21 +278,9 @@ export default function AccountsReceivablePage() {
   const [resendRecipients, setResendRecipients] = useState<Set<string>>(new Set());
 
   // History drawer state — also opened from the Paid tab (PaidStatementsPanel),
-  // so the shape is the minimal subset both callers can supply.
+  // so the shape is the minimal subset both callers can supply. Fetching and
+  // rendering live in StatementTimelineDialog.
   const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string } | null>(null);
-  const [historyItems, setHistoryItems] = useState<Array<{
-    id: string;
-    stage_index: number;
-    stage_label: string;
-    channel: string;
-    recipient: string;
-    status: string;
-    error: string | null;
-    triggered_by: string;
-    sent_at: string;
-    triggered_by_user?: { full_name: string } | null;
-  }>>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -381,21 +385,7 @@ export default function AccountsReceivablePage() {
     }
   };
 
-  const openHistory = async (row: { id: string; statement_number: string }) => {
-    setHistoryRow(row);
-    setHistoryItems([]);
-    setHistoryLoading(true);
-    try {
-      const res = await fetch(`/api/billing-statements/${row.id}/send-reminder`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-      setHistoryItems(json.history || []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load history");
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
+  const openHistory = (row: { id: string; statement_number: string }) => setHistoryRow(row);
 
   const exportCsv = () => {
     window.location.href = "/api/accounting/receivables/export";
@@ -650,7 +640,11 @@ export default function AccountsReceivablePage() {
                     const party = partyOf(r);
                     const avg = avgDays[party.id];
                     return (
-                      <tr key={r.id} className="hover:bg-gray-50">
+                      // Fragment, not a wrapper element: the query panel is a
+                      // sibling <tr> and anything else here would be invalid
+                      // inside <tbody>.
+                      <Fragment key={r.id}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-4 py-3">
                           <div className="font-medium">
                             <Link href={party.href} className="text-teal-700 hover:underline">
@@ -710,6 +704,24 @@ export default function AccountsReceivablePage() {
                               {ACCOUNTING_HEAD_LABELS[r.invoice.primary_head as AccountingHead] || r.invoice.primary_head}
                             </Badge>
                           )}
+                          {/* An ad-hoc invoice billing a contract charge stays owned by the
+                              invoice (party is the lead), so surface the contract it was
+                              attributed to — otherwise the link is invisible here. */}
+                          {r.invoice?.attributed_contract && (
+                            <Link
+                              href={`/contracts/${r.invoice.attributed_contract.id}`}
+                              className="inline-block mt-1 ml-1"
+                              title={
+                                r.invoice.attribution_purpose
+                                  ? `Attributed as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[r.invoice.attribution_purpose]}`
+                                  : undefined
+                              }
+                            >
+                              <Badge variant="outline" className="text-[10px] border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                                → {r.invoice.attributed_contract.contract_number}
+                              </Badge>
+                            </Link>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-xs whitespace-nowrap">
                           {formatDate(r.period_start)}<br />
@@ -733,7 +745,11 @@ export default function AccountsReceivablePage() {
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
                         <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">
-                          {r.amount_paid > 0 ? formatCurrency(r.amount_paid) : "—"}
+                          {r.amount_paid > 0 ? (
+                            <button onClick={() => setPaymentDetailRow(r)} className="hover:underline" title="View payment detail">
+                              {formatCurrency(r.amount_paid)}
+                            </button>
+                          ) : "—"}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.balance_due)}</td>
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
@@ -758,6 +774,12 @@ export default function AccountsReceivablePage() {
                             <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={isGstRoute(r) ? "Resend GST invoice" : "Resend proforma email"}>
                               <Send className="h-3.5 w-3.5" />
                             </Button>
+                            <InboxQueryButton
+                              open={queryRowId === r.id}
+                              openCount={r.open_query_count ?? 0}
+                              onToggle={() => setQueryRowId(queryRowId === r.id ? null : r.id)}
+                              title="Raise or answer a question about this statement"
+                            />
                             {r.razorpay_payment_link_url && (
                               <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -766,6 +788,18 @@ export default function AccountsReceivablePage() {
                           </div>
                         </td>
                       </tr>
+                      {queryRowId === r.id && (
+                        <tr key={`${r.id}-query`} className="bg-muted/20">
+                          <td colSpan={10} className="px-4 py-3">
+                            <QueryThreadPanel
+                              entityType="billing_statement"
+                              entityId={r.id}
+                              onChanged={load}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                     );
                   })}
                 </tbody>
@@ -782,60 +816,17 @@ export default function AccountsReceivablePage() {
         onRecorded={load}
       />
 
-      <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Send history — {historyRow?.statement_number}</DialogTitle>
-          </DialogHeader>
-          {historyLoading ? (
-            <div className="p-6 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
-          ) : historyItems.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">Nothing sent yet for this statement.</div>
-          ) : (
-            <div className="max-h-[400px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Sent</th>
-                    <th className="px-3 py-2 text-left">Stage</th>
-                    <th className="px-3 py-2 text-left">Channel</th>
-                    <th className="px-3 py-2 text-left">Recipient</th>
-                    <th className="px-3 py-2 text-left">Status</th>
-                    <th className="px-3 py-2 text-left">By</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {historyItems.map((h) => (
-                    <tr key={h.id}>
-                      <td className="px-3 py-2 whitespace-nowrap text-xs">{new Date(h.sent_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}</td>
-                      <td className="px-3 py-2 text-xs">{h.stage_label}</td>
-                      <td className="px-3 py-2 text-xs uppercase">{h.channel}</td>
-                      <td className="px-3 py-2 text-xs">{h.recipient}</td>
-                      <td className="px-3 py-2">
-                        {h.status === "opened" ? (
-                          <Badge className="bg-teal-100 text-teal-800 border-teal-300 text-[10px] flex items-center gap-1 w-fit">
-                            <Eye className="h-2.5 w-2.5" /> OPENED
-                          </Badge>
-                        ) : h.status === "sent" ? (
-                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">SENT</Badge>
-                        ) : (
-                          <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]" title={h.error || ""}>FAILED</Badge>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {h.triggered_by === "cron" ? "Cron" : (h.triggered_by_user?.full_name || "Manual")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setHistoryRow(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PaymentDetailDialog
+        row={paymentDetailRow && {
+          ...paymentDetailRow,
+          partyNumber: partyOf(paymentDetailRow).number,
+          partyCustomerName: customerName(partyOf(paymentDetailRow).lead),
+        }}
+        onClose={() => setPaymentDetailRow(null)}
+        onOpenHistory={openHistory}
+      />
+
+      <StatementTimelineDialog statement={historyRow} onClose={() => setHistoryRow(null)} />
 
       <Dialog open={!!resendRow} onOpenChange={(o) => !o && setResendRow(null)}>
         <DialogContent>

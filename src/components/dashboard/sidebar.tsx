@@ -59,6 +59,7 @@ import {
   Flame,
   Inbox,
   Zap,
+  MessageCircleQuestion,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -87,6 +88,15 @@ const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "acc
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
   { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
+  // Queries sits here rather than under Finance because it spans modules —
+  // a thread can hang off a statement, a vendor bill, a contract or a PO.
+  // Roles mirror ANY_QUERY_ROLE in src/lib/queries/registry.ts.
+  {
+    href: "/queries",
+    label: "Queries",
+    icon: MessageCircleQuestion,
+    roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "office_admin", "viewer"],
+  },
 ];
 
 // Collapsible sections

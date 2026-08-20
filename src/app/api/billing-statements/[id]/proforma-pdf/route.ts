@@ -40,21 +40,21 @@ export async function GET(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, total_amount, subtotal, tax_percentage,
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, pan_number, mobile, street, city, zip_code)
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
         id, proposal_number,
-        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, pan_number, mobile, street, city, zip_code)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number,
-        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, pan_number, mobile, street, city, zip_code)
       ),
       case:cases!billing_statements_case_id_fkey(
-        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
-        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number, client_pan_number,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number)
       ),
-      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
     .eq("id", id)
@@ -93,18 +93,18 @@ export async function GET(
       const billToAggregator = voCase.bill_to === "aggregator" ? voCase.aggregator : null;
       if (billToAggregator) {
         return {
-          company: billToAggregator.name, gst_number: billToAggregator.gst_number, state: null,
+          company: billToAggregator.name, gst_number: billToAggregator.gst_number, pan_number: billToAggregator.pan_number, state: null,
           street: null, city: null, zip_code: null, first_name: null, last_name: null,
         };
       }
       return {
-        company: voCase.client_company_name || voCase.client_name, gst_number: voCase.client_gst_number, state: null,
+        company: voCase.client_company_name || voCase.client_name, gst_number: voCase.client_gst_number, pan_number: voCase.client_pan_number, state: null,
         street: null, city: null, zip_code: null, first_name: null, last_name: null,
       };
     }
     if (voAggregator) {
       return {
-        company: voAggregator.name, gst_number: voAggregator.gst_number, state: null,
+        company: voAggregator.name, gst_number: voAggregator.gst_number, pan_number: voAggregator.pan_number, state: null,
         street: null, city: null, zip_code: null, first_name: null, last_name: null,
       };
     }
@@ -204,6 +204,7 @@ export async function GET(
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerAddress: [lead?.street, lead?.city, lead?.state, lead?.zip_code].filter(Boolean).join(", ") || undefined,
     buyerGstin: lead?.gst_number || undefined,
+    buyerPan: lead?.pan_number || undefined,
     buyerState: lead?.state || undefined,
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,

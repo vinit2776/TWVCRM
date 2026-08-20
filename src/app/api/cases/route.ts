@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("cases")
     .select(
-      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)",
+      "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, company_name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)",
       { count: "exact" }
     );
 

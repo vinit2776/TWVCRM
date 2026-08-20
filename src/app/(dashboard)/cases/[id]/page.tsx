@@ -11,6 +11,7 @@ import {
   Building,
   MapPin,
   RefreshCw,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -101,7 +102,7 @@ export default function CaseDetailPage({
     );
   }
 
-  const aggregator = caseData.aggregator as { id: string; name: string; code: string } | null;
+  const aggregator = caseData.aggregator as { id: string; name: string; company_name?: string; code: string } | null;
 
   return (
     <div className="space-y-6">
@@ -125,7 +126,7 @@ export default function CaseDetailPage({
               <span className="font-mono">{caseData.case_number}</span>
               <span>|</span>
               {aggregator ? (
-                <span>{aggregator.name}</span>
+                <span>{aggregator.company_name || aggregator.name}</span>
               ) : (
                 <Badge variant="outline">Direct Client</Badge>
               )}
@@ -195,6 +196,8 @@ export default function CaseDetailPage({
                     <InfoRow label="PAN" value={caseData.client_pan_number} />
                     <InfoRow label="GST" value={caseData.client_gst_number} />
                     <InfoRow label="CIN" value={caseData.client_cin_number} />
+                    <InfoRow icon={User} label="Represented By" value={caseData.represented_by_name} />
+                    <InfoRow label="Designation" value={caseData.represented_by_designation} />
                   </div>
                 </CardContent>
               </Card>

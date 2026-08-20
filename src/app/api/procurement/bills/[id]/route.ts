@@ -79,6 +79,18 @@ const patchBillSchema = z.discriminatedUnion("action", [
     resolution_notes: z.string().max(500).nullish(),
   }),
   z.object({
+    /**
+     * Corrects the base (pre-GST) amount on an already-approved bill when it
+     * doesn't match the vendor's invoice. Re-approves in full at the corrected
+     * figure — there is no other path to change approved_amount once approved
+     * (reject only works on pending bills; approve_balance only raises to the
+     * original total_amount).
+     */
+    action: z.literal("correct_approved_amount"),
+    total_amount: z.number().positive("Amount must be greater than zero"),
+    reason: z.string().min(1, "A reason is required for correcting the approved amount"),
+  }),
+  z.object({
     action: z.literal("update_gst"),
     gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
     /** Required when gst_amount === 0 — user must explicitly confirm no-GST */
@@ -677,6 +689,69 @@ export async function PATCH(
         payment_hold_resolved_at: new Date().toISOString(),
         payment_hold_resolution_notes: parsed.data.resolution_notes ?? null,
       };
+      break;
+    }
+
+    case "correct_approved_amount": {
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin can correct an approved bill's amount" }, { status: 403 });
+      }
+      if (bill.approval_status !== "approved") {
+        return NextResponse.json({ error: "Only approved bills can have their amount corrected" }, { status: 422 });
+      }
+      if (bill.payment_status === "paid") {
+        return NextResponse.json({ error: "This bill is already fully paid — the amount can no longer be corrected" }, { status: 422 });
+      }
+
+      const correctedTotal = parsed.data.total_amount;
+      const gstAmount = Number(bill.gst_amount ?? 0);
+      const alreadyPaid = Number(bill.amount_paid ?? 0);
+      const newCeiling = correctedTotal + gstAmount;
+      if (alreadyPaid > newCeiling + 0.01) {
+        return NextResponse.json(
+          {
+            error: `Corrected amount (₹${correctedTotal.toFixed(2)} + ₹${gstAmount.toFixed(2)} GST = ₹${newCeiling.toFixed(2)}) is less than the ₹${alreadyPaid.toFixed(2)} already paid on this bill.`,
+          },
+          { status: 422 }
+        );
+      }
+
+      const correctionReason = parsed.data.reason.trim();
+      updatePayload = {
+        total_amount: correctedTotal,
+        approved_amount: correctedTotal,
+        approved_amount_note: null,
+        approved_amount_reason: null,
+      };
+      extraAuditChanges.amount_correction_reason = { old: null, new: correctionReason };
+
+      // Notify the Accounts / Office Admin users who actually record payment —
+      // the correction is what unblocks them, unlike hold_payment which notifies admin/manager.
+      const { data: accountsUsers } = await supabase
+        .from("users")
+        .select("id")
+        .in("role", ["accounts", "office_admin"]);
+      if (accountsUsers && accountsUsers.length > 0) {
+        await supabase.from("notifications").insert(
+          accountsUsers.map((u: { id: string }) => ({
+            user_id: u.id,
+            type: "bill_amount_corrected",
+            title: "Approved Amount Corrected",
+            body: `${bill.bill_number} corrected to ₹${correctedTotal.toLocaleString("en-IN")} — ${correctionReason}`,
+            url: `/accounting/vendor-payments/${id}`,
+            entity_type: "vendor_bill",
+            entity_id: id,
+          }))
+        );
+      }
+
+      sendPushToProcurementRoles({
+        title: "Bill Amount Corrected",
+        body: `${bill.bill_number} corrected to ₹${correctedTotal.toLocaleString("en-IN")}`,
+        url: `/accounting/vendor-payments/${id}`,
+        tag: `bill-amount-corrected-${id}`,
+      }).catch((err) => console.error("[push] amount correction notification failed:", err));
+
       break;
     }
 

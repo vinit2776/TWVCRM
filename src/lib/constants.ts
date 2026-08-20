@@ -248,6 +248,11 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   expired: "bg-orange-100 text-orange-800",
 };
 
+// Content edits (line items, pricing, terms) are only allowed in these
+// statuses — enforced server-side in PATCH /api/proposals/[id]; mirrored
+// here so the Edit action only renders where it will actually be accepted.
+export const PROPOSAL_EDITABLE_STATUSES = ["draft", "sent", "viewed", "rejected"] as const;
+
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 
 export const INVOICE_STATUS_LABELS: Record<string, string> = {
@@ -509,16 +514,24 @@ export const BILLING_STATEMENT_STATUSES = [
   "exported",
 ] as const;
 
+// voided and discarded are terminal states reached through the void/discard
+// routes rather than the normal progression, so they are not offered as
+// choices in BILLING_STATEMENT_STATUSES — but rows in those states still need
+// a badge wherever an unfiltered list surfaces them.
 export const BILLING_STATEMENT_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   finalized: "Finalized",
   exported: "Exported",
+  voided: "Voided",
+  discarded: "Discarded",
 };
 
 export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
   finalized: "bg-blue-100 text-blue-800",
   exported: "bg-green-100 text-green-800",
+  voided: "bg-red-100 text-red-800",
+  discarded: "bg-gray-100 text-gray-500 line-through",
 };
 
 // ==========================================
@@ -962,6 +975,22 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
   huf: "HUF",
   other: "Other",
 };
+
+// ==========================================
+// Case Representative Designation Options
+// ==========================================
+export const CASE_DESIGNATION_OPTIONS = [
+  "Director",
+  "Managing Director",
+  "Partner",
+  "Designated Partner",
+  "Proprietor",
+  "Authorized Signatory",
+  "Trustee",
+  "Karta",
+  "Secretary",
+  "President",
+] as const;
 
 // ==========================================
 // KYC Documents Required per Entity Type
@@ -1761,8 +1790,96 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"] as const;
+/**
+ * Units of measure for procurement items (catalog, material requests, POs).
+ * Every value here must also exist in the Postgres `item_unit` enum — add new
+ * ones via a migration (`ALTER TYPE item_unit ADD VALUE IF NOT EXISTS ...`)
+ * before adding them here, or inserts fail with "invalid input value for enum".
+ * Order matters: it drives the grouped dropdown via ITEM_UNIT_GROUPS below.
+ */
+export const ITEM_UNITS = [
+  // Count & discrete
+  "piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle",
+  // Packaging
+  "packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder",
+  // Weight
+  "gram", "kg", "ton",
+  // Volume
+  "ml", "litre",
+  // Length
+  "inch", "feet", "metre", "rft", "rmt", "km",
+  // Area
+  "sqft", "sqm",
+  // Cubic
+  "cft", "cbm",
+  // Time & service
+  "hr", "day", "month", "quarter", "half_year", "year", "manday", "visit",
+  // Other
+  "lumpsum", "kwh",
+] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+/** Display labels for units — the raw enum values are terse/lowercase. */
+export const ITEM_UNIT_LABELS: Record<ItemUnit, string> = {
+  piece: "Piece",
+  nos: "Nos",
+  pair: "Pair",
+  dozen: "Dozen",
+  set: "Set",
+  sheet: "Sheet",
+  ream: "Ream",
+  roll: "Roll",
+  bundle: "Bundle",
+  packet: "Packet",
+  sachet: "Sachet",
+  box: "Box",
+  carton: "Carton",
+  bag: "Bag",
+  bottle: "Bottle",
+  can: "Can",
+  tin: "Tin",
+  tube: "Tube",
+  drum: "Drum",
+  cylinder: "Cylinder",
+  gram: "Gram (g)",
+  kg: "Kilogram (kg)",
+  ton: "Tonne",
+  ml: "Millilitre (ml)",
+  litre: "Litre (L)",
+  inch: "Inch",
+  feet: "Feet",
+  metre: "Metre (m)",
+  rft: "Running Feet (Rft)",
+  rmt: "Running Metre (Rmt)",
+  km: "Kilometre (km)",
+  sqft: "Square Feet (Sqft)",
+  sqm: "Square Metre (Sqm)",
+  cft: "Cubic Feet (Cft)",
+  cbm: "Cubic Metre (Cbm)",
+  hr: "Hour",
+  day: "Day",
+  month: "Month",
+  quarter: "Quarter",
+  half_year: "Half-Year",
+  year: "Year",
+  manday: "Man-day",
+  visit: "Visit",
+  lumpsum: "Lumpsum",
+  kwh: "Unit (kWh)",
+};
+
+/** Grouped for the unit dropdown — 40+ flat options are unusable to scan. */
+export const ITEM_UNIT_GROUPS: { label: string; units: readonly ItemUnit[] }[] = [
+  { label: "Count", units: ["piece", "nos", "pair", "dozen", "set", "sheet", "ream", "roll", "bundle"] },
+  { label: "Packaging", units: ["packet", "sachet", "box", "carton", "bag", "bottle", "can", "tin", "tube", "drum", "cylinder"] },
+  { label: "Weight", units: ["gram", "kg", "ton"] },
+  { label: "Volume", units: ["ml", "litre"] },
+  { label: "Length", units: ["inch", "feet", "metre", "rft", "rmt", "km"] },
+  { label: "Area", units: ["sqft", "sqm"] },
+  { label: "Cubic", units: ["cft", "cbm"] },
+  { label: "Time & Service", units: ["hr", "day", "month", "quarter", "half_year", "year", "manday", "visit"] },
+  { label: "Other", units: ["lumpsum", "kwh"] },
+];
 
 /** Vending machine drink types tracked on the Consumption > Beverages tab. A pure usage tally — not linked to ingredient stock. */
 export const BEVERAGE_TYPES = [
@@ -1796,6 +1913,15 @@ export const PR_STATUSES = [
   "partially_ordered", "po_created", "cancelled",
 ] as const;
 export type PrStatus = (typeof PR_STATUSES)[number];
+
+/**
+ * Statuses in which a Material Request can still be edited in full (department,
+ * location, items, quantities, prices, AMC details). Once approved, the MR is a
+ * committed spend that budgets and POs are already derived from, so it becomes
+ * read-only — the remaining correction paths are the admin-only department fix
+ * (PATCH `correct_department`) and, for cancelled MRs, raising a fresh request.
+ */
+export const MR_EDITABLE_STATUSES: readonly PrStatus[] = ["draft", "submitted", "rejected"];
 
 export const PR_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
@@ -1938,8 +2064,8 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
   service: "Service",
 };
 
-// Service PO billing cycles (subset of contract BILLING_CYCLES — excludes half_yearly)
-export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "yearly"] as const;
+// Service PO billing cycles. Mirrors the contract-side BILLING_CYCLES.
+export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "half_yearly", "yearly"] as const;
 export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
 
 // PO Advance Payment
@@ -2314,6 +2440,34 @@ export const ACCOUNTING_HEAD_COLORS: Record<AccountingHead, string> = {
   late_fee: "bg-red-100 text-red-800 border-red-200",
   other_income: "bg-gray-100 text-gray-800 border-gray-200",
 };
+
+// What an ad-hoc invoice attributed to a contract is understood to cover.
+// Mirrors the proforma_invoices_attribution_purpose_check constraint (00426).
+export const ADHOC_ATTRIBUTION_PURPOSES = [
+  "prorata_first_invoice",
+  "monthly_rent",
+  "other",
+] as const;
+
+export type AdhocAttributionPurpose = (typeof ADHOC_ATTRIBUTION_PURPOSES)[number];
+
+export const ADHOC_ATTRIBUTION_PURPOSE_LABELS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice: "Pro-rata / first invoice",
+  monthly_rent: "Monthly rent",
+  other: "Other contract charge",
+};
+
+export const ADHOC_ATTRIBUTION_PURPOSE_DESCRIPTIONS: Record<AdhocAttributionPurpose, string> = {
+  prorata_first_invoice:
+    "The partial first month or first invoice for this contract. Once paid, this satisfies the activation payment gate.",
+  monthly_rent: "A regular monthly charge billed ad hoc instead of through a billing statement.",
+  other: "Belongs to this contract, but is neither the first invoice nor monthly rent.",
+};
+
+// The only purpose that may unblock contract activation. Keeping this as a
+// named constant rather than an inline string makes the blast radius of the
+// activation gate greppable.
+export const ACTIVATION_UNBLOCKING_PURPOSE: AdhocAttributionPurpose = "prorata_first_invoice";
 
 export const ACCOUNTING_HEAD_GST: Record<
   AccountingHead,

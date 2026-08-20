@@ -39,6 +39,7 @@ import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-emai
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ type ChainData = {
     created_at: string; total_ordered_amount: number | null;
     expected_delivery_date: string | null;
     orderer: { id: string; full_name: string } | null;
-    purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string }>;
+    purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null }>;
   } | null;
   mr: {
     id: string; pr_number: string; department: string;
@@ -610,6 +611,9 @@ export default function VendorBillDetailPage() {
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
             </p>
+            <div className="mt-2">
+              <QueryButton entityType="vendor_bill" entityId={bill.id} />
+            </div>
             {bill.auto_approved && bill.auto_approval_note && (
               <p className="text-xs text-muted-foreground mt-1">{bill.auto_approval_note}</p>
             )}
@@ -1183,10 +1187,38 @@ export default function VendorBillDetailPage() {
                     {chain.po.total_ordered_amount != null && ` · ${formatCurrency(chain.po.total_ordered_amount)}`}
                   </p>
                   {chain.po.purchase_order_items && chain.po.purchase_order_items.length > 0 && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {chain.po.purchase_order_items.slice(0, 3).map((item) => item.item_name).join(", ")}
-                      {chain.po.purchase_order_items.length > 3 && ` +${chain.po.purchase_order_items.length - 3} more`}
-                    </p>
+                    <div className="mt-2 rounded border border-purple-200 bg-white/60 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-purple-200 text-[10px] uppercase tracking-wide text-purple-800">
+                            <th className="text-left font-medium px-2 py-1.5">Item</th>
+                            <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Qty</th>
+                            <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Rate</th>
+                            <th className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {chain.po.purchase_order_items.map((item) => {
+                            const rate = item.unit_price == null ? null : Number(item.unit_price);
+                            const qty = Number(item.quantity_ordered);
+                            return (
+                              <tr key={item.id} className="border-b border-purple-100 last:border-0">
+                                <td className="px-2 py-1.5 text-foreground">{item.item_name}</td>
+                                <td className="px-2 py-1.5 text-right whitespace-nowrap text-muted-foreground">
+                                  {qty.toLocaleString("en-IN")} <span className="text-[10px]">{item.unit}</span>
+                                </td>
+                                <td className="px-2 py-1.5 text-right whitespace-nowrap text-muted-foreground">
+                                  {rate == null ? "—" : formatCurrency(rate)}
+                                </td>
+                                <td className="px-2 py-1.5 text-right whitespace-nowrap font-medium text-foreground">
+                                  {rate == null ? "—" : formatCurrency(qty * rate)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -12,6 +12,12 @@ import { logAudit } from "@/lib/audit";
  *   • Admin only
  *   • Blocked if any payments have been recorded against the statement
  *   • Statement must be finalized or exported (not draft or already voided)
+ *
+ * Side effects:
+ *   • Cancels the proforma's Razorpay payment link, if one was issued —
+ *     otherwise a client holding the emailed link could still pay a voided
+ *     invoice. Best-effort; the payments webhook refuses to record against a
+ *     voided statement as the second line of defence.
  */
 export async function POST(
   request: NextRequest,
@@ -115,6 +121,39 @@ export async function POST(
 
   if (voidErr) {
     return NextResponse.json({ error: voidErr.message }, { status: 500 });
+  }
+
+  // 1b. Cancel the Razorpay payment link that went out with the proforma.
+  //     Without this the client keeps a live, payable link for an invoice we
+  //     have just cancelled. Best-effort — a link that is already paid,
+  //     expired or cancelled fails here and that is not fatal (the void has
+  //     already been committed, and the webhook guard covers the rest).
+  //     razorpay_payment_link_id is deliberately left on the row so a stray
+  //     webhook can still be traced back to this statement.
+  const linkId = statement.razorpay_payment_link_id as string | null;
+  if (linkId) {
+    try {
+      const adminSupabase = createAdminClient();
+      const { data: rzpSettings } = await adminSupabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+      const rzp: Record<string, string> = {};
+      (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzp[s.key] = s.value; });
+
+      if (rzp.razorpay_enabled === "true" && rzp.razorpay_key_id && rzp.razorpay_key_secret) {
+        const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+        const cancelRes = await fetch(
+          `https://api.razorpay.com/v1/payment_links/${linkId}/cancel`,
+          { method: "POST", headers: { Authorization: `Basic ${auth}` } }
+        );
+        if (!cancelRes.ok) {
+          console.warn("[statement void] Razorpay link cancel failed (non-fatal):", await cancelRes.text());
+        }
+      }
+    } catch (e) {
+      console.warn("[statement void] Razorpay cancel error (non-fatal):", e);
+    }
   }
 
   // 2a. Un-link usage charges from the voided statement so they can be

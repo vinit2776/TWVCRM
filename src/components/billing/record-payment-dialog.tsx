@@ -275,7 +275,7 @@ export function RecordPaymentDialog({
           {isDepositMode && (
             <div className="rounded-lg border border-teal-200 bg-teal-50/50 p-3 space-y-3">
               <p className="text-xs text-muted-foreground">
-                Available deposit balance: <span className="font-semibold text-foreground">{formatCurrency(depositAvailable ?? 0)}</span>
+                Available deposit balance (all contracts for this customer): <span className="font-semibold text-foreground">{formatCurrency(depositAvailable ?? 0)}</span>
               </p>
               <div className="rounded px-2.5 py-1.5 text-xs font-medium bg-white border border-teal-200">
                 {formatCurrency(depositLeg)} from deposit

@@ -49,11 +49,13 @@ import {
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
+  PROPOSAL_EDITABLE_STATUSES,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
@@ -77,6 +79,7 @@ export default function ProposalDetailPage({
   const router = useRouter();
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editProposalOpen, setEditProposalOpen] = useState(false);
 
   // Current user (rep) profile for PDF/email attribution
   const { user: currentUser } = useCurrentUser();
@@ -97,6 +100,19 @@ export default function ProposalDetailPage({
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
   const [manualPayShortfallApproved, setManualPayShortfallApproved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Manual recording of the monthly / pro-rata first invoice. Separate state
+  // from the deposit's manualPay* above — both dialogs live on this page and
+  // sharing state would let one dialog inherit the other's half-typed values.
+  const [monthlyPayDialogOpen, setMonthlyPayDialogOpen] = useState(false);
+  const [monthlyPayAmount, setMonthlyPayAmount] = useState("");
+  const [monthlyPayRef, setMonthlyPayRef] = useState("");
+  const [monthlyPayMedium, setMonthlyPayMedium] = useState("");
+  const [monthlyPayNotes, setMonthlyPayNotes] = useState("");
+  const [monthlyPayFile, setMonthlyPayFile] = useState<File | null>(null);
+  const [monthlyPaySubmitting, setMonthlyPaySubmitting] = useState(false);
+  const [monthlyPayShortfallApproved, setMonthlyPayShortfallApproved] = useState(false);
+  const monthlyPayFileInputRef = useRef<HTMLInputElement>(null);
 
   // Apply deposit credit dialog (admin/manager — deposit held from a prior contract)
   const [depositCreditOpen, setDepositCreditOpen] = useState(false);
@@ -141,11 +157,42 @@ export default function ProposalDetailPage({
   const [gstCc, setGstCc] = useState("");
   const [gstPreview, setGstPreview] = useState<{
     subject: string; html: string; to: string[]; invoiceNumber: string | null;
+    items: { description: string; qty: number; unit_price: number; amount: number }[];
     proratedSubtotal: number; taxAmount: number; totalAmount: number;
     daysRemaining: number; daysInMonth: number; prorationFactor: number;
     periodLabel: string; startLabel: string; endLabel: string;
     razorpayUrl: string | null; previous_occupation_start_date: string | null;
   } | null>(null);
+  // Editable copy of the previewed line items — only sent to the server
+  // (as items_override) once the staff member actually changes something,
+  // so the untouched path keeps the normal auto-prorated PDF breakdown.
+  const [gstItems, setGstItems] = useState<{ description: string; qty: number; unit_price: number }[]>([]);
+  const [gstItemsDirty, setGstItemsDirty] = useState(false);
+  const gstItemsTotal = gstItems.reduce((sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
+  // Live figures for the summary cards once the table has been edited —
+  // mirrors calcGst() in src/lib/tax.ts so the displayed total matches what
+  // send-invoice will actually charge.
+  const gstLiveSubtotal = gstItemsDirty ? gstItemsTotal : (gstPreview?.proratedSubtotal ?? 0);
+  const gstLiveTaxPct = Number(proposal?.tax_percentage || 18);
+  const gstLiveTax = gstItemsDirty
+    ? Math.round(gstLiveSubtotal * gstLiveTaxPct / 100 * 100) / 100
+    : (gstPreview?.taxAmount ?? 0);
+  const gstLiveTotal = gstItemsDirty
+    ? Math.round((gstLiveSubtotal + gstLiveTax) * 100) / 100
+    : (gstPreview?.totalAmount ?? 0);
+
+  const updateGstItem = (index: number, field: "description" | "qty" | "unit_price", value: string | number) => {
+    setGstItems((prev) => prev.map((it, i) => (i === index ? { ...it, [field]: value } : it)));
+    setGstItemsDirty(true);
+  };
+  const addGstItem = () => {
+    setGstItems((prev) => [...prev, { description: "", qty: 1, unit_price: 0 }]);
+    setGstItemsDirty(true);
+  };
+  const removeGstItem = (index: number) => {
+    setGstItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
+    setGstItemsDirty(true);
+  };
 
   const fetchProposal = useCallback(async () => {
     setLoading(true);
@@ -200,6 +247,16 @@ export default function ProposalDetailPage({
       })
       .catch(() => {});
   }, [fetchProposal, id]);
+
+  // Client-side navigations (e.g. from the contract page's "view payment
+  // details" link) land here before the hash target has mounted, so the
+  // browser's native #anchor scroll fires too early and silently no-ops.
+  // Retry once loading finishes and the section has actually rendered.
+  useEffect(() => {
+    if (loading || !window.location.hash) return;
+    const el = document.querySelector(window.location.hash);
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [loading]);
 
   const handleDownloadPDF = async () => {
     if (!proposal) return;
@@ -454,6 +511,8 @@ export default function ProposalDetailPage({
       : new Date().toISOString().slice(0, 10);
     setGstDate(initialDate);
     setGstPreview(null);
+    setGstItems([]);
+    setGstItemsDirty(false);
     setGstIsRevise(forRevise);
     setGstCc((proposal?.lead?.billing_emails || []).join(", "));
     setGstDialogOpen(true);
@@ -474,6 +533,10 @@ export default function ProposalDetailPage({
       const json = await res.json();
       if (res.ok) {
         setGstPreview(json);
+        setGstItems((json.items || []).map((i: { description: string; qty: number; unit_price: number }) => ({
+          description: i.description, qty: i.qty, unit_price: i.unit_price,
+        })));
+        setGstItemsDirty(false);
       } else {
         toast.error(json.error || "Failed to generate preview");
       }
@@ -486,6 +549,11 @@ export default function ProposalDetailPage({
 
   const handleSendGstInvoice = async () => {
     if (!gstDate) { toast.error("Date is required"); return; }
+    const validGstItems = gstItems.filter((i) => i.description.trim() && Number(i.qty) > 0);
+    if (gstItemsDirty && validGstItems.length === 0) {
+      toast.error("Add at least one line item with a description and quantity");
+      return;
+    }
     setGstSending(true);
     try {
       const ccList = Array.from(new Set(
@@ -494,7 +562,11 @@ export default function ProposalDetailPage({
       const res = await fetch(`/api/proposals/${id}/send-invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ occupation_start_date: gstDate, additionalCc: ccList }),
+        body: JSON.stringify({
+          occupation_start_date: gstDate,
+          additionalCc: ccList,
+          ...(gstItemsDirty ? { items_override: validGstItems } : {}),
+        }),
       });
       const json = await res.json();
       if (res.ok) {
@@ -579,6 +651,64 @@ export default function ProposalDetailPage({
       toast.error("Unexpected error recording payment");
     } finally {
       setManualPaySubmitting(false);
+    }
+  };
+
+  const handleMonthlyPaySubmit = async () => {
+    const amt = parseFloat(monthlyPayAmount);
+    if (!amt || amt <= 0) {
+      toast.error("Enter a valid amount.");
+      return;
+    }
+    if (monthlyPayNotes.trim().length < 10) {
+      toast.error("Add an internal note of at least 10 characters.");
+      return;
+    }
+    const expected = Number(proposal?.total_amount || 0);
+    if (expected > 0 && amt < expected) {
+      const shortfall = (expected - amt) / expected;
+      if (shortfall > 0.10) {
+        toast.error("Amount is more than 10% below the expected total. Cannot record.");
+        return;
+      }
+      if (!monthlyPayShortfallApproved) {
+        toast.error("Please check the shortfall approval box before submitting.");
+        return;
+      }
+    }
+    setMonthlyPaySubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("amount", String(amt));
+      if (monthlyPayRef.trim()) fd.append("reference", monthlyPayRef.trim());
+      if (monthlyPayMedium) fd.append("payment_medium", monthlyPayMedium);
+      if (monthlyPayNotes.trim()) fd.append("notes", monthlyPayNotes.trim());
+      if (monthlyPayFile) fd.append("payment_proof", monthlyPayFile);
+      if (monthlyPayShortfallApproved) fd.append("shortfall_approved", "true");
+
+      const res = await fetch(`/api/proposals/${id}/payment`, { method: "POST", body: fd });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(
+          json.deposit_settled
+            ? "Payment recorded. The linked contract can now be activated."
+            : "Payment recorded. The security deposit is still outstanding."
+        );
+        setMonthlyPayDialogOpen(false);
+        setMonthlyPayAmount("");
+        setMonthlyPayRef("");
+        setMonthlyPayMedium("");
+        setMonthlyPayNotes("");
+        setMonthlyPayFile(null);
+        setMonthlyPayShortfallApproved(false);
+        fetchProposal();
+      } else {
+        toast.error(json.error || "Failed to record payment");
+      }
+    } catch {
+      toast.error("Unexpected error recording payment");
+    } finally {
+      setMonthlyPaySubmitting(false);
     }
   };
 
@@ -822,6 +952,16 @@ export default function ProposalDetailPage({
               </DropdownMenu>
             );
           })()}
+          {(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(proposal.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditProposalOpen(true)}
+            >
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -1044,7 +1184,7 @@ export default function ProposalDetailPage({
         <div className="space-y-4">
           {/* Security Deposit */}
           {Number(proposal.security_deposit_months) > 0 && (
-            <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
+            <Card id="security-deposit" className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
               <CardHeader className="pb-2">
                 <CardTitle className={`text-base flex items-center gap-2 ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
                   {proposal.deposit_payment_status !== "paid" && (
@@ -1167,6 +1307,24 @@ export default function ProposalDetailPage({
                         <span className="text-green-700">Received</span>
                         <span className="text-green-800 text-xs">{formatDate(proposal.deposit_payment_received_at)}</span>
                       </div>
+                    )}
+                    {proposal.deposit_payment_recorded_by_user?.full_name ? (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Recorded by</span>
+                        <span className="text-green-800 text-xs">{proposal.deposit_payment_recorded_by_user.full_name}</span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Recorded by</span>
+                        <span className="text-green-800 text-xs italic">
+                          {proposal.deposit_payment_reference?.startsWith("Legacy")
+                            ? "Legacy import — no recorder on file"
+                            : "No recorder on file"}
+                        </span>
+                      </div>
+                    )}
+                    {!proposal.deposit_payment_recorded_by_user?.full_name && proposal.deposit_internal_notes && (
+                      <p className="text-xs text-green-700/80 italic">{proposal.deposit_internal_notes}</p>
                     )}
                     {proposal.deposit_payment_screenshot_url && (
                       <a
@@ -1320,6 +1478,36 @@ export default function ProposalDetailPage({
                           <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
                         </div>
                       )}
+                      {proposal.payment_medium && (
+                        <div className="flex justify-between">
+                          <span className="text-green-700">Mode</span>
+                          <span className="text-xs uppercase text-green-800">{proposal.payment_medium}</span>
+                        </div>
+                      )}
+                      {/* Only set by the manual route — makes a hand-recorded
+                          payment distinguishable from a Razorpay-collected one. */}
+                      {proposal.payment_recorded_by && (
+                        <div className="flex items-start gap-1.5 rounded border border-green-200 bg-white/60 px-2 py-1.5 text-xs text-green-800">
+                          <Banknote className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span>
+                            Recorded manually
+                            {proposal.payment_received_at && ` on ${formatDate(proposal.payment_received_at)}`}
+                            {proposal.payment_screenshot_url && (
+                              <>
+                                {" · "}
+                                <a
+                                  href={proposal.payment_screenshot_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  view proof
+                                </a>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -1388,6 +1576,25 @@ export default function ProposalDetailPage({
                       </Button>
                     </>
                   )}
+
+                  {/* Manual record — for payments that never touch the Razorpay
+                      link (NEFT, cheque, cash). Without this the only way past
+                      the contract activation gate is the admin override. */}
+                  {proposal.payment_status !== "paid" &&
+                    ["admin", "manager", "accounts"].includes(currentUser?.role || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-blue-300 text-blue-700 hover:bg-blue-100"
+                        onClick={() => {
+                          setMonthlyPayAmount(String(proposal.total_amount ?? ""));
+                          setMonthlyPayDialogOpen(true);
+                        }}
+                      >
+                        <Banknote className="mr-2 h-3.5 w-3.5" />
+                        Record Payment Received
+                      </Button>
+                    )}
                 </CardContent>
               </Card>
             );
@@ -1445,6 +1652,7 @@ export default function ProposalDetailPage({
                 proposalNumber={proposal.proposal_number}
                 isVerified={waiverVerified}
                 requestedAt={proposal.deposit_waiver_requested_at}
+                verifiedByName={proposal.deposit_waiver_verified_by_user?.full_name}
                 onVerified={fetchProposal}
               />
             </div>
@@ -1492,6 +1700,19 @@ export default function ProposalDetailPage({
           )}
         </div>
       </div>
+
+      {/* Edit Proposal Dialog */}
+      {editProposalOpen && proposal.lead_id && (
+        <ProposalForm
+          leadId={proposal.lead_id}
+          leadLocationId={proposal.location_id}
+          open={editProposalOpen}
+          onOpenChange={setEditProposalOpen}
+          onSuccess={fetchProposal}
+          proposalId={proposal.id}
+          initialProposal={proposal}
+        />
+      )}
 
       {/* Booking Confirmation Dialog (accept flow) */}
       {bookingConfirmOpen && (
@@ -1713,12 +1934,68 @@ export default function ProposalDetailPage({
                   <p className="font-semibold text-foreground">{gstPreview.daysRemaining}/{gstPreview.daysInMonth} days</p>
                 </div>
                 <div className="rounded-md border bg-muted/30 px-3 py-2">
-                  <p className="text-muted-foreground">Subtotal</p>
-                  <p className="font-semibold text-foreground">₹{gstPreview.proratedSubtotal.toLocaleString("en-IN")}</p>
+                  <p className="text-muted-foreground">Subtotal{gstItemsDirty && " (edited)"}</p>
+                  <p className="font-semibold text-foreground">₹{gstLiveSubtotal.toLocaleString("en-IN")}</p>
                 </div>
                 <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-                  <p className="text-muted-foreground">Total Payable</p>
-                  <p className="font-bold text-primary">₹{gstPreview.totalAmount.toLocaleString("en-IN")}</p>
+                  <p className="text-muted-foreground">Total Payable{gstItemsDirty && " (edited)"}</p>
+                  <p className="font-bold text-primary">₹{gstLiveTotal.toLocaleString("en-IN")}</p>
+                </div>
+              </div>
+
+              {/* Editable line items — amount override / added-removed lines.
+                  Untouched, these mirror the auto-prorated proposal items;
+                  edited, they're sent as items_override on Send. */}
+              <div className="rounded-md border">
+                <div className="grid grid-cols-12 gap-2 px-3 py-1.5 text-[11px] font-medium text-muted-foreground border-b bg-muted/30">
+                  <div className="col-span-6">Description</div>
+                  <div className="col-span-2">Qty</div>
+                  <div className="col-span-3">Rate</div>
+                  <div className="col-span-1" />
+                </div>
+                <div className="divide-y">
+                  {gstItems.map((item, idx) => (
+                    <div key={idx} className="grid grid-cols-12 gap-2 px-3 py-1.5 items-center">
+                      <Input
+                        className="col-span-6 h-7 text-xs"
+                        value={item.description}
+                        onChange={(e) => updateGstItem(idx, "description", e.target.value)}
+                      />
+                      <Input
+                        className="col-span-2 h-7 text-xs"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={item.qty}
+                        onChange={(e) => updateGstItem(idx, "qty", Number(e.target.value) || 0)}
+                      />
+                      <Input
+                        className="col-span-3 h-7 text-xs"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unit_price}
+                        onChange={(e) => updateGstItem(idx, "unit_price", Number(e.target.value) || 0)}
+                      />
+                      <button
+                        type="button"
+                        className="col-span-1 flex justify-center text-muted-foreground hover:text-destructive disabled:opacity-30"
+                        onClick={() => removeGstItem(idx)}
+                        disabled={gstItems.length <= 1}
+                        title="Remove line"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between px-3 py-1.5 border-t bg-muted/10">
+                  <button type="button" className="text-xs text-primary hover:underline" onClick={addGstItem}>
+                    + Add line
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    Line total: ₹{gstItemsTotal.toLocaleString("en-IN")}
+                  </span>
                 </div>
               </div>
 
@@ -1735,7 +2012,7 @@ export default function ProposalDetailPage({
 
               {gstIsRevise && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <strong>Revise & Resend:</strong> A new GST invoice number will be issued and a fresh email (with the new PDF) will be sent to the customer. The previous invoice will not be automatically cancelled.
+                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new GST invoice number and send a fresh email (with the new PDF) to the customer.
                 </div>
               )}
 
@@ -1944,6 +2221,217 @@ export default function ProposalDetailPage({
               >
                 {manualPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {manualPaySubmitting ? "Saving…" : "Mark as Paid & Notify Customer"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Record the monthly / pro-rata first invoice payment (bank transfer) */}
+      <Dialog open={monthlyPayDialogOpen} onOpenChange={setMonthlyPayDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="h-5 w-5 text-blue-600" />
+              Record Payment Received
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — Monthly / Pro-rata Charge
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {(() => {
+              const expectedAmt = Number(proposal.total_amount || 0);
+              const enteredAmt = parseFloat(monthlyPayAmount) || 0;
+              const shortfall =
+                expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt
+                  ? (expectedAmt - enteredAmt) / expectedAmt
+                  : 0;
+              const canApproveShortfall = ["admin", "manager"].includes(currentUser?.role || "");
+              return (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mrp-amount">
+                      Amount Received (₹) <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="mrp-amount"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={monthlyPayAmount}
+                      onChange={(e) => {
+                        setMonthlyPayAmount(e.target.value);
+                        setMonthlyPayShortfallApproved(false);
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Expected: ₹{expectedAmt.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+
+                  {shortfall > 0.10 && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> below the expected
+                      total (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}). Minimum
+                      acceptable is ₹{Math.ceil(expectedAmt * 0.9).toLocaleString("en-IN")}. Cannot record.
+                    </div>
+                  )}
+
+                  {shortfall > 0 && shortfall <= 0.10 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                      <p className="text-xs text-amber-800">
+                        ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> less than expected
+                        (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}).{" "}
+                        {canApproveShortfall
+                          ? "Check the box below to approve this shortfall."
+                          : "Only a manager or admin can approve a shortfall."}
+                      </p>
+                      {canApproveShortfall && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={monthlyPayShortfallApproved}
+                            onChange={(e) => setMonthlyPayShortfallApproved(e.target.checked)}
+                            className="h-4 w-4 rounded border-amber-400 accent-amber-600"
+                          />
+                          <span className="text-xs font-medium text-amber-900">
+                            I approve accepting ₹{enteredAmt.toLocaleString("en-IN")} as full settlement
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="mrp-medium">Payment Mode</Label>
+                <select
+                  id="mrp-medium"
+                  value={monthlyPayMedium}
+                  onChange={(e) => setMonthlyPayMedium(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                >
+                  <option value="">Select mode</option>
+                  <option value="neft">NEFT</option>
+                  <option value="rtgs">RTGS</option>
+                  <option value="upi">UPI</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="cash">Cash</option>
+                  <option value="razorpay">Razorpay</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mrp-ref">Reference / UTR</Label>
+                <Input
+                  id="mrp-ref"
+                  value={monthlyPayRef}
+                  onChange={(e) => setMonthlyPayRef(e.target.value)}
+                  placeholder="UTR or transaction ID"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="mrp-notes">
+                Internal Note (for Accounts) <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="mrp-notes"
+                value={monthlyPayNotes}
+                onChange={(e) => setMonthlyPayNotes(e.target.value)}
+                placeholder="Where this money came from and how it was already invoiced — never shown to the customer"
+                rows={2}
+              />
+              <CheckAccountingNoteButton
+                note={monthlyPayNotes}
+                accountingHead="Membership Fee"
+                context={`${proposal.proposal_number} — monthly / pro-rata charge`}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Payment Proof (screenshot / PDF)</Label>
+              <input
+                ref={monthlyPayFileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setMonthlyPayFile(e.target.files?.[0] || null)}
+              />
+              {monthlyPayFile ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="truncate text-muted-foreground">{monthlyPayFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMonthlyPayFile(null);
+                      if (monthlyPayFileInputRef.current) monthlyPayFileInputRef.current.value = "";
+                    }}
+                    className="ml-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => monthlyPayFileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload proof of payment
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">Optional — JPEG, PNG or PDF, max 10 MB</p>
+            </div>
+
+            {/* Out-of-order money is normal, so this warns rather than blocks. */}
+            {proposal.deposit_payment_status !== "paid" &&
+              Number(proposal.security_deposit_months || 0) > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  The security deposit is still outstanding. You can record this payment, but the
+                  linked contract stays blocked from activation until the deposit is settled too.
+                </div>
+              )}
+
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              No email is sent to the customer — this is an internal record.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setMonthlyPayDialogOpen(false)}
+                disabled={monthlyPaySubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleMonthlyPaySubmit}
+                disabled={
+                  monthlyPaySubmitting ||
+                  monthlyPayNotes.trim().length < 10 ||
+                  (() => {
+                    const expectedAmt = Number(proposal.total_amount || 0);
+                    const enteredAmt = parseFloat(monthlyPayAmount) || 0;
+                    if (expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt) {
+                      const shortfall = (expectedAmt - enteredAmt) / expectedAmt;
+                      if (shortfall > 0.10) return true;
+                      if (shortfall > 0 && !monthlyPayShortfallApproved) return true;
+                    }
+                    return false;
+                  })()
+                }
+              >
+                {monthlyPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {monthlyPaySubmitting ? "Saving…" : "Mark as Paid"}
               </Button>
             </div>
           </div>

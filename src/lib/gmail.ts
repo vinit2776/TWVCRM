@@ -1,4 +1,10 @@
-import { google, gmail_v1 } from "googleapis";
+// Per-API package rather than the "googleapis" meta-package, which bundles
+// typings for every Google API (~1.4M lines of .d.ts — 81% of this project's
+// total) and pushed the build's typecheck to the edge of Node's default heap.
+// Take `auth` from this same package too: installing google-auth-library
+// separately resolves it to its own copy, and the two OAuth2Client types are
+// then structurally incompatible ("No overload matches this call").
+import { gmail, gmail_v1, auth as googleAuth } from "@googleapis/gmail";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -10,7 +16,7 @@ const SCOPES = [
  * Create an authenticated Gmail API client using OAuth2 credentials.
  */
 function getGmailClient(): gmail_v1.Gmail {
-  const auth = new google.auth.OAuth2(
+  const auth = new googleAuth.OAuth2(
     process.env.GMAIL_CLIENT_ID,
     process.env.GMAIL_CLIENT_SECRET
   );
@@ -19,7 +25,7 @@ function getGmailClient(): gmail_v1.Gmail {
     refresh_token: process.env.GMAIL_REFRESH_TOKEN,
   });
 
-  return google.gmail({ version: "v1", auth });
+  return gmail({ version: "v1", auth });
 }
 
 /**

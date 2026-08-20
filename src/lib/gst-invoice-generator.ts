@@ -162,6 +162,7 @@ export interface GstInvoiceData {
   buyerName: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  buyerPan?: string;
   buyerState?: string;
   buyerStateCode?: string;
   // Billing
@@ -304,7 +305,13 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     const buyerAddr = doc.splitTextToSize(data.buyerAddress, pageWidth / 2 - 20);
     doc.text(buyerAddr, bx, y + 14);
   }
-  if (data.buyerGstin) doc.text(`GSTIN: ${data.buyerGstin}`, bx, y + 22);
+  if (data.buyerGstin || data.buyerPan) {
+    const idParts = [
+      data.buyerGstin ? `GSTIN: ${data.buyerGstin}` : null,
+      data.buyerPan ? `PAN: ${data.buyerPan}` : null,
+    ].filter(Boolean);
+    doc.text(idParts.join("   "), bx, y + 22);
+  }
   if (data.buyerState) doc.text(`State: ${data.buyerState}${data.buyerStateCode ? ` (${data.buyerStateCode})` : ""}`, bx, y + 26);
   doc.text(`Place of Supply: ${data.isInterstate ? (data.buyerState || "Other") : SELLER.state}`, bx, y + 30);
 

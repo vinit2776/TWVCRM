@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { StatementPaymentPanel } from "@/components/billing/payment-collected-panel";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ProposalForm } from "@/components/proposals/proposal-form";
@@ -28,6 +30,7 @@ import {
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
+  PROPOSAL_EDITABLE_STATUSES,
   INVOICE_STATUS_LABELS,
   ACCOUNTING_HEAD_LABELS,
   ACCOUNTING_HEAD_COLORS,
@@ -46,6 +49,62 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   cancelled: "bg-orange-100 text-orange-800",
 };
 
+/**
+ * "Paid" badge for an ad-hoc invoice — clickable, lazy-loads the underlying
+ * billing_payments detail (amount, mode, reference/txn id, recorded by,
+ * Razorpay settlement) on first open via GET /api/invoices/[id]/payments.
+ * Renders through the same StatementPaymentPanel the Tally Inbox uses, so
+ * the detail shown here is identical to what accounts already sees there.
+ */
+function PaidInvoiceBadge({ invoiceId }: { invoiceId: string }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<{ payments: import("@/lib/tally-handoff").InboxPayment[]; total_amount: number } | null>(null);
+
+  const handleOpenChange = async (open: boolean) => {
+    if (!open || data || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/payments`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(json?.error || "Couldn't load payment details");
+      } else {
+        setData(json);
+      }
+    } catch {
+      setError("Couldn't load payment details");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Popover onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <button type="button" className="cursor-pointer">
+          <Badge variant="secondary" className={`${INVOICE_STATUS_COLORS.paid} hover:opacity-80 transition-opacity`}>
+            {INVOICE_STATUS_LABELS.paid}
+          </Badge>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-96 p-0 border-none shadow-lg" align="start">
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground p-4">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading payment details…
+          </div>
+        ) : error ? (
+          <p className="text-xs text-destructive p-4">{error}</p>
+        ) : data ? (
+          <StatementPaymentPanel payments={data.payments} totalAmount={data.total_amount} />
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 interface LeadProposalsTabProps {
   leadId: string;
   leadLocationId?: string;
@@ -57,6 +116,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
+  const [editingProposal, setEditingProposal] = useState<(Proposal & { lead?: Lead }) | null>(null);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<(ProformaInvoice & { lead?: Lead }) | null>(null);
 
@@ -74,6 +134,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
 
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
+
+  // Cancelling an invoice is restricted to admin/manager/accounts server-side
+  // (api/invoices/[id]/cancel) — mirror that here so the action isn't offered
+  // to roles that would only get a 403.
+  const [userRole, setUserRole] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
+  }, []);
+  const canCancelInvoice = ["admin", "manager", "accounts"].includes(userRole ?? "");
 
   // Newest non-terminal proposal — where the deposit link lives. Proposals
   // come back newest-first, so this is just the first one that isn't
@@ -366,6 +435,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </DropdownMenuItem>
+                            {(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(p.status) && (
+                              <DropdownMenuItem onClick={() => setEditingProposal(p)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleDownloadProposalPDF(p)}>
                               <Download className="mr-2 h-4 w-4" />
@@ -470,9 +545,13 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                       <td className="px-4 py-3 font-mono text-xs">{inv.invoice_number}</td>
                       <td className="px-4 py-3 font-medium">{inv.title}</td>
                       <td className="px-4 py-3">
-                        <Badge variant="secondary" className={INVOICE_STATUS_COLORS[inv.status]}>
-                          {INVOICE_STATUS_LABELS[inv.status]}
-                        </Badge>
+                        {inv.status === "paid" ? (
+                          <PaidInvoiceBadge invoiceId={inv.id} />
+                        ) : (
+                          <Badge variant="secondary" className={INVOICE_STATUS_COLORS[inv.status]}>
+                            {INVOICE_STATUS_LABELS[inv.status]}
+                          </Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         {formatCurrency(inv.total_amount)}
@@ -485,7 +564,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <p className="text-xs font-mono text-green-700">{inv.payment_reference}</p>
                             )}
                             {inv.gst_invoice_number && (
-                              <p className="text-xs text-muted-foreground">GST: {inv.gst_invoice_number}</p>
+                              <a
+                                href={`/api/invoices/${inv.id}/gst-invoice-pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 text-xs text-primary hover:underline"
+                              >
+                                <FileText className="h-3 w-3" />
+                                GST: {inv.gst_invoice_number}
+                              </a>
                             )}
                           </div>
                         ) : inv.razorpay_link_url ? (
@@ -556,7 +643,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Overdue
                               </DropdownMenuItem>
                             )}
-                            {["draft", "sent", "overdue"].includes(inv.status) && (
+                            {canCancelInvoice && ["draft", "sent", "overdue"].includes(inv.status) && (
                               <DropdownMenuItem
                                 onClick={() => handleCancelInvoice(inv)}
                                 className="text-red-600"
@@ -581,9 +668,16 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       <ProposalForm
         leadId={leadId}
         leadLocationId={leadLocationId}
-        open={proposalFormOpen}
-        onOpenChange={setProposalFormOpen}
+        open={proposalFormOpen || !!editingProposal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProposalFormOpen(false);
+            setEditingProposal(null);
+          }
+        }}
         onSuccess={handleSuccess}
+        proposalId={editingProposal?.id}
+        initialProposal={editingProposal ?? undefined}
       />
       <InvoiceForm
         leadId={leadId}

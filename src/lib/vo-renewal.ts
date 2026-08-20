@@ -6,7 +6,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { sendWhatsAppDocument } from "@/lib/whatsapp";
+import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { logAudit } from "@/lib/audit";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -478,20 +478,21 @@ export async function sendRenewalWhatsApp(params: {
       return false;
     }
 
-    // Called directly rather than via messaging.invoiceDocument() so the row is
-    // tagged entity_type "case" — that wrapper hardcodes "proposal", which would
-    // break the delivery webhook's lead lookup for a VO case.
-    const result = await sendWhatsAppDocument({
-      to: caseData.client_phone,
-      template: "gst_invoice_doc",
-      documentUrl: pdfUrl,
-      documentFilename: `${piNumber.replace(/\//g, "-")}.pdf`,
+    // Back on messaging.invoiceDocument() now that it takes the entity type
+    // explicitly. It previously hardcoded "proposal", which would have broken
+    // the delivery webhook's lead lookup for a VO case, so this call was
+    // hand-rolled to get the tag right.
+    const result = await messaging.invoiceDocument(
+      caseData.client_phone,
+      clientName,
+      piNumber,
       // Template renders "Rs.{{3}}", so pass the bare number — the old code
       // passed "Rs. 12,000" here, which would have rendered "Rs.Rs. 12,000".
-      params: [clientName, piNumber, totalAmount.toLocaleString("en-IN"), razorpayUrl],
-      entityType: "case",
-      entityId: caseData.id,
-    });
+      totalAmount.toLocaleString("en-IN"),
+      razorpayUrl,
+      pdfUrl,
+      { type: "case", id: caseData.id },
+    );
     return result.success;
   } catch (err) {
     console.error("[vo-renewal] WhatsApp send failed:", err);

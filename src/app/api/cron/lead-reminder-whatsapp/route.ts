@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendWhatsApp } from "@/lib/whatsapp";
+import { withCronHealth } from "@/lib/cron-ping";
 
 const WINDOW_MINUTES = 10;
 
@@ -24,7 +25,7 @@ const WINDOW_MINUTES = 10;
  *     /api/activities/[id]) so a pushed-out follow-up gets exactly one
  *     fresh nudge at its new time.
  */
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -129,3 +130,5 @@ export async function GET(request: NextRequest) {
     claimed: claimed.length,
   });
 }
+
+export const GET = withCronHealth("cron/lead-reminder-whatsapp", handler);

@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
   (rzpSettings || []).forEach((s) => { rzp[s.key] = s.value; });
 
   if (rzp.razorpay_enabled !== "true" || !rzp.razorpay_key_id || !rzp.razorpay_key_secret) {
-    await pingCronHealth("settlement-recon", "ok", { skipped: "razorpay disabled" });
+    await pingCronHealth("cron/settlement-recon", "ok", { skipped: "razorpay disabled" });
     return NextResponse.json({ status: "skipped", reason: "Razorpay not enabled" });
   }
 
@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (reconByPaymentId.size === 0) {
-    await pingCronHealth("settlement-recon", fetchErrors.length ? "error" : "ok", {
+    await pingCronHealth("cron/settlement-recon", fetchErrors.length ? "error" : "ok", {
       stamped: 0, errors: fetchErrors.length,
     });
     return NextResponse.json({ status: "ok", dry, recon_rows: 0, stamped: 0, errors: fetchErrors });
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
   );
 
   const total = stamped.deposits + stamped.topups + stamped.invoices;
-  await pingCronHealth("settlement-recon", fetchErrors.length ? "error" : "ok", {
+  await pingCronHealth("cron/settlement-recon", fetchErrors.length ? "error" : "ok", {
     stamped: total, errors: fetchErrors.length,
   });
 

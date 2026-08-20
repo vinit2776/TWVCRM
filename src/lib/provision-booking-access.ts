@@ -150,18 +150,6 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   // Store PIN in booking record
   await admin.from("bookings").update({ access_pin: pin }).eq("id", booking_id);
 
-  // Audit trail
-  logAudit(admin, {
-    entityType: "booking",
-    entityId: booking_id,
-    action: "update",
-    performedBy: "system",
-    changes: {
-      access_pin:        { old: null, new: "[provisioned]" },
-      devices_activated: { old: [], new: devicesToProvision.map(d => d.label) },
-    },
-  });
-
   // ── Format times for messages ────────────────────────────────────────────────
   const fmtTime = (t: string) => {
     const [h, m] = (t as string).split(":").map(Number);
@@ -194,8 +182,10 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
     // messaging.bookingAccessPin(contactPhone, contactName, bookingRef, startFmt, endFmt, pin, booking_id)
     delivery.whatsapp = "skipped";
 
-    // DLT SMS access_pin — requires MSG91_SMS_DLT_FLOW_ACCESS_PIN env var (set after TRAI approval).
-    // Skips gracefully with a log warning if the flow ID is not yet configured.
+    // DLT SMS access_pin — sends via MSG91_SMS_DLT_FLOW_ACCESS_PIN. If TRAI has
+    // not yet approved the DLT template, MSG91 rejects it and the failure is
+    // recorded in whatsapp_messages rather than being swallowed (it used to
+    // return before logging, which hid PIN delivery breaking entirely).
     const smsResult = await dltSms.accessPin(contactPhone, contactName, bookingRef, pin, booking_id)
       .catch((err) => { console.error("[provision-booking-access] SMS error:", err); return null; });
     if (!smsResult) {
@@ -261,6 +251,21 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
   } else {
     console.info("[provision-booking-access] PIN provisioned and delivered for booking", booking_id);
   }
+
+  // Audit trail — logged after delivery completes so the per-channel outcome
+  // (whatsapp/sms/email) is captured alongside provisioning in a single row.
+  // Never log the actual PIN value — "[provisioned]" placeholder only.
+  logAudit(admin, {
+    entityType: "booking",
+    entityId: booking_id,
+    action: "update",
+    performedBy: "system",
+    changes: {
+      access_pin:        { old: null, new: "[provisioned]" },
+      devices_activated: { old: [], new: devicesToProvision.map(d => d.label) },
+      pin_delivery:      { old: null, new: delivery },
+    },
+  });
 
   return { ok: true, pin, devicesProvisioned: devicesToProvision.length, delivery };
 }

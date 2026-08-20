@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (recipients.length === 0) {
-    await pingCronHealth("kyc-reminder", "error", { reason: "no recipients configured" });
+    await pingCronHealth("cron/kyc-reminder", "error", { reason: "no recipients configured" });
     return NextResponse.json({ error: "No digest_recipients configured in app_settings" }, { status: 400 });
   }
 
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
     .order("label");
 
   if (error) {
-    await pingCronHealth("kyc-reminder", "error", { error: error.message });
+    await pingCronHealth("cron/kyc-reminder", "error", { error: error.message });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
@@ -118,7 +118,7 @@ export async function GET(request: NextRequest) {
   );
 
   if (filtered.length === 0) {
-    await pingCronHealth("kyc-reminder", "ok", { reason: "no outstanding KYC items" });
+    await pingCronHealth("cron/kyc-reminder", "ok", { reason: "no outstanding KYC items" });
     return NextResponse.json({ sent: 0, contracts: 0, message: "No outstanding KYC items" });
   }
 
@@ -183,7 +183,7 @@ export async function GET(request: NextRequest) {
   }
 
   const totalDocs = contracts.reduce((s, c) => s + c.docs.length, 0);
-  await pingCronHealth("kyc-reminder", "ok", { sent, contracts: contracts.length, docs: totalDocs });
+  await pingCronHealth("cron/kyc-reminder", "ok", { sent, contracts: contracts.length, docs: totalDocs });
 
   return NextResponse.json({
     date: dateLabel,

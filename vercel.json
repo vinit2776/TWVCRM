@@ -81,6 +81,10 @@
       "schedule": "0 4 * * 1"
     },
     {
+      "path": "/api/cron/gmail-watch-renew",
+      "schedule": "0 1 * * *"
+    },
+    {
       "path": "/api/cron/invoice-gap-audit",
       "schedule": "30 4 * * 1"
     },
@@ -125,12 +129,20 @@
       "schedule": "0 */6 * * *"
     },
     {
+      "path": "/api/cron/query-escalation",
+      "schedule": "0 */6 * * *"
+    },
+    {
       "path": "/api/cron/billing-dispatch-pump",
       "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/unifi-ap-health",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/messaging-health",
+      "schedule": "*/30 * * * *"
     }
   ],
   "headers": [

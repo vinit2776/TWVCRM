@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, ShieldCheck, ShieldAlert, ShieldOff } from "lucide-react";
+import { ExternalLink, ShieldCheck, ShieldAlert, ShieldOff, Users, AlertTriangle } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { CONTRACT_QUOTA_LOCKED_STATUSES } from "@/lib/constants";
 
 const MEDIUM_LABELS: Record<string, string> = {
   neft: "NEFT",
@@ -18,30 +20,112 @@ const MEDIUM_LABELS: Record<string, string> = {
 interface DepositProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   proposal: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  contract?: any;
   depositCarriedFrom?: string | null;
+  leadId?: string;
+  depositShortfall?: number;
 }
 
-export function ContractDepositSection({ proposal, depositCarriedFrom }: DepositProps) {
-  if (!proposal) return null;
+// Once a contract activates, its own deposit columns (snapshotted from the
+// proposal at that moment — see contracts/[id]/route.ts) become the source
+// of truth and the contract never needs the proposal join again. Before
+// that, the proposal is still the one collecting the deposit.
+//
+// The balance shown here is this contract's OWN collection — accurate on
+// its own, since a contract's own history doesn't change. But since
+// 00502_pooled_customer_deposits.sql, the ACTUAL available balance is
+// pooled across every contract the customer holds. When they have more
+// than one, a small pointer (not a number) links to the consolidated view.
+export function ContractDepositSection({ proposal, contract, depositCarriedFrom, leadId, depositShortfall }: DepositProps) {
+  const isActivated = !!contract?.status && (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
+  const source = isActivated ? contract : proposal;
 
-  const status: string = proposal.deposit_payment_status || "not_required";
-  const required = Number(proposal.security_deposit_months || 0) > 0;
+  const [siblingCount, setSiblingCount] = useState<number | null>(null);
+  const [pooledAvailable, setPooledAvailable] = useState<number | null>(null);
+  const [pooledShortfall, setPooledShortfall] = useState<number | null>(null);
+  useEffect(() => {
+    if (!leadId) return;
+    fetch(`/api/leads/${leadId}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => {
+        setSiblingCount(j.data?.contracts?.length ?? null);
+        setPooledAvailable(j.data?.available ?? null);
+        setPooledShortfall(j.data?.total_shortfall ?? null);
+      })
+      .catch(() => { setSiblingCount(null); setPooledAvailable(null); setPooledShortfall(null); });
+  }, [leadId]);
 
-  // Renewal: deposit carried from parent contract
+  // total_shortfall is Required − Available across every contract the
+  // customer holds (see deposit-summary/route.ts) — not just this one. It's
+  // worth surfacing here regardless of which branch below is rendering,
+  // since a contract that's itself fully paid can still belong to a
+  // customer who owes money elsewhere.
+  const hasPooledShortfall = pooledShortfall !== null && pooledShortfall > 0;
+  const siblingPointer = leadId && siblingCount && siblingCount > 1 ? (
+    <a
+      href={`/leads/${leadId}?tab=activities#security-deposit`}
+      className={`flex items-center gap-1.5 text-xs underline underline-offset-2 mt-2 ${
+        hasPooledShortfall ? "text-amber-700 hover:text-amber-900" : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <Users className="h-3 w-3" />
+      This customer has {siblingCount} contracts
+      {hasPooledShortfall && (
+        <> · <strong>{formatCurrency(pooledShortfall)} shortfall</strong></>
+      )}
+      {" "}— see the consolidated deposit on their profile
+    </a>
+  ) : null;
+
+  if (!source) return null;
+
+  const status: string = source.deposit_payment_status || "not_required";
+  const required = Number(source.security_deposit_months || 0) > 0;
+
+  // Renewal: no fresh deposit collected on this contract itself. Historically
+  // this meant "inherited from the parent" — since deposits pool by customer
+  // (00502_pooled_customer_deposits.sql), the real available figure now
+  // comes from the whole customer's pool, which can include contracts
+  // beyond just the immediate parent. depositCarriedFrom itself only still
+  // matters for the activation gate (see contracts/[id]/route.ts) — it's no
+  // longer what determines this number.
   if (depositCarriedFrom) {
+    const hasShortfall = Number(depositShortfall || 0) > 0;
     return (
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-green-600" />
+            {hasShortfall
+              ? <ShieldAlert className="h-4 w-4 text-amber-500" />
+              : <ShieldCheck className="h-4 w-4 text-green-600" />
+            }
             Security Deposit
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-2 text-sm text-green-700">
-            <Badge className="bg-green-100 text-green-800 border-green-200">Carried Forward</Badge>
-            <span>Deposit from parent contract — no new collection required.</span>
+          <div className={`flex items-center gap-2 text-sm ${hasShortfall ? "text-amber-700" : "text-green-700"}`}>
+            <Badge className={hasShortfall
+              ? "bg-amber-100 text-amber-800 border-amber-200"
+              : "bg-green-100 text-green-800 border-green-200"
+            }>
+              Pooled with customer
+            </Badge>
+            <span>
+              {hasShortfall ? (
+                <>
+                  <AlertTriangle className="h-3 w-3 inline -mt-0.5 mr-1" />
+                  This renewal&apos;s rate increase requires an additional <strong>{formatCurrency(Number(depositShortfall))}</strong>, not yet collected.
+                </>
+              ) : (
+                "No new collection required for this contract."
+              )}
+              {pooledAvailable !== null && (
+                <> Customer&apos;s available deposit: <strong>{formatCurrency(pooledAvailable)}</strong></>
+              )}
+            </span>
           </div>
+          {siblingPointer}
         </CardContent>
       </Card>
     );
@@ -59,12 +143,13 @@ export function ContractDepositSection({ proposal, depositCarriedFrom }: Deposit
         <CardContent>
           <div className="flex items-center gap-2">
             <Badge variant="secondary">Not Required</Badge>
-            {proposal.deposit_waiver_verified_at && (
+            {proposal?.deposit_waiver_verified_at && (
               <span className="text-xs text-muted-foreground">
                 Admin waiver approved {formatDate(proposal.deposit_waiver_verified_at)}
               </span>
             )}
           </div>
+          {siblingPointer}
         </CardContent>
       </Card>
     );
@@ -97,38 +182,40 @@ export function ContractDepositSection({ proposal, depositCarriedFrom }: Deposit
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Amount</p>
-              <p className="font-semibold">{formatCurrency(Number(proposal.deposit_payment_amount || 0))}</p>
+              <p className="font-semibold">{formatCurrency(Number(source.deposit_payment_amount || 0))}</p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Date</p>
               <p className="font-medium">
-                {proposal.deposit_payment_received_at
-                  ? formatDate(proposal.deposit_payment_received_at)
+                {source.deposit_payment_received_at
+                  ? formatDate(source.deposit_payment_received_at)
                   : "—"}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Mode</p>
               <p className="font-medium">
-                {proposal.deposit_payment_medium
-                  ? (MEDIUM_LABELS[proposal.deposit_payment_medium] ?? proposal.deposit_payment_medium)
+                {source.deposit_payment_medium
+                  ? (MEDIUM_LABELS[source.deposit_payment_medium] ?? source.deposit_payment_medium)
                   : "—"}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground mb-0.5">Reference / UTR</p>
               <p className="font-mono text-xs break-all">
-                {proposal.deposit_payment_reference || "—"}
+                {source.deposit_payment_reference || "—"}
               </p>
             </div>
-            {proposal.deposit_shortfall_approved_by && (
+            {/* Shortfall-approval and proof-screenshot never moved off the proposal —
+                still shown (pre- or post-activation) when a proposal is available. */}
+            {proposal?.deposit_shortfall_approved_by && (
               <div className="col-span-full">
                 <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-200 bg-amber-50">
                   Shortfall approved
                 </Badge>
               </div>
             )}
-            {proposal.deposit_payment_screenshot_url && (
+            {proposal?.deposit_payment_screenshot_url && (
               <div className="col-span-full">
                 <Button variant="outline" size="sm" asChild>
                   <a href={proposal.deposit_payment_screenshot_url} target="_blank" rel="noopener noreferrer">
@@ -143,11 +230,12 @@ export function ContractDepositSection({ proposal, depositCarriedFrom }: Deposit
           <div className="text-sm text-muted-foreground">
             Expected:{" "}
             <span className="font-semibold text-foreground">
-              {formatCurrency(Number(proposal.security_deposit_amount || 0))}
+              {formatCurrency(Number(source.security_deposit_amount || 0))}
             </span>
-            {" "}({proposal.security_deposit_months}× monthly fee) — not yet collected.
+            {" "}({source.security_deposit_months}× monthly fee) — not yet collected.
           </div>
         )}
+        {siblingPointer}
       </CardContent>
     </Card>
   );

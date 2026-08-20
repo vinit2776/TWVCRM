@@ -276,9 +276,26 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a billing statement (invoice)
     const { data: billingStatement } = await supabase
       .from("billing_statements")
-      .select("id, total_amount, payment_status")
+      .select("id, total_amount, payment_status, voided_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
+
+    // A voided statement is no longer a receivable. Its Razorpay link is
+    // cancelled at void time, but a payment already in flight (or a link the
+    // cancel call failed on) must not be booked against a cancelled invoice —
+    // that would resurrect it in AR and mis-state the month. Record the receipt
+    // for reconciliation and let accounts handle it as an unallocated payment.
+    if (billingStatement?.voided_at) {
+      logWebhookReceipt(supabase, {
+        event,
+        razorpay_payment_id: razorpayPaymentId,
+        razorpay_payment_link_id: paymentLinkId,
+        entity: "billing_statement",
+        outcome: "ignored",
+        outcome_detail: `Statement ${billingStatement.id} is voided — payment not recorded`,
+      });
+      return NextResponse.json({ status: "ok", entity: "billing_statement", ignored: "voided" });
+    }
 
     if (billingStatement && billingStatement.payment_status !== "paid") {
       // Record payment

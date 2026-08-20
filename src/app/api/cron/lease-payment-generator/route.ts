@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { withCronHealth } from "@/lib/cron-ping";
 
 // Runs 1st of month at 08:00 IST (02:30 UTC)
 // Idempotent — ON CONFLICT (lease_id, payment_month) DO NOTHING
@@ -38,7 +39,7 @@ function isBlanketActive(
   return true;
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -115,3 +116,5 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ generated, skipped, holdLifts, paymentMonth });
 }
+
+export const GET = withCronHealth("cron/lease-payment-generator", handler);

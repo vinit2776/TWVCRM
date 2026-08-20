@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -40,17 +41,22 @@ export default function ProposalsPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
 
   const fetchProposals = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page) });
     if (statusFilter) params.set("status", statusFilter);
+    if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/proposals?${params}`);
     if (res.ok) { const json = await res.json(); setProposals(json.data || []); setPagination(json.pagination); }
     setLoading(false);
-  }, [page, statusFilter]);
+  }, [page, statusFilter, search]);
 
   useEffect(() => { fetchProposals(); }, [fetchProposals]);
+
+  const hasFilters = search || statusFilter;
+  const clearFilters = () => { setSearch(""); setStatusFilter(""); setPage(1); };
 
   return (
     <div className="space-y-4">
@@ -60,13 +66,30 @@ export default function ProposalsPage() {
           <h1 className="text-2xl font-bold">Proposals</h1>
           <p className="text-sm text-muted-foreground">{pagination.total} total proposals</p>
         </div>
-        <Select value={statusFilter} onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setPage(1); }}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            {PROPOSAL_STATUSES.map((s) => <SelectItem key={s} value={s}>{PROPOSAL_STATUS_LABELS[s]}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search proposals..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-9 w-[200px]"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setPage(1); }}>
+            <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              {PROPOSAL_STATUSES.map((s) => <SelectItem key={s} value={s}>{PROPOSAL_STATUS_LABELS[s]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <X className="mr-1 h-4 w-4" />
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       {loading ? <TableSkeleton rows={6} /> : proposals.length === 0 ? (

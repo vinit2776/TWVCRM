@@ -21,6 +21,7 @@ import {
   VO_PURPOSE_LABELS,
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS,
+  CASE_DESIGNATION_OPTIONS,
 } from "@/lib/constants";
 import type { Aggregator, VoCase } from "@/types";
 import { Loader2 } from "lucide-react";
@@ -35,7 +36,11 @@ interface CaseFormProps {
 
 export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
   const [submitting, setSubmitting] = useState(false);
-  const [aggregators, setAggregators] = useState<{ id: string; name: string; code: string }[]>([]);
+  const [aggregators, setAggregators] = useState<{ id: string; name: string; company_name?: string; code: string }[]>([]);
+  const [customDesignation, setCustomDesignation] = useState(
+    () => !!caseData?.represented_by_designation &&
+      !(CASE_DESIGNATION_OPTIONS as readonly string[]).includes(caseData.represented_by_designation)
+  );
 
   useEffect(() => {
     fetch("/api/aggregators?limit=100&status=active")
@@ -65,9 +70,10 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
       client_email: caseData?.client_email || "",
       client_phone: caseData?.client_phone || "",
       client_address: caseData?.client_address || "",
-      client_city: caseData?.client_city || "",
-      client_state: caseData?.client_state || "",
-      client_pincode: caseData?.client_pincode || "",
+      represented_by_name: caseData?.represented_by_name || "",
+      represented_by_designation: caseData?.represented_by_designation || "",
+      represented_by_id_type: caseData?.represented_by_id_type || "pan",
+      represented_by_id_number: caseData?.represented_by_id_number || "",
       rate: caseData?.rate || undefined,
       tenure_months: caseData?.tenure_months || 12,
       start_date: caseData?.start_date || "",
@@ -80,6 +86,8 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
 
   const caseSource = watch("case_source");
   const entityType = watch("client_entity_type");
+  const representedByDesignation = watch("represented_by_designation");
+  const representedByIdType = watch("represented_by_id_type");
   const purpose = watch("purpose");
   const startDate = watch("start_date");
   const tenureMonths = watch("tenure_months");
@@ -149,7 +157,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
                   <SelectContent>
                     {aggregators.map((agg) => (
                       <SelectItem key={agg.id} value={agg.id}>
-                        {agg.name} ({agg.code})
+                        {agg.company_name || agg.name} ({agg.code})
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -235,7 +243,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
               <Input {...register("client_phone")} />
             </div>
             <div className="space-y-2">
-              <Label>PAN Number</Label>
+              <Label>Company / Entity PAN Number</Label>
               <Input {...register("client_pan_number")} placeholder="XXXXX1234X" />
             </div>
             <div className="space-y-2">
@@ -248,6 +256,80 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
                 <Input {...register("client_cin_number")} />
               </div>
             )}
+            <div className="space-y-2">
+              <Label>Represented By</Label>
+              <Input {...register("represented_by_name")} placeholder="Name of authorized signatory" />
+            </div>
+            <div className="space-y-2">
+              <Label>Designation</Label>
+              <Select
+                value={customDesignation ? "other" : representedByDesignation || ""}
+                onValueChange={(val) => {
+                  if (val === "other") {
+                    setCustomDesignation(true);
+                    setValue("represented_by_designation", "");
+                  } else {
+                    setCustomDesignation(false);
+                    setValue("represented_by_designation", val);
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select designation" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CASE_DESIGNATION_OPTIONS.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {d}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              {customDesignation && (
+                <Input
+                  className="mt-2"
+                  placeholder="Enter designation"
+                  {...register("represented_by_designation")}
+                />
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Representative ID Type</Label>
+              <Select
+                value={representedByIdType || "pan"}
+                onValueChange={(val) => {
+                  setValue("represented_by_id_type", val as CreateCaseInput["represented_by_id_type"]);
+                  setValue("represented_by_id_number", "");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pan">PAN</SelectItem>
+                  <SelectItem value="aadhaar">Aadhaar</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>
+                {representedByIdType === "aadhaar" ? "Representative Aadhaar" : "Representative PAN"}
+              </Label>
+              <Input
+                {...register("represented_by_id_number")}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setValue(
+                    "represented_by_id_number",
+                    representedByIdType === "aadhaar" ? val.replace(/\D/g, "") : val.toUpperCase()
+                  );
+                }}
+                placeholder={representedByIdType === "aadhaar" ? "12-digit Aadhaar number" : "e.g. ABCDE1234F"}
+                maxLength={representedByIdType === "aadhaar" ? 12 : 10}
+                inputMode={representedByIdType === "aadhaar" ? "numeric" : "text"}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -258,23 +340,16 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
           <CardTitle className="text-base">Client Address</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2 space-y-2">
-              <Label>Address</Label>
-              <Textarea {...register("client_address")} rows={2} />
-            </div>
-            <div className="space-y-2">
-              <Label>City</Label>
-              <Input {...register("client_city")} />
-            </div>
-            <div className="space-y-2">
-              <Label>State</Label>
-              <Input {...register("client_state")} />
-            </div>
-            <div className="space-y-2">
-              <Label>Pincode</Label>
-              <Input {...register("client_pincode")} />
-            </div>
+          <div className="space-y-2">
+            <Label>Address</Label>
+            <Textarea
+              {...register("client_address")}
+              rows={3}
+              placeholder="Full address, including city, state and pincode"
+            />
+            <p className="text-xs text-muted-foreground">
+              Used as-is in the proposal and agreement.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -325,8 +400,11 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
         <CardHeader>
           <CardTitle className="text-base">Notes</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <Textarea {...register("notes")} rows={3} placeholder="Additional notes..." />
+          <p className="text-xs text-muted-foreground">
+            Internal only — never shown to the client or printed on the proposal/agreement.
+          </p>
         </CardContent>
       </Card>
 

@@ -153,8 +153,9 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
-| Daily 09:30 IST | `/api/digest` | Email digest |
+| Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
+| Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 
 Billing generation logic is centralised in `src/lib/billing.ts` — used by both the cron and the manual trigger, and called on contract activation to generate the first statement immediately.
 
@@ -166,16 +167,17 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 | Action | Allowed Roles |
 |--------|--------------|
-| Approve vendor bills | `admin`, `manager` |
-| Record payments (vendor bills) | `accounts`, `admin`, `office_admin` — **only from Finance > Acc Payables** |
-| Record petty cash | `accounts`, `admin`, `office_admin` |
+| Approve vendor bills | `admin` only — a `manager` gets a 403 |
+| Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
+| Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
+| Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
 | Facility tickets | `fms`, `admin` |
 | Void billing statements | `admin` only |
 
 ### Procurement → Payment Flow (strict separation)
 
-1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin`/`manager` approve/reject. **No payment recording here.**
+1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin` approves/rejects — `manager` cannot (`canApproveOrReject` in `src/app/api/procurement/bills/[id]/route.ts` is `role === "admin"`). **No payment recording here.**
 2. **Finance > Acc Payables** (`/accounting/vendor-payments/[id]`): `accounts`/`admin`/`office_admin` record payments on approved bills only. Uses `VendorEmailBanner` (`src/components/finance-intelligence/vendor-email-banner.tsx`) to prompt for missing vendor emails.
 
 ### Billing Statement Lifecycle
@@ -241,6 +243,15 @@ BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_D
 ```
 
 Razorpay keys are stored in the `app_settings` DB table, not env vars.
+
+**Not currently set anywhere** (the Gmail inbound pipeline has never run in any
+environment — see `docs/gmail-intake.md` before setting them):
+
+```
+GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN
+GMAIL_WATCH_EMAIL / GMAIL_PUBSUB_TOPIC
+GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
+```
 
 ## Module Map
 

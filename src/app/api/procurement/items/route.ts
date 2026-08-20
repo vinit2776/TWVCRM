@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { ITEM_UNITS } from "@/lib/constants";
 
 const createItemSchema = z.object({
   name: z.string().min(1, "Item name is required"),
   department: z.enum(["pantry", "maintenance", "administration", "asset"]),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton", "hr"]),
+  unit: z.enum(ITEM_UNITS),
   item_type: z.enum(["goods", "service"]).default("goods"),
   standard_price: z.number().min(0).optional(),
   gst_rate: z.number().min(0).max(28).default(0),

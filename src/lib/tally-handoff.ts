@@ -137,6 +137,11 @@ export interface InboxProposal {
 export interface InboxInvoice {
   id: string;
   invoice_number: string;
+  /** The invoice's own title — often clearer than a free-typed line-item
+   *  description (e.g. "Security Deposit - Add on Seat" vs. "SD - Additional Seat"). */
+  title: string | null;
+  /** Internal-only context for accounts, never sent to the customer. */
+  internal_notes: string | null;
   lead: InboxLead | null;
 }
 
@@ -282,6 +287,9 @@ export interface InboxRow {
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
+  /** Open query thread count for this statement — drives the "Query" button
+   *  badge in the Tally Inbox. See src/lib/queries/registry.ts. */
+  open_query_count: number;
   /** Present only when the request specified `?include=timeline`. */
   timeline_events?: TimelineEvent[];
 
@@ -341,6 +349,9 @@ export interface BookingInboxAddon {
 export interface BookingInboxRow {
   row_type: "booking";
   task_id: string;
+  /** Open query thread count for this task — drives the "Query" button badge.
+   *  See src/lib/queries/registry.ts. */
+  open_query_count: number;
   booking_id: string;
   booking_number: string | null;
   booking_date: string | null;
@@ -377,6 +388,8 @@ export interface BookingInboxRow {
   discrepancy_reason: string | null;
   gst_invoice_sent_at: string | null;
   payment_confirmations: BookingPaymentConfirmation[];
+  is_voided: boolean;
+  void_reason: string | null;
 }
 
 export interface InboxStats {

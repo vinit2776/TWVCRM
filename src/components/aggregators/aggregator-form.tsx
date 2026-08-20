@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { createAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
+import { createAggregatorSchema, updateAggregatorSchema, type CreateAggregatorInput } from "@/lib/validations";
 import { preventEnterSubmit } from "@/lib/utils";
 import type { Aggregator } from "@/types";
 import { Loader2, Plus, Trash2 } from "lucide-react";
@@ -44,7 +44,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
     control,
     formState: { errors },
   } = useForm<CreateAggregatorInput>({
-    resolver: zodResolver(createAggregatorSchema),
+    // Editing an existing (possibly legacy) aggregator must not re-enforce
+    // create-time-only requirements like company_name — otherwise saving an
+    // unrelated correction on an aggregator that predates that rule fails
+    // validation before it even reaches the API.
+    resolver: zodResolver(aggregator ? updateAggregatorSchema : createAggregatorSchema) as Resolver<CreateAggregatorInput>,
     defaultValues: {
       name: aggregator?.name || "",
       company_name: aggregator?.company_name || "",
@@ -102,13 +106,14 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label htmlFor="company_name">Company Name *</Label>
+              <Input id="company_name" {...register("company_name")} />
+              {errors.company_name && <p className="text-sm text-red-500">{errors.company_name.message}</p>}
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" {...register("name")} placeholder="e.g. ABC Associates" />
               {errors.name && <p className="text-sm text-red-500">{errors.name.message}</p>}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="company_name">Company Name</Label>
-              <Input id="company_name" {...register("company_name")} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="gst_number">GST Number</Label>
@@ -287,8 +292,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
         <CardHeader>
           <CardTitle className="text-base">Additional Notes</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-2">
           <Textarea {...register("notes")} rows={3} placeholder="Any additional notes about this aggregator..." />
+          <p className="text-xs text-muted-foreground">
+            Internal only — never shown to the aggregator.
+          </p>
         </CardContent>
       </Card>
 

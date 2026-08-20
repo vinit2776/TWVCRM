@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -39,7 +40,7 @@ interface CaseBillingInfo {
   client_name: string | null;
   client_company_name: string | null;
   client_email: string | null;
-  aggregator: { billing_method?: string; billing_mode?: "proforma_first" | "gst_direct"; name?: string; primary_email?: string | null } | null;
+  aggregator: { billing_method?: string; billing_mode?: "proforma_first" | "gst_direct"; name?: string; company_name?: string; primary_email?: string | null } | null;
 }
 
 interface CaseStatement {
@@ -62,6 +63,7 @@ interface CaseStatement {
 }
 
 interface InvoicePreview {
+  statementId: string | null;
   statementNumber: string | null;
   totalAmount: number;
 }
@@ -77,6 +79,9 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [generating, setGenerating] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [showCreditNoteCancel, setShowCreditNoteCancel] = useState(false);
+  const [showVoidConfirm, setShowVoidConfirm] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
@@ -121,7 +126,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const billToAggregator = caseInfo?.case_source === "aggregator" && caseInfo.bill_to === "aggregator";
   const primaryEmail = billToAggregator ? caseInfo?.aggregator?.primary_email ?? null : caseInfo?.client_email ?? null;
   const primaryName = billToAggregator
-    ? caseInfo?.aggregator?.name ?? ""
+    ? caseInfo?.aggregator?.company_name || caseInfo?.aggregator?.name || ""
     : caseInfo?.client_company_name || caseInfo?.client_name || "";
 
   // A statement that exists, isn't voided, and has had nothing happen to it
@@ -134,6 +139,15 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     && !statement.handoff_state
     && !statement.proforma_sent_at
     && resolvedBillingMode === "proforma_first";
+
+  // Void covers everything the Tally-only "Cancel Invoice" flow above
+  // doesn't — a finalized/exported proforma that never went through Tally
+  // (sent-but-unpaid, or the isUnsentPi state). Blocked server-side if any
+  // payment is already recorded.
+  const canVoid = !!statement
+    && userRole === "admin"
+    && ["finalized", "exported"].includes(statement.status)
+    && statement.issuance_channel !== "tally";
 
   const handleBillToChange = async (value: string) => {
     setSavingBillTo(true);
@@ -207,7 +221,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   // skipped and it goes straight to the Tally Inbox as before.
   const handleGenerateInvoice = async () => {
     if (isUnsentPi && statement) {
-      setPreview({ statementNumber: statement.statement_number, totalAmount: statement.total_amount });
+      setPreview({ statementId: statement.id, statementNumber: statement.statement_number, totalAmount: statement.total_amount });
       setPreviewOpen(true);
       return;
     }
@@ -225,6 +239,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
       }
       if (json.data?.requires_send) {
         setPreview({
+          statementId: json.data.statement_id ?? null,
           statementNumber: json.data.preview?.statement_number ?? null,
           totalAmount: Number(json.data.preview?.total_amount ?? 0),
         });
@@ -265,6 +280,28 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
       toast.error("Failed to send invoice");
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleVoid = async () => {
+    if (!statement || !voidReason.trim()) return;
+    setVoidSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statement.id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: voidReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to void invoice");
+      toast.success(json.message || "Invoice voided");
+      setShowVoidConfirm(false);
+      setVoidReason("");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to void invoice");
+    } finally {
+      setVoidSubmitting(false);
     }
   };
 
@@ -448,6 +485,54 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                     Cancel Invoice
                   </Button>
                 )}
+              {canVoid && !showVoidConfirm && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-700 border-red-200 hover:bg-red-50"
+                  onClick={() => setShowVoidConfirm(true)}
+                >
+                  <Ban className="mr-1.5 h-3.5 w-3.5" />
+                  Void Invoice
+                </Button>
+              )}
+              {canVoid && showVoidConfirm && (
+                <div className="w-full space-y-2 rounded-md border border-red-200 bg-red-50 p-3">
+                  <p className="text-xs text-red-800">
+                    This voids the statement and un-links it back to pending — blocked if any payment has already been recorded.
+                  </p>
+                  <Textarea
+                    placeholder="Reason for void / cancellation (required)"
+                    value={voidReason}
+                    onChange={(e) => setVoidReason(e.target.value)}
+                    rows={2}
+                    className="bg-background"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setShowVoidConfirm(false); setVoidReason(""); }}
+                      disabled={voidSubmitting}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleVoid}
+                      disabled={voidSubmitting || !voidReason.trim()}
+                    >
+                      {voidSubmitting ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Ban className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      Confirm Void
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
@@ -492,6 +577,19 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
               <span>{formatCurrency(preview?.totalAmount ?? 0)}</span>
             </div>
           </div>
+
+          {preview?.statementId && (
+            <a
+              href={`/api/billing-statements/${preview.statementId}/proforma-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Preview invoice PDF — exactly what the customer will receive
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
 
           <div className="space-y-3">
             <div className="space-y-1">

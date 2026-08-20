@@ -48,8 +48,9 @@ export async function GET(_req: NextRequest) {
         lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
-        id, invoice_number, primary_head, internal_notes,
-        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
+        id, invoice_number, primary_head, internal_notes, attribution_purpose,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails),
+        attributed_contract:contracts!proforma_invoices_contract_id_fkey(id, contract_number)
       ),
       case:cases!billing_statements_case_id_fkey(
         id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number, bill_to,
@@ -68,16 +69,60 @@ export async function GET(_req: NextRequest) {
   // One round-trip to sum payments per statement instead of N selects.
   // Paid-to-date includes TDS (same settlement definition as the payment
   // route) — a TDS-bearing partial payment must not inflate balance_due.
+  // Also collects the payment detail rows themselves (reference, mode, who
+  // recorded it) — powers the "Payment received" dialog on partially-paid
+  // rows, same shape as the Paid tab.
   let paidByStatement = new Map<string, number>();
+  const paymentsByStatement = new Map<string, Array<{
+    id: string; amount: number; payment_date: string; payment_mode: string;
+    payment_reference: string | null; razorpay_payment_id: string | null;
+    notes: string | null; recorded_by_user: { id: string; full_name: string } | null;
+  }>>();
   if (statementIds.length > 0) {
     const { data: pays } = await supabase
       .from("billing_payments")
-      .select("billing_statement_id, amount, tds_amount")
-      .in("billing_statement_id", statementIds);
+      .select(`
+        billing_statement_id, id, amount, tds_amount, payment_date, payment_mode, created_at,
+        payment_reference, razorpay_payment_id, notes,
+        recorded_by_user:users!billing_payments_recorded_by_fkey(id, full_name)
+      `)
+      .in("billing_statement_id", statementIds)
+      .order("created_at", { ascending: false });
     paidByStatement = (pays || []).reduce((map, p: { billing_statement_id: string; amount: number; tds_amount: number | null }) => {
       map.set(p.billing_statement_id, (map.get(p.billing_statement_id) || 0) + paymentCredit(p));
       return map;
     }, new Map<string, number>());
+    for (const p of pays || []) {
+      const sid = p.billing_statement_id as string;
+      if (!paymentsByStatement.has(sid)) paymentsByStatement.set(sid, []);
+      paymentsByStatement.get(sid)!.push({
+        id: p.id as string,
+        amount: p.amount as number,
+        payment_date: p.payment_date as string,
+        payment_mode: p.payment_mode as string,
+        payment_reference: p.payment_reference as string | null,
+        razorpay_payment_id: p.razorpay_payment_id as string | null,
+        notes: p.notes as string | null,
+        recorded_by_user: (p.recorded_by_user as unknown as { id: string; full_name: string } | null) ?? null,
+      });
+    }
+  }
+
+  // Open query count per statement — one grouped query for the page rather
+  // than a fetch per row, same as the Tally Inbox badges. Scoped by
+  // entity_type since `queries` spans every module.
+  const openQueriesByStatement = new Map<string, number>();
+  if (statementIds.length > 0) {
+    const { data: openQueries } = await supabase
+      .from("queries")
+      .select("entity_id")
+      .eq("entity_type", "billing_statement")
+      .in("entity_id", statementIds)
+      .eq("status", "open");
+    for (const q of openQueries || []) {
+      const id = (q as { entity_id: string }).entity_id;
+      openQueriesByStatement.set(id, (openQueriesByStatement.get(id) ?? 0) + 1);
+    }
   }
 
   // Today in IST as a YYYY-MM-DD anchor for daysOverdue.
@@ -98,6 +143,8 @@ export async function GET(_req: NextRequest) {
       amount_paid: Math.round(paid),
       balance_due: Math.round(balance),
       days_overdue: daysOverdue,
+      open_query_count: openQueriesByStatement.get(s.id as string) ?? 0,
+      payments: paymentsByStatement.get(s.id as string) ?? [],
     };
   });
 

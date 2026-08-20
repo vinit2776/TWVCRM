@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
+import { withCronHealth } from "@/lib/cron-ping";
 
 export const maxDuration = 60;
 
@@ -48,7 +49,7 @@ function isAuthorised(request: NextRequest): boolean {
   return request.headers.get("authorization") === `Bearer ${secret}`;
 }
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -294,3 +295,5 @@ export async function GET(request: NextRequest) {
     details: results,
   });
 }
+
+export const GET = withCronHealth("cron/renewal-reminders", handler);

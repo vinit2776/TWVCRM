@@ -586,7 +586,7 @@ export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;
 // belong only on createAggregatorSchema, for genuinely-new records.
 const aggregatorFieldsSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  company_name: z.string().optional(),
+  company_name: z.string().min(1, "Company name is required"),
   gst_number: z.string().max(20).optional(),
   pan_number: z.string().max(15).optional(),
   email_domain: z.string().optional(),
@@ -622,7 +622,15 @@ export const createAggregatorSchema = aggregatorFieldsSchema.extend({
   tags: z.array(z.string()).default([]),
 });
 
-export const updateAggregatorSchema = aggregatorFieldsSchema.partial();
+// .partial() alone isn't enough for company_name: it allows the KEY to be
+// omitted or `undefined`, but a blank text input still submits "" (a defined
+// value), which still fails the base schema's .min(1) — silently blocking
+// saves on any legacy aggregator with no company name on file. Override it
+// to explicitly accept "" on update, since re-requiring it retroactively
+// was never the intent (see fix/aggregator-edit-company-name-validation).
+export const updateAggregatorSchema = aggregatorFieldsSchema.partial().extend({
+  company_name: z.string().optional().or(z.literal("")),
+});
 export type CreateAggregatorInput = z.input<typeof createAggregatorSchema>;
 export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
 
@@ -657,6 +665,10 @@ const caseFieldsSchema = z.object({
   client_city: z.string().optional(),
   client_state: z.string().optional(),
   client_pincode: z.string().optional(),
+  represented_by_name: z.string().optional(),
+  represented_by_designation: z.string().optional(),
+  represented_by_id_type: z.enum(["pan", "aadhaar"]).optional(),
+  represented_by_id_number: z.string().optional(),
   rate: z.number().positive("Rate must be positive").optional(),
   tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),

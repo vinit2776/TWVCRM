@@ -24,7 +24,7 @@ import { MaterialRequestQuotations } from "@/components/procurement/material-req
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
 import {
-  PR_STATUS_LABELS, PR_STATUS_COLORS,
+  PR_STATUS_LABELS, PR_STATUS_COLORS, MR_EDITABLE_STATUSES,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
   PROCUREMENT_APPROVAL_THRESHOLDS,
   PO_STATUS_LABELS, PO_STATUS_COLORS,
@@ -34,8 +34,10 @@ import {
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { QueryButton } from "@/components/queries/query-button";
 
 type ActionType = "approve" | "reject" | "cancel" | "submit" | "resubmit";
 
@@ -332,6 +334,10 @@ export default function PurchaseRequestDetailPage() {
   if (!pr) return null;
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
+  // Everything on an MR stays editable until it's approved — see MR_EDITABLE_STATUSES.
+  const canEditRequest =
+    MR_EDITABLE_STATUSES.includes(pr.status) &&
+    ["admin", "manager", "office_admin"].includes(userRole);
   const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
@@ -358,12 +364,15 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
                 {PR_STATUS_LABELS[pr.status]}
               </Badge>
+              <QueryButton entityType="purchase_request" entityId={pr.id} />
             </div>
             <div className="flex items-center gap-2 mt-1">
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
-              {userRole === "admin" && !["cancelled", "rejected"].includes(pr.status) && (
+              {/* Quick department fix for approved MRs. Before approval the full
+                  "Edit Request" editor covers this, so don't offer two paths. */}
+              {userRole === "admin" && !canEditRequest && !["cancelled", "rejected"].includes(pr.status) && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -388,6 +397,28 @@ export default function PurchaseRequestDetailPage() {
           </div>
         </div>
 
+        {/* An approved multi-cycle AMC is the point people get stuck: the request is
+            done, but nothing about it says the recurring invoices live on the PO. */}
+        {pr.department === "amc" && ["approved", "partially_ordered"].includes(pr.status) && (() => {
+          const amcItem = pr.purchase_request_items?.[0];
+          const cycle = cycleFromUnit(amcItem?.unit);
+          const cycles = Number(amcItem?.quantity ?? 1);
+          if (cycles <= 1) return null;
+          return (
+            <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
+              <p className="font-medium text-blue-900">
+                Next step: create the Purchase Order
+              </p>
+              <p className="text-xs text-blue-800 mt-0.5">
+                This is a {CYCLE_UNIT_LABEL[cycle]}ly contract — {cycles} payments of{" "}
+                {amcItem?.estimated_price ? formatCurrency(Number(amcItem.estimated_price)) : "the agreed amount"}{" "}
+                per {CYCLE_UNIT_LABEL[cycle]}. Service reports and vendor invoices are
+                recorded on the Purchase Order, once per {CYCLE_UNIT_LABEL[cycle]} — not on this request.
+              </p>
+            </div>
+          );
+        })()}
+
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
           {["approved", "partially_ordered"].includes(pr.status) && (
@@ -410,6 +441,16 @@ export default function PurchaseRequestDetailPage() {
               onClick={() => router.push(`/procurement/orders?pr_id=${pr.id}`)}
             >
               <ShoppingCart className="h-4 w-4 mr-1" /> View Orders
+            </Button>
+          )}
+          {canEditRequest && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => router.push(`/procurement/requests/${pr.id}/edit`)}
+              disabled={actionLoading}
+            >
+              <Pencil className="h-4 w-4 mr-1" /> Edit Request
             </Button>
           )}
           {pr.status === "draft" && (

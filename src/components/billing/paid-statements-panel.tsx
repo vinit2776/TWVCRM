@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Loader2, FileDown, History, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 
 interface Lead {
   id: string;
@@ -49,6 +51,14 @@ interface PaidRow {
   gst_invoice_number: string | null;
   paid_on: string | null;
   payment_mode: string | null;
+  status: string;
+  payment_status: string | null;
+  accounted: boolean | null;
+  proforma_sent_at: string | null;
+  pi_cancelled_at: string | null;
+  proforma_viewed_at: string | null;
+  gst_invoice_viewed_at: string | null;
+  payments: PaymentDetail[];
   contract: { id: string; contract_number: string; lead?: Lead } | null;
   proposal?: { id: string; proposal_number: string; lead?: Lead } | null;
   invoice?: { id: string; invoice_number: string; lead?: Lead } | null;
@@ -106,6 +116,7 @@ export function PaidStatementsPanel({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [detailRow, setDetailRow] = useState<PaidRow | null>(null);
   const requestIdRef = useRef(0);
 
   const fetchPage = useCallback(async (pageNum: number, replace: boolean, searchTerm: string) => {
@@ -171,6 +182,7 @@ export function PaidStatementsPanel({
               <th className="px-4 py-3 text-left">Paid</th>
               <th className="px-4 py-3 text-right">Amount</th>
               <th className="px-4 py-3 text-left">Mode</th>
+              <th className="px-4 py-3 text-left">Lifecycle</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
@@ -178,10 +190,10 @@ export function PaidStatementsPanel({
             {rows.map((r) => {
               const party = partyOf(r);
               return (
-                <tr key={r.id} className="hover:bg-gray-50">
+                <tr key={r.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetailRow(r)}>
                   <td className="px-4 py-3">
                     <div className="font-medium">
-                      <Link href={party.href} className="text-teal-700 hover:underline">{party.number}</Link>
+                      <Link href={party.href} className="text-teal-700 hover:underline" onClick={(e) => e.stopPropagation()}>{party.number}</Link>
                       {party.kind === "proposal" && <Badge variant="outline" className="ml-1.5 text-[10px]">Proposal PI</Badge>}
                       {party.kind === "invoice" && <Badge variant="outline" className="ml-1.5 text-[10px]">Ad-hoc Invoice</Badge>}
                     </div>
@@ -189,11 +201,11 @@ export function PaidStatementsPanel({
                   </td>
                   <td className="px-4 py-3">
                     {r.gst_invoice_number ? (
-                      <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                      <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {r.gst_invoice_number}<FileDown className="h-3 w-3" />
                       </Link>
                     ) : (
-                      <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                      <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         {r.statement_number}<FileDown className="h-3 w-3" />
                       </Link>
                     )}
@@ -212,6 +224,18 @@ export function PaidStatementsPanel({
                   <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.total_amount)}</td>
                   <td className="px-4 py-3 text-xs capitalize whitespace-nowrap">{r.payment_mode ? r.payment_mode.replace(/_/g, " ") : "—"}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
+                    <BillingLifecycleStatus
+                      status={r.status}
+                      payment_status={r.payment_status}
+                      accounted={r.accounted}
+                      gst_invoice_number={r.gst_invoice_number}
+                      proforma_sent_at={r.proforma_sent_at}
+                      pi_cancelled_at={r.pi_cancelled_at}
+                      proforma_viewed_at={r.proforma_viewed_at}
+                      gst_invoice_viewed_at={r.gst_invoice_viewed_at}
+                    />
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1 justify-end">
                       <Button size="sm" variant="ghost" onClick={() => onOpenHistory(r)} title="View send/payment history">
                         <History className="h-3.5 w-3.5" />
@@ -235,6 +259,16 @@ export function PaidStatementsPanel({
           <span className="text-xs text-muted-foreground">All {total} paid statement{total === 1 ? "" : "s"} loaded.</span>
         )}
       </div>
+
+      <PaymentDetailDialog
+        row={detailRow && {
+          ...detailRow,
+          partyNumber: partyOf(detailRow).number,
+          partyCustomerName: customerName(partyOf(detailRow).lead),
+        }}
+        onClose={() => setDetailRow(null)}
+        onOpenHistory={onOpenHistory}
+      />
     </div>
   );
 }

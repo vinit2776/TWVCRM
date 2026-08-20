@@ -70,7 +70,6 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-  const authUserId = user.id;
   if (!["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -263,7 +262,7 @@ export async function POST(
     .from("credit_note_uploads")
     .insert({
       billing_statement_id: statement.id,
-      uploaded_by: authUserId,
+      uploaded_by: dbUser.id,
       original_invoice_number: statement.tally_invoice_number,
       original_invoice_series: originalInvoiceSeries,
       credit_note_number: meta.credit_note_number,

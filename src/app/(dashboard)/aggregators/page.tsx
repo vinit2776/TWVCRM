@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Plus, Search, ChevronLeft, ChevronRight, Handshake } from "lucide-react";
@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AGGREGATOR_BILLING_METHOD_LABELS } from "@/lib/constants";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -37,6 +38,26 @@ export default function AggregatorsPage() {
     search,
     status: statusFilter || undefined,
   });
+
+  const [caseCounts, setCaseCounts] = useState<Record<string, { total: number; incomplete: number }>>({});
+  const [caseCountsLoading, setCaseCountsLoading] = useState(false);
+
+  // Key off a stable string, not the `aggregators` array reference — usePaginatedFetch
+  // returns a fresh `[]` on every render until the first fetch resolves, which would
+  // otherwise re-fire this effect (and its unconditional setState) every render.
+  const aggregatorIdsKey = aggregators.map((a) => a.id).join(",");
+
+  useEffect(() => {
+    if (!aggregatorIdsKey) {
+      setCaseCounts({});
+      return;
+    }
+    setCaseCountsLoading(true);
+    fetch(`/api/aggregators/case-counts?ids=${aggregatorIdsKey}`)
+      .then((r) => r.json())
+      .then((j) => setCaseCounts(j.data ?? {}))
+      .finally(() => setCaseCountsLoading(false));
+  }, [aggregatorIdsKey]);
 
   const handleSearch = () => {
     setSearch(searchInput);
@@ -116,7 +137,8 @@ export default function AggregatorsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Email Domain</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">State</th>
+                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Cases</th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Billing Method</th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Created</th>
               </tr>
             </thead>
@@ -142,10 +164,10 @@ export default function AggregatorsPage() {
                         pushTrailEntry({ href: `/aggregators/${agg.id}`, label: agg.name });
                       }}
                     >
-                      {agg.name}
+                      {agg.company_name || agg.name}
                     </Link>
                     {agg.company_name && (
-                      <p className="text-xs text-muted-foreground">{agg.company_name}</p>
+                      <p className="text-xs text-muted-foreground">{agg.name}</p>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
@@ -157,8 +179,28 @@ export default function AggregatorsPage() {
                   <td className="px-4 py-3">
                     <StatusBadge type="aggregator_status" value={agg.status} />
                   </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    {caseCountsLoading ? (
+                      <span className="text-muted-foreground text-xs">…</span>
+                    ) : caseCounts[agg.id] ? (
+                      <Link
+                        href={`/aggregators/${agg.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="hover:underline"
+                      >
+                        <span className="font-medium">{caseCounts[agg.id].total}</span>
+                        {caseCounts[agg.id].incomplete > 0 && (
+                          <span className="ml-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
+                            {caseCounts[agg.id].incomplete} pending
+                          </span>
+                        )}
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                    {agg.same_state_as_twv ? "Same (TN)" : "Interstate"}
+                    {AGGREGATOR_BILLING_METHOD_LABELS[agg.billing_method] || agg.billing_method}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">
                     {formatDate(agg.created_at)}
@@ -167,6 +209,35 @@ export default function AggregatorsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Legend */}
+      {!loading && aggregators.length > 0 && (
+        <div className="rounded-md border bg-muted/20 px-4 py-3">
+          <p className="text-xs font-medium text-muted-foreground mb-2">Legend</p>
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="active" />
+              <span className="text-xs text-muted-foreground">currently engaged</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="inactive" />
+              <span className="text-xs text-muted-foreground">not currently referring</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge type="aggregator_status" value="suspended" />
+              <span className="text-xs text-muted-foreground">flagged, under review</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
+                N pending
+              </span>
+              <span className="text-xs text-muted-foreground">
+                cases not yet Active — won&apos;t show on the Billing tab
+              </span>
+            </div>
+          </div>
         </div>
       )}
 
