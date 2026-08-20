@@ -57,6 +57,7 @@ type ActionType =
   | "process_advance"
   | "approve_advance"
   | "reject_advance"
+  | "reverse_advance"
   | "terminate_amc"
   | "email_po";
 
@@ -370,6 +371,12 @@ export default function PurchaseOrderDetailPage() {
   // Process Advance
   const [advancePaymentDate, setAdvancePaymentDate] = useState("");
 
+  // ── Reverse Advance dialog state (migration 00517) ──────────────────────
+  const [reverseAdvanceMode, setReverseAdvanceMode] = useState<"refund_received" | "adjusted" | "written_off" | null>(null);
+  const [reverseAdvanceReason, setReverseAdvanceReason] = useState("");
+  const [reverseAdvanceLoading, setReverseAdvanceLoading] = useState(false);
+  const [reverseAdvanceError, setReverseAdvanceError] = useState<string | null>(null);
+
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
   const [srPeriodFrom, setSrPeriodFrom] = useState("");
@@ -541,6 +548,46 @@ export default function PurchaseOrderDetailPage() {
       await fetchPo();
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // ── Reverse Advance (admin only, migration 00517) ────────────────────────
+  const handleReverseAdvance = async () => {
+    if (!reverseAdvanceMode) {
+      toast.error("Select a reason category");
+      return;
+    }
+    if (reverseAdvanceReason.trim().length < 10) {
+      toast.error("Reason must be at least 10 characters");
+      return;
+    }
+    setReverseAdvanceLoading(true);
+    setReverseAdvanceError(null);
+    try {
+      const res = await fetch(`/api/procurement/orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reverse_advance",
+          mode: reverseAdvanceMode,
+          reason: reverseAdvanceReason.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setReverseAdvanceError(json.error || "Failed to reverse advance");
+        return;
+      }
+      toast.success("Advance reversed — this PO can now be cancelled");
+      setActionDialog(null);
+      setReverseAdvanceMode(null);
+      setReverseAdvanceReason("");
+      setReverseAdvanceError(null);
+      await fetchPo();
+    } catch {
+      setReverseAdvanceError("Failed to reverse advance");
+    } finally {
+      setReverseAdvanceLoading(false);
     }
   };
 
@@ -1699,7 +1746,9 @@ export default function PurchaseOrderDetailPage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground mb-0.5">Amount</p>
-                <p className="font-bold text-base">{formatCurrency(po.advance_amount ?? 0)}</p>
+                <p className={`font-bold text-base ${po.advance_status === "reversed" ? "line-through text-muted-foreground" : ""}`}>
+                  {formatCurrency(po.advance_amount ?? 0)}
+                </p>
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Mode</p>
@@ -1765,6 +1814,83 @@ export default function PurchaseOrderDetailPage() {
                     >
                       <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
                     </Button>
+                  )}
+                </div>
+              );
+            })()}
+
+            {po.advance_status === "processed" && (
+              <div className="pt-1 space-y-2.5">
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                  <span>
+                    This PO and its material request cannot be cancelled while this advance is outstanding —
+                    money has already been paid to the vendor. Reverse the advance first.
+                  </span>
+                </div>
+                {!userLoading && currentUserRole === "admin" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                    onClick={() => {
+                      setReverseAdvanceMode(null);
+                      setReverseAdvanceReason("");
+                      setReverseAdvanceError(null);
+                      setActionDialog("reverse_advance");
+                    }}
+                    disabled={actionLoading}
+                  >
+                    <Undo2 className="h-4 w-4 mr-1" /> Reverse Advance
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {po.advance_status === "reversed" && (() => {
+              // advance_reversed_by is joined by the PO GET route as
+              // advance_reverser. Deriving this from the audit trail instead
+              // would silently drop the name whenever the audit write failed —
+              // logAudit is fire-and-forget and never blocks the mutation.
+              const reversedByName = po.advance_reverser?.full_name ?? null;
+              const modeLabels: Record<string, string> = {
+                refund_received: "Refund Received",
+                adjusted: "Adjusted",
+                written_off: "Written Off",
+              };
+              const modeColors: Record<string, string> = {
+                refund_received: "bg-green-100 text-green-700",
+                adjusted: "bg-blue-100 text-blue-700",
+                written_off: "bg-red-100 text-red-700",
+              };
+              const isWriteOff = po.advance_reversal_mode === "written_off";
+              const writeOffReviewed = !!po.advance_writeoff_reviewed_at;
+              return (
+                <div className="pt-1 space-y-2.5">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {po.advance_reversal_mode && (
+                      <Badge variant="secondary" className={modeColors[po.advance_reversal_mode] ?? ""}>
+                        {modeLabels[po.advance_reversal_mode] ?? po.advance_reversal_mode}
+                      </Badge>
+                    )}
+                    <span className="text-muted-foreground">
+                      {reversedByName ? `Reversed by ${reversedByName}` : "Reversed"}
+                      {po.advance_reversed_at ? ` on ${formatDate(po.advance_reversed_at)}` : ""}
+                    </span>
+                  </div>
+                  {po.advance_reversal_reason && (
+                    <p className="text-sm text-muted-foreground">{po.advance_reversal_reason}</p>
+                  )}
+                  {isWriteOff && !writeOffReviewed ? (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                      <span>This write-off is awaiting Finance review.</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-800">
+                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5 text-green-600" />
+                      <span>The advance is cleared — this PO can now be cancelled.</span>
+                    </div>
                   )}
                 </div>
               );
@@ -2179,6 +2305,111 @@ export default function PurchaseOrderDetailPage() {
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Confirm Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Reverse Advance dialog ───────────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "reverse_advance"}
+        onOpenChange={(open) => {
+          if (reverseAdvanceLoading) return;
+          setActionDialog(open ? "reverse_advance" : null);
+          if (!open) {
+            setReverseAdvanceMode(null);
+            setReverseAdvanceReason("");
+            setReverseAdvanceError(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Reverse Advance — {po.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              The advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> was paid to{" "}
+              <strong>{vendor?.name}</strong>. What happened to it?
+            </p>
+
+            <div className="space-y-1.5">
+              <Label>What happened <span className="text-red-500">*</span></Label>
+              <div className="grid gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReverseAdvanceMode("refund_received")}
+                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                    reverseAdvanceMode === "refund_received"
+                      ? "border-green-500 bg-green-50 ring-1 ring-green-500"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <p className="text-sm font-medium">Refund received</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">The vendor returned it. Nothing outstanding.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReverseAdvanceMode("adjusted")}
+                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                    reverseAdvanceMode === "adjusted"
+                      ? "border-blue-500 bg-blue-50 ring-1 ring-blue-500"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <p className="text-sm font-medium">Adjusted</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Set off against another PO or a future invoice.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReverseAdvanceMode("written_off")}
+                  className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                    reverseAdvanceMode === "written_off"
+                      ? "border-red-500 bg-red-50 ring-1 ring-red-500"
+                      : "border-red-200 hover:bg-red-50/50"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+                    <p className="text-sm font-medium text-red-700">Written off</p>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Not recoverable. Recorded as a loss and sent to Finance for review.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Reason <span className="text-red-500">*</span></Label>
+              <Textarea
+                placeholder="Explain what happened to this advance..."
+                value={reverseAdvanceReason}
+                onChange={(e) => setReverseAdvanceReason(e.target.value)}
+                rows={3}
+              />
+              <p className={`text-xs ${reverseAdvanceReason.trim().length < 10 ? "text-muted-foreground" : "text-green-700"}`}>
+                {reverseAdvanceReason.trim().length}/10 characters minimum
+              </p>
+            </div>
+
+            {reverseAdvanceError && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                <p className="text-sm text-red-800">{reverseAdvanceError}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActionDialog(null)} disabled={reverseAdvanceLoading}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleReverseAdvance}
+              disabled={reverseAdvanceLoading || !reverseAdvanceMode || reverseAdvanceReason.trim().length < 10}
+            >
+              {reverseAdvanceLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Reverse Advance
             </Button>
           </DialogFooter>
         </DialogContent>

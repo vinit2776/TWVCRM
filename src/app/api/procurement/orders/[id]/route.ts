@@ -40,6 +40,11 @@ const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approve_advance") }),
   z.object({ action: z.literal("reject_advance") }),
   z.object({
+    action: z.literal("reverse_advance"),
+    mode: z.enum(["refund_received", "adjusted", "written_off"]),
+    reason: z.string().min(10),
+  }),
+  z.object({
     action: z.literal("update_amc_details"),
     amc_start_date: z.string().nullable().optional(),
     amc_end_date: z.string().nullable().optional(),
@@ -69,7 +74,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), advance_reverser:users!advance_reversed_by(id, full_name), advance_writeoff_reviewer:users!advance_writeoff_reviewed_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -449,6 +454,32 @@ export async function PATCH(
         advance_payment_mode: mode,
         advance_payment_reference: parsed.data.advance_payment_reference,
       };
+      break;
+    }
+
+    case "reverse_advance": {
+      // Admin only. Releasing an advance (process_advance above) is a
+      // Finance action, but declaring that money was returned, adjusted, or
+      // lost (write-off) is an admin decision — it directly clears the hard
+      // cancellation blocker in resolveCancellationImpact
+      // (src/lib/procurement/cancellation-plan.ts) and, for written_off,
+      // carries real P&L impact.
+      if (dbUser.role !== "admin") {
+        return NextResponse.json({ error: "Only admin can reverse a processed advance" }, { status: 403 });
+      }
+      if (po.advance_status !== "processed") {
+        return NextResponse.json({ error: "Only a processed advance can be reversed" }, { status: 422 });
+      }
+      const { mode, reason } = parsed.data;
+      updatePayload = {
+        advance_status: "reversed",
+        advance_reversed_at: new Date().toISOString(),
+        advance_reversed_by: dbUser.id,
+        advance_reversal_reason: reason.trim(),
+        advance_reversal_mode: mode,
+      };
+      extraAuditChanges.advance_reversal_mode = { old: null, new: mode };
+      extraAuditChanges.advance_reversal_reason = { old: null, new: reason.trim() };
       break;
     }
 

@@ -2091,19 +2091,31 @@ export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "half_yearly",
 export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
 
 // PO Advance Payment
-export const PO_ADVANCE_STATUSES = ["not_required", "pending", "processed"] as const;
+export const PO_ADVANCE_STATUSES = ["not_required", "pending", "processed", "reversed"] as const;
 export type PoAdvanceStatus = (typeof PO_ADVANCE_STATUSES)[number];
 
 export const PO_ADVANCE_STATUS_LABELS: Record<string, string> = {
   not_required: "No Advance",
   pending: "Advance Pending",
   processed: "Advance Processed",
+  reversed: "Advance Reversed",
 };
 
 export const PO_ADVANCE_STATUS_COLORS: Record<string, string> = {
   not_required: "bg-gray-100 text-gray-600",
   pending: "bg-orange-100 text-orange-800",
   processed: "bg-green-100 text-green-800",
+  reversed: "bg-slate-100 text-slate-700",
+};
+
+// PO Advance Reversal (migration 00517)
+export const PO_ADVANCE_REVERSAL_MODES = ["refund_received", "adjusted", "written_off"] as const;
+export type PoAdvanceReversalMode = (typeof PO_ADVANCE_REVERSAL_MODES)[number];
+
+export const PO_ADVANCE_REVERSAL_MODE_LABELS: Record<string, string> = {
+  refund_received: "Refund Received",
+  adjusted: "Adjusted Against Bill",
+  written_off: "Written Off",
 };
 
 export const PO_ADVANCE_PAYMENT_MODES = ["cash", "upi", "bank_transfer"] as const;

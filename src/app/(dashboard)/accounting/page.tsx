@@ -51,6 +51,7 @@ import {
   EXPENDITURE_TYPE_LABELS,
   PROCUREMENT_DEPARTMENTS,
   PARTIAL_APPROVAL_REASON_LABELS,
+  PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -114,6 +115,20 @@ type PendingAdvance = {
   procurement_vendors: { id: string; name: string; contact_email?: string | null } | null;
   purchase_requests: { id: string; pr_number: string } | null;
   proforma: { file_name: string; file_path: string; amount: number; signed_url: string | null } | null;
+};
+
+type AdvanceWriteoff = {
+  po_id: string;
+  po_number: string;
+  vendor: { id: string; name: string } | null;
+  advance_amount: number;
+  advance_payment_date: string | null;
+  advance_payment_mode: string | null;
+  reversed_at: string | null;
+  reversed_by: { id: string; full_name: string; email: string } | null;
+  reversal_reason: string | null;
+  reviewed_at: string | null;
+  reviewed_by: { id: string; full_name: string; email: string } | null;
 };
 
 type TdsSection = {
@@ -383,14 +398,53 @@ export default function AccountingPage() {
     }
   }, []);
 
+  // ── Advance write-offs (Finance review queue, migration 00517) ────────────
+  const [writeoffs, setWriteoffs] = useState<AdvanceWriteoff[]>([]);
+  const [writeoffsLoading, setWriteoffsLoading] = useState(false);
+  const [reviewingWriteoffId, setReviewingWriteoffId] = useState<string | null>(null);
+
+  const fetchWriteoffs = useCallback(async () => {
+    setWriteoffsLoading(true);
+    try {
+      const res = await fetch("/api/procurement/advances/writeoffs?reviewed=all");
+      if (res.ok) {
+        const { data } = await res.json();
+        setWriteoffs(data ?? []);
+      }
+    } finally {
+      setWriteoffsLoading(false);
+    }
+  }, []);
+
+  const markWriteoffReviewed = useCallback(async (poId: string) => {
+    setReviewingWriteoffId(poId);
+    try {
+      const res = await fetch("/api/procurement/advances/writeoffs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "review_advance_writeoff", po_id: poId }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to mark write-off reviewed");
+        return;
+      }
+      toast.success("Write-off marked reviewed");
+      await fetchWriteoffs();
+    } finally {
+      setReviewingWriteoffId(null);
+    }
+  }, [fetchWriteoffs]);
+
   // Fire when filter VALUES change — stringify guards against reference churn.
   const filtersKey = useMemo(() => filtersToParams(filters).toString(), [filters]);
   useEffect(() => {
     if (activeTab === "vendor-payments") {
       fetchVendorBills();
       fetchPendingAdvances();
+      fetchWriteoffs();
     }
-  }, [activeTab, filtersKey, fetchVendorBills, fetchPendingAdvances]);
+  }, [activeTab, filtersKey, fetchVendorBills, fetchPendingAdvances, fetchWriteoffs]);
 
   // Vendor-email audit count for the dashboard widget
   useEffect(() => {
@@ -645,6 +699,11 @@ export default function AccountingPage() {
                 {vendorBills.filter((b) => b.payment_status !== "paid").length}
               </span>
             )}
+            {writeoffs.filter((w) => !w.reviewed_at).length > 0 && (
+              <span className="ml-1.5 bg-red-600 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
+                {writeoffs.filter((w) => !w.reviewed_at).length}
+              </span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="petty-cash">
             <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
@@ -799,6 +858,126 @@ export default function AccountingPage() {
                   )}
                 </div>
               )}
+
+              {/* ── Advance write-offs — Finance review queue (migration 00517) ──
+                  A "written_off" advance reversal is the only reversal mode with
+                  real P&L impact and no corroborating money movement, so it needs
+                  a second pair of eyes. Hidden entirely when there's nothing
+                  unreviewed and nothing reviewed this FY. */}
+              {(writeoffsLoading || writeoffs.length > 0) && (() => {
+                const unreviewed = writeoffs.filter((w) => !w.reviewed_at);
+                const reviewed = writeoffs.filter((w) => w.reviewed_at);
+                const unreviewedTotal = unreviewed.reduce((s, w) => s + Number(w.advance_amount ?? 0), 0);
+                return (
+                  <div className="rounded-lg border border-red-200 bg-red-50/40 overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-red-200 bg-red-100/50 flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-red-800">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-600" />
+                        Advance Write-offs
+                        {!writeoffsLoading && unreviewed.length > 0 && (
+                          <span className="ml-1 normal-case font-normal text-red-700">
+                            · {unreviewed.length} unreviewed · {formatCurrency(unreviewedTotal)}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    {writeoffsLoading ? (
+                      <div className="p-4 text-xs text-red-700">Loading…</div>
+                    ) : (
+                      <div className="divide-y divide-red-100">
+                        {unreviewed.length > 0 && (
+                          <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-red-700 bg-red-50/60">
+                            Awaiting review
+                          </div>
+                        )}
+                        {unreviewed.map((w) => {
+                          const isSelfReview = !!currentUserCtx?.id && w.reversed_by?.id === currentUserCtx.id;
+                          return (
+                            <div key={w.po_id} className="px-4 py-3 space-y-2">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <Link
+                                    href={`/procurement/orders/${w.po_id}`}
+                                    className="font-mono text-xs text-red-800 hover:underline"
+                                    onClick={() => pushTrailEntry({ href: `/procurement/orders/${w.po_id}`, label: w.po_number })}
+                                  >
+                                    {w.po_number}
+                                  </Link>
+                                  <p className="text-sm font-medium mt-0.5">{w.vendor?.name ?? "—"}</p>
+                                </div>
+                                <p className="text-sm font-semibold text-red-800 shrink-0">
+                                  {formatCurrency(w.advance_amount)}
+                                </p>
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Paid {w.advance_payment_date ? formatDate(w.advance_payment_date) : "—"}
+                                {w.advance_payment_mode ? ` via ${PO_ADVANCE_PAYMENT_MODE_LABELS[w.advance_payment_mode] ?? w.advance_payment_mode}` : ""}
+                                {" · "}Written off by {w.reversed_by?.full_name ?? "—"}
+                                {w.reversed_at ? ` on ${formatDate(w.reversed_at)}` : ""}
+                              </p>
+                              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{w.reversal_reason}</p>
+                              <div className="flex items-center gap-2 pt-0.5">
+                                {isSelfReview ? (
+                                  <span
+                                    title="You recorded this write-off — another admin or Accounts user must review it"
+                                    className="inline-flex items-center gap-1 rounded-md border border-muted-foreground/20 bg-muted text-muted-foreground text-xs font-medium px-3 py-1.5 cursor-not-allowed"
+                                  >
+                                    Mark reviewed — requires a different reviewer
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => markWriteoffReviewed(w.po_id)}
+                                    disabled={reviewingWriteoffId === w.po_id}
+                                    className="inline-flex items-center gap-1 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-1.5 disabled:opacity-60"
+                                  >
+                                    {reviewingWriteoffId === w.po_id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                    Mark reviewed
+                                  </button>
+                                )}
+                                <Link
+                                  href={`/procurement/orders/${w.po_id}`}
+                                  className="text-xs text-muted-foreground hover:underline"
+                                  onClick={() => pushTrailEntry({ href: `/procurement/orders/${w.po_id}`, label: w.po_number })}
+                                >
+                                  View PO
+                                </Link>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {reviewed.length > 0 && (
+                          <>
+                            <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted/40">
+                              Reviewed this financial year — nothing awaiting action
+                            </div>
+                            {reviewed.map((w) => (
+                              <div key={w.po_id} className="px-4 py-2.5 space-y-1 opacity-60">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <Link
+                                      href={`/procurement/orders/${w.po_id}`}
+                                      className="font-mono text-xs text-muted-foreground hover:underline"
+                                      onClick={() => pushTrailEntry({ href: `/procurement/orders/${w.po_id}`, label: w.po_number })}
+                                    >
+                                      {w.po_number}
+                                    </Link>
+                                    <p className="text-sm mt-0.5">{w.vendor?.name ?? "—"}</p>
+                                  </div>
+                                  <p className="text-sm text-muted-foreground shrink-0">{formatCurrency(w.advance_amount)}</p>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  Reviewed by {w.reviewed_by?.full_name ?? "—"}{w.reviewed_at ? ` on ${formatDate(w.reviewed_at)}` : ""}
+                                </p>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Cash-flow batch buckets */}
               {allPendingBills.length > 0 && (() => {

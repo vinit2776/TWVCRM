@@ -153,10 +153,12 @@ export function buildStockReversedEffect(opts: {
 /**
  * A processed PO advance is money already paid to the vendor. Product rule
  * (scope change): this blocks the cancel outright rather than producing a
- * "recovery due" effect — there is currently NO endpoint or UI in the CRM to
- * reverse or record recovery of a processed advance, so the message tells
- * the user to sort it out with Finance rather than pointing at a button that
- * doesn't exist.
+ * "recovery due" effect. An admin can now clear this via the "Reverse
+ * advance" action (PATCH .../orders/[id] action: "reverse_advance", modes
+ * refund_received / adjusted / written_off — see migration 00517 and
+ * src/app/api/procurement/orders/[id]/route.ts), which flips advance_status
+ * to 'reversed' and this check stops blocking automatically since it only
+ * ever matches 'processed'.
  */
 export function processedAdvanceBlocker(opts: {
   poNumber: string;
@@ -166,7 +168,7 @@ export function processedAdvanceBlocker(opts: {
   if (opts.advanceStatus !== "processed") return null;
   return {
     entity: `purchase_order:${opts.poNumber}`,
-    reason: `${opts.poNumber} has a processed advance of ₹${opts.advanceAmount.toLocaleString("en-IN")}. That money has already been paid to the vendor; it must be recovered or reversed with Finance before this chain can be cancelled.`,
+    reason: `${opts.poNumber} has a processed advance of ₹${opts.advanceAmount.toLocaleString("en-IN")}. That money has already been paid to the vendor; reverse the advance (refund received, adjusted, or written off) before this chain can be cancelled.`,
   };
 }
 
