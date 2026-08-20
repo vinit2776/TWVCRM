@@ -4119,3 +4119,39 @@ export interface ContractBillingMoratorium {
   authorized_by_user?: { full_name: string } | null;
 }
 
+
+/**
+ * One entry on a billing statement's unified history timeline.
+ *
+ * Built by GET /api/billing-statements/[id]/timeline, which merges six
+ * sources (lifecycle columns, send log, reminder sends, payments, GST
+ * uploads, audit trail) into a single chronological narrative. Prior to
+ * this the AR page only ever showed send events, so workflow overrides
+ * like "PI cancelled, GST issued early" were invisible — a GST invoice
+ * would appear against an unpaid bill with no visible explanation.
+ */
+export type StatementTimelineKind =
+  | "lifecycle"
+  | "send"
+  | "reminder"
+  | "payment"
+  | "gst"
+  | "audit";
+
+export interface StatementTimelineEvent {
+  id: string;
+  at: string;
+  kind: StatementTimelineKind;
+  label: string;
+  detail: string | null;
+  channel: string | null;
+  recipient: string | null;
+  /** sent | delivered | opened | failed | ok */
+  status: string | null;
+  error: string | null;
+  /** Resolved display name, or a sentinel like "Cron" / "System". */
+  actor: string | null;
+  amount: number | null;
+  /** Draws the eye to workflow overrides that explain otherwise-odd state. */
+  highlight: boolean;
+}

@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -38,6 +38,7 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
 import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
+import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -277,21 +278,9 @@ export default function AccountsReceivablePage() {
   const [resendRecipients, setResendRecipients] = useState<Set<string>>(new Set());
 
   // History drawer state — also opened from the Paid tab (PaidStatementsPanel),
-  // so the shape is the minimal subset both callers can supply.
+  // so the shape is the minimal subset both callers can supply. Fetching and
+  // rendering live in StatementTimelineDialog.
   const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string } | null>(null);
-  const [historyItems, setHistoryItems] = useState<Array<{
-    id: string;
-    stage_index: number;
-    stage_label: string;
-    channel: string;
-    recipient: string;
-    status: string;
-    error: string | null;
-    triggered_by: string;
-    sent_at: string;
-    triggered_by_user?: { full_name: string } | null;
-  }>>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -396,21 +385,7 @@ export default function AccountsReceivablePage() {
     }
   };
 
-  const openHistory = async (row: { id: string; statement_number: string }) => {
-    setHistoryRow(row);
-    setHistoryItems([]);
-    setHistoryLoading(true);
-    try {
-      const res = await fetch(`/api/billing-statements/${row.id}/send-reminder`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-      setHistoryItems(json.history || []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load history");
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
+  const openHistory = (row: { id: string; statement_number: string }) => setHistoryRow(row);
 
   const exportCsv = () => {
     window.location.href = "/api/accounting/receivables/export";
@@ -851,60 +826,7 @@ export default function AccountsReceivablePage() {
         onOpenHistory={openHistory}
       />
 
-      <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Send history — {historyRow?.statement_number}</DialogTitle>
-          </DialogHeader>
-          {historyLoading ? (
-            <div className="p-6 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
-          ) : historyItems.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">Nothing sent yet for this statement.</div>
-          ) : (
-            <div className="max-h-[400px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Sent</th>
-                    <th className="px-3 py-2 text-left">Stage</th>
-                    <th className="px-3 py-2 text-left">Channel</th>
-                    <th className="px-3 py-2 text-left">Recipient</th>
-                    <th className="px-3 py-2 text-left">Status</th>
-                    <th className="px-3 py-2 text-left">By</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {historyItems.map((h) => (
-                    <tr key={h.id}>
-                      <td className="px-3 py-2 whitespace-nowrap text-xs">{new Date(h.sent_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}</td>
-                      <td className="px-3 py-2 text-xs">{h.stage_label}</td>
-                      <td className="px-3 py-2 text-xs uppercase">{h.channel}</td>
-                      <td className="px-3 py-2 text-xs">{h.recipient}</td>
-                      <td className="px-3 py-2">
-                        {h.status === "opened" ? (
-                          <Badge className="bg-teal-100 text-teal-800 border-teal-300 text-[10px] flex items-center gap-1 w-fit">
-                            <Eye className="h-2.5 w-2.5" /> OPENED
-                          </Badge>
-                        ) : h.status === "sent" ? (
-                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">SENT</Badge>
-                        ) : (
-                          <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]" title={h.error || ""}>FAILED</Badge>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {h.triggered_by === "cron" ? "Cron" : (h.triggered_by_user?.full_name || "Manual")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setHistoryRow(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <StatementTimelineDialog statement={historyRow} onClose={() => setHistoryRow(null)} />
 
       <Dialog open={!!resendRow} onOpenChange={(o) => !o && setResendRow(null)}>
         <DialogContent>
