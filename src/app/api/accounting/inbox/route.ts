@@ -17,6 +17,7 @@ import {
   type InboxSnapshot,
   type InboxUpload,
   type TimelineEvent,
+  voBillParty,
 } from "@/lib/tally-handoff";
 
 /**
@@ -111,7 +112,7 @@ export async function GET(req: NextRequest) {
         )
       ),
       case:cases!billing_statements_case_id_fkey(
-        id, case_number, client_name, client_company_name, client_email, client_phone, client_gst_number,
+        id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
@@ -233,6 +234,7 @@ export async function GET(req: NextRequest) {
     case: {
       id: string;
       case_number: string;
+      bill_to: "aggregator" | "client" | null;
       client_name: string;
       client_company_name: string | null;
       client_email: string | null;
@@ -482,10 +484,14 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(stateChangedAt)) / 3_600_000));
     const bucket = bucketFor(s.handoff_state, hasDiscrepancy) ?? "in_flight";
 
-    const customerHasGstin = !!(
+    // VO statements: the buyer is whoever bill_to names, so the GSTIN that
+    // decides A-series vs B-series has to come from that same party — reading
+    // the aggregator's GSTIN on a client-billed case would put the invoice in
+    // the wrong series.
+    const customerGstin =
       s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number ??
-      s.case?.aggregator?.gst_number ?? s.case?.client_gst_number ?? s.aggregator?.gst_number
-    );
+      voBillParty(s)?.gstin ?? null;
+    const customerHasGstin = !!customerGstin;
     const payments = paymentsByStatement.get(s.id) ?? [];
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const isVoided = !!s.voided_at;

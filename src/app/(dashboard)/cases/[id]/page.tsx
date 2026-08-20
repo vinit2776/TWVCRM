@@ -41,6 +41,7 @@ import {
   CASE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { caseDisplayName } from "@/lib/case-workflow";
 import {
   Dialog,
   DialogContent,
@@ -107,7 +108,7 @@ export default function CaseDetailPage({
   return (
     <div className="space-y-6">
       <PageBreadcrumb
-        current={{ label: caseData.client_name }}
+        current={{ label: caseDisplayName(caseData) }}
         fallbackParent={{ href: "/cases", label: "Cases" }}
       />
       {/* Header */}
@@ -118,12 +119,20 @@ export default function CaseDetailPage({
           </Button>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold">{caseData.client_name}</h1>
+              <h1 className="text-2xl font-bold">{caseDisplayName(caseData)}</h1>
               <StatusBadge type="case_status" value={caseData.status} />
               <StatusBadge type="vo_purpose" value={caseData.purpose} />
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono">{caseData.case_number}</span>
+              {/* Contact person — secondary to the company in the heading, but
+                  still the name staff use on the phone, so keep it visible. */}
+              {caseData.client_company_name && caseData.client_name && (
+                <>
+                  <span>|</span>
+                  <span>{caseData.client_name}</span>
+                </>
+              )}
               <span>|</span>
               {aggregator ? (
                 <span>{aggregator.company_name || aggregator.name}</span>
@@ -438,7 +447,7 @@ export default function CaseDetailPage({
           <DialogHeader>
             <DialogTitle>Delete Case</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete case {caseData.case_number} for {caseData.client_name}?
+              Are you sure you want to delete case {caseData.case_number} for {caseDisplayName(caseData)}?
               This action cannot be undone.
             </DialogDescription>
           </DialogHeader>

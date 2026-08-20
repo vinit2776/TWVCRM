@@ -37,6 +37,7 @@ import {
   VO_PURPOSE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 export default function CasesPage() {
   const router = useRouter();
@@ -199,7 +200,7 @@ export default function CasesPage() {
                   key={c.id}
                   className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
                   onClick={() => {
-                    pushTrailEntry({ href: `/cases/${c.id}`, label: c.client_name });
+                    pushTrailEntry({ href: `/cases/${c.id}`, label: caseDisplayName(c) });
                     router.push(`/cases/${c.id}`);
                   }}
                 >
@@ -212,7 +213,7 @@ export default function CasesPage() {
                       className="font-medium text-primary hover:underline"
                       onClick={(e) => {
                         e.stopPropagation();
-                        pushTrailEntry({ href: `/cases/${c.id}`, label: c.client_name });
+                        pushTrailEntry({ href: `/cases/${c.id}`, label: caseDisplayName(c) });
                       }}
                     >
                       {c.client_company_name || c.client_name}

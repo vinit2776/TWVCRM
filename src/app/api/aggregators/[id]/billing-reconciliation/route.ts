@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 /**
  * GET /api/aggregators/[id]/billing-reconciliation
@@ -26,7 +27,7 @@ export async function GET(
 
   const { data: cases, error: casesError } = await supabase
     .from("cases")
-    .select("id, case_number, client_name, purpose, rate, status")
+    .select("id, case_number, client_name, client_company_name, purpose, rate, status")
     .eq("aggregator_id", id)
     .in("status", BILLABLE_CASE_STATUSES)
     .order("case_number", { ascending: true });
@@ -67,7 +68,7 @@ export async function GET(
       billed.push({
         id: c.id,
         case_number: c.case_number,
-        client_name: c.client_name,
+        client_name: caseDisplayName(c),
         purpose: c.purpose,
         rate: c.rate,
         amount: entry.amount,
@@ -86,7 +87,7 @@ export async function GET(
       pending.push({
         id: c.id,
         case_number: c.case_number,
-        client_name: c.client_name,
+        client_name: caseDisplayName(c),
         purpose: c.purpose,
         rate: c.rate,
       });

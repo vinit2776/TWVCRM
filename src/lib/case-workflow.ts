@@ -2,6 +2,23 @@ import { CASE_STATUS_TRANSITIONS, CASE_STATUS_LABELS, CASE_STATUS_GROUPS } from 
 import type { CaseStatus } from "@/types";
 
 /**
+ * The name a case is known by across the CRM.
+ *
+ * A Virtual Office case is opened for a business, with a named individual as
+ * its contact — so the registered company is the identity that matters (it is
+ * what goes on the invoice, the agreement, and the GST registration), and the
+ * contact person is secondary. Sole proprietors have no company name; they
+ * fall back to the person. Display the contact separately as a subline rather
+ * than in place of this.
+ */
+export function caseDisplayName(caseData: {
+  client_company_name?: string | null;
+  client_name?: string | null;
+}): string {
+  return caseData.client_company_name || caseData.client_name || "(unnamed)";
+}
+
+/**
  * Check if a status transition is valid.
  */
 export function validateTransition(

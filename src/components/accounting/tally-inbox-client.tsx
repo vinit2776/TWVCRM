@@ -36,6 +36,7 @@ import {
   type HandoffBucket,
   type InboxResponse,
   type InboxRow,
+  voBillParty,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
@@ -74,15 +75,11 @@ function partyDisplay(row: InboxRow): string {
     const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
     return name || lead.email || "(unnamed)";
   }
-  // Per-case VO statements (prepaid aggregator / direct client) carry no
-  // lead — they use the case's own client fields instead.
-  if (row.case) {
-    return row.case.client_company_name || row.case.client_name || "(unnamed)";
-  }
-  // Postpaid aggregator consolidated statements carry no lead either.
-  if (row.aggregator) {
-    return row.aggregator.name || "(unnamed)";
-  }
+  // VO statements carry no lead. The buyer is whoever the case's bill_to
+  // names (the aggregator, for partner-billed cases) — not automatically the
+  // end client, whose name never reaches the invoice in that case.
+  const voParty = voBillParty(row);
+  if (voParty) return voParty.name || "(unnamed)";
   return "(unknown party)";
 }
 
@@ -1615,9 +1612,9 @@ const InboxRowItem = memo(function InboxRowItem({
               </span>
             );
           })()}
-          {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number) ? (
+          {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin) ? (
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
-              {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number}
+              {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin}
             </span>
           ) : gstinEditing ? (
             <span className="flex items-center gap-1 flex-wrap">

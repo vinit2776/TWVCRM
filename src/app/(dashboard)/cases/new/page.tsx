@@ -10,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import type { CreateCaseInput } from "@/lib/validations";
 import type { VoCase } from "@/types";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 function NewCaseContent() {
   const router = useRouter();
@@ -47,7 +48,7 @@ function NewCaseContent() {
 
     const { data: newCase } = await res.json();
     toast.success(renewFrom ? "Renewal case created" : "Case created successfully");
-    pushTrailEntry({ href: `/cases/${newCase.id}`, label: newCase.client_name });
+    pushTrailEntry({ href: `/cases/${newCase.id}`, label: caseDisplayName(newCase) });
     router.push(`/cases/${newCase.id}`);
   };
 
@@ -70,7 +71,7 @@ function NewCaseContent() {
       </h1>
       {renewFrom && parentCase && (
         <p className="text-sm text-muted-foreground mb-6">
-          Renewing {parentCase.case_number} — {parentCase.client_name}
+          Renewing {parentCase.case_number} — {caseDisplayName(parentCase)}
         </p>
       )}
       {!renewFrom && <div className="mb-6" />}

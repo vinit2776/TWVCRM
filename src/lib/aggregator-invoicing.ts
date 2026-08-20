@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { MONTH_NAMES, VO_PURPOSE_LABELS } from "@/lib/constants";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 export interface GenerateConsolidatedInvoiceParams {
   supabase: SupabaseClient;
@@ -71,7 +72,7 @@ export async function generateConsolidatedInvoice({
   // all" behavior, still used by the monthly cron).
   let caseQuery = supabase
     .from("cases")
-    .select("id, case_number, client_name, purpose, rate, tenure_months, start_date, activated_at, status")
+    .select("id, case_number, client_name, client_company_name, purpose, rate, tenure_months, start_date, activated_at, status")
     .eq("aggregator_id", aggregatorId)
     .in("status", ["active", "renewal_due", "invoiced", "executed"]);
 
@@ -125,7 +126,7 @@ export async function generateConsolidatedInvoice({
       return {
         case_id: c.id,
         case_number: c.case_number,
-        client_name: c.client_name,
+        client_name: caseDisplayName(c),
         purpose: c.purpose,
         purpose_label: VO_PURPOSE_LABELS[c.purpose] || c.purpose,
         tenure_months: c.tenure_months,

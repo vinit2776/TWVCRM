@@ -158,12 +158,55 @@ export interface InboxAggregator {
 export interface InboxCase {
   id: string;
   case_number: string;
+  /** Who this case's invoice actually bills. 'aggregator' means the referral
+   *  partner is the buyer on the invoice, not the end client. Null for
+   *  direct-client cases (they always bill the client). */
+  bill_to: "aggregator" | "client" | null;
   client_name: string;
   client_company_name: string | null;
   client_email: string | null;
   client_phone: string | null;
   client_gst_number: string | null;
   aggregator: InboxAggregator | null;
+}
+
+/** The party a Virtual Office statement actually bills.
+ *
+ *  A per-case statement bills the aggregator when the case's bill_to says so,
+ *  and the end client otherwise; a consolidated statement always bills its
+ *  aggregator. Mirrors leadFromVoSource in the dispatch and PDF paths
+ *  (inbox-send, upload-gst-invoice, upload-credit-note, proforma-pdf,
+ *  send-proforma) so the inbox shows the same buyer the invoice will carry. */
+export function voBillParty(source: {
+  case: InboxCase | null;
+  aggregator: InboxAggregator | null;
+}): { name: string; email: string | null; phone: string | null; gstin: string | null } | null {
+  if (source.case) {
+    const billToAggregator = source.case.bill_to === "aggregator" ? source.case.aggregator : null;
+    if (billToAggregator) {
+      return {
+        name: billToAggregator.name,
+        email: billToAggregator.primary_email,
+        phone: billToAggregator.primary_phone,
+        gstin: billToAggregator.gst_number,
+      };
+    }
+    return {
+      name: source.case.client_company_name || source.case.client_name,
+      email: source.case.client_email,
+      phone: source.case.client_phone,
+      gstin: source.case.client_gst_number,
+    };
+  }
+  if (source.aggregator) {
+    return {
+      name: source.aggregator.name,
+      email: source.aggregator.primary_email,
+      phone: source.aggregator.primary_phone,
+      gstin: source.aggregator.gst_number,
+    };
+  }
+  return null;
 }
 
 export interface InboxPayment {

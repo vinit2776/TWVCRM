@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
-import type { InboxRow, ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
+import { voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 
 interface Props {
   row: InboxRow;
@@ -37,11 +37,18 @@ function usageLineLabel(statementType: string | null): string {
 
 export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
-  const customerHasGstin = !!lead?.gst_number;
+  // Virtual Office statements have no lead — the buyer is the case's bill_to
+  // party (the aggregator, for partner-billed cases) or the statement's own
+  // aggregator. Reading only the lead left accounts typing "(unnamed)" into
+  // Tally against a B-series number while the row itself said IRN required.
+  const voParty = voBillParty(row);
+  const customerGstin = lead?.gst_number || voParty?.gstin || null;
+  const customerHasGstin = !!customerGstin;
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
   const expectedPrefix = customerHasGstin ? "SD/A/" : "SD/B/";
   const partyName =
-    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "(unnamed)";
+    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
+    || voParty?.name || "(unnamed)";
 
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [irn, setIrn] = useState("");
@@ -222,7 +229,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         <div className="font-medium">Upload Tally GST invoice</div>
         <div className="text-xs text-muted-foreground mt-0.5">
           Customer: <span className="font-medium">{partyName}</span>
-          {lead?.gst_number ? ` · GSTIN ${lead.gst_number}` : " · (no GSTIN on file)"}
+          {customerGstin ? ` · GSTIN ${customerGstin}` : " · (no GSTIN on file)"}
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
           {row.irn_required && <span className="ml-2 text-blue-900">· IRN required</span>}
@@ -284,7 +291,21 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
 
         {/* Line items */}
         <div className="border-t pt-2">
-          <div className="text-muted-foreground mb-1">Line items</div>
+          <div className="flex items-baseline justify-between gap-2 mb-1">
+            <div className="text-muted-foreground">Line items</div>
+            {/* When the buyer is the aggregator, nothing else on this row says
+                which referred client the fee is for. Statements created before
+                the description carried it have only this. */}
+            {row.case && row.case.bill_to === "aggregator" && (
+              <div className="text-muted-foreground truncate">
+                For:{" "}
+                <span className="text-foreground font-medium">
+                  {row.case.client_company_name || row.case.client_name}
+                </span>
+                <span className="font-mono"> · {row.case.case_number}</span>
+              </div>
+            )}
+          </div>
           <table className="w-full">
             <tbody>
               {row.itemized_charges.length > 0 ? (
