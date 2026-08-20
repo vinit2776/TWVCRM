@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 // The checker is a CI script, but its comparison logic is pure and worth
 // pinning — a false negative here means a silently skipped migration.
-import { numberOf, byNumber, findConflicts } from "../../../.github/scripts/check-migration-numbers.mjs";
+import { numberOf, byNumber, findConflicts, nameOf, findAppliedConflicts } from "../../../.github/scripts/check-migration-numbers.mjs";
 
 describe("numberOf", () => {
   it("reads the five-digit prefix", () => {
@@ -80,5 +80,43 @@ describe("importing the checker", () => {
       { encoding: "utf8", cwd: process.cwd() },
     );
     expect(out).toBe("");
+  });
+});
+
+describe("nameOf", () => {
+  it("strips the version prefix and extension", () => {
+    expect(nameOf("00511_delivery_receipt_reversal.sql")).toBe("delivery_receipt_reversal");
+  });
+});
+
+describe("findAppliedConflicts", () => {
+  const introduced = [{ file: "00517_delivery_receipt_reversal.sql", number: "00517" }];
+
+  it("flags a number production applied under a different name", () => {
+    const { conflicts } = findAppliedConflicts(introduced, new Map([["00517", "po_advance_reversal"]]));
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].recorded).toBe("po_advance_reversal");
+  });
+
+  it("accepts a branch's own migration already applied", () => {
+    // Normal here: db push runs from feature branches before they merge, so a
+    // branch legitimately owns an applied number. Failing this would make the
+    // check unusable.
+    const { conflicts, unverifiable } =
+      findAppliedConflicts(introduced, new Map([["00517", "delivery_receipt_reversal"]]));
+    expect(conflicts).toEqual([]);
+    expect(unverifiable).toEqual([]);
+  });
+
+  it("reports an unnamed history row as unverifiable rather than passing it", () => {
+    const { conflicts, unverifiable } = findAppliedConflicts(introduced, new Map([["00517", null]]));
+    expect(conflicts).toEqual([]);
+    expect(unverifiable).toHaveLength(1);
+  });
+
+  it("ignores numbers production has never applied", () => {
+    const { conflicts, unverifiable } = findAppliedConflicts(introduced, new Map([["00099", "other"]]));
+    expect(conflicts).toEqual([]);
+    expect(unverifiable).toEqual([]);
   });
 });
