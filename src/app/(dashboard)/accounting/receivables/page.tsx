@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -222,7 +222,7 @@ interface Summary {
   oldest_days: number;
 }
 
-type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "paid";
+type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid";
 type ViewMode = "detail" | "ageing";
 
 /** One row in the Ageing view — aggregates all statements for a contract. */
@@ -246,6 +246,7 @@ const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "overdue",    label: "Overdue",        hint: "Due date is in the past" },
   { key: "overdue_30", label: "Overdue 30+",    hint: "More than a month past due" },
   { key: "partial",    label: "Partially paid", hint: "Some money in, balance pending" },
+  { key: "reported",   label: "Reported",       hint: "Payments reported by customers, not yet verified" },
   { key: "paid",       label: "Paid",           hint: "Finalized statements settled in full" },
 ];
 
@@ -423,6 +424,7 @@ export default function AccountsReceivablePage() {
     if (filter === "overdue")    r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= 0);
     if (filter === "overdue_30") r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= 30);
     if (filter === "partial")    r = r.filter((x) => x.payment_status === "partially_paid");
+    if (filter === "reported")   r = r.filter((x) => reportsForRow(x).length > 0);
 
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -436,7 +438,46 @@ export default function AccountsReceivablePage() {
       });
     }
     return r;
-  }, [rows, filter, search]);
+  }, [rows, filter, search, reportsForRow]);
+
+  /**
+   * Needs-attention strip totals — always over the full unfiltered `rows` /
+   * `pendingReports`, not `filtered`, so clicking a card gives an accurate
+   * jump-filter regardless of which filter/search is currently active.
+   */
+  const kpis = useMemo(() => {
+    const overdue30Rows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= 30);
+    const overdueUnder30Rows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= 0 && r.days_overdue < 30);
+    const dueSoonRows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= -7 && r.days_overdue < 0);
+    const reportedClaims = pendingReports.filter((p) => p.status === "reported");
+    return {
+      overdue30Count: overdue30Rows.length,
+      overdue30Sum: overdue30Rows.reduce((s, r) => s + r.balance_due, 0),
+      overdueUnder30Count: overdueUnder30Rows.length,
+      overdueUnder30Sum: overdueUnder30Rows.reduce((s, r) => s + r.balance_due, 0),
+      dueSoonCount: dueSoonRows.length,
+      dueSoonSum: dueSoonRows.reduce((s, r) => s + r.balance_due, 0),
+      reportedCount: reportedClaims.length,
+      reportedSum: reportedClaims.reduce((s, r) => s + r.amount, 0),
+    };
+  }, [rows, pendingReports]);
+
+  // ── Detail view: group filtered statements by urgency bucket ─────────────
+  const buckets = useMemo(() => {
+    const defs: { label: string; labelClass: string; borderClass: string; test: (d: number | null) => boolean }[] = [
+      { label: "31+ days overdue",  labelClass: "text-red-700",    borderClass: "border-l-red-600",    test: (d) => d !== null && d >= 30 },
+      { label: "Overdue",           labelClass: "text-orange-700", borderClass: "border-l-orange-500", test: (d) => d !== null && d >= 0 && d < 30 },
+      { label: "Due within 7 days", labelClass: "text-amber-700",  borderClass: "border-l-amber-500",  test: (d) => d !== null && d < 0 && d >= -7 },
+      { label: "Not due yet",       labelClass: "text-emerald-700",borderClass: "border-l-emerald-500",test: (d) => d === null || d < -7 },
+    ];
+    return defs
+      .map((d) => ({ ...d, rows: filtered.filter((r) => d.test(r.days_overdue)) }))
+      .filter((b) => b.rows.length > 0);
+  }, [filtered]);
+
+  // Which row's collapsed "reported paid" banner is expanded (one at a time,
+  // matching the existing single-open pattern used for the query panel).
+  const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
 
   // ── Ageing view: group filtered statements by contract (or proposal) ─────
   const agingRows = useMemo((): AgingRow[] => {
@@ -576,25 +617,37 @@ export default function AccountsReceivablePage() {
 
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <button
+            type="button"
+            onClick={() => setFilter("overdue_30")}
+            className="text-left rounded-xl border border-red-200 border-l-4 border-l-red-600 bg-red-50 p-3.5 hover:bg-red-100/60 transition"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-red-800">31+ days overdue</div>
+            <div className="text-lg font-bold text-red-900 mt-0.5">{kpis.overdue30Count} · {formatCurrency(kpis.overdue30Sum)}</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilter("reported")}
+            className="text-left rounded-xl border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-3.5 hover:bg-amber-100/60 transition"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">Reported — needs verification</div>
+            <div className="text-lg font-bold text-amber-900 mt-0.5">{kpis.reportedCount} · {formatCurrency(kpis.reportedSum)}</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilter("due_soon")}
+            className="text-left rounded-xl border border-teal-200 border-l-4 border-l-teal-600 bg-teal-50 p-3.5 hover:bg-teal-100/60 transition"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-teal-800">Due within 7 days</div>
+            <div className="text-lg font-bold text-teal-900 mt-0.5">{kpis.dueSoonCount} · {formatCurrency(kpis.dueSoonSum)}</div>
+          </button>
+          <Card className="border-l-4 border-l-orange-500">
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Overdue (under 30d)</CardTitle></CardHeader>
+            <CardContent><div className="text-lg font-bold text-orange-700">{kpis.overdueUnder30Count} · {formatCurrency(kpis.overdueUnder30Sum)}</div></CardContent>
+          </Card>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total outstanding</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-teal-700">{formatCurrency(summary.total_outstanding)}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Open statements</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold">{summary.count}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Due ≤ 7 days</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-amber-700">{summary.due_soon}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Overdue</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-orange-700">{summary.overdue}</div></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Overdue 30+</CardTitle></CardHeader>
-            <CardContent><div className="text-2xl font-bold text-red-700">{summary.overdue_30}</div></CardContent>
+            <CardContent><div className="text-lg font-bold text-teal-700">{summary.count} open · {formatCurrency(summary.total_outstanding)}</div></CardContent>
           </Card>
         </div>
       )}
@@ -727,160 +780,174 @@ export default function AccountsReceivablePage() {
             </div>
           ) : (
             /* ── Detail view ── */
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Contract / Customer</th>
-                    <th className="px-4 py-3 text-left">Statement</th>
-                    <th className="px-4 py-3 text-left">Period</th>
-                    <th className="px-4 py-3 text-left">Due</th>
-                    <th className="px-4 py-3 text-left">Lifecycle</th>
-                    <th className="px-4 py-3 text-right">Total</th>
-                    <th className="px-4 py-3 text-right">Paid</th>
-                    <th className="px-4 py-3 text-right">Balance</th>
-                    <th className="px-4 py-3 text-left">Last sent</th>
-                    <th className="px-4 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {filtered.map((r) => {
-                    const party = partyOf(r);
-                    const avg = avgDays[party.id];
-                    return (
-                      // Fragment, not a wrapper element: the query panel is a
-                      // sibling <tr> and anything else here would be invalid
-                      // inside <tbody>.
-                      <Fragment key={r.id}>
-                      <tr className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
-                          <div className="font-medium">
-                            <Link href={party.href} className="text-teal-700 hover:underline">
-                              {party.number}
-                            </Link>
-                            {party.kind === "proposal" && (
-                              <Badge variant="outline" className="ml-1.5 text-[10px]">Proposal PI</Badge>
-                            )}
-                            {party.kind === "invoice" && (
-                              <Badge variant="outline" className="ml-1.5 text-[10px]">Ad-hoc Invoice</Badge>
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground">{customerName(party.lead)}</div>
-                          {avg !== undefined && (
-                            <div className={`text-[10px] mt-0.5 font-medium ${avg > 0 ? "text-red-600" : "text-emerald-600"}`}>
-                              avg {avg > 0 ? `${avg}d late` : `${Math.abs(avg)}d early`}
+            <div className="flex flex-col gap-5 p-4">
+              {buckets.map((bucket) => (
+                <div key={bucket.label}>
+                  <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${bucket.labelClass}`}>
+                    {bucket.label} <span className="text-muted-foreground font-medium">({bucket.rows.length})</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {bucket.rows.map((r) => {
+                      const party = partyOf(r);
+                      const avg = avgDays[party.id];
+                      const reports = reportsForRow(r);
+                      const reportOpen = expandedReportId === r.id;
+                      return (
+                        <div key={r.id} className={`rounded-xl border overflow-hidden ${bucket.borderClass} border-l-4`}>
+                          {reports.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedReportId(reportOpen ? null : r.id)}
+                              className={`block w-full text-left px-3.5 py-1.5 text-xs font-medium border-b ${
+                                reports.some((x) => x.status === "reported")
+                                  ? "bg-amber-50 text-amber-900 border-amber-200"
+                                  : "bg-muted/40 text-muted-foreground border-border"
+                              }`}
+                            >
+                              ⚠ {reports.length} payment report{reports.length > 1 ? "s" : ""} on this statement — {reportOpen ? "hide" : "view"}
+                            </button>
+                          )}
+                          {reportOpen && (
+                            <div className="px-3.5 py-2 border-b bg-amber-50/40 space-y-1.5">
+                              {reports.map((rep) => (
+                                <ReportedPaymentLine key={rep.id} rep={rep} />
+                              ))}
                             </div>
                           )}
-                          <div className="flex gap-2 mt-1">
-                            {party.lead?.email && (
-                              <a href={`mailto:${party.lead.email}`} title={party.lead.email} className="text-muted-foreground hover:text-teal-700">
-                                <Mail className="h-3.5 w-3.5" />
-                              </a>
-                            )}
-                            {(party.lead?.mobile || party.lead?.phone) && (
-                              <a href={`tel:${party.lead.mobile || party.lead.phone}`} title={party.lead.mobile || party.lead.phone} className="text-muted-foreground hover:text-teal-700">
-                                <Phone className="h-3.5 w-3.5" />
-                              </a>
-                            )}
+
+                          <div className="p-3.5 flex items-start justify-between gap-4 flex-wrap">
+                            <div className="flex-1 min-w-[260px]">
+                              <div className="flex items-baseline gap-1.5 flex-wrap">
+                                <Link href={party.href} className="font-semibold text-sm text-gray-900 hover:underline">
+                                  {party.number}
+                                </Link>
+                                {party.kind === "proposal" && (
+                                  <Badge variant="outline" className="text-[10px]">Proposal PI</Badge>
+                                )}
+                                {party.kind === "invoice" && (
+                                  <Badge variant="outline" className="text-[10px]">Ad-hoc Invoice</Badge>
+                                )}
+                                {party.kind === "case" && (
+                                  <Badge variant="outline" className="text-[10px]">VO Case</Badge>
+                                )}
+                                {party.kind === "aggregator" && (
+                                  <Badge variant="outline" className="text-[10px]">Aggregator</Badge>
+                                )}
+                                <span className="text-sm text-gray-700">— {customerName(party.lead)}</span>
+                              </div>
+
+                              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                                {/* A GST invoice number can be present regardless of billing_mode —
+                                    gst_direct issues it directly, but proforma_first contracts get
+                                    one too once accounts uploads it via the Tally Inbox handoff. The
+                                    invoice number, once it exists, always wins over the proforma link. */}
+                                {r.gst_invoice_number ? (
+                                  <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono flex items-center gap-1">
+                                    {r.gst_invoice_number}
+                                    <FileDown className="h-3 w-3" />
+                                  </Link>
+                                ) : r.contract?.billing_mode === "gst_direct" ? (
+                                  <span className="font-mono">GST Pending</span>
+                                ) : (
+                                  <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono flex items-center gap-1">
+                                    {r.statement_number}
+                                    <FileDown className="h-3 w-3" />
+                                  </Link>
+                                )}
+                                <span>· <span className="capitalize">{r.statement_type}</span></span>
+                                <span>· period {formatDate(r.period_start)}–{formatDate(r.period_end)}</span>
+                                <span>· due {r.due_date ? formatDate(r.due_date) : "—"}</span>
+                                {party.lead?.email && (
+                                  <a href={`mailto:${party.lead.email}`} title={party.lead.email} className="hover:text-teal-700">Email</a>
+                                )}
+                                {(party.lead?.mobile || party.lead?.phone) && (
+                                  <a href={`tel:${party.lead.mobile || party.lead.phone}`} title={party.lead.mobile || party.lead.phone} className="hover:text-teal-700">Call</a>
+                                )}
+                              </div>
+
+                              {(r.invoice?.primary_head || r.invoice?.attributed_contract) && (
+                                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                  {r.invoice?.primary_head && (
+                                    <Badge
+                                      variant="outline"
+                                      title={r.invoice.internal_notes ? `Internal note: ${r.invoice.internal_notes}` : undefined}
+                                      className={`text-[10px] ${ACCOUNTING_HEAD_COLORS[r.invoice.primary_head as AccountingHead] || ""}`}
+                                    >
+                                      {ACCOUNTING_HEAD_LABELS[r.invoice.primary_head as AccountingHead] || r.invoice.primary_head}
+                                    </Badge>
+                                  )}
+                                  {/* An ad-hoc invoice billing a contract charge stays owned by the
+                                      invoice (party is the lead), so surface the contract it was
+                                      attributed to — otherwise the link is invisible here. */}
+                                  {r.invoice?.attributed_contract && (
+                                    <Link
+                                      href={`/contracts/${r.invoice.attributed_contract.id}`}
+                                      title={
+                                        r.invoice.attribution_purpose
+                                          ? `Attributed as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[r.invoice.attribution_purpose]}`
+                                          : undefined
+                                      }
+                                    >
+                                      <Badge variant="outline" className="text-[10px] border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                                        → {r.invoice.attributed_contract.contract_number}
+                                      </Badge>
+                                    </Link>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                {daysOverdueBadge(r.days_overdue)}
+                                <BillingLifecycleStatus
+                                  status={r.status}
+                                  payment_status={r.payment_status}
+                                  proforma_sent_at={r.proforma_sent_at}
+                                  proforma_viewed_at={r.proforma_viewed_at}
+                                  gst_invoice_viewed_at={r.gst_invoice_viewed_at}
+                                  gst_invoice_number={r.gst_invoice_number}
+                                  pi_cancelled_at={r.pi_cancelled_at}
+                                  accounted={r.accounted}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="text-left sm:text-right w-full sm:w-auto sm:min-w-[150px]">
+                              <div className="text-lg font-bold text-teal-700">{formatCurrency(r.balance_due)}</div>
+                              <div className="text-[10.5px] text-muted-foreground">
+                                of {formatCurrency(r.total_amount)}
+                                {r.amount_paid > 0 && (
+                                  <>
+                                    {" · "}
+                                    <button onClick={() => setPaymentDetailRow(r)} className="hover:underline" title="View payment detail">
+                                      {formatCurrency(r.amount_paid)}
+                                    </button>
+                                    {" paid"}
+                                  </>
+                                )}
+                              </div>
+                              <div className="text-[10.5px] text-muted-foreground mt-1.5">
+                                Last sent {r.proforma_sent_at ? formatDate(r.proforma_sent_at) : "Never"}
+                              </div>
+                              {r.reminder_count > 0 && (
+                                <div className="text-[10px] font-medium text-amber-700">+{r.reminder_count} reminder{r.reminder_count > 1 ? "s" : ""}</div>
+                              )}
+                              {avg !== undefined && (
+                                <div className={`text-[10px] font-medium mt-1 ${avg > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                                  avg {avg > 0 ? `${avg}d late` : `${Math.abs(avg)}d early`}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          {/* A GST invoice number can be present regardless of billing_mode —
-                              gst_direct issues it directly, but proforma_first contracts get
-                              one too once accounts uploads it via the Tally Inbox handoff. The
-                              invoice number, once it exists, always wins over the proforma link. */}
-                          {r.gst_invoice_number ? (
-                            <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                              {r.gst_invoice_number}
-                              <FileDown className="h-3 w-3" />
-                            </Link>
-                          ) : r.contract?.billing_mode === "gst_direct" ? (
-                            <span className="font-mono text-xs text-muted-foreground">GST Pending</span>
-                          ) : (
-                            <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                              {r.statement_number}
-                              <FileDown className="h-3 w-3" />
-                            </Link>
-                          )}
-                          <Badge variant="outline" className="text-[10px] mt-1 capitalize">{r.statement_type}</Badge>
-                          {r.invoice?.primary_head && (
-                            <Badge
-                              variant="outline"
-                              title={r.invoice.internal_notes ? `Internal note: ${r.invoice.internal_notes}` : undefined}
-                              className={`text-[10px] mt-1 ml-1 ${ACCOUNTING_HEAD_COLORS[r.invoice.primary_head as AccountingHead] || ""}`}
-                            >
-                              {ACCOUNTING_HEAD_LABELS[r.invoice.primary_head as AccountingHead] || r.invoice.primary_head}
-                            </Badge>
-                          )}
-                          {/* An ad-hoc invoice billing a contract charge stays owned by the
-                              invoice (party is the lead), so surface the contract it was
-                              attributed to — otherwise the link is invisible here. */}
-                          {r.invoice?.attributed_contract && (
-                            <Link
-                              href={`/contracts/${r.invoice.attributed_contract.id}`}
-                              className="inline-block mt-1 ml-1"
-                              title={
-                                r.invoice.attribution_purpose
-                                  ? `Attributed as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[r.invoice.attribution_purpose]}`
-                                  : undefined
-                              }
-                            >
-                              <Badge variant="outline" className="text-[10px] border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
-                                → {r.invoice.attributed_contract.contract_number}
-                              </Badge>
-                            </Link>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-xs whitespace-nowrap">
-                          {formatDate(r.period_start)}<br />
-                          <span className="text-muted-foreground">→ {formatDate(r.period_end)}</span>
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
-                          <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <BillingLifecycleStatus
-                            status={r.status}
-                            payment_status={r.payment_status}
-                            proforma_sent_at={r.proforma_sent_at}
-                            proforma_viewed_at={r.proforma_viewed_at}
-                            gst_invoice_viewed_at={r.gst_invoice_viewed_at}
-                            gst_invoice_number={r.gst_invoice_number}
-                            pi_cancelled_at={r.pi_cancelled_at}
-                            accounted={r.accounted}
-                          />
-                        </td>
-                        <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
-                        <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">
-                          {r.amount_paid > 0 ? (
-                            <button onClick={() => setPaymentDetailRow(r)} className="hover:underline" title="View payment detail">
-                              {formatCurrency(r.amount_paid)}
-                            </button>
-                          ) : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.balance_due)}</td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                          {r.proforma_sent_at ? formatDate(r.proforma_sent_at) : "Never"}
-                          {r.reminder_count > 0 && (
-                            <div className="text-[10px] text-amber-700">+{r.reminder_count} reminder{r.reminder_count > 1 ? "s" : ""}</div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex items-center gap-1 justify-end">
-                            {canRecordPayment && (
-                              <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
-                                <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
-                              </Button>
-                            )}
+
+                          <div className="flex items-center justify-start sm:justify-end gap-1 px-3.5 py-2 border-t bg-gray-50/50 flex-wrap">
                             <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
-                              {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                              {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Bell className="h-3.5 w-3.5 mr-1" />} Remind
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View send history (reminders, proforma, GST invoice)">
-                              <History className="h-3.5 w-3.5" />
+                              <History className="h-3.5 w-3.5 mr-1" /> History
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={isGstRoute(r) ? "Resend GST invoice" : "Resend proforma email"}>
-                              <Send className="h-3.5 w-3.5" />
+                              <Send className="h-3.5 w-3.5 mr-1" /> Resend
                             </Button>
                             <InboxQueryButton
                               open={queryRowId === r.id}
@@ -888,6 +955,7 @@ export default function AccountsReceivablePage() {
                               onToggle={() => setQueryRowId(queryRowId === r.id ? null : r.id)}
                               title="Raise or answer a question about this statement"
                             />
+                            <span className="w-px h-4 bg-border mx-1" />
                             {/*
                               Distinct from Record: that is the accounts-only
                               action that moves money, this is open to everyone
@@ -902,46 +970,33 @@ export default function AccountsReceivablePage() {
                             >
                               <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
                             </Button>
+                            {canRecordPayment && (
+                              <Button size="sm" onClick={() => openPayDialog(r)} title="Record offline payment" className="bg-teal-700 hover:bg-teal-800">
+                                <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record payment
+                              </Button>
+                            )}
                             {r.razorpay_payment_link_url && (
-                              <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
-                                <ExternalLink className="h-3.5 w-3.5" />
+                              <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-muted-foreground hover:text-teal-700 px-2 flex items-center gap-1" title="Open Razorpay link">
+                                Pay link <ExternalLink className="h-3 w-3" />
                               </a>
                             )}
                           </div>
-                        </td>
-                      </tr>
-                      {reportsForRow(r).length > 0 && (
-                        <tr
-                          key={`${r.id}-reported`}
-                          className={
-                            reportsForRow(r).some((x) => x.status === "reported")
-                              ? "bg-amber-50/70"
-                              : "bg-muted/40"
-                          }
-                        >
-                          <td colSpan={10} className="px-4 py-2">
-                            {reportsForRow(r).map((rep) => (
-                              <ReportedPaymentLine key={rep.id} rep={rep} />
-                            ))}
-                          </td>
-                        </tr>
-                      )}
-                      {queryRowId === r.id && (
-                        <tr key={`${r.id}-query`} className="bg-muted/20">
-                          <td colSpan={10} className="px-4 py-3">
-                            <QueryThreadPanel
-                              entityType="billing_statement"
-                              entityId={r.id}
-                              onChanged={load}
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+
+                          {queryRowId === r.id && (
+                            <div className="px-3.5 py-3 border-t bg-muted/20">
+                              <QueryThreadPanel
+                                entityType="billing_statement"
+                                entityId={r.id}
+                                onChanged={load}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
@@ -1192,6 +1247,7 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
   const [historyRow, setHistoryRow] = useState<OtherReceivableRow | null>(null);
+  const [open, setOpen] = useState(false);
 
   async function sendReminderNow(r: OtherReceivableRow) {
     setRemindingId(r.id);
@@ -1214,32 +1270,21 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
 
   return (
     <Card>
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">Deposits & ad-hoc invoices</CardTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              Security deposits, top-ups and ad-hoc invoices awaiting payment.
-            </p>
-          </div>
-          <div className="flex items-center gap-4 text-sm">
-            <div className="text-right">
-              <p className="text-xs text-muted-foreground">Outstanding</p>
-              <p className="font-bold text-teal-700">{formatCurrency(summary.total_outstanding)}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-muted-foreground">Overdue</p>
-              <p className="font-bold text-orange-700">{summary.overdue}</p>
-            </div>
-            {summary.stale > 0 && (
-              <div className="text-right">
-                <p className="text-xs text-muted-foreground">Stale</p>
-                <p className="font-bold text-red-700">{summary.stale}</p>
-              </div>
-            )}
-          </div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-6 py-4 text-left hover:bg-gray-50/60 transition flex-wrap"
+      >
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <CardTitle className="text-base">Deposits &amp; ad-hoc invoices</CardTitle>
+          <span className="text-sm text-muted-foreground">
+            — {rows.length} · {formatCurrency(summary.total_outstanding)} outstanding, {summary.overdue} overdue
+            {summary.stale > 0 && <>, {summary.stale} stale</>}
+          </span>
         </div>
-      </CardHeader>
+        <span className="text-xs font-medium text-muted-foreground shrink-0">{open ? "▲ Hide" : "▼ Show"}</span>
+      </button>
+      {open && (
       <CardContent className="p-0">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -1375,6 +1420,7 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
           </table>
         </div>
       </CardContent>
+      )}
 
       {payRow && (
         <RecordOtherPaymentDialog
