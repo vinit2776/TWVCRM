@@ -226,7 +226,29 @@ export async function POST(request: NextRequest) {
 
     if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
       const now = new Date().toISOString();
-      // Mark deposit as paid AND auto-accept the proposal
+      /**
+       * Record the money always; auto-accept only a proposal that is still
+       * alive.
+       *
+       * A deposit link stays payable at Razorpay until someone cancels it,
+       * and until this PR nothing could. So a link issued against a proposal
+       * that was later rejected could still be paid — and this handler would
+       * have flipped that rejected proposal to 'accepted', resurrecting a
+       * dead deal on the strength of a stale link. One such proposal existed
+       * with a live ₹33,000 link on it.
+       *
+       * The money is real either way and must be recorded. What must not
+       * happen silently is the status change; a rejected proposal that
+       * receives a deposit is something a human needs to look at.
+       */
+      const resurrects = depositProposal.status === "rejected" || depositProposal.status === "expired";
+      if (resurrects) {
+        console.warn(
+          `[webhook] deposit paid on ${depositProposal.status} proposal ${depositProposal.proposal_number} — ` +
+          `recording the payment but leaving its status alone`,
+        );
+      }
+      // Mark deposit as paid, and auto-accept only if it isn't a dead deal.
       const depositUpdate = {
         deposit_payment_status: "paid",
         deposit_payment_received_at: now,
@@ -239,8 +261,7 @@ export async function POST(request: NextRequest) {
         // /api/proposals/[id]/deposit-payment) read correctly — so the
         // cleanest path produced the least legible inbox row.
         deposit_payment_medium: "razorpay",
-        status: "accepted",
-        accepted_at: now,
+        ...(resurrects ? {} : { status: "accepted", accepted_at: now }),
       };
       await supabase
         .from("proposals")

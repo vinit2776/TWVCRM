@@ -200,7 +200,8 @@ async function fetchOtherReceivables(
     .from("proposals")
     .select(`
       id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
-      deposit_due_date, deposit_razorpay_link_url,
+      deposit_due_date, deposit_razorpay_link_url, deposit_razorpay_link_id,
+      deposit_link_cancelled_at,
       deposit_reminder_count, deposit_last_reminder_sent_at,
       lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email)
     `)
@@ -208,7 +209,11 @@ async function fetchOtherReceivables(
     .gt("security_deposit_amount", 0);
 
   for (const d of deposits || []) {
-    if (!depositIsChaseable(d.status as string)) continue;
+    if (!depositIsChaseable({
+      status: d.status as string,
+      deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
+      deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
+    })) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = d.lead as any;
     const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);

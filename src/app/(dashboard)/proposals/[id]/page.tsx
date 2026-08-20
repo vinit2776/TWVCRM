@@ -38,6 +38,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -93,6 +94,9 @@ export default function ProposalDetailPage({
 
   // Manual deposit payment dialog state
   const [manualPayDialogOpen, setManualPayDialogOpen] = useState(false);
+  const [cancelLinkOpen, setCancelLinkOpen] = useState(false);
+  const [cancelLinkReason, setCancelLinkReason] = useState("");
+  const [cancellingLink, setCancellingLink] = useState(false);
   const [manualPayAmount, setManualPayAmount] = useState("");
   const [manualPayRef, setManualPayRef] = useState("");
   const [manualPayMedium, setManualPayMedium] = useState("");
@@ -1407,6 +1411,25 @@ export default function ProposalDetailPage({
                           </Button>
                         </div>
                       )}
+
+                      {/*
+                        A deposit link stays payable until someone withdraws
+                        it, so it outlives the deal it was raised for — and a
+                        link on a rejected proposal is money that can arrive
+                        for something nobody is going to deliver. Admin only,
+                        same as cancelling a deposit top-up.
+                      */}
+                      {currentUser?.role === "admin" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full border-red-300 text-red-700 hover:bg-red-50"
+                          onClick={() => { setCancelLinkReason(""); setCancelLinkOpen(true); }}
+                        >
+                          <XCircle className="mr-2 h-3.5 w-3.5" />
+                          Cancel deposit link
+                        </Button>
+                      )}
                       {isExpired && (
                         <Button
                           size="sm"
@@ -2050,6 +2073,61 @@ export default function ProposalDetailPage({
       </Dialog>
 
       {/* Manual Deposit Payment Dialog */}
+      <Dialog open={cancelLinkOpen} onOpenChange={(o) => !o && setCancelLinkOpen(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel deposit payment link</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The link stops working for the customer and this proposal drops out of deposit
+              follow-up. It does <span className="font-medium">not</span> waive the deposit — if it
+              is genuinely no longer owed, use a waiver or a carried-forward credit instead.
+            </p>
+            <div className="space-y-1">
+              <Label className="text-xs">Why are you withdrawing it?</Label>
+              <Textarea
+                rows={3}
+                value={cancelLinkReason}
+                onChange={(e) => setCancelLinkReason(e.target.value)}
+                placeholder="e.g. deal lost, customer moved to a different plan, link raised in error"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelLinkOpen(false)} disabled={cancellingLink}>
+              Keep the link
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={cancellingLink || !cancelLinkReason.trim()}
+              onClick={async () => {
+                setCancellingLink(true);
+                try {
+                  const res = await fetch(`/api/proposals/${id}/deposit-link/cancel`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ reason: cancelLinkReason.trim() }),
+                  });
+                  const json = await res.json().catch(() => ({}));
+                  if (!res.ok) throw new Error(json.error || "Could not cancel the link");
+                  toast.success("Deposit link cancelled");
+                  setCancelLinkOpen(false);
+                  fetchProposal();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Could not cancel the link");
+                } finally {
+                  setCancellingLink(false);
+                }
+              }}
+            >
+              {cancellingLink && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+              Cancel the link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={manualPayDialogOpen} onOpenChange={setManualPayDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
