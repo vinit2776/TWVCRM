@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   canReviewPaymentReport,
+  targetKindForEntity,
+  PAYMENT_REPORT_ENTITY_TYPES,
   defaultNeededBy,
   describeReport,
   isPaymentReportOutcome,
@@ -161,5 +163,23 @@ describe("describeReport", () => {
     );
     expect(line).toContain("ref HDFC0938271");
     expect(line).toContain("from R. Menon");
+  });
+});
+
+
+describe("targetKindForEntity", () => {
+  it("treats a proposal deposit as a deposit, everything else as an invoice", () => {
+    expect(targetKindForEntity("proposal_deposit")).toBe("deposit");
+    expect(targetKindForEntity("contract")).toBe("invoice");
+    expect(targetKindForEntity("billing_statement")).toBe("invoice");
+  });
+
+  it("classifies every reportable entity type", () => {
+    // Guards the next entity type someone adds: if it isn't classified here
+    // it silently defaults to 'invoice', and an invoice-shaped report on a
+    // deposit would demand a billing_payments row that can never exist.
+    for (const t of PAYMENT_REPORT_ENTITY_TYPES) {
+      expect(["invoice", "deposit"]).toContain(targetKindForEntity(t));
+    }
   });
 });

@@ -32,8 +32,13 @@ import { PAYMENT_REPORT_DUE_DAYS, validatePaymentReport } from "@/lib/queries/pa
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 'contract' when the invoice is unknown (the common case), else 'billing_statement'. */
-  entityType: "contract" | "billing_statement";
+  /**
+   * 'contract' when the invoice is unknown (the common case),
+   * 'billing_statement' when reporting against a specific one, or
+   * 'proposal_deposit' for a security deposit — which has no invoice to
+   * allocate to, so the picker never appears for it.
+   */
+  entityType: "contract" | "billing_statement" | "proposal_deposit";
   entityId: string | null;
   /** One-line context under the title: "Bluescale Analytics · TWV-C-0188". */
   partyLabel?: string | null;
@@ -166,6 +171,13 @@ export function ReportPaymentDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {entityType === "proposal_deposit" && (
+            <p className="text-xs rounded-md border border-violet-200 bg-violet-50 text-violet-900 p-2.5">
+              Security deposit. Once accounts confirm it against the bank it is recorded on the
+              proposal and appears in the Tally Inbox for booking.
+            </p>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Amount</Label>
