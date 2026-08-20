@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
     // Check if this payment link belongs to a proposal security deposit
     const { data: depositProposal } = await supabase
       .from("proposals")
-      .select("id, proposal_number, status, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_received_at")
+      .select("id, proposal_number, status, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_received_at, deposit_payment_medium")
       .eq("deposit_razorpay_link_id", paymentLinkId)
       .maybeSingle();
 
@@ -232,6 +232,13 @@ export async function POST(request: NextRequest) {
         deposit_payment_received_at: now,
         deposit_payment_amount: amountPaid,
         deposit_payment_reference: razorpayPaymentId || paymentLinkId,
+        // Stamped here because the Tally Inbox shows this column to tell
+        // accounts how the money arrived. Omitting it left every
+        // link-paid deposit in the inbox with a blank medium, while
+        // manually recorded ones (which set it in
+        // /api/proposals/[id]/deposit-payment) read correctly — so the
+        // cleanest path produced the least legible inbox row.
+        deposit_payment_medium: "razorpay",
         status: "accepted",
         accepted_at: now,
       };
