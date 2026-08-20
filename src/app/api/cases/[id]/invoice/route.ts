@@ -1,7 +1,121 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { createCaseInvoiceStatement, CaseInvoicingError } from "@/lib/case-invoicing";
+import { computeCaseInvoice, createCaseInvoiceStatement, CaseInvoicingError } from "@/lib/case-invoicing";
+
+
+const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
+
+const INELIGIBLE_MESSAGE =
+  "Only prepaid-aggregator and direct-client cases can be invoiced individually. Postpaid aggregators are billed via the consolidated monthly invoice.";
+
+const CASE_INVOICE_SELECT =
+  "id, rate, start_date, tenure_months, case_source, bill_to, billing_mode, client_gst_number, client_name, client_company_name, client_email, aggregator:aggregators!cases_aggregator_id_fkey(name, gst_number, same_state_as_twv, billing_method, billing_mode, primary_email)";
+
+interface CaseAggregator {
+  name: string | null;
+  gst_number: string | null;
+  same_state_as_twv: boolean | null;
+  billing_method?: string;
+  billing_mode?: "proforma_first" | "gst_direct";
+  primary_email?: string | null;
+}
+
+/**
+ * GET /api/cases/[id]/invoice
+ *
+ * Dry run of the POST below: resolves the buyer, period and tax breakup this
+ * case's invoice would carry, creating nothing. Backs the "confirm before
+ * generating" dialog on the case Billing tab — a gst_direct invoice used to
+ * go straight into the Tally Inbox on one click with nothing shown first.
+ *
+ * A blocking problem (no rate, no bill-to, not individually invoiceable)
+ * comes back as the same 4xx the POST would return, so it surfaces in the
+ * dialog instead of after the fact.
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: caseId } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+
+  if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json({ error: "Not authorized to generate case invoices" }, { status: 403 });
+  }
+
+  const adminSupabase = await createAdminClient();
+  const { data: caseRow, error: caseError } = await adminSupabase
+    .from("cases")
+    .select(CASE_INVOICE_SELECT)
+    .eq("id", caseId)
+    .single();
+
+  if (caseError || !caseRow) {
+    return NextResponse.json({ error: "Case not found" }, { status: 404 });
+  }
+
+  const aggregator = caseRow.aggregator as unknown as CaseAggregator | null;
+  if (!(caseRow.case_source === "direct" || aggregator?.billing_method === "prepaid")) {
+    return NextResponse.json({ error: INELIGIBLE_MESSAGE }, { status: 400 });
+  }
+
+  const { data: existing } = await adminSupabase
+    .from("billing_statements")
+    .select("id")
+    .eq("case_id", caseId)
+    .eq("statement_type", "vo_case")
+    .is("voided_at", null)
+    .maybeSingle();
+
+  if (existing) {
+    return NextResponse.json({ error: "An invoice already exists for this case." }, { status: 409 });
+  }
+
+  try {
+    const preview = computeCaseInvoice({
+      id: caseRow.id,
+      rate: caseRow.rate,
+      start_date: caseRow.start_date,
+      tenure_months: caseRow.tenure_months,
+      case_source: caseRow.case_source,
+      bill_to: caseRow.bill_to,
+      billing_mode: caseRow.billing_mode,
+      client_gst_number: caseRow.client_gst_number,
+      client_name: caseRow.client_name,
+      client_company_name: caseRow.client_company_name,
+      aggregator: aggregator
+        ? { name: aggregator.name, gst_number: aggregator.gst_number, same_state_as_twv: aggregator.same_state_as_twv, billing_mode: aggregator.billing_mode }
+        : null,
+    });
+
+    return NextResponse.json({
+      data: {
+        ...preview,
+        // Who the proforma would actually email, so the dialog can warn when
+        // the chosen bill-to party has no address on file.
+        buyerEmail: preview.billTo === "aggregator"
+          ? aggregator?.primary_email ?? null
+          : caseRow.client_email ?? null,
+      },
+    });
+  } catch (err) {
+    if (err instanceof CaseInvoicingError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
+}
 
 /**
  * POST /api/cases/[id]/invoice
@@ -38,7 +152,6 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
-  const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
   if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
     return NextResponse.json({ error: "Not authorized to generate case invoices" }, { status: 403 });
   }
@@ -48,7 +161,7 @@ export async function POST(
   const { data: caseRow, error: caseError } = await adminSupabase
     .from("cases")
     .select(
-      "id, rate, start_date, tenure_months, case_source, bill_to, billing_mode, client_gst_number, client_name, client_company_name, aggregator:aggregators!cases_aggregator_id_fkey(gst_number, same_state_as_twv, billing_method, billing_mode)"
+      CASE_INVOICE_SELECT
     )
     .eq("id", caseId)
     .single();
@@ -57,12 +170,12 @@ export async function POST(
     return NextResponse.json({ error: "Case not found" }, { status: 404 });
   }
 
-  const aggregator = caseRow.aggregator as unknown as { gst_number: string | null; same_state_as_twv: boolean | null; billing_method?: string; billing_mode?: "proforma_first" | "gst_direct" } | null;
+  const aggregator = caseRow.aggregator as unknown as CaseAggregator | null;
 
   const eligible = caseRow.case_source === "direct" || aggregator?.billing_method === "prepaid";
   if (!eligible) {
     return NextResponse.json(
-      { error: "Only prepaid-aggregator and direct-client cases can be invoiced individually. Postpaid aggregators are billed via the consolidated monthly invoice." },
+      { error: INELIGIBLE_MESSAGE },
       { status: 400 }
     );
   }
@@ -79,7 +192,7 @@ export async function POST(
       client_gst_number: caseRow.client_gst_number,
       client_name: caseRow.client_name,
       client_company_name: caseRow.client_company_name,
-      aggregator: aggregator ? { gst_number: aggregator.gst_number, same_state_as_twv: aggregator.same_state_as_twv, billing_mode: aggregator.billing_mode } : null,
+      aggregator: aggregator ? { name: aggregator.name, gst_number: aggregator.gst_number, same_state_as_twv: aggregator.same_state_as_twv, billing_mode: aggregator.billing_mode } : null,
     }, { dispatch: !previewOnly });
 
     logAudit(supabase, {

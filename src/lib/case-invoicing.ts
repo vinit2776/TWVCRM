@@ -22,6 +22,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { logAudit } from "@/lib/audit";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 interface CaseForInvoicing {
   id: string;
@@ -38,6 +39,7 @@ interface CaseForInvoicing {
   // aggregator's billing_mode instead).
   billing_mode?: "proforma_first" | "gst_direct" | null;
   aggregator: {
+    name?: string | null;
     gst_number: string | null;
     same_state_as_twv: boolean | null;
     billing_mode?: "proforma_first" | "gst_direct" | null;
@@ -72,29 +74,44 @@ export interface CaseInvoiceResult {
  * without sending it — used by the "preview before send" flow so an
  * operator can review the amount/recipient and add CC emails first.
  */
-export async function createCaseInvoiceStatement(
-  supabase: SupabaseClient,
-  caseData: CaseForInvoicing,
-  opts: { dispatch?: boolean } = {},
-): Promise<CaseInvoiceResult> {
+/** Everything the invoice will carry, derived from the case alone.
+ *  Exported so the "confirm before generating" preview (GET
+ *  /api/cases/[id]/invoice) shows the same numbers, buyer and period the
+ *  statement is actually created with — computing them twice is how a
+ *  preview quietly stops matching what gets billed. */
+export interface CaseInvoicePreview {
+  billTo: "aggregator" | "client";
+  buyerName: string;
+  buyerGstin: string | null;
+  /** The referred client the fee is for. Same as buyerName when billing the
+   *  client directly; the distinct end client when billing an aggregator. */
+  endClientName: string;
+  description: string;
+  periodStart: string;
+  periodEnd: string;
+  tenureMonths: number;
+  subtotal: number;
+  gstRate: number;
+  gstAmount: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+  isInterstate: boolean;
+  placeOfSupply: string;
+  billingMode: "proforma_first" | "gst_direct";
+}
+
+/**
+ * Resolves the buyer, period, and tax breakup for a case's invoice.
+ * Pure — reads nothing, writes nothing. Throws CaseInvoicingError for the
+ * same 4xx conditions the create path rejects on, so the preview surfaces a
+ * blocking problem (no rate, no bill-to) before anything is created.
+ */
+export function computeCaseInvoice(caseData: CaseForInvoicing): CaseInvoicePreview {
   if (!caseData.rate || caseData.rate <= 0) {
     throw new CaseInvoicingError("Case has no rate set — cannot generate an invoice.", 400);
   }
-
-  const { data: existing } = await supabase
-    .from("billing_statements")
-    .select("id")
-    .eq("case_id", caseData.id)
-    .eq("statement_type", "vo_case")
-    .is("voided_at", null)
-    .maybeSingle();
-
-  if (existing) {
-    throw new CaseInvoicingError("An invoice already exists for this case.", 409);
-  }
-
-  const billToAggregator = caseData.case_source === "aggregator" && caseData.bill_to === "aggregator";
-  const billToClient = caseData.case_source === "direct" || caseData.bill_to === "client";
 
   if (caseData.case_source === "aggregator" && !caseData.bill_to) {
     throw new CaseInvoicingError(
@@ -103,11 +120,11 @@ export async function createCaseInvoiceStatement(
     );
   }
 
+  const billToAggregator = caseData.case_source === "aggregator" && caseData.bill_to === "aggregator";
+
   const buyerGstin = billToAggregator
     ? caseData.aggregator?.gst_number ?? null
-    : billToClient
-      ? caseData.client_gst_number ?? null
-      : null;
+    : caseData.client_gst_number ?? null;
 
   // Interstate determination mirrors the existing precedent (aggregator
   // invoicing uses aggregator.same_state_as_twv; vo-renewal hardcodes
@@ -135,9 +152,68 @@ export async function createCaseInvoiceStatement(
   periodEndDate.setDate(periodEndDate.getDate() - 1);
   const periodEnd = periodEndDate.toISOString().slice(0, 10);
 
-  const buyerName = billToAggregator
-    ? undefined // aggregator name isn't stored on billing_statements directly; case/aggregator join carries it
-    : caseData.client_company_name || caseData.client_name;
+  // The line item always names the end client, whoever is being billed. When
+  // the aggregator is the buyer this is the only place its invoice says which
+  // of its many referred clients the fee covers — the buyer block shows the
+  // aggregator, so without it accounts (and the aggregator) cannot tell the
+  // statements apart. Mirrors how the consolidated postpaid invoice labels
+  // each bundled case (src/lib/aggregator-invoicing.ts).
+  const endClientName = caseDisplayName(caseData);
+
+  // Aggregator-sourced cases honor the aggregator's choice; direct-client
+  // cases carry their own billing_mode (no aggregator to hold one), which
+  // defaults to proforma_first at creation.
+  const billingMode: "proforma_first" | "gst_direct" = caseData.case_source === "aggregator"
+    ? (caseData.aggregator?.billing_mode === "proforma_first" ? "proforma_first" : "gst_direct")
+    : (caseData.billing_mode === "gst_direct" ? "gst_direct" : "proforma_first");
+
+  return {
+    billTo: billToAggregator ? "aggregator" : "client",
+    buyerName: billToAggregator
+      ? caseData.aggregator?.name ?? "(aggregator)"
+      : endClientName,
+    buyerGstin,
+    endClientName,
+    description: `Virtual Office License Fee — ${endClientName}`,
+    periodStart,
+    periodEnd,
+    tenureMonths,
+    subtotal,
+    gstRate,
+    gstAmount,
+    cgst,
+    sgst,
+    igst,
+    total,
+    isInterstate,
+    placeOfSupply,
+    billingMode,
+  };
+}
+
+export async function createCaseInvoiceStatement(
+  supabase: SupabaseClient,
+  caseData: CaseForInvoicing,
+  opts: { dispatch?: boolean } = {},
+): Promise<CaseInvoiceResult> {
+  const computed = computeCaseInvoice(caseData);
+
+  const { data: existing } = await supabase
+    .from("billing_statements")
+    .select("id")
+    .eq("case_id", caseData.id)
+    .eq("statement_type", "vo_case")
+    .is("voided_at", null)
+    .maybeSingle();
+
+  if (existing) {
+    throw new CaseInvoicingError("An invoice already exists for this case.", 409);
+  }
+
+  const {
+    buyerGstin, isInterstate, placeOfSupply, subtotal, gstRate, gstAmount,
+    cgst, sgst, igst, total, periodStart, periodEnd, description, billingMode,
+  } = computed;
 
   const { data: statement, error } = await supabase
     .from("billing_statements")
@@ -168,7 +244,7 @@ export async function createCaseInvoiceStatement(
           subtotal,
           items: [
             {
-              description: `Virtual Office License Fee${buyerName ? ` — ${buyerName}` : ""}`,
+              description,
               quantity: 1,
               rate: subtotal,
               amount: subtotal,
@@ -183,13 +259,6 @@ export async function createCaseInvoiceStatement(
   if (error || !statement) {
     throw new CaseInvoicingError(`Failed to create case invoice: ${error?.message}`, 500);
   }
-
-  // Aggregator-sourced cases honor the aggregator's choice; direct-client
-  // cases carry their own billing_mode (no aggregator to hold one), which
-  // defaults to proforma_first at creation.
-  const billingMode = caseData.case_source === "aggregator"
-    ? (caseData.aggregator?.billing_mode === "proforma_first" ? "proforma_first" : "gst_direct")
-    : (caseData.billing_mode === "gst_direct" ? "gst_direct" : "proforma_first");
 
   const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
 

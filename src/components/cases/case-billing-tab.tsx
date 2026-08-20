@@ -45,6 +45,7 @@ interface CaseBillingInfo {
 
 interface CaseStatement {
   id: string;
+  created_at: string | null;
   statement_number: string | null;
   total_amount: number;
   payment_status: string;
@@ -68,6 +69,30 @@ interface InvoicePreview {
   totalAmount: number;
 }
 
+/** Mirrors CaseInvoicePreview from src/lib/case-invoicing.ts, returned by
+ *  GET /api/cases/[id]/invoice. */
+interface GeneratePreview {
+  billTo: "aggregator" | "client";
+  buyerName: string;
+  buyerGstin: string | null;
+  buyerEmail: string | null;
+  endClientName: string;
+  description: string;
+  periodStart: string;
+  periodEnd: string;
+  tenureMonths: number;
+  subtotal: number;
+  gstRate: number;
+  gstAmount: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+  isInterstate: boolean;
+  placeOfSupply: string;
+  billingMode: "proforma_first" | "gst_direct";
+}
+
 const CREDIT_NOTE_ROLES = ["accounts", "admin"];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -82,6 +107,10 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmPreview, setConfirmPreview] = useState<GeneratePreview | null>(null);
+  const [loadingConfirm, setLoadingConfirm] = useState(false);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
@@ -213,18 +242,39 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     setCcInput("");
   };
 
-  // "Generate Invoice" (or "Send Invoice" for an already-created-but-unsent
-  // statement — see isUnsentPi). For proforma_first this creates the
-  // statement without dispatching and opens the preview dialog; the actual
-  // send happens from there via handleConfirmSend. gst_direct is unaffected
-  // — it never dispatches from this route, so the whole preview step is
-  // skipped and it goes straight to the Tally Inbox as before.
+  // Step 1 of "Generate Invoice": show what would be billed, to whom, for
+  // what period, with the tax breakup — before anything is created. Nothing
+  // is written until the operator confirms. A gst_direct invoice previously
+  // went straight into the Tally Inbox on this one click with no review, and
+  // undoing it needs an admin void.
   const handleGenerateInvoice = async () => {
     if (isUnsentPi && statement) {
       setPreview({ statementId: statement.id, statementNumber: statement.statement_number, totalAmount: statement.total_amount });
       setPreviewOpen(true);
       return;
     }
+    setLoadingConfirm(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/invoice`);
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Could not prepare the invoice");
+        return;
+      }
+      setConfirmPreview(json.data as GeneratePreview);
+      setConfirmOpen(true);
+    } catch {
+      toast.error("Could not prepare the invoice");
+    } finally {
+      setLoadingConfirm(false);
+    }
+  };
+
+  // Step 2: actually create it. For proforma_first the statement is created
+  // without dispatching and the send dialog opens; the send happens there via
+  // handleConfirmSend. gst_direct creates it and routes it to the Tally Inbox.
+  const handleConfirmGenerate = async () => {
+    setConfirmOpen(false);
     setGenerating(true);
     try {
       const res = await fetch(`/api/cases/${caseId}/invoice`, {
@@ -253,6 +303,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
       toast.error("Failed to generate invoice");
     } finally {
       setGenerating(false);
+      setConfirmPreview(null);
     }
   };
 
@@ -392,8 +443,8 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <FileText className="h-8 w-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No invoice generated yet for this case.</p>
-              <Button onClick={handleGenerateInvoice} disabled={generating || needsBillTo}>
-                {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button onClick={handleGenerateInvoice} disabled={generating || loadingConfirm || needsBillTo}>
+                {(generating || loadingConfirm) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Generate Invoice
               </Button>
               {needsBillTo && (
@@ -428,43 +479,84 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   />
                 </div>
               </div>
+              {/* Where this invoice actually stands, in the terms of whichever
+                  mode raised it — a proforma is about payment, a gst_direct
+                  invoice is about whether accounts have issued it in Tally. */}
               {(() => {
-                const viewHref = statement.gst_invoice_number
-                  ? `/api/billing-statements/${statement.id}/gst-invoice-pdf`
-                  : statement.proforma_sent_at
-                    ? `/api/billing-statements/${statement.id}/proforma-pdf`
-                    : null;
-                return viewHref ? (
-                  <a
-                    href={viewHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                  >
-                    View Invoice <ExternalLink className="h-3.5 w-3.5" />
-                  </a>
-                ) : null;
+                const gstIssued = !!(statement.gst_invoice_number || statement.tally_invoice_number);
+                const gstNumber = statement.tally_invoice_number || statement.gst_invoice_number;
+                const isPaid = statement.payment_status === "paid";
+                const requestedAt = statement.created_at;
+
+                if (isUnsentPi) {
+                  return (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Proforma created{requestedAt ? ` on ${formatDate(requestedAt)}` : ""} but not yet sent to the customer.
+                    </div>
+                  );
+                }
+
+                if (resolvedBillingMode === "proforma_first" && !gstIssued) {
+                  return (
+                    <div className="space-y-2">
+                      <div className={`rounded-md border px-3 py-2 text-xs ${isPaid ? "border-green-200 bg-green-50 text-green-900" : "border-blue-200 bg-blue-50 text-blue-900"}`}>
+                        {statement.proforma_sent_at
+                          ? `Proforma sent to the customer on ${formatDate(statement.proforma_sent_at)}.`
+                          : "Proforma raised."}{" "}
+                        {isPaid
+                          ? "Paid — it now routes to the Tally Inbox for the GST invoice."
+                          : "Awaiting payment via the payment link."}
+                      </div>
+                      {statement.proforma_sent_at && (
+                        <a
+                          href={`/api/billing-statements/${statement.id}/proforma-pdf`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                          View proforma invoice <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  );
+                }
+
+                if (gstIssued) {
+                  return (
+                    <div className="space-y-2">
+                      <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-900">
+                        GST invoice issued by accounts{gstNumber ? <> — <span className="font-mono">{gstNumber}</span></> : null}
+                        {statement.tally_delivered_at ? ` on ${formatDate(statement.tally_delivered_at)}` : ""}.
+                        {statement.tally_irn && <> IRN on file.</>}
+                      </div>
+                      <a
+                        href={`/api/billing-statements/${statement.id}/gst-invoice-pdf`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                      >
+                        <FileCheck className="h-3.5 w-3.5" />
+                        View GST invoice <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2">
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Pending with accounts — requested{requestedAt ? ` on ${formatDate(requestedAt)}` : ""}, waiting for the GST invoice to be issued in Tally.
+                    </div>
+                    <Link
+                      href={`/accounting/inbox?id=${statement.id}`}
+                      className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                    >
+                      View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  </div>
+                );
               })()}
-              {statement.handoff_state ? (
-                <Link
-                  href={`/accounting/inbox?id=${statement.id}`}
-                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                >
-                  View in Tally Inbox <ExternalLink className="h-3.5 w-3.5" />
-                </Link>
-              ) : statement.proforma_sent_at ? (
-                <p className="text-xs text-muted-foreground">
-                  Proforma invoice sent to the customer on {formatDate(statement.proforma_sent_at)} — awaiting payment via the payment link.
-                </p>
-              ) : isUnsentPi ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Invoice created but not yet sent to the customer.
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Awaiting payment — this invoice will route to the Tally Inbox once paid.
-                </p>
-              )}
               {isUnsentPi && (
                 <Button size="sm" onClick={handleGenerateInvoice} disabled={generating}>
                   <Send className="mr-1.5 h-3.5 w-3.5" />
@@ -554,6 +646,116 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
           onClose={() => setShowCreditNoteCancel(false)}
         />
       )}
+
+      {/* Confirm-before-generate: nothing has been created at this point. */}
+      <Dialog open={confirmOpen} onOpenChange={(open) => { if (!open) { setConfirmOpen(false); setConfirmPreview(null); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Confirm invoice</DialogTitle>
+            <DialogDescription>
+              {confirmPreview?.billingMode === "gst_direct"
+                ? "Nothing has been created yet. On confirm, this invoice is raised and sent to accounts in the Tally Inbox for the GST invoice to be issued."
+                : "Nothing has been created yet. On confirm, a proforma invoice is prepared — you will review the recipient before it is emailed."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {confirmPreview && (
+            <div className="space-y-3 text-sm">
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bill to</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium">{confirmPreview.buyerName}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {confirmPreview.buyerEmail || "No email on file"}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 text-xs">
+                    {confirmPreview.billTo === "aggregator" ? "Aggregator" : "Client"}
+                  </Badge>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">GSTIN</span>
+                  <span className="font-mono">{confirmPreview.buyerGstin || "— (B-series, no IRN)"}</span>
+                </div>
+                {confirmPreview.billTo === "aggregator" && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">On behalf of</span>
+                    <span>{confirmPreview.endClientName}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">For</p>
+                <div className="flex justify-between gap-3">
+                  <span className="min-w-0">{confirmPreview.description}</span>
+                  <span className="tabular-nums shrink-0">{formatCurrency(confirmPreview.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Period</span>
+                  <span>
+                    {formatDate(confirmPreview.periodStart)} → {formatDate(confirmPreview.periodEnd)}
+                    <span className="text-muted-foreground"> · {confirmPreview.tenureMonths} mo</span>
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Place of supply</span>
+                  <span>
+                    {confirmPreview.placeOfSupply}
+                    {confirmPreview.isInterstate && <span className="text-amber-700"> (interstate · IGST)</span>}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Subtotal</span>
+                  <span className="tabular-nums">{formatCurrency(confirmPreview.subtotal)}</span>
+                </div>
+                {confirmPreview.isInterstate ? (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">IGST @ {confirmPreview.gstRate}%</span>
+                    <span className="tabular-nums">{formatCurrency(confirmPreview.igst)}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">CGST @ {confirmPreview.gstRate / 2}%</span>
+                      <span className="tabular-nums">{formatCurrency(confirmPreview.cgst)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">SGST @ {confirmPreview.gstRate / 2}%</span>
+                      <span className="tabular-nums">{formatCurrency(confirmPreview.sgst)}</span>
+                    </div>
+                  </>
+                )}
+                <Separator />
+                <div className="flex justify-between font-semibold">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatCurrency(confirmPreview.total)}</span>
+                </div>
+              </div>
+
+              {!confirmPreview.buyerEmail && (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  No email on file for {confirmPreview.buyerName} — the invoice will be created but cannot be emailed.
+                </p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setConfirmOpen(false); setConfirmPreview(null); }}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmGenerate} disabled={generating}>
+              {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
+              {confirmPreview?.billingMode === "gst_direct" ? "Raise & send to accounts" : "Create proforma"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Send Invoice Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={(open) => { if (!open) resetPreviewState(); else setPreviewOpen(true); }}>

@@ -8,6 +8,7 @@ import { useCase } from "@/hooks/use-cases";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { CreateCaseInput } from "@/lib/validations";
+import { caseDisplayName } from "@/lib/case-workflow";
 
 export default function EditCasePage({
   params,
@@ -51,9 +52,9 @@ export default function EditCasePage({
     <div className="max-w-4xl mx-auto">
       <PageBreadcrumb
         current={{ label: "Edit" }}
-        fallbackParent={{ href: `/cases/${id}`, label: caseData.client_name }}
+        fallbackParent={{ href: `/cases/${id}`, label: caseDisplayName(caseData) }}
       />
-      <h1 className="text-2xl font-bold mb-6">Edit: {caseData.client_name}</h1>
+      <h1 className="text-2xl font-bold mb-6">Edit: {caseDisplayName(caseData)}</h1>
       <CaseForm
         caseData={caseData}
         onSubmit={handleSubmit}
