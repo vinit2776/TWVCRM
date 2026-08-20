@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -41,6 +41,8 @@ import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/pa
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
+import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface Lead {
@@ -179,6 +181,24 @@ interface ReceivableRow {
   aggregator?: AggregatorRef | null;
 }
 
+/**
+ * A payment someone was told about but accounts haven't found in the bank yet.
+ *
+ * Advisory only — deliberately kept out of amount_paid and balance_due, which
+ * still read as if nothing arrived. A customer's screenshot must not move
+ * receivables; only a verified payment does.
+ */
+interface PendingPaymentReport {
+  id: string;
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  payer_name: string | null;
+  payer_differs: boolean;
+  created_by: { full_name: string };
+  query: { id: string; entity_type: string; entity_id: string } | null;
+}
+
 interface Summary {
   total_outstanding: number;
   count: number;
@@ -282,6 +302,11 @@ export default function AccountsReceivablePage() {
   // rendering live in StatementTimelineDialog.
   const [historyRow, setHistoryRow] = useState<{ id: string; statement_number: string } | null>(null);
 
+  // "The customer says they've paid" — reporting is open to every role, so
+  // this dialog is not behind canRecordPayment.
+  const [reportRow, setReportRow] = useState<ReceivableRow | null>(null);
+  const [pendingReports, setPendingReports] = useState<PendingPaymentReport[]>([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -293,6 +318,15 @@ export default function AccountsReceivablePage() {
       setOtherRows(json.other_rows || []);
       setOtherSummary(json.other_summary || null);
       setAvgDays(json.avgDays || {});
+
+      // Non-fatal: an AR page without the advisory banner is still a working
+      // AR page, so a failure here must not blank the receivables list.
+      try {
+        const repRes = await fetch("/api/queries/payment-reports?status=reported", { cache: "no-store" });
+        setPendingReports(repRes.ok ? ((await repRes.json()).items ?? []) : []);
+      } catch {
+        setPendingReports([]);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load receivables");
     } finally {
@@ -308,6 +342,33 @@ export default function AccountsReceivablePage() {
       .then((me) => setCanRecordPayment(["admin", "manager", "accounts"].includes(me.role)))
       .catch(() => setCanRecordPayment(false));
   }, []);
+
+  /**
+   * Pending reports keyed by "<entity_type>:<entity_id>".
+   *
+   * A report raised against a contract belongs to every open statement on
+   * that contract, because the reporter didn't know which invoice was paid —
+   * that's the whole premise. So a row matches on its own id OR its
+   * contract's, and a contract-scoped claim shows on each of that contract's
+   * open rows rather than being invisible until someone opens Queries.
+   */
+  const reportsByEntity = useMemo(() => {
+    const map = new Map<string, PendingPaymentReport[]>();
+    for (const rep of pendingReports) {
+      if (!rep.query) continue;
+      const key = `${rep.query.entity_type}:${rep.query.entity_id}`;
+      map.set(key, [...(map.get(key) ?? []), rep]);
+    }
+    return map;
+  }, [pendingReports]);
+
+  const reportsForRow = useCallback(
+    (row: ReceivableRow): PendingPaymentReport[] => [
+      ...(reportsByEntity.get(`billing_statement:${row.id}`) ?? []),
+      ...(row.contract?.id ? reportsByEntity.get(`contract:${row.contract.id}`) ?? [] : []),
+    ],
+    [reportsByEntity],
+  );
 
   const filtered = useMemo(() => {
     let r = rows;
@@ -780,6 +841,20 @@ export default function AccountsReceivablePage() {
                               onToggle={() => setQueryRowId(queryRowId === r.id ? null : r.id)}
                               title="Raise or answer a question about this statement"
                             />
+                            {/*
+                              Distinct from Record: that is the accounts-only
+                              action that moves money, this is open to everyone
+                              and moves nothing until accounts verify it.
+                            */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-teal-200 text-teal-700 hover:bg-teal-50"
+                              onClick={() => setReportRow(r)}
+                              title="Customer says they've paid outside the CRM — tell accounts"
+                            >
+                              <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
+                            </Button>
                             {r.razorpay_payment_link_url && (
                               <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -788,6 +863,33 @@ export default function AccountsReceivablePage() {
                           </div>
                         </td>
                       </tr>
+                      {reportsForRow(r).length > 0 && (
+                        <tr key={`${r.id}-reported`} className="bg-amber-50/70">
+                          <td colSpan={10} className="px-4 py-2">
+                            {reportsForRow(r).map((rep) => (
+                              <div key={rep.id} className="flex items-start gap-2 text-xs text-amber-900">
+                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
+                                <span>
+                                  <span className="font-semibold">
+                                    {formatCurrency(rep.amount)} reported paid, not yet verified
+                                  </span>
+                                  {" — "}
+                                  {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
+                                  {" on "}{formatDate(rep.paid_on)}, by {rep.created_by.full_name}.
+                                  {rep.payer_differs && rep.payer_name && (
+                                    <> Paid from <span className="font-medium">{rep.payer_name}</span>.</>
+                                  )}
+                                  {" "}
+                                  <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
+                                    Open to verify
+                                  </a>
+                                  <span className="text-amber-700"> · Balance due below is unchanged until it is.</span>
+                                </span>
+                              </div>
+                            ))}
+                          </td>
+                        </tr>
+                      )}
                       {queryRowId === r.id && (
                         <tr key={`${r.id}-query`} className="bg-muted/20">
                           <td colSpan={10} className="px-4 py-3">
@@ -814,6 +916,24 @@ export default function AccountsReceivablePage() {
         summary={otherSummary}
         canRecordPayment={canRecordPayment}
         onRecorded={load}
+      />
+
+      <ReportPaymentDialog
+        open={!!reportRow}
+        onOpenChange={(o) => !o && setReportRow(null)}
+        // Reports attach to the contract when there is one, so accounts can
+        // reallocate to whichever invoice the money actually settles — the
+        // reporter is not expected to know. Statements with no contract
+        // (ad-hoc invoices, cases) fall back to the statement itself.
+        entityType={reportRow?.contract?.id ? "contract" : "billing_statement"}
+        entityId={reportRow ? reportRow.contract?.id ?? reportRow.id : null}
+        partyLabel={
+          reportRow
+            ? `${customerName(partyOf(reportRow).lead)}${partyOf(reportRow).number ? ` · ${partyOf(reportRow).number}` : ""}`
+            : null
+        }
+        suggestedAmount={reportRow?.balance_due ?? null}
+        onReported={load}
       />
 
       <PaymentDetailDialog

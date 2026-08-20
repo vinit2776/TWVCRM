@@ -719,6 +719,31 @@ export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {
   prepaid: "bg-purple-100 text-purple-800",
 };
 
+// ==========================================
+// Statement Payment Modes
+// ==========================================
+// How money arrives against a billing statement. Shared by the Record
+// Payment dialog and the "report payment received" form so a mode reported
+// by ops maps straight onto the payment accounts eventually record — when
+// the two lists drift, the verify step silently loses the reporter's answer.
+export const STATEMENT_PAYMENT_MODES = [
+  { value: "neft",          label: "NEFT" },
+  { value: "rtgs",          label: "RTGS" },
+  { value: "imps",          label: "IMPS" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "upi",           label: "UPI" },
+  { value: "cheque",        label: "Cheque" },
+  { value: "cash",          label: "Cash" },
+  { value: "razorpay",      label: "Razorpay (manually reconciled)" },
+  { value: "other",         label: "Other" },
+] as const;
+
+export type StatementPaymentMode = (typeof STATEMENT_PAYMENT_MODES)[number]["value"];
+
+export const STATEMENT_PAYMENT_MODE_LABELS: Record<string, string> = Object.fromEntries(
+  STATEMENT_PAYMENT_MODES.map((m) => [m.value, m.label]),
+);
+
 export const PAYMENT_MODES = ["upi", "cash", "card", "online"] as const;
 
 export const PAYMENT_MODE_LABELS: Record<string, string> = {
