@@ -112,11 +112,14 @@ interface CaseRef {
  *  bill_to varies case by case for prepaid aggregators. */
 function leadFromCase(c: CaseRef): Lead {
   const billTo = c.bill_to === "aggregator" ? c.aggregator : null;
+  // "" and null both mean "not set" for these fields — a nullish-only fallback
+  // (??) let a blank client_company_name/email/phone from the DB win over a
+  // populated client_name, silently discarding the customer's actual name.
   return {
     id: c.id,
-    company: billTo?.name ?? c.client_company_name ?? c.client_name,
-    email: billTo?.primary_email ?? c.client_email ?? undefined,
-    phone: billTo?.primary_phone ?? c.client_phone ?? undefined,
+    company: billTo?.name || c.client_company_name || c.client_name,
+    email: billTo?.primary_email || c.client_email || undefined,
+    phone: billTo?.primary_phone || c.client_phone || undefined,
   };
 }
 
