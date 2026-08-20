@@ -32,7 +32,7 @@ const THREAD_SELECT = `
     attachments:query_attachments!query_attachments_message_id_fkey(${ATTACHMENT_SELECT})
   ),
   payment_report:query_payment_reports!query_payment_reports_query_id_fkey(
-    id, status, amount, paid_on, payment_mode, payment_reference,
+    id, status, target_kind, amount, paid_on, payment_mode, payment_reference,
     payer_name, payer_differs, billing_payment_id, resolution_note,
     claimed_statement_id, reviewed_at, created_at,
     claimed_statement:billing_statements!query_payment_reports_claimed_statement_id_fkey(id, statement_number),

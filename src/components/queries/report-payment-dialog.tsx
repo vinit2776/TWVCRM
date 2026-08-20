@@ -250,17 +250,29 @@ export function ReportPaymentDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          {pendingReports.length > 0 && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
+          {(existing ?? []).length > 0 && (
+            <div className={`rounded-md border p-3 space-y-2.5 ${
+              pendingReports.length > 0 ? "border-amber-200 bg-amber-50" : "border-border bg-muted/40"
+            }`}>
+              <div className={`flex items-center gap-1.5 text-xs font-medium ${
+                pendingReports.length > 0 ? "text-amber-900" : "text-muted-foreground"
+              }`}>
                 <AlertTriangle className="h-3.5 w-3.5 flex-none" />
-                Already reported, waiting on accounts
+                {pendingReports.length > 0
+                  ? "Already reported, waiting on accounts"
+                  : "Previously reported on this transaction"}
               </div>
               {existing!.map((rep) => (
-                <div key={rep.id} className="rounded border border-amber-200 bg-background/70 p-2 space-y-1.5">
+                <div key={rep.id} className="rounded border bg-background/70 p-2 space-y-1.5">
                   <div className="flex items-baseline justify-between gap-2 text-xs">
                     <span className="font-semibold tabular-nums">{formatCurrency(rep.amount)}</span>
-                    <span className="px-1.5 py-0.5 rounded-full border text-[10px] text-amber-800 border-amber-300">
+                    <span className={`px-1.5 py-0.5 rounded-full border text-[10px] ${
+                      rep.status === "reported"
+                        ? "text-amber-800 border-amber-300"
+                        : rep.status === "verified"
+                          ? "text-green-800 border-green-300"
+                          : "text-red-800 border-red-300"
+                    }`}>
                       {PAYMENT_REPORT_STATUS_LABELS[rep.status]}
                     </span>
                   </div>

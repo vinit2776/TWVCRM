@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -202,6 +202,10 @@ interface PendingPaymentReport {
   payer_name: string | null;
   payer_differs: boolean;
   claimed_statement_id: string | null;
+  status: "reported" | "verified" | "rejected";
+  resolution_note: string | null;
+  reviewed_at: string | null;
+  reviewed_by: { full_name: string } | null;
   created_by: { full_name: string };
   query: { id: string; entity_type: string; entity_id: string } | null;
 }
@@ -332,7 +336,11 @@ export default function AccountsReceivablePage() {
       // Non-fatal: an AR page without the advisory banner is still a working
       // AR page, so a failure here must not blank the receivables list.
       try {
-        const repRes = await fetch("/api/queries/payment-reports?status=reported", { cache: "no-store" });
+        // "recent" = still pending, plus anything settled in the last
+        // fortnight. A rejected report used to disappear the moment accounts
+        // answered it, leaving the row looking untouched and the reporter
+        // with no trace of what was found.
+        const repRes = await fetch("/api/queries/payment-reports?status=recent", { cache: "no-store" });
         setPendingReports(repRes.ok ? ((await repRes.json()).items ?? []) : []);
       } catch {
         setPendingReports([]);
@@ -900,28 +908,17 @@ export default function AccountsReceivablePage() {
                         </td>
                       </tr>
                       {reportsForRow(r).length > 0 && (
-                        <tr key={`${r.id}-reported`} className="bg-amber-50/70">
+                        <tr
+                          key={`${r.id}-reported`}
+                          className={
+                            reportsForRow(r).some((x) => x.status === "reported")
+                              ? "bg-amber-50/70"
+                              : "bg-muted/40"
+                          }
+                        >
                           <td colSpan={10} className="px-4 py-2">
                             {reportsForRow(r).map((rep) => (
-                              <div key={rep.id} className="flex items-start gap-2 text-xs text-amber-900">
-                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
-                                <span>
-                                  <span className="font-semibold">
-                                    {formatCurrency(rep.amount)} reported paid, not yet verified
-                                  </span>
-                                  {" — "}
-                                  {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
-                                  {" on "}{formatDate(rep.paid_on)}, by {rep.created_by.full_name}.
-                                  {rep.payer_differs && rep.payer_name && (
-                                    <> Paid from <span className="font-medium">{rep.payer_name}</span>.</>
-                                  )}
-                                  {" "}
-                                  <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
-                                    Open to verify
-                                  </a>
-                                  <span className="text-amber-700"> · Balance due below is unchanged until it is.</span>
-                                </span>
-                              </div>
+                              <ReportedPaymentLine key={rep.id} rep={rep} />
                             ))}
                           </td>
                         </tr>
@@ -1106,6 +1103,58 @@ export default function AccountsReceivablePage() {
         balanceDue={payRow?.balance_due ?? null}
         onSuccess={load}
       />
+    </div>
+  );
+}
+
+
+/**
+ * One line of history about a reported payment, shown on the transaction it
+ * was raised against.
+ *
+ * A settled report is deliberately kept visible for a while rather than
+ * dropped the moment it is answered. "Accounts looked and found nothing" is
+ * the most useful thing that can come back to whoever reported it, and it
+ * used to be written to the thread and then never surfaced anywhere the
+ * reporter would look.
+ */
+function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
+  const settled = rep.status !== "reported";
+  const tone = rep.status === "reported"
+    ? "text-amber-900"
+    : rep.status === "verified"
+      ? "text-green-900"
+      : "text-red-900";
+  const Icon = rep.status === "reported" ? AlertTriangle : rep.status === "verified" ? CheckCircle2 : XCircle;
+  const headline = rep.status === "reported"
+    ? `${formatCurrency(rep.amount)} reported paid, not yet verified`
+    : rep.status === "verified"
+      ? `${formatCurrency(rep.amount)} reported and verified`
+      : `${formatCurrency(rep.amount)} reported — accounts found no such payment`;
+
+  return (
+    <div className={`flex items-start gap-2 text-xs ${tone}`}>
+      <Icon className="h-3.5 w-3.5 mt-0.5 flex-none" />
+      <span>
+        <span className="font-semibold">{headline}</span>
+        {" — "}
+        {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
+        {" on "}{formatDate(rep.paid_on)}, by {rep.created_by.full_name}.
+        {rep.payer_differs && rep.payer_name && (
+          <> Paid from <span className="font-medium">{rep.payer_name}</span>.</>
+        )}
+        {settled && rep.reviewed_by && rep.reviewed_at && (
+          <> Closed by {rep.reviewed_by.full_name} on {formatDate(rep.reviewed_at)}.</>
+        )}
+        {settled && rep.resolution_note && <span className="block italic">&ldquo;{rep.resolution_note}&rdquo;</span>}
+        {" "}
+        <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
+          {settled ? "Open the thread" : "Open to verify"}
+        </a>
+        {!settled && (
+          <span className="opacity-80"> · Balance is unchanged until accounts confirm it.</span>
+        )}
+      </span>
     </div>
   );
 }
@@ -1302,28 +1351,16 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
                     </td>
                   </tr>
                   {reportsForRow(r).length > 0 && (
-                    <tr className="bg-amber-50/70">
+                    <tr
+                      className={
+                        reportsForRow(r).some((x) => x.status === "reported")
+                          ? "bg-amber-50/70"
+                          : "bg-muted/40"
+                      }
+                    >
                       <td colSpan={6} className="px-4 py-2">
                         {reportsForRow(r).map((rep) => (
-                          <div key={rep.id} className="flex items-start gap-2 text-xs text-amber-900">
-                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
-                            <span>
-                              <span className="font-semibold">
-                                {formatCurrency(rep.amount)} reported paid, not yet verified
-                              </span>
-                              {" — "}
-                              {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
-                              {" on "}{formatDate(rep.paid_on)}, by {rep.created_by.full_name}.
-                              {rep.payer_differs && rep.payer_name && (
-                                <> Paid from <span className="font-medium">{rep.payer_name}</span>.</>
-                              )}
-                              {" "}
-                              <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
-                                Open to verify
-                              </a>
-                              <span className="text-amber-700"> · Still outstanding until accounts confirm it.</span>
-                            </span>
-                          </div>
+                          <ReportedPaymentLine key={rep.id} rep={rep} />
                         ))}
                       </td>
                     </tr>

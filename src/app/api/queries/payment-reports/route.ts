@@ -36,6 +36,9 @@ import {
  */
 export const dynamic = "force-dynamic";
 
+/** How long a settled report keeps showing on the transaction it was raised on. */
+const SETTLED_WINDOW_DAYS = 14;
+
 /**
  * Deliberately NOT requireQueryUser().
  *
@@ -64,7 +67,7 @@ async function requireAnyUser(
 const REPORT_SELECT = `
   id, query_id, status, amount, paid_on, payment_mode, payment_reference,
   payer_name, payer_differs, billing_payment_id, resolution_note,
-  claimed_statement_id, reviewed_at, created_at,
+  claimed_statement_id, target_kind, reviewed_at, created_at,
   reviewed_by:users!query_payment_reports_reviewed_by_fkey(id, full_name, role),
   created_by:users!query_payment_reports_created_by_fkey(id, full_name, role),
   query:queries!query_payment_reports_query_id_fkey(id, entity_type, entity_id, status)
@@ -110,12 +113,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ items: mine, balance });
   }
 
-  const { data, error } = await admin
-    .from("query_payment_reports")
-    .select(REPORT_SELECT)
-    .eq("status", status)
-    .order("paid_on", { ascending: false })
-    .limit(200);
+  /**
+   * `status=recent` — still-pending reports plus anything settled in the last
+   * fortnight.
+   *
+   * Filtering to 'reported' alone made a rejected report vanish the moment it
+   * was answered: the AR row went back to looking untouched, and the person
+   * who raised it had nowhere to see that accounts had looked and found
+   * nothing. The outcome is the most useful part of the exchange, so the row
+   * keeps it for a while rather than dropping it the instant it lands.
+   */
+  let query = admin.from("query_payment_reports").select(REPORT_SELECT);
+  if (status === "recent") {
+    const since = new Date(Date.now() - SETTLED_WINDOW_DAYS * 86_400_000).toISOString();
+    query = query.or(`status.eq.reported,reviewed_at.gte.${since}`);
+  } else {
+    query = query.eq("status", status);
+  }
+
+  const { data, error } = await query.order("paid_on", { ascending: false }).limit(200);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
