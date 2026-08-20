@@ -601,7 +601,11 @@ const aggregatorFieldsSchema = z.object({
   default_rate_card: z.record(z.string(), z.number()),
   billing_method: z.enum(["postpaid", "prepaid"]),
   billing_mode: z.enum(["proforma_first", "gst_direct"]),
-  credit_limit: z.number().min(0).optional(),
+  // .nullish(), not .optional(): the column is nullable and null is the
+  // stored value for "no limit". .optional() accepts only undefined, so an
+  // aggregator loaded straight from the DB failed its own edit form — see
+  // the defaultValues note in aggregator-form.tsx.
+  credit_limit: z.number().min(0).nullish(),
   notes: z.string().optional(),
   tags: z.array(z.string()),
   contacts: z.array(z.object({
