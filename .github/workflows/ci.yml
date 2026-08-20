@@ -17,23 +17,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history + all remote refs: the migration-number check compares
+          # this branch against main and every other branch.
+          fetch-depth: 0
 
-      - name: Check for duplicate migration numbers
-        run: |
-          DUPES=$(ls supabase/migrations/*.sql | xargs -I{} basename {} | sed 's/_.*//' | sort | uniq -d)
-          if [ -n "$DUPES" ]; then
-            echo "❌ Duplicate migration numbers found: $DUPES"
-            echo "Two files with the same prefix cause supabase db push to silently skip one,"
-            echo "leaving production with missing columns. Rename before merging."
-            exit 1
-          fi
-          echo "✅ No duplicate migration numbers"
+      - name: Fetch remote branches for the migration check
+        run: git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+
+      # The previous version of this step only looked for duplicates *within*
+      # the checked-out tree, which never fires — a branch only ever holds one
+      # file per number. Every collision this repo has actually hit was
+      # cross-branch: two people pick the same next number on the same
+      # afternoon and whoever pushes second is silently dropped by db push.
+      # Catching that needs main and the other branches, hence fetch-depth: 0.
+      - name: Check migration numbers
+        run: node .github/scripts/check-migration-numbers.mjs
 
       - name: Install dependencies
         run: npm ci

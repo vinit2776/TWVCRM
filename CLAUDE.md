@@ -325,6 +325,7 @@ GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
 
 - All schema changes go through migrations. Never edit schema via the Supabase dashboard in production.
 - Migration files live in `/supabase/migrations/`. Naming: `NNNNN_description.sql` (sequential 5-digit prefix, matching existing convention).
+- **Pick the number against every branch, not just `main`.** `schema_migrations` keys on the prefix alone, so if two files share a number `db push` records the first and silently skips the rest — no error, the columns just never exist. `main` is not the source of truth here: people run `db push` from feature branches, so production is routinely ahead of `main`. CI runs `.github/scripts/check-migration-numbers.mjs`, which compares what your branch introduces against `main` and every remote branch; run it locally with `node .github/scripts/check-migration-numbers.mjs` before pushing. Re-check right before merging — the number can be taken while your PR is open.
 - Test migrations locally first: `npx supabase db push` against your local instance.
 - RLS is mandatory on every table containing user data. Default policy: deny all, then allow specific.
 - Reversible migrations where possible — include a rollback path in the PR description for destructive changes.
