@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { balanceDue, paymentCredit } from "@/lib/settlement";
+import { statementReference } from "@/lib/receivables";
 
 /**
  * GET /api/contracts/[id]/open-statements — this contract's unpaid finalized
@@ -34,7 +35,7 @@ export async function GET(
 
   const { data: statements, error } = await supabase
     .from("billing_statements")
-    .select("id, statement_number, total_amount, due_date")
+    .select("id, statement_number, gst_invoice_number, total_amount, due_date")
     .eq("contract_id", id)
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])
@@ -61,6 +62,10 @@ export async function GET(
   const data = (statements ?? []).map((s) => ({
     id: s.id as string,
     statement_number: (s.statement_number as string | null) ?? null,
+    gst_invoice_number: (s.gst_invoice_number as string | null) ?? null,
+    // What the invoice is actually called on screen — the GST number once one
+    // exists, so a picker here matches the AR row for the same invoice.
+    reference: statementReference(s as { statement_number: string | null; gst_invoice_number: string | null }),
     total_amount: Number(s.total_amount ?? 0),
     due_date: (s.due_date as string | null) ?? null,
     balance_due: Math.round(balanceDue(s.total_amount as number, paid.get(s.id as string) ?? 0)),

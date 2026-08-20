@@ -11,6 +11,7 @@ import {
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
+import { statementReference } from "@/lib/receivables";
 
 const TODAY = new Date("2026-08-20T09:00:00Z");
 
@@ -181,5 +182,23 @@ describe("targetKindForEntity", () => {
     for (const t of PAYMENT_REPORT_ENTITY_TYPES) {
       expect(["invoice", "deposit"]).toContain(targetKindForEntity(t));
     }
+  });
+});
+
+
+describe("statementReference", () => {
+  it("prefers the GST invoice number once one exists", () => {
+    expect(statementReference({ statement_number: "TWV-BS-0103", gst_invoice_number: "TWV/INV/26-27/0004" }))
+      .toBe("TWV/INV/26-27/0004");
+  });
+
+  it("falls back to the statement number before one is issued", () => {
+    expect(statementReference({ statement_number: "TWV-BS-0176", gst_invoice_number: null }))
+      .toBe("TWV-BS-0176");
+  });
+
+  it("never renders an empty label", () => {
+    expect(statementReference({ statement_number: null, gst_invoice_number: null })).toBe("Draft");
+    expect(statementReference({})).toBe("Draft");
   });
 });
