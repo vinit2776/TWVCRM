@@ -28,6 +28,12 @@ export interface Stage {
   toneLabel: string;
   subject: (ref: string, dueDesc: string, amount: string) => string;
   /** Opening sentence of the email body. */
+  /**
+   * Body copy. May contain the `{doc}` placeholder for the customer-facing
+   * document noun — "tax invoice" once a GST invoice has been issued against
+   * the statement, "proforma" otherwise. Callers must substitute it; see
+   * `resolveIntro`.
+   */
   intro: string;
   ccAccounts: boolean;
   ccManagerAndAdmin: boolean;
@@ -46,19 +52,19 @@ export const STAGES: Stage[] = [
   {
     day: 0, toneLabel: "Friendly reminder",
     subject: (ref, _due, amt) => `Payment due today — ${ref} · ₹${amt}`,
-    intro: "Just a friendly note that the payment for the proforma below is due today. We'd appreciate it if you could settle it at your convenience.",
+    intro: "Just a friendly note that the payment for the {doc} below is due today. We'd appreciate it if you could settle it at your convenience.",
     ccAccounts: false, ccManagerAndAdmin: false, whatsApp: false,
   },
   {
     day: 3, toneLabel: "Gentle reminder",
     subject: (ref, due, amt) => `Reminder — ${ref} now ${due} overdue · ₹${amt}`,
-    intro: "A gentle reminder that the payment for the proforma below is still pending. Please process at your earliest convenience.",
+    intro: "A gentle reminder that the payment for the {doc} below is still pending. Please process at your earliest convenience.",
     ccAccounts: false, ccManagerAndAdmin: false, whatsApp: true,
   },
   {
     day: 7, toneLabel: "Firm reminder",
     subject: (ref, _due, amt) => `Overdue — ${ref} · ₹${amt}`,
-    intro: "The payment for the proforma below is now overdue. Kindly arrange settlement at the earliest. Our accounts team has been copied on this email.",
+    intro: "The payment for the {doc} below is now overdue. Kindly arrange settlement at the earliest. Our accounts team has been copied on this email.",
     ccAccounts: true, ccManagerAndAdmin: false, whatsApp: true,
   },
   {
@@ -80,7 +86,7 @@ export const STAGES: Stage[] = [
   {
     day: 30, toneLabel: "Continued follow-up",
     subject: (ref, due, amt) => `Payment still pending — ${ref} (${due} overdue) · ₹${amt}`,
-    intro: "The payment for the proforma below has been outstanding for some time despite multiple reminders. Our accounts team is also reaching out separately. We'd really appreciate it if you could close this out, or reply to let us know when we can expect settlement.",
+    intro: "The payment for the {doc} below has been outstanding for some time despite multiple reminders. Our accounts team is also reaching out separately. We'd really appreciate it if you could close this out, or reply to let us know when we can expect settlement.",
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
     // Re-fires every 3 days perpetually until the statement is paid or voided.
     // Manual collections (calls, in-person visits) runs in parallel — this
@@ -88,6 +94,17 @@ export const STAGES: Stage[] = [
     perpetualEveryDays: 3,
   },
 ];
+
+/**
+ * Fill the `{doc}` placeholder in a stage intro.
+ *
+ * A statement that has had a GST invoice issued against it is, to the
+ * customer, a tax invoice — chasing it as a "proforma" names a document they
+ * were never sent. Deposits and ad-hoc PIs are always proformas.
+ */
+export function resolveIntro(intro: string, docNoun: string): string {
+  return intro.replace(/\{doc\}/g, docNoun);
+}
 
 /** Highest stage index that applies given days-past-due, or -1 if pre-due. */
 export function pickStageIndex(daysOverdue: number): number {
@@ -341,6 +358,17 @@ export async function sendOneReminder(
   if (stageIdx >= 4) cc.push(...ccPools.adminOnly);
   const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== lead?.email)));
 
+  // What the customer actually holds. Once a GST invoice has been issued the
+  // proforma has been superseded (and in the override flow, cancelled outright)
+  // — chasing them under the proforma number names a document they cannot find.
+  // This is independent of pi_cancelled_at: Tally-issued invoices never had a
+  // proforma cancelled, and were the larger share of the mismatch.
+  const gstInvoiceNumber = (s.gst_invoice_number as string | null) || null;
+  const customerRef = gstInvoiceNumber || (s.statement_number as string);
+  const docNoun = gstInvoiceNumber ? "tax invoice" : "proforma";
+  // Only shown when a proforma was actually cancelled, for continuity.
+  const cancelledPiNumber = s.pi_cancelled_at ? (s.statement_number as string) : null;
+
   // Email
   let emailSent = false;
   if (lead?.email) {
@@ -355,15 +383,14 @@ export async function sendOneReminder(
     let dynamicSubject: string;
     let dynamicIntro: string;
     if (isPreDue && stageIdx === 0) {
-      dynamicSubject = `Upcoming payment — ${s.statement_number} due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} · ₹${amountStr}`;
-      dynamicIntro = `A friendly heads-up that the payment for the proforma below is due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} (${dueStr}). Sharing the details so you can plan the transfer.`;
+      dynamicSubject = `Upcoming payment — ${customerRef} due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} · ₹${amountStr}`;
+      dynamicIntro = `A friendly heads-up that the payment for the ${docNoun} below is due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} (${dueStr}). Sharing the details so you can plan the transfer.`;
     } else {
       const subjDueDesc = daysOverdue > 0 ? `${daysOverdue}d` : "due today";
-      dynamicSubject = stage.subject(s.statement_number, subjDueDesc, amountStr);
-      dynamicIntro = stage.intro;
+      dynamicSubject = stage.subject(customerRef, subjDueDesc, amountStr);
+      dynamicIntro = resolveIntro(stage.intro, docNoun);
     }
 
-    const isEarlyGst = !!s.pi_cancelled_at && !!s.gst_invoice_number;
     const trackingId = crypto.randomUUID();
     const trackingPixelUrl = `${input.appUrl}/api/tracking/email-open?id=${trackingId}`;
 
@@ -378,9 +405,10 @@ export async function sendOneReminder(
       daysOverdue,
       originalTotal: isPartial ? fmtINR(settlementAmount(s.total_amount as number)) : null,
       paidSoFar:     isPartial ? fmtINR(paidSoFar) : null,
-      // Early GST override — show invoice number and cancelled PI for continuity
-      gstInvoiceNumber: isEarlyGst ? (s.gst_invoice_number as string) : null,
-      cancelledPiNumber: isEarlyGst ? s.statement_number : null,
+      // Switches the ref label to "Tax Invoice Ref". cancelledPiNumber adds the
+      // "replaced Proforma X" line, so it stays null unless one was cancelled.
+      gstInvoiceNumber,
+      cancelledPiNumber,
       trackingPixelUrl,
     });
     try {
@@ -413,11 +441,9 @@ export async function sendOneReminder(
   // WhatsApp (stage 1 onwards, only if customer has a phone)
   let whatsAppSent = false;
   const phone = lead?.mobile || lead?.phone || null;
-  const isEarlyGst = !!s.pi_cancelled_at && !!s.gst_invoice_number;
-  const whatsAppRef = isEarlyGst ? (s.gst_invoice_number as string) : s.statement_number;
   if (stage.whatsApp && phone) {
     try {
-      const r = await messaging.paymentReminder(phone, customerName, whatsAppRef, amountStr, dueStr, s.id);
+      const r = await messaging.paymentReminder(phone, customerName, customerRef, amountStr, dueStr, s.id);
       whatsAppSent = r?.success === true;
       if (!whatsAppSent) errors.push(`whatsapp: ${r?.error || "unknown"}`);
     } catch (err) {
