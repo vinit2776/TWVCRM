@@ -205,6 +205,14 @@ function summarizePurchaseRequest(c: AuditChanges, action: string): AuditSummary
   if (went(c, "status", "draft", "submitted")) return { label: "Submitted for approval", tone: "blue" };
   if (went(c, "status", "submitted", "approved")) return { label: "Material request approved", tone: "green" };
   if (went(c, "status", "submitted", "rejected")) return { label: "Material request rejected", tone: "red" };
+  if (action === "procurement_approval_revoked") {
+    const reason = (c.reason?.new as string | null) ?? null;
+    return { label: "Approval revoked — back to Pending Approval", tone: "amber", detail: reason ?? undefined };
+  }
+  if (action === "procurement_chain_cancelled") {
+    const reason = (c.reason?.new as string | null) ?? null;
+    return { label: "Material request cancelled (chain reversed)", tone: "red", detail: reason ?? undefined };
+  }
   if (action === "create") return { label: "Material request created", tone: "blue" };
   return null;
 }

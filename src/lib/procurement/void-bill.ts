@@ -82,6 +82,19 @@ export async function getBillVoidBlocker(
  * Void a single vendor bill. Performs its own blocker check — callers do not
  * need to call getBillVoidBlocker first (though they may want to, to surface
  * the blocker message before attempting the write).
+ *
+ * Phase 2 (migration 00512_procurement_chain_cancellation.sql): this is now
+ * a thin wrapper that builds a one-bill cancellation plan and hands it to
+ * `apply_procurement_cancellation`, the single writer for every
+ * cancel/void/reversal write in procurement. The actual field-level writes
+ * (approval_status, rejection_outcome, payment-batch clearing, payment-hold
+ * release, recurring-rule pause) now live in that RPC — see its "Step 3:
+ * void each vendor bill" block, which mirrors this function's previous body
+ * field for field. getBillVoidBlocker() is unchanged: it stays pure
+ * TypeScript and remains the source of the user-facing blocker message; the
+ * RPC re-validates the same conditions server-side as its last line of
+ * defence, but does not produce a friendly message, so callers should still
+ * prefer getBillVoidBlocker() to explain *why* voiding is blocked.
  */
 export async function voidBill(
   supabase: SupabaseClient,
@@ -96,7 +109,7 @@ export async function voidBill(
 
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
-    .select("id, approval_status, rejection_outcome, rejection_reason, payment_hold_status")
+    .select("id, approval_status, rejection_outcome")
     .eq("id", billId)
     .single();
 
@@ -104,47 +117,25 @@ export async function voidBill(
     return { ok: false, error: "Bill not found." };
   }
 
-  const now = new Date().toISOString();
-
-  const updatePayload: Record<string, unknown> = {
-    approval_status: "rejected",
-    rejection_outcome: "void",
-    rejection_reason: reason,
-    approved_by: actorId,
-    approved_at: now,
-    // Clear payment-batch scheduling — a voided bill must not show up in any
-    // upcoming payment batch.
-    payment_batch_type: null,
-    payment_batch_date: null,
-    payment_batch_assigned_by: null,
-    payment_batch_assigned_at: null,
+  const plan = {
+    reason,
+    root: { type: "vendor_bill" as const, id: billId },
+    outcome: "cancelled" as const,
+    material_request: null,
+    purchase_orders: [],
+    vendor_bills: [{ id: billId }],
+    delivery_receipts: [],
+    advance_recoveries: [],
   };
 
-  // Mirror the release_hold case's field writes (bills/[id]/route.ts) so a
-  // voided bill that was on hold doesn't stay stuck "on hold" forever.
-  if (bill.payment_hold_status === "on_hold") {
-    updatePayload.payment_hold_status = "none";
-    updatePayload.payment_hold_resolved_by = actorId;
-    updatePayload.payment_hold_resolved_at = now;
-    updatePayload.payment_hold_resolution_notes = `Bill voided: ${reason}`;
+  const { error: rpcError } = await supabase.rpc("apply_procurement_cancellation", {
+    p_plan: plan,
+    p_actor: actorId,
+  });
+
+  if (rpcError) {
+    return { ok: false, error: rpcError.message };
   }
-
-  const { error: updateError } = await supabase
-    .from("vendor_bills")
-    .update(updatePayload)
-    .eq("id", billId);
-
-  if (updateError) {
-    return { ok: false, error: updateError.message };
-  }
-
-  // Pause any recurring bill rule anchored to this bill — a rule anchored to
-  // a voided bill must not keep auto-approving future bills from the vendor.
-  await supabase
-    .from("procurement_recurring_bill_rules")
-    .update({ status: "paused" })
-    .eq("anchor_bill_id", billId)
-    .eq("status", "active");
 
   await logAudit(supabase, {
     entityType: "vendor_bill",

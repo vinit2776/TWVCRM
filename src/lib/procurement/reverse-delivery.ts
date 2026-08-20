@@ -209,65 +209,137 @@ export async function reverseDeliveryReceipt(
     prLocationId
   );
 
-  // Reverse quantity_received on each PO item + reverse location_stock
-  for (const item of receipt.po_delivery_receipt_items ?? []) {
-    const { data: poItem } = await supabase
-      .from("purchase_order_items")
-      .select("item_id, quantity_received, purchase_request_items(item_id)")
-      .eq("id", item.po_item_id)
-      .eq("po_id", poId)
-      .single();
-    if (poItem) {
-      // Atomic decrement (floors at 0) — mirrors the POST-path increment
-      await supabase.rpc("increment_po_item_received", {
-        p_po_item_id: item.po_item_id,
-        p_po_id: poId,
-        p_delta: -Number(item.qty_received),
-      });
-      // Reverse location_stock against the item stock was credited to:
-      // stored stock_item_id, else re-derive via the POST path's fallback
-      // (PO item's item_id, else the linked PR item's item_id).
-      const stockItemId = resolveStockItemId(
-        item.stock_item_id,
-        poItem.item_id,
-        (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id
-      );
-      if (stockLocationId && stockItemId) {
-        // Services never had a location_stock write in the first place — skip the reversal too.
-        const { data: catalogRow } = await supabase
-          .from("procurement_items")
-          .select("item_type")
-          .eq("id", stockItemId)
-          .maybeSingle();
-        if (catalogRow?.item_type !== "service") {
-          await supabase.rpc("upsert_location_stock", {
-            p_location_id: stockLocationId,
-            p_item_id: stockItemId,
-            p_quantity_delta: -Number(item.qty_received),
-          });
+  if (disposition === "delete") {
+    // Delivery-reject correction path — unchanged by Phase 2. This is NOT
+    // part of the RPC: deletion is not something apply_procurement_cancellation
+    // does (it only ever retains/stamps receipts), and the delivery-reject
+    // path's behaviour must not shift.
+    for (const item of receipt.po_delivery_receipt_items ?? []) {
+      const { data: poItem } = await supabase
+        .from("purchase_order_items")
+        .select("item_id, quantity_received, purchase_request_items(item_id)")
+        .eq("id", item.po_item_id)
+        .eq("po_id", poId)
+        .single();
+      if (poItem) {
+        // Atomic decrement (floors at 0) — mirrors the POST-path increment
+        await supabase.rpc("increment_po_item_received", {
+          p_po_item_id: item.po_item_id,
+          p_po_id: poId,
+          p_delta: -Number(item.qty_received),
+        });
+        // Reverse location_stock against the item stock was credited to:
+        // stored stock_item_id, else re-derive via the POST path's fallback
+        // (PO item's item_id, else the linked PR item's item_id).
+        const stockItemId = resolveStockItemId(
+          item.stock_item_id,
+          poItem.item_id,
+          (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id
+        );
+        if (stockLocationId && stockItemId) {
+          // Services never had a location_stock write in the first place — skip the reversal too.
+          const { data: catalogRow } = await supabase
+            .from("procurement_items")
+            .select("item_type")
+            .eq("id", stockItemId)
+            .maybeSingle();
+          if (catalogRow?.item_type !== "service") {
+            await supabase.rpc("upsert_location_stock", {
+              p_location_id: stockLocationId,
+              p_item_id: stockItemId,
+              p_quantity_delta: -Number(item.qty_received),
+            });
+          }
         }
       }
     }
-  }
 
-  if (disposition === "delete") {
     // Delete receipt items, then receipt
     await supabase.from("po_delivery_receipt_items").delete().eq("delivery_receipt_id", receiptId);
     await supabase.from("po_delivery_receipts").delete().eq("id", receiptId).eq("po_id", poId);
-  } else {
-    // Retain both rows — stamp the reversal columns instead of deleting.
-    const { error: updateErr } = await supabase
-      .from("po_delivery_receipts")
-      .update({
-        reversed_at: new Date().toISOString(),
-        reversed_by: reversedBy,
-        reversal_reason: reason,
-      })
-      .eq("id", receiptId)
-      .eq("po_id", poId);
-    if (updateErr) {
-      return { ok: false, error: `Stock was reversed but the receipt could not be marked reversed: ${updateErr.message}` };
+
+    return { ok: true };
+  }
+
+  // disposition === "retain" (Phase 2, migration 00512): build a one-receipt
+  // cancellation plan — resolving the same location/item fallback chains as
+  // before — and hand the actual writes (decrement quantity_received,
+  // reverse location_stock, stamp reversed_at/reversed_by/reversal_reason)
+  // to apply_procurement_cancellation, the single writer for this feature.
+  const items = (receipt.po_delivery_receipt_items ?? []).map(
+    (item: { id: string; po_item_id: string; qty_received: number; stock_item_id: string | null }) => {
+      return { item, poItemId: item.po_item_id, qty: Number(item.qty_received) };
     }
+  );
+
+  const resolvedItems: Array<{
+    po_item_id: string;
+    stock_item_id: string | null;
+    qty: number;
+    skip_stock: boolean;
+  }> = [];
+
+  for (const { item, poItemId, qty } of items) {
+    const { data: poItem } = await supabase
+      .from("purchase_order_items")
+      .select("item_id, purchase_request_items(item_id)")
+      .eq("id", poItemId)
+      .eq("po_id", poId)
+      .single();
+
+    const stockItemId = poItem
+      ? resolveStockItemId(
+          item.stock_item_id,
+          poItem.item_id,
+          (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id
+        )
+      : null;
+
+    let skipStock = !stockLocationId || !stockItemId;
+    if (!skipStock && stockItemId) {
+      const { data: catalogRow } = await supabase
+        .from("procurement_items")
+        .select("item_type")
+        .eq("id", stockItemId)
+        .maybeSingle();
+      if (catalogRow?.item_type === "service") {
+        skipStock = true;
+      }
+    }
+
+    resolvedItems.push({
+      po_item_id: poItemId,
+      stock_item_id: stockItemId,
+      qty,
+      skip_stock: skipStock,
+    });
+  }
+
+  const plan = {
+    reason,
+    root: { type: "purchase_order" as const, id: poId },
+    outcome: "cancelled" as const,
+    material_request: null,
+    purchase_orders: [],
+    vendor_bills: [],
+    delivery_receipts: [
+      {
+        id: receiptId,
+        po_id: poId,
+        stock_location_id: stockLocationId,
+        items: resolvedItems,
+      },
+    ],
+    advance_recoveries: [],
+  };
+
+  const { error: rpcError } = await supabase.rpc("apply_procurement_cancellation", {
+    p_plan: plan,
+    p_actor: reversedBy,
+  });
+
+  if (rpcError) {
+    return { ok: false, error: `Stock was not reversed: ${rpcError.message}` };
   }
 
   return { ok: true };

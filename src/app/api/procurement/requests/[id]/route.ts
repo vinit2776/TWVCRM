@@ -5,10 +5,19 @@ import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
+import { resolveCancellationImpact } from "@/lib/procurement/cancellation-plan";
+
+/** Post-approval MR statuses — the only ones `revoke_approval` / the extended `cancel` apply to. */
+const POST_APPROVAL_MR_STATUSES = ["approved", "partially_ordered", "po_created"] as const;
 
 const patchPrSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
-  z.object({ action: z.literal("cancel") }),
+  // `reason` is optional so the original draft/submitted cancel flow (any
+  // procurement role, no reason required) keeps working byte-for-byte. It
+  // becomes effectively required by the handler itself for the post-approval
+  // (admin-only, chain-cancelling) extension of this same action.
+  z.object({ action: z.literal("cancel"), reason: z.string().min(10).optional() }),
+  z.object({ action: z.literal("revoke_approval"), reason: z.string().min(10) }),
   z.object({
     action: z.literal("approve"),
     notes: z.string().optional(),
@@ -119,6 +128,76 @@ async function generateApprovalCode(supabase: Awaited<ReturnType<typeof createCl
   return generateSignedApprovalCode("pr", (count ?? 0) + 1, entityId);
 }
 
+/**
+ * Shared engine behind `revoke_approval` and the post-approval extension of
+ * `cancel`: resolve the full impact of undoing this MR's approval (POs,
+ * vendor bills, delivery receipts — and, per the paid-advance rule, refusing
+ * outright if any PO in the chain has a processed advance), refuse with the
+ * blocker list if anything can't be reversed, otherwise hand the plan to
+ * `apply_procurement_cancellation` — the single writer for every table this
+ * cascade touches — and audit-log the result.
+ *
+ * Returns the NextResponse directly since both callers just `return` it —
+ * neither falls through to the generic status-flip tail of PATCH below
+ * (that tail is for actions that only ever touch the purchase_requests row
+ * itself via a plain `.update()`).
+ */
+async function applyChainCancellation(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  opts: {
+    prId: string;
+    pr: { id: string; pr_number: string; status: string };
+    actorId: string;
+    outcome: "revoked" | "cancelled";
+    reason: string;
+    auditAction: "procurement_chain_cancelled" | "procurement_approval_revoked";
+  }
+) {
+  const { prId, pr, actorId, outcome, reason, auditAction } = opts;
+
+  const impact = await resolveCancellationImpact(supabase, {
+    rootType: "purchase_request",
+    rootId: prId,
+    outcome,
+    reason,
+  });
+
+  if (impact.blockers.length > 0) {
+    return NextResponse.json(
+      {
+        error: `Cannot ${outcome === "revoked" ? "revoke approval for" : "cancel"} MR ${pr.pr_number} — blocked: ${impact.blockers
+          .map((b) => b.reason)
+          .join("; ")}`,
+        blockers: impact.blockers,
+      },
+      { status: 422 }
+    );
+  }
+
+  const { data: rpcResult, error: rpcError } = await supabase.rpc("apply_procurement_cancellation", {
+    p_plan: impact.plan,
+    p_actor: actorId,
+  });
+
+  if (rpcError) {
+    return NextResponse.json({ error: rpcError.message }, { status: 500 });
+  }
+
+  await logAudit(supabase, {
+    entityType: "purchase_request",
+    entityId: prId,
+    action: auditAction,
+    performedBy: actorId,
+    changes: {
+      status: { old: pr.status, new: impact.plan.material_request?.terminal_status ?? null },
+      reason: { old: null, new: reason },
+      impact_summary: { old: null, new: rpcResult ?? impact.effects },
+    },
+  });
+
+  return NextResponse.json({ data: rpcResult, effects: impact.effects });
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -219,14 +298,72 @@ export async function PATCH(
     }
 
     case "cancel": {
-      if (!["draft", "submitted"].includes(pr.status)) {
-        return NextResponse.json({ error: "Only draft or submitted PRs can be cancelled" }, { status: 422 });
+      // Original draft/submitted flow — unchanged from before this PR, byte
+      // for byte: any procurement role (or the requester) can cancel, no
+      // reason required, simple status flip, no RPC involved (nothing can
+      // have been ordered or billed against a draft/submitted MR yet).
+      if (["draft", "submitted"].includes(pr.status)) {
+        if (pr.requested_by !== dbUser.id && !["admin", "manager", "office_admin"].includes(dbUser.role)) {
+          return NextResponse.json({ error: "Access denied" }, { status: 403 });
+        }
+        updatePayload = { status: "cancelled" };
+        break;
       }
-      if (pr.requested_by !== dbUser.id && !["admin", "manager", "office_admin"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+
+      // Extension: a post-approval MR (and everything raised against it —
+      // POs, vendor bills, delivery receipts) can also be cancelled,
+      // admin-only, via the chain-cancellation RPC.
+      if ((POST_APPROVAL_MR_STATUSES as readonly string[]).includes(pr.status)) {
+        if (dbUser.role !== "admin") {
+          return NextResponse.json(
+            { error: "Only admins can cancel an approved material request and its chain" },
+            { status: 403 }
+          );
+        }
+        if (!parsed.data.reason || parsed.data.reason.trim().length < 10) {
+          return NextResponse.json(
+            { error: "A reason of at least 10 characters is required to cancel an approved material request" },
+            { status: 422 }
+          );
+        }
+        return applyChainCancellation(supabase, {
+          prId: id,
+          pr,
+          actorId: dbUser.id,
+          outcome: "cancelled",
+          reason: parsed.data.reason.trim(),
+          auditAction: "procurement_chain_cancelled",
+        });
       }
-      updatePayload = { status: "cancelled" };
-      break;
+
+      return NextResponse.json({ error: "This material request cannot be cancelled from its current status" }, { status: 422 });
+    }
+
+    case "revoke_approval": {
+      // Everyday fix for a wrong or premature approval: the MR drops back to
+      // `submitted` (already in MR_EDITABLE_STATUSES, so the existing edit
+      // form and approval queue work unchanged), approval fields are
+      // cleared, and any child POs/bills are cancelled/voided as part of the
+      // same RPC call. Committed budget is released implicitly — the budget
+      // queries above filter on status IN ('approved','partially_ordered','po_created'),
+      // so a PR back at 'submitted' no longer counts toward committed spend.
+      if (!(POST_APPROVAL_MR_STATUSES as readonly string[]).includes(pr.status)) {
+        return NextResponse.json(
+          { error: "Only approved (or beyond) material requests can have their approval revoked" },
+          { status: 422 }
+        );
+      }
+      if (dbUser.role !== "admin") {
+        return NextResponse.json({ error: "Only admins can revoke a material request's approval" }, { status: 403 });
+      }
+      return applyChainCancellation(supabase, {
+        prId: id,
+        pr,
+        actorId: dbUser.id,
+        outcome: "revoked",
+        reason: parsed.data.reason.trim(),
+        auditAction: "procurement_approval_revoked",
+      });
     }
 
     case "approve": {
