@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { canRecordPayments } from "@/lib/constants";
 
 /**
  * POST /api/proposals/[id]/deposit-payment
@@ -29,9 +30,11 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
-  const ALLOWED_ROLES = ["admin", "manager", "accounts"];
-  if (!actor || !ALLOWED_ROLES.includes(actor.role)) {
-    return NextResponse.json({ error: "Not authorised to record manual payments" }, { status: 403 });
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record a deposit. Use \"Report paid\" to tell accounts about one." },
+      { status: 403 },
+    );
   }
 
   // Parse multipart form

@@ -44,6 +44,7 @@ import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { canRecordPayments } from "@/lib/constants";
 
 interface Lead {
   id: string;
@@ -339,7 +340,7 @@ export default function AccountsReceivablePage() {
   useEffect(() => {
     fetch("/api/me")
       .then((res) => res.json())
-      .then((me) => setCanRecordPayment(["admin", "manager", "accounts"].includes(me.role)))
+      .then((me) => setCanRecordPayment(canRecordPayments(me.role)))
       .catch(() => setCanRecordPayment(false));
   }, []);
 

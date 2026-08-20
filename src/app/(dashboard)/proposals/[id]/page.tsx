@@ -69,6 +69,7 @@ const CreateContractDialog = dynamic(
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { canRecordPayments } from "@/lib/constants";
 
 export default function ProposalDetailPage({
   params,
@@ -1357,8 +1358,12 @@ export default function ProposalDetailPage({
                   </Button>
                 )}
 
-                {/* Manual payment recording */}
-                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
+                {/* Manual payment recording. Had no role check of its own —
+                    the API rejected the wrong roles, but the button was
+                    visible to anyone who could open the proposal. */}
+                {proposal.deposit_payment_status === "pending" &&
+                  ["sent", "viewed", "accepted"].includes(proposal.status) &&
+                  canRecordPayments(currentUser?.role) && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -1581,7 +1586,7 @@ export default function ProposalDetailPage({
                       link (NEFT, cheque, cash). Without this the only way past
                       the contract activation gate is the admin override. */}
                   {proposal.payment_status !== "paid" &&
-                    ["admin", "manager", "accounts"].includes(currentUser?.role || "") && (
+                    canRecordPayments(currentUser?.role) && (
                       <Button
                         size="sm"
                         variant="outline"

@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { handleStatementPaid } from "@/lib/tally-handoff-server";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { canRecordPayments } from "@/lib/constants";
 
 /**
  * POST /api/invoices/[id]/payment
@@ -27,6 +28,19 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // This route had no role check at all — any authenticated user could record
+  // money against an ad-hoc invoice, including roles with no finance access.
+  // Every other payment route gated on admin/manager/accounts; this one was
+  // simply missed. Brought in line with the rest.
+  const { data: actor } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).maybeSingle();
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record payments" },
+      { status: 403 },
+    );
+  }
 
   const body = await request.json();
   const amount = parseFloat(body.amount);

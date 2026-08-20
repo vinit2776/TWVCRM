@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
+import { canRecordPayments } from "@/lib/constants";
 
-const ALLOWED_ROLES = ["admin", "manager", "accounts"];
+// Recording money already received — same gate as every other payment.
 const VALID_CATEGORIES = ["seat_expansion", "risk_buffer", "customer_requested", "renewal_escalation", "other"];
 
 /**
@@ -25,8 +26,11 @@ export async function POST(
 
   const { data: actor } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!actor || !ALLOWED_ROLES.includes(actor.role)) {
-    return NextResponse.json({ error: "Not authorised to record an additional deposit" }, { status: 403 });
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record an additional deposit" },
+      { status: 403 },
+    );
   }
 
   const formData = await request.formData();
