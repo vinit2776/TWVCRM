@@ -107,9 +107,24 @@ export async function POST(request: NextRequest) {
 
   // Defaults to the client-supplied values; overwritten below when
   // contract_facility_id is set, since quota math is server-authoritative.
+  //
+  // The total is derived rather than trusted, for the same reason gst_amount is
+  // below: a client that sends a total disagreeing with quantity x unit_price
+  // leaves a line that cannot be read back. Booking TWV-B-0040 is the example —
+  // three hours of conference room were billed correctly at Rs 2,400, but the
+  // charge was stored as quantity 1 at Rs 800, so the line reads as Rs 800 while
+  // charging Rs 2,400. Both dialogs already send quantity x unit_price, so this
+  // changes nothing for them and only rejects the inconsistent case.
   let facilityQuantity  = result.data.quantity;
   let facilityUnitPrice = result.data.unit_price;
-  let facilityTotal     = Number(result.data.total);
+  let facilityTotal     = parseFloat((result.data.quantity * result.data.unit_price).toFixed(2));
+
+  const claimedTotal = Number(result.data.total);
+  if (Number.isFinite(claimedTotal) && Math.abs(claimedTotal - facilityTotal) > 0.01) {
+    return NextResponse.json({
+      error: `Charge does not add up: ${result.data.quantity} x ${result.data.unit_price} is ${facilityTotal.toLocaleString("en-IN")}, but the total says ${claimedTotal.toLocaleString("en-IN")}. Set the quantity to the units actually being billed.`,
+    }, { status: 422 });
+  }
   let facilityStatus    = "pending";
 
   if (result.data.contract_id) {
