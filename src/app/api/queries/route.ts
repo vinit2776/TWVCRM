@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
-import { isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
+import { canSeeQuery, isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
 import {
   requireQueryUser,
   loadEntitySummaries,
@@ -37,7 +37,8 @@ const THREAD_SELECT = `
   messages:query_messages(
     body, event_type, created_at, created_by,
     author:users!query_messages_created_by_fkey(id, full_name, role)
-  )
+  ),
+  payment_report:query_payment_reports!query_payment_reports_query_id_fkey(amount, status)
 `;
 
 interface QueryRow {
@@ -55,6 +56,7 @@ interface QueryRow {
   resolved_at: string | null;
   created_by: QueryAuthor;
   resolved_by: QueryAuthor | null;
+  payment_report: { amount: number; status: string } | Array<{ amount: number; status: string }> | null;
   messages: Array<{
     body: string | null;
     event_type: "message" | "resolved" | "reopened" | "retargeted";
@@ -118,6 +120,13 @@ function toListItem(
     resolved_at: row.resolved_at,
     needed_by: row.needed_by,
     entity: entitySummary,
+    // The claim, not the contract. Without this a payment report card reads
+    // "Acme Corp ₹59,000" — the contract's value — next to a ₹100 claim, and
+    // the number a skim-reader takes away is the wrong one.
+    reported_amount: (() => {
+      const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
+      return r ? Number(r.amount) : null;
+    })(),
     last_message: last
       ? { body: last.body, event_type: last.event_type, created_at: last.created_at }
       : null,
@@ -130,7 +139,7 @@ function visibleRows(rows: QueryRow[], viewer: Viewer): Array<{ row: QueryRow; d
   return rows.flatMap((row) => {
     const def = queryEntityDef(row.entity_type);
     if (!def) return [];
-    if (!(def.roles as readonly string[]).includes(viewer.role)) return [];
+    if (!canSeeQuery(def, viewer, row.created_by?.id)) return [];
     return [{ row, def }];
   });
 }
@@ -202,6 +211,10 @@ export async function GET(req: NextRequest) {
   const tab = (url.searchParams.get("tab") ?? "awaiting_me") as Tab;
   const cursor = url.searchParams.get("cursor");
   const moduleFilter = url.searchParams.get("module");
+  // Filters by what a thread *is*, not which module it hangs off. Payment
+  // reports hang off contracts, so a module chip files them next to
+  // renewal-intent questions — accounts need a way to see just the money.
+  const kindFilter = url.searchParams.get("kind");
   const entityType = url.searchParams.get("entity_type");
   const entityId = url.searchParams.get("entity_id");
   const today = new Date().toISOString().slice(0, 10);
@@ -231,6 +244,7 @@ export async function GET(req: NextRequest) {
   let visible = visibleRows(rows, viewer);
 
   if (moduleFilter) visible = visible.filter(({ def }) => def.module === moduleFilter);
+  if (kindFilter) visible = visible.filter(({ row }) => row.kind === kindFilter);
 
   const summaries = await loadEntitySummaries(
     admin,

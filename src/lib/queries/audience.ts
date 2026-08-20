@@ -42,7 +42,13 @@ export interface Viewer {
  * transaction, you can read questions raised on it. Targeting routes, it
  * doesn't hide.
  */
-export function canSeeQuery(def: QueryEntityDef, viewer: Viewer): boolean {
+export function canSeeQuery(def: QueryEntityDef, viewer: Viewer, createdById?: string | null): boolean {
+  // You can always read a thread you raised, whatever your role. Payment
+  // reports made this load-bearing rather than merely fair: reporting is open
+  // to every authenticated user, so an fms or IT technician passing on a
+  // customer's payment screenshot would otherwise lose sight of their own
+  // report the moment they sent it.
+  if (createdById && createdById === viewer.id) return true;
   return (def.roles as readonly string[]).includes(viewer.role);
 }
 

@@ -8,6 +8,7 @@ import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { queryEntityDef } from "@/lib/queries/registry";
 import {
   QUERY_MODULE_LABELS,
+  type QueryKind,
   type QueryListItem,
   type QueryModule,
   type QueryStats,
@@ -51,6 +52,10 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   // while the thread you were sent to look at sat one tab over.
   const [tab, setTab] = useState<Tab>(openQueryId ? "open" : "awaiting_me");
   const [moduleFilter, setModuleFilter] = useState<QueryModule | null>(null);
+  // Orthogonal to moduleFilter: "Payments reported" is a kind, not a module.
+  // Selecting it clears the module chip, since a report's module is always
+  // Contracts and the two filters would just fight each other.
+  const [kindFilter, setKindFilter] = useState<QueryKind | null>(null);
   const [stats, setStats] = useState<QueryStats | null>(null);
   const [items, setItems] = useState<QueryListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -72,10 +77,11 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
     (activeTab: Tab, cursor?: string) => {
       const params = new URLSearchParams({ tab: activeTab });
       if (moduleFilter) params.set("module", moduleFilter);
+      if (kindFilter) params.set("kind", kindFilter);
       if (cursor) params.set("cursor", cursor);
       return `/api/queries?${params.toString()}`;
     },
-    [moduleFilter],
+    [moduleFilter, kindFilter],
   );
 
   const loadFirstPage = useCallback(
@@ -172,15 +178,30 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
       </div>
 
       <div className="flex flex-wrap gap-1.5 mb-4">
-        <ModuleChip active={moduleFilter === null} onClick={() => setModuleFilter(null)} label="All modules" />
+        <ModuleChip
+          active={moduleFilter === null && kindFilter === null}
+          onClick={() => { setModuleFilter(null); setKindFilter(null); }}
+          label="All modules"
+        />
         {MODULES.map((m) => (
           <ModuleChip
             key={m}
             active={moduleFilter === m}
-            onClick={() => setModuleFilter(moduleFilter === m ? null : m)}
+            onClick={() => {
+              setKindFilter(null);
+              setModuleFilter(moduleFilter === m ? null : m);
+            }}
             label={QUERY_MODULE_LABELS[m]}
           />
         ))}
+        <ModuleChip
+          active={kindFilter === "payment_reported"}
+          onClick={() => {
+            setModuleFilter(null);
+            setKindFilter(kindFilter === "payment_reported" ? null : "payment_reported");
+          }}
+          label="Payments reported"
+        />
       </div>
 
       {loading ? (
@@ -256,8 +277,20 @@ function QueryCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            {isResolved ? (
+            {isResolved && item.kind === "payment_reported" ? (
+              // "Resolved" alone would hide the only thing anyone wants to
+              // know about a settled money claim: did the payment turn out to
+              // be real? The outcome lives on the report row, so infer it
+              // from the last timeline event, which is one of exactly two.
+              item.last_message?.event_type === "payment_rejected" ? (
+                <Pill tone="danger">No such payment</Pill>
+              ) : (
+                <Pill tone="good">Payment verified</Pill>
+              )
+            ) : isResolved ? (
               <Pill tone="good">Resolved</Pill>
+            ) : item.kind === "payment_reported" ? (
+              <Pill tone="warning">Payment reported</Pill>
             ) : item.kind === "action_needed" ? (
               <Pill tone="danger">Action needed</Pill>
             ) : (
@@ -266,10 +299,21 @@ function QueryCard({
             {overdue > 0 && <Pill tone="warning">Overdue · {overdue}d</Pill>}
             {!isResolved && <Pill tone="muted">→ {audienceText}</Pill>}
             <span className="font-medium text-sm">{item.entity?.title ?? "(transaction unavailable)"}</span>
-            {item.entity?.amount != null && (
-              <span className="text-sm text-muted-foreground tabular-nums">
-                {formatCurrency(item.entity.amount)}
-              </span>
+            {item.kind === "payment_reported" ? (
+              // The claim, never the contract value. Showing the entity's
+              // amount here would put "₹59,000" on a card about a ₹100
+              // payment, which is the number people would remember.
+              item.reported_amount != null && (
+                <span className="text-sm font-medium text-amber-800 tabular-nums">
+                  {formatCurrency(item.reported_amount)} claimed
+                </span>
+              )
+            ) : (
+              item.entity?.amount != null && (
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {formatCurrency(item.entity.amount)}
+                </span>
+              )
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">

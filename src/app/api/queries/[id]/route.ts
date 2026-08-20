@@ -11,7 +11,7 @@ import {
   threadParticipantIds,
 } from "@/lib/queries/server";
 import { ATTACHMENT_SELECT } from "@/lib/queries/attachments";
-import type { QueryAuthor, QueryKind, QueryMessage, QueryThread } from "@/lib/queries/types";
+import type { QueryAuthor, QueryKind, QueryMessage, QueryPaymentReport, QueryThread } from "@/lib/queries/types";
 
 /**
  * GET   /api/queries/[id] — the full thread.
@@ -30,6 +30,14 @@ const THREAD_SELECT = `
     id, event_type, body, created_at,
     created_by:users!query_messages_created_by_fkey(id, full_name, role),
     attachments:query_attachments!query_attachments_message_id_fkey(${ATTACHMENT_SELECT})
+  ),
+  payment_report:query_payment_reports!query_payment_reports_query_id_fkey(
+    id, status, amount, paid_on, payment_mode, payment_reference,
+    payer_name, payer_differs, billing_payment_id, resolution_note,
+    claimed_statement_id, reviewed_at, created_at,
+    claimed_statement:billing_statements!query_payment_reports_claimed_statement_id_fkey(id, statement_number),
+    reviewed_by:users!query_payment_reports_reviewed_by_fkey(id, full_name, role),
+    created_by:users!query_payment_reports_created_by_fkey(id, full_name, role)
   )
 `;
 
@@ -50,6 +58,7 @@ interface ThreadRow {
   creator: QueryAuthor;
   resolved_by: QueryAuthor | null;
   messages: Array<QueryMessage>;
+  payment_report: QueryPaymentReport | QueryPaymentReport[] | null;
 }
 
 async function fetchThread(
@@ -108,6 +117,13 @@ async function fetchThread(
       entity: (await loadEntity(admin, row.entity_type, row.entity_id))?.summary ?? null,
       messages,
       audience_users: audienceUsers,
+      // PostgREST returns a one-to-one embed as an object, but a one-to-many
+      // as an array. query_payment_reports.query_id is UNIQUE, so this is
+      // logically one-to-one — normalise either shape to a single value or
+      // null rather than trusting which one comes back.
+      payment_report: Array.isArray(row.payment_report)
+        ? row.payment_report[0] ?? null
+        : row.payment_report ?? null,
       awaiting_viewer: isAwaitingUser(
         {
           ...targeting,

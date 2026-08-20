@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Send, Users } from "lucide-react";
+import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Send, Users, XCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -9,7 +9,8 @@ import { queryEntityDef } from "@/lib/queries/registry";
 import { AudiencePicker } from "@/components/queries/audience-picker";
 import { NeededByPicker } from "@/components/queries/needed-by-picker";
 import { AttachmentPicker, formatBytes } from "@/components/queries/attachment-picker";
-import { QUERY_KIND_LABELS, type QueryKind, type QueryTargeting, type QueryThread } from "@/lib/queries/types";
+import { PaymentReportCard } from "@/components/queries/payment-report-card";
+import { COMPOSER_QUERY_KINDS, QUERY_KIND_LABELS, type QueryKind, type QueryTargeting, type QueryThread } from "@/lib/queries/types";
 
 /**
  * One thread, wherever it's opened from — the /queries page, an inline
@@ -219,7 +220,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
         {error && <p className="text-xs text-red-600">{error}</p>}
 
         <div className="flex gap-1.5">
-          {(Object.keys(QUERY_KIND_LABELS) as QueryKind[]).map((k) => (
+          {COMPOSER_QUERY_KINDS.map((k) => (
             <button
               key={k}
               type="button"
@@ -323,6 +324,18 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
         </div>
       )}
 
+      {thread.payment_report && (
+        <PaymentReportCard
+          report={thread.payment_report}
+          entityType={thread.entity_type}
+          entityId={thread.entity_id}
+          onChanged={() => {
+            void loadThread(thread.id);
+            onChanged?.();
+          }}
+        />
+      )}
+
       <div className="flex items-center gap-2 flex-wrap text-[11px]">
         {thread.kind === "action_needed" && (
           <span className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800">
@@ -364,11 +377,17 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
               );
             }
             const label =
-              m.event_type === "resolved" ? "Resolved" : m.event_type === "reopened" ? "Reopened" : "Re-assigned";
+              m.event_type === "resolved" ? "Resolved"
+              : m.event_type === "reopened" ? "Reopened"
+              : m.event_type === "payment_verified" ? "Payment verified and recorded"
+              : m.event_type === "payment_rejected" ? "Closed — no such payment"
+              : "Re-assigned";
             return (
               <div key={m.id} className="text-[11px] text-muted-foreground flex items-center gap-1 pl-1 flex-wrap">
-                {m.event_type === "resolved" ? (
+                {m.event_type === "resolved" || m.event_type === "payment_verified" ? (
                   <CheckCircle2 className="h-3 w-3 text-green-600" />
+                ) : m.event_type === "payment_rejected" ? (
+                  <XCircle className="h-3 w-3 text-red-600" />
                 ) : (
                   <RotateCcw className="h-3 w-3" />
                 )}

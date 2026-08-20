@@ -47,13 +47,26 @@ export type QueryStatus = "open" | "resolved";
 
 /** 'question' just needs an answer; 'action_needed' means the responder has
  *  to change something (fix a rate, raise a revised PO, upload a doc) before
- *  it can be resolved. */
-export type QueryKind = "question" | "action_needed";
+ *  it can be resolved; 'payment_reported' carries an out-of-system payment
+ *  someone was told about, and is the only kind with structured fields
+ *  alongside the prose (see src/lib/queries/payment-reports.ts). */
+export type QueryKind = "question" | "action_needed" | "payment_reported";
 
 export const QUERY_KIND_LABELS: Record<QueryKind, string> = {
   question: "Question",
   action_needed: "Action needed",
+  payment_reported: "Payment reported",
 };
+
+/**
+ * The kinds the free-text composer offers.
+ *
+ * 'payment_reported' is deliberately absent: it needs amount, date, mode and
+ * remitter, so it has its own dialog (ReportPaymentDialog) and its own
+ * endpoint. Offering it as a chip here would produce reports with no fields —
+ * exactly the unreconcilable prose this feature replaces.
+ */
+export const COMPOSER_QUERY_KINDS: readonly QueryKind[] = ["question", "action_needed"];
 
 /**
  * Who a query is addressed to.
@@ -65,7 +78,14 @@ export const QUERY_KIND_LABELS: Record<QueryKind, string> = {
  */
 export type QueryAudience = "all" | "roles" | "users";
 
-export type QueryMessageEventType = "message" | "resolved" | "reopened" | "retargeted" | "nudged";
+export type QueryMessageEventType =
+  | "message"
+  | "resolved"
+  | "reopened"
+  | "retargeted"
+  | "nudged"
+  | "payment_verified"
+  | "payment_rejected";
 
 export interface QueryAuthor {
   id: string;
@@ -141,6 +161,8 @@ export interface QueryListItem extends QueryTargeting {
    *  card renders "transaction no longer available" rather than failing. */
   entity: QueryEntitySummary | null;
   last_message: { body: string | null; event_type: QueryMessageEventType; created_at: string } | null;
+  /** The amount claimed, on 'payment_reported' threads only. Null elsewhere. */
+  reported_amount?: number | null;
   /** True when this viewer is the one expected to act next. Computed by
    *  isAwaitingUser() in audience.ts. */
   awaiting_viewer: boolean;
@@ -151,6 +173,8 @@ export interface QueryThread extends Omit<QueryListItem, "last_message"> {
   /** Names resolved for audience_user_ids, so the thread header can show
    *  "→ Priya S" without the client doing a second lookup. */
   audience_users: QueryAuthor[];
+  /** Present only when kind === 'payment_reported'. */
+  payment_report?: QueryPaymentReport | null;
 }
 
 /** A canned opening question, offered as a chip in the composer. */
@@ -165,4 +189,31 @@ export interface QueryStats {
   overdue: number;
   open: number;
   resolved_this_week: number;
+}
+
+/**
+ * The structured half of a 'payment_reported' thread. Present on a thread
+ * only for that kind; every other query has none.
+ *
+ * `billing_payment_id` is the join this feature exists to create — until it
+ * is set, this record has had no effect on any balance anywhere.
+ */
+export interface QueryPaymentReport {
+  id: string;
+  status: "reported" | "verified" | "rejected";
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  payer_name: string | null;
+  payer_differs: boolean;
+  billing_payment_id: string | null;
+  /** The invoice the reporter was told this covers. Pre-selects allocation. */
+  claimed_statement_id: string | null;
+  claimed_statement: { id: string; statement_number: string | null } | null;
+  resolution_note: string | null;
+  reviewed_at: string | null;
+  reviewed_by: QueryAuthor | null;
+  created_by: QueryAuthor;
+  created_at: string;
 }

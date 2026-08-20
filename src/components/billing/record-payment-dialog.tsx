@@ -14,7 +14,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
-import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
+import { STATEMENT_PAYMENT_MODES, TDS_CLIENT_SECTIONS } from "@/lib/constants";
 
 /**
  * The one Record Payment dialog for billing statements — used by the Billing
@@ -33,23 +33,33 @@ interface RecordPaymentDialogProps {
   /** One-line party context (contract # · customer) shown under the title. */
   partyLabel?: string | null;
   balanceDue: number | null;
-  /** Called after a payment is recorded successfully — refresh your lists here. */
-  onSuccess: () => void;
+  /**
+   * Called after a payment is recorded successfully — refresh your lists here.
+   *
+   * `paymentId` is the billing_payments row that was just created, present
+   * only on the straightforward cash/bank path. It is absent when the payment
+   * went through the deposit-adjustment route, because that only *requests*
+   * an adjustment and no payment exists yet. Callers that need to link to a
+   * real payment (verifying a reported payment) must handle the undefined
+   * case rather than assume one was created.
+   */
+  onSuccess: (paymentId?: string) => void;
+  /**
+   * Prefills the form. Used when verifying a reported payment, so accounts
+   * confirm what ops were told rather than retyping it from the thread.
+   */
+  prefill?: {
+    amount?: number | null;
+    date?: string | null;
+    mode?: string | null;
+    reference?: string | null;
+  } | null;
 }
 
-const PAYMENT_MODES = [
-  { value: "neft", label: "NEFT" },
-  { value: "rtgs", label: "RTGS" },
-  { value: "bank_transfer", label: "Bank transfer" },
-  { value: "upi", label: "UPI" },
-  { value: "cheque", label: "Cheque" },
-  { value: "cash", label: "Cash" },
-  { value: "razorpay", label: "Razorpay (manually reconciled)" },
-  { value: "other", label: "Other" },
-];
+const PAYMENT_MODES = STATEMENT_PAYMENT_MODES;
 
 export function RecordPaymentDialog({
-  open, onOpenChange, statementId, statementNumber, partyLabel, balanceDue, onSuccess,
+  open, onOpenChange, statementId, statementNumber, partyLabel, balanceDue, onSuccess, prefill,
 }: RecordPaymentDialogProps) {
   const [amount, setAmount]       = useState("");
   const [date, setDate]           = useState(new Date().toISOString().slice(0, 10));
@@ -70,13 +80,23 @@ export function RecordPaymentDialog({
   const [remainderMode, setRemainderMode] = useState("neft");
   const [remainderReference, setRemainderReference] = useState("");
 
-  // Fresh form every time the dialog opens; prefill amount with the balance.
+  // Fresh form every time the dialog opens. Defaults to the balance due and
+  // today; `prefill` overrides field by field when the caller already knows
+  // what the payment was — verifying a reported payment, where retyping the
+  // amount the reporter supplied is how transcription errors get in.
   useEffect(() => {
     if (open) {
-      setAmount(balanceDue !== null && balanceDue > 0 ? String(balanceDue) : "");
-      setDate(new Date().toISOString().slice(0, 10));
-      setMode("neft");
-      setReference("");
+      const prefilledAmount = prefill?.amount != null && prefill.amount > 0 ? prefill.amount : null;
+      setAmount(
+        prefilledAmount !== null
+          ? String(prefilledAmount)
+          : balanceDue !== null && balanceDue > 0
+            ? String(balanceDue)
+            : "",
+      );
+      setDate(prefill?.date || new Date().toISOString().slice(0, 10));
+      setMode(prefill?.mode || "neft");
+      setReference(prefill?.reference || "");
       setNotes("");
       setTdsEnabled(false);
       setTdsSection("194I");
@@ -86,7 +106,7 @@ export function RecordPaymentDialog({
       setRemainderReference("");
       setDepositAvailable(null);
     }
-  }, [open, balanceDue]);
+  }, [open, balanceDue, prefill]);
 
   useEffect(() => {
     if (!open || !statementId) return;
@@ -201,13 +221,14 @@ export function RecordPaymentDialog({
     setSubmitting(false);
     if (res.ok) {
       const json = await res.json();
+      const recordedPaymentId: string | undefined = json?.data?.id;
       toast.success(
         `Payment recorded. ${json.payment_status === "paid"
           ? "Invoice fully paid!"
           : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`
       );
       onOpenChange(false);
-      onSuccess();
+      onSuccess(recordedPaymentId);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to record payment");
