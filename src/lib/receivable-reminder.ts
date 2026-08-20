@@ -21,7 +21,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
-import { STAGES, fmtINR, fmtDate, pickStageIndex } from "@/lib/payment-reminder";
+import { STAGES, fmtINR, fmtDate, pickStageIndex, resolveIntro } from "@/lib/payment-reminder";
 import { ladderMaxStageFor, type ReceivableKind } from "@/lib/receivables";
 
 /** Where each kind keeps its due date and reminder bookkeeping. */
@@ -174,7 +174,8 @@ function renderEmail(o: {
 
 /** Deposit copy differs from invoice copy — a deposit isn't an unpaid bill. */
 function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number): string {
-  if (kind === "adhoc_invoice") return STAGES[stageIdx].intro;
+  // Ad-hoc PIs and deposits never carry a GST invoice — always "proforma".
+  if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, "proforma");
 
   const what = kind === "deposit" ? "security deposit" : "additional security deposit";
   switch (stageIdx) {
