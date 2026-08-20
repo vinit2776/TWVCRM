@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
 import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
+import type { DepositUnavailableReason } from "@/types";
 
 /**
  * The one Record Payment dialog for billing statements — used by the Billing
@@ -36,6 +37,16 @@ interface RecordPaymentDialogProps {
   /** Called after a payment is recorded successfully — refresh your lists here. */
   onSuccess: () => void;
 }
+
+/** Why the deposit option is offered but not selectable. Shown inline on the
+ *  disabled dropdown row — the option used to be dropped from the list
+ *  entirely when there was no balance, which read as a broken feature. */
+const DEPOSIT_UNAVAILABLE_LABELS: Record<DepositUnavailableReason, string> = {
+  no_proposal:     "no proposal linked, so no deposit is tracked",
+  deposit_pending: "deposit not collected yet",
+  no_deposit:      "no deposit on record",
+  fully_committed: "deposit fully committed to other adjustments",
+};
 
 const PAYMENT_MODES = [
   { value: "neft", label: "NEFT" },
@@ -62,10 +73,13 @@ export function RecordPaymentDialog({
   const [tdsSection, setTdsSection] = useState("194I");
   const [tdsAmount, setTdsAmount]   = useState("");
 
-  // Adjustment against deposit — available balance gates whether the mode
-  // is offered at all; a request over that balance splits the remainder
-  // into a normal payment on the secondary leg below.
-  const [depositAvailable, setDepositAvailable] = useState<number | null>(null);
+  // Adjustment against deposit — the balance gates whether the mode is
+  // *selectable*, never whether it's listed: a missing row is indistinguishable
+  // from a missing feature. null while the balance is still loading. A request
+  // over the balance splits the remainder into a normal payment on the
+  // secondary leg below.
+  const [depositBalance, setDepositBalance] =
+    useState<{ available: number; reason: DepositUnavailableReason | null } | null>(null);
   const [notifyCustomer, setNotifyCustomer] = useState(false);
   const [remainderMode, setRemainderMode] = useState("neft");
   const [remainderReference, setRemainderReference] = useState("");
@@ -84,7 +98,7 @@ export function RecordPaymentDialog({
       setNotifyCustomer(false);
       setRemainderMode("neft");
       setRemainderReference("");
-      setDepositAvailable(null);
+      setDepositBalance(null);
     }
   }, [open, balanceDue]);
 
@@ -92,14 +106,18 @@ export function RecordPaymentDialog({
     if (!open || !statementId) return;
     fetch(`/api/billing-statements/${statementId}/deposit-balance`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setDepositAvailable(json?.data?.available ?? 0))
-      .catch(() => setDepositAvailable(0));
+      .then((json) => setDepositBalance({
+        available: json?.data?.available ?? 0,
+        reason: json?.data?.unavailable_reason ?? null,
+      }))
+      .catch(() => setDepositBalance({ available: 0, reason: null }));
   }, [open, statementId]);
 
+  const depositAvailable = depositBalance?.available ?? 0;
   const isDepositMode = mode === "deposit_adjustment";
   const requestedAmount = parseFloat(amount || "0");
-  const depositLeg = isDepositMode ? Math.min(requestedAmount, depositAvailable ?? 0) : 0;
-  const remainderLeg = isDepositMode ? Math.max(0, requestedAmount - (depositAvailable ?? 0)) : 0;
+  const depositLeg = isDepositMode ? Math.min(requestedAmount, depositAvailable) : 0;
+  const remainderLeg = isDepositMode ? Math.max(0, requestedAmount - depositAvailable) : 0;
 
   const handleDepositSubmit = async () => {
     if (!statementId || depositLeg <= 0) {
@@ -218,9 +236,17 @@ export function RecordPaymentDialog({
   const tdsNum  = parseFloat(tdsAmount || "0");
   const settles = balanceDue !== null && Math.abs((cashNum + tdsNum) - balanceDue) < 1;
 
-  const availableModes = (depositAvailable ?? 0) > 0
-    ? [...PAYMENT_MODES, { value: "deposit_adjustment", label: "Adjustment against deposit" }]
-    : PAYMENT_MODES;
+  // The deposit row is always rendered — disabled with the reason when there's
+  // nothing to draw against, so "why can't I adjust this?" is answered in place.
+  // `available` is the authority on selectability; the reason only supplies the
+  // wording. Keeping that order means the row still enables correctly if this
+  // code reaches production ahead of the migration that added the reason.
+  const depositUnavailableLabel = depositBalance === null
+    ? "checking balance…"
+    : depositBalance.available > 0
+      ? null
+      : (depositBalance.reason && DEPOSIT_UNAVAILABLE_LABELS[depositBalance.reason])
+        || "no deposit available";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -253,9 +279,15 @@ export function RecordPaymentDialog({
               <Select value={mode} onValueChange={setMode}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {availableModes.map((m) => (
+                  {PAYMENT_MODES.map((m) => (
                     <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                   ))}
+                  <SelectItem value="deposit_adjustment" disabled={depositUnavailableLabel !== null}>
+                    Adjustment against deposit
+                    {depositUnavailableLabel
+                      ? <span className="text-muted-foreground"> — {depositUnavailableLabel}</span>
+                      : <span className="text-muted-foreground"> ({formatCurrency(depositAvailable)} available)</span>}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
