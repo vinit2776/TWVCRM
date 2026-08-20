@@ -55,7 +55,7 @@ async function onegridRequest<T>(path: string, apiKey: string, searchParams?: UR
   try {
     res = await fetch(url, {
       headers: { "X-API-Key": apiKey },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(45_000),
     });
   } catch {
     throw new OnegridApiError(502, "NETWORK_ERROR", "Could not reach the OneGrid telemetry service");
