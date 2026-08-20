@@ -50,12 +50,16 @@ export function withProrationBreakdown(description: string, item: LineItem): str
 /**
  * Decimal places to show for a line item's unit rate.
  *
- * Rent lines derive their per-seat rate by dividing the line amount by the seat
- * count (billing.ts, buildProratedRentLineItems). When that division is not
- * exact, a rate printed at the usual 2 dp no longer multiplies back to the
- * amount — a customer checking `Qty x Rate` against the Total sees a few paise
- * of drift (see issue #498: 8 x 11,055.63 = 88,445.04 against an amount of
- * 88,445).
+ * Seat-based lines derive their per-seat rate by dividing the line total by the
+ * seat count. When that division is not exact, a rate printed at the usual 2 dp
+ * no longer multiplies back to the total — a reader checking `Qty x Rate`
+ * against the Total sees a paisa or two of drift (issue #498; on contract
+ * TWV-C-0055, 28 x 12,635.18 = 353,785.04 against a total of 353,785).
+ *
+ * This matters only on documents that actually print a rate column: contract,
+ * proposal and lead-invoice PDFs (generatePDF in pdf-generator.ts). The billing
+ * proforma shows description and amount only, and the GST tax invoice prints
+ * whole rupees with an explicit Round Off line, so neither is affected.
  *
  * The amount is authoritative and must not change, so the fix is on the display
  * side: widen the rate just enough that the multiplication reconciles at paise
@@ -68,10 +72,9 @@ export function withProrationBreakdown(description: string, item: LineItem): str
  * is 5 dp because the residual scales with quantity: a 143-seat line needs
  * ~3.5e-5 of rate precision to stay inside a paisa, which 4 dp cannot give.
  *
- * This cannot repair statements generated before the rate was stored at full
- * precision — those persisted an already-rounded 2 dp rate, so the information
- * needed to reconcile is gone from the record. Current billing.ts stores the
- * undivided quotient, so newly generated statements are unaffected.
+ * It cannot repair a record that persisted an already-rounded 2 dp rate — the
+ * precision needed to reconcile is gone. Nothing in contracts, proposals or
+ * lead invoices is in that state today.
  */
 export function rateDecimalsForLine(qty: number, rate: number, amount: number): number {
   const MIN = 2, MAX = 5;

@@ -13,13 +13,21 @@ describe("rateDecimalsForLine", () => {
   });
 
   it("widens to 3 dp for a terminating decimal that 2 dp would break (#498)", () => {
-    // 88,445 / 8 = 11,055.625 — at 2 dp this printed 11,055.63 and drifted 4 paise
-    expect(rateDecimalsForLine(8, 88445 / 8, 88445)).toBe(3);
-    expect(shownRate(8, 88445 / 8, 88445) * 8).toBeCloseTo(88445, 2);
+    // Contract TWV-C-0042: 16,799 / 3 seats. At 2 dp this printed 5,599.67,
+    // and 3 x 5,599.67 = 16,799.01 — a paisa adrift of the stated total.
+    expect(rateDecimalsForLine(3, 16799 / 3, 16799)).toBe(3);
+    expect(shownRate(3, 16799 / 3, 16799) * 3).toBeCloseTo(16799, 2);
+  });
+
+  it("handles the widest real case — 28 seats on TWV-C-0055 (#498)", () => {
+    // 353,785 / 28 = 12,635.178571... ; at 2 dp it overshot by 4 paise
+    const dp = rateDecimalsForLine(28, 353785 / 28, 353785);
+    expect(dp).toBeGreaterThan(2);
+    expect(shownRate(28, 353785 / 28, 353785) * 28).toBeCloseTo(353785, 2);
   });
 
   it("reconciles a non-terminating rate to the paisa (#498)", () => {
-    // 19,145 / 3 = 6,381.666... — never exact at any finite precision, but 3 dp
+    // Contract TWV-C-0019: 19,145 / 3 — never exact at any finite precision, but 3 dp
     // already brings it inside a paisa (6,381.667 x 3 = 19,145.001), so it rounds
     // to the amount on the customer's side. The helper takes the narrowest
     // precision that works rather than always widening to the maximum.
