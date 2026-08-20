@@ -26,7 +26,11 @@ function computeReceivedValue(po: PurchaseOrder): number | null {
     priceMap[item.id] = Number(item.unit_price ?? 0);
   }
   let total = 0;
+  // Reversed receipts (from a force-cancelled PO) no longer represent goods
+  // actually received — excluding them keeps this prefill/cap in sync with
+  // the server-side check in POST /api/procurement/bills.
   for (const receipt of po.po_delivery_receipts) {
+    if (receipt.reversed_at) continue;
     for (const ri of receipt.po_delivery_receipt_items ?? []) {
       total += (priceMap[ri.po_item_id] ?? 0) * Number(ri.qty_received);
     }

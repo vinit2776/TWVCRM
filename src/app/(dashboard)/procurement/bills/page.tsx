@@ -10,7 +10,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
-  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  billApprovalBadge,
   AUTO_APPROVED_BADGE_CLASS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, cn } from "@/lib/utils";
@@ -211,8 +211,8 @@ function VendorBillsPageInner() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <Badge variant="secondary" className={`text-xs ${BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}`}>
-                        {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
+                      <Badge variant="secondary" className={`text-xs ${billApprovalBadge(bill).className}`}>
+                        {billApprovalBadge(bill).label}
                       </Badge>
                       {bill.auto_approved && (
                         <Badge variant="secondary" className={`text-xs ${AUTO_APPROVED_BADGE_CLASS}`} title={bill.auto_approval_note ?? undefined}>

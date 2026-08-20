@@ -25,7 +25,7 @@ import {
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS,
   PO_STATUS_LABELS, PO_STATUS_COLORS,
-  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  billApprovalBadge,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
 } from "@/lib/constants";
@@ -96,6 +96,7 @@ type LinkedPo = {
   vendor_bills: Array<{
     id: string; bill_number: string; invoice_date: string;
     total_amount: number; payment_status: string; approval_status: string;
+    rejection_outcome?: string | null;
     approved_at?: string; payment_date?: string;
     approver: { id: string; full_name?: string } | null;
   }>;
@@ -262,8 +263,8 @@ function LifecycleView({ data }: { data: LifecycleData }) {
             {allBills.map((bill) => (
               <div key={bill.id} className="flex items-center gap-2 rounded border px-2.5 py-1.5 bg-background text-xs">
                 <span className="font-mono font-semibold">{bill.bill_number}</span>
-                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${BILL_APPROVAL_STATUS_COLORS[bill.approval_status] ?? ""}`}>
-                  {BILL_APPROVAL_STATUS_LABELS[bill.approval_status] ?? bill.approval_status}
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${billApprovalBadge(bill).className}`}>
+                  {billApprovalBadge(bill).label}
                 </Badge>
                 <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${BILL_PAYMENT_STATUS_COLORS[bill.payment_status] ?? ""}`}>
                   {BILL_PAYMENT_STATUS_LABELS[bill.payment_status] ?? bill.payment_status}

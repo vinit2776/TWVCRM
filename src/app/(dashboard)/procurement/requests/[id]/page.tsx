@@ -28,7 +28,7 @@ import {
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
   PROCUREMENT_APPROVAL_THRESHOLDS,
   PO_STATUS_LABELS, PO_STATUS_COLORS,
-  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  billApprovalBadge,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
@@ -53,7 +53,7 @@ interface LinkedPo {
   procurement_vendors?: { id: string; name: string } | null;
   po_delivery_receipts?: Array<{ id: string; status: string; received_at: string }>;
   po_service_reports?: Array<{ id: string; service_date: string }>;
-  vendor_bills?: Array<{ id: string; bill_number: string; approval_status: string; payment_status: string; total_amount?: number }>;
+  vendor_bills?: Array<{ id: string; bill_number: string; approval_status: string; rejection_outcome?: string | null; payment_status: string; total_amount?: number }>;
 }
 
 interface AuditEvent {
@@ -1047,9 +1047,9 @@ export default function PurchaseRequestDetailPage() {
                             </Link>
                             <Badge
                               variant="secondary"
-                              className={`text-xs ${BILL_APPROVAL_STATUS_COLORS[bill.approval_status] ?? "bg-gray-100 text-gray-700"}`}
+                              className={`text-xs ${billApprovalBadge(bill).className}`}
                             >
-                              {BILL_APPROVAL_STATUS_LABELS[bill.approval_status] ?? bill.approval_status}
+                              {billApprovalBadge(bill).label}
                             </Badge>
                             <Badge
                               variant="secondary"

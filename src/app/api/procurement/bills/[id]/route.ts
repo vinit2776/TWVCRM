@@ -5,6 +5,7 @@ import { sendPushToProcurementRoles } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { confirmFirstBillIfNeeded } from "@/lib/procurement/recurring-bill-rules-server";
+import { getBillVoidBlocker, voidBill } from "@/lib/procurement/void-bill";
 import { z } from "zod";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
@@ -131,6 +132,17 @@ const patchBillSchema = z.discriminatedUnion("action", [
     total_amount: z.number().positive("Total amount must be greater than 0"),
     notes: z.string().nullish(),
     invoice_file_url: z.string().url().nullish(),
+  }),
+  z.object({
+    /**
+     * Reverses a pending/approved bill that no money has moved on yet — the
+     * counterpart to "reject" (which only works from pending). See
+     * src/lib/procurement/void-bill.ts for the full blocker rules and why
+     * this is represented as rejected + rejection_outcome="void" rather than
+     * a new approval_status.
+     */
+    action: z.literal("void"),
+    reason: z.string().min(10, "A reason of at least 10 characters is required"),
   }),
 ]);
 
@@ -1077,6 +1089,39 @@ export async function PATCH(
       }
 
       break;
+    }
+
+    case "void": {
+      // Admin only — mirrors canApproveOrReject, since voiding an approved
+      // bill reverses an admin-only decision.
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin can void bills" }, { status: 403 });
+      }
+
+      const blocker = await getBillVoidBlocker(supabase, id);
+      if (blocker) {
+        return NextResponse.json({ error: blocker }, { status: 422 });
+      }
+
+      const result = await voidBill(supabase, {
+        billId: id,
+        actorId: dbUser.id,
+        reason: parsed.data.reason,
+      });
+      if (!result.ok) {
+        return NextResponse.json({ error: result.error }, { status: 422 });
+      }
+
+      const { data: voided, error: refetchError } = await supabase
+        .from("vendor_bills")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (refetchError || !voided) {
+        return NextResponse.json({ error: refetchError?.message ?? "Bill voided but could not be refetched" }, { status: 500 });
+      }
+
+      return NextResponse.json({ data: voided });
     }
   }
 

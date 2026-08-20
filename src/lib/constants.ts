@@ -2011,6 +2011,28 @@ export const BILL_APPROVAL_STATUS_COLORS: Record<string, string> = {
   rejected: "bg-red-100 text-red-800",
 };
 
+/**
+ * Derive the approval badge for a vendor bill.
+ *
+ * A voided bill is stored as approval_status "rejected" + rejection_outcome "void"
+ * (see src/lib/procurement/void-bill.ts for why that representation was chosen over
+ * a new enum value). Any badge that reads approval_status alone therefore labels a
+ * void as a plain "Rejected" — which tells Accounts "fix it and resubmit" when the
+ * truth is "this invoice is dead and is not payable". Always render bill approval
+ * badges through this helper so the two states stay distinguishable everywhere.
+ */
+export function billApprovalBadge(
+  bill: { approval_status: string; rejection_outcome?: string | null }
+): { label: string; className: string } {
+  if (bill.approval_status === "rejected" && bill.rejection_outcome === "void") {
+    return { label: "Voided", className: "bg-gray-200 text-gray-700" };
+  }
+  return {
+    label: BILL_APPROVAL_STATUS_LABELS[bill.approval_status] ?? bill.approval_status,
+    className: BILL_APPROVAL_STATUS_COLORS[bill.approval_status] ?? "bg-gray-100 text-gray-700",
+  };
+}
+
 // Recurring Bill Rules — auto-approval of pre-vetted vendor invoices
 export const RECURRING_BILL_RULE_STATUSES = ["active", "paused"] as const;
 
@@ -2038,7 +2060,7 @@ export const RECURRING_BILL_RULE_DEPARTMENTS = ["pantry", "maintenance", "admini
 export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
   return: "Return Goods & Cancel PO",
   replacement: "Request Replacement (New PR)",
-  void: "Void (Service Invoice)",
+  void: "Voided",
 };
 
 // Payment Batch Scheduling

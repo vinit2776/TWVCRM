@@ -28,11 +28,15 @@ export async function getLastReceivedMap(
   const poIds = (pos ?? []).map((p: { id: string }) => p.id);
 
   if (poIds.length > 0) {
+    // Reversed receipts (e.g. from a force-cancelled PO) no longer have a
+    // live stock effect — excluding them keeps "last received" honest about
+    // what's actually sitting in stock, not goods that were sent back out.
     const { data: receipts } = await supabase
       .from("po_delivery_receipts")
       .select("received_at, po_delivery_receipt_items(po_item:purchase_order_items(item_id))")
       .in("po_id", poIds)
-      .not("received_at", "is", null);
+      .not("received_at", "is", null)
+      .is("reversed_at", null);
 
     for (const r of (receipts ?? []) as unknown as {
       received_at: string;
