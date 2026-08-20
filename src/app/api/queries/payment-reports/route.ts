@@ -13,6 +13,7 @@ import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import { logAudit } from "@/lib/audit";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { reportableBalance, REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
 import {
   PAYMENT_REPORT_AUDIENCE_ROLES,
   PAYMENT_REPORT_ENTITY_TYPES,
@@ -63,7 +64,7 @@ async function requireAnyUser(
 const REPORT_SELECT = `
   id, query_id, status, amount, paid_on, payment_mode, payment_reference,
   payer_name, payer_differs, billing_payment_id, resolution_note,
-  reviewed_at, created_at,
+  claimed_statement_id, reviewed_at, created_at,
   reviewed_by:users!query_payment_reports_reviewed_by_fkey(id, full_name, role),
   created_by:users!query_payment_reports_created_by_fkey(id, full_name, role),
   query:queries!query_payment_reports_query_id_fkey(id, entity_type, entity_id, status)
@@ -74,8 +75,40 @@ export async function GET(req: NextRequest) {
   const auth = await requireAnyUser(supabase);
   if ("error" in auth) return auth.error;
 
-  const status = new URL(req.url).searchParams.get("status") ?? "reported";
+  const url = new URL(req.url);
+  const status = url.searchParams.get("status") ?? "reported";
+  const entityType = url.searchParams.get("entity_type");
+  const entityId = url.searchParams.get("entity_id");
   const admin = createAdminClient();
+
+  // Scoped to one transaction: what the report dialog asks for, so it can
+  // show what has already been claimed instead of silently letting someone
+  // claim the same money twice.
+  if (entityType && entityId) {
+    const { data: scoped, error: scopedErr } = await admin
+      .from("query_payment_reports")
+      .select(`${REPORT_SELECT}, timeline:queries!query_payment_reports_query_id_fkey(
+        messages:query_messages(
+          id, event_type, body, created_at,
+          author:users!query_messages_created_by_fkey(full_name, role)
+        )
+      )`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (scopedErr) return NextResponse.json({ error: scopedErr.message }, { status: 500 });
+
+    const mine = (scoped ?? []).filter((r) => {
+      const q = (r as unknown as { query: { entity_type: string; entity_id: string } | null }).query;
+      return q?.entity_type === entityType && q?.entity_id === entityId;
+    });
+
+    const balance = await reportableBalance(
+      admin,
+      entityType as Parameters<typeof reportableBalance>[1],
+      entityId,
+    );
+    return NextResponse.json({ items: mine, balance });
+  }
 
   const { data, error } = await admin
     .from("query_payment_reports")
@@ -188,6 +221,33 @@ export async function POST(req: NextRequest) {
       );
     }
     claimedStatementNumber = (stmt.statement_number as string | null) ?? null;
+  }
+
+  // Refuse to let the same money be reported twice. The dialog hides the
+  // form once nothing is left to claim, but a stale tab or a direct call
+  // would otherwise still create a duplicate thread — and duplicates mean
+  // two chases and two chances for accounts to record one payment twice.
+  const balance = await reportableBalance(admin, entityType as PaymentReportEntityType, entityId)
+    .catch(() => null);
+  // When nothing is left to report, refuse outright. The tolerance exists to
+  // absorb rounding on a partial claim, not to wave through a token amount on
+  // a transaction that is already fully claimed — ₹1 past zero is still a
+  // duplicate thread and a second chance to record the same money.
+  const overReported =
+    !!balance &&
+    (balance.reportable <= 0 || fields.amount > balance.reportable + REPORT_TOLERANCE);
+  if (overReported && balance) {
+    return NextResponse.json(
+      {
+        error:
+          balance.reportable <= 0
+            ? `The full outstanding amount here is already reported and waiting for accounts to verify it. Open the existing report instead of raising another.`
+            : `Only ₹${balance.reportable.toLocaleString("en-IN")} is left to report — ₹${balance.pending.toLocaleString("en-IN")} is already claimed and awaiting verification.`,
+        reportable: balance.reportable,
+        pending: balance.pending,
+      },
+      { status: 409 },
+    );
   }
 
   const modeLabel = STATEMENT_PAYMENT_MODE_LABELS[fields.payment_mode] ?? fields.payment_mode;
