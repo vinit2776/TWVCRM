@@ -47,7 +47,7 @@ Both routes are `"use client"` pages. There are no server-component wrappers.
 | POST | `/api/proposals/[id]/accept` | Accept proposal: mark accepted, create deposit link, send booking confirmation email + WhatsApp |
 | POST | `/api/proposals/[id]/send-invoice` | Generate prorated GST invoice, send email + WhatsApp (supports `preview: true` mode) |
 | POST | `/api/proposals/[id]/deposit-link` | Create/reuse deposit Razorpay link, send email + WhatsApp (supports `preview: true`) |
-| POST | `/api/proposals/[id]/deposit-payment` | Record manual bank transfer deposit payment (admin/manager/accounts only) |
+| POST | `/api/proposals/[id]/deposit-payment` | Record manual bank transfer deposit payment (admin/accounts only) |
 | POST | `/api/proposals/[id]/payment-link` | Auto-create Razorpay link for monthly charge (idempotent — reuses existing link) |
 | POST | `/api/proposals/[id]/monthly-link` | Create monthly charge Razorpay link and email it (manual trigger) |
 | POST | `/api/proposals/[id]/email` | Send proposal PDF to customer via email + optional WhatsApp document |
@@ -230,7 +230,7 @@ viewed       ← set by /track route when customer clicks email link (idempotent
 
 4. **Deposit link reuse on `/deposit-link`:** The `/deposit-link` route reuses the existing `deposit_razorpay_link_url` if one already exists (to avoid duplicate links). Only creates a new one if `deposit_razorpay_link_url` is null.
 
-5. **Manual deposit payment roles:** Only `admin`, `manager`, `accounts` roles can call `/deposit-payment`. HTTP 403 for others.
+5. **Manual deposit payment roles:** Only `admin` and `accounts` can call `/deposit-payment`. HTTP 403 for others, pointing them at **Report paid**.
 
 6. **Deposit shortfall tolerance:** If manual deposit amount is less than expected:
    - More than 10% short: hard block (HTTP 400).
@@ -319,7 +319,7 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 | Download / Send proposal PDF | All authenticated (blocked for zero-deposit without OTP) |
 | Send deposit email | All authenticated |
 | Send GST invoice | All authenticated |
-| Record manual deposit payment | `admin`, `manager`, `accounts` only (HTTP 403 for others) |
+| Record manual deposit payment | `admin`, `accounts` only (HTTP 403 for others) |
 | Approve deposit shortfall | `admin`, `manager` only |
 | Request/verify deposit waiver OTP | Any authenticated user can request; OTP goes to all `admin` users |
 | Mark deposit as accounted | All authenticated (via `/api/accounting/proposal-payments`) |
@@ -501,6 +501,8 @@ The `/deposit-payment` route uses `createClient()` for storage upload, which mea
 
 ### Shortfall approval checkbox is role-checked both client and server
 Only `admin` and `manager` roles see the shortfall approval checkbox in the UI (`currentUser.role` check). The server independently checks `SHORTFALL_APPROVER_ROLES = ["admin", "manager"]`. The `accounts` role can record deposits but cannot approve shortfalls even if they find a way to send the field.
+
+**Since recording narrowed to `admin`/`accounts`, a short deposit can in practice only be recorded by an `admin`** — they are the only role that both records and approves. `accounts` can record a full-value deposit but not a short one; `manager` can still approve a shortfall but can no longer record. That is deliberate separation, not an oversight; if it bites, the fix is to widen `SHORTFALL_APPROVER_ROLES`, not to re-widen recording.
 
 ### `/track` is a public endpoint with no auth
 `GET /api/proposals/[id]/track` uses `createAdminClient()` and requires no session. It marks the proposal as `viewed`. Anyone with a proposal ID can trigger this. This is by design (email tracking), but means any proposal can be marked viewed without authentication.

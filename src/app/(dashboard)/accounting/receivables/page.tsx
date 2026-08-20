@@ -42,6 +42,7 @@ import { StatementTimelineDialog } from "@/components/billing/statement-timeline
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { canRecordPayments } from "@/lib/constants";
 
 interface Lead {
   id: string;
@@ -305,7 +306,7 @@ export default function AccountsReceivablePage() {
   useEffect(() => {
     fetch("/api/me")
       .then((res) => res.json())
-      .then((me) => setCanRecordPayment(["admin", "manager", "accounts"].includes(me.role)))
+      .then((me) => setCanRecordPayment(canRecordPayments(me.role)))
       .catch(() => setCanRecordPayment(false));
   }, []);
 

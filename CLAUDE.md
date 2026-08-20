@@ -169,6 +169,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 |--------|--------------|
 | Approve vendor bills | `admin` only — a `manager` gets a 403 |
 | Record payments (vendor bills) | `accounts`, `admin`; `office_admin` **cash/petty cash only** — **only from Finance > Acc Payables**, and only on an approved bill |
+| Record payments (customer: invoices, deposits, top-ups, ad-hoc) | `admin`, `accounts` only — `PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`. Everyone else uses **Report paid**, which routes to accounts to verify against the bank. `office_admin` keeps its existing carve-out for settling a pending deposit top-up. Front-desk **booking** payments are separate and unaffected. |
 | Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
 | Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |

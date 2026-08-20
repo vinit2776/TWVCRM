@@ -29,6 +29,7 @@ import { StatementTimeline } from "@/components/accounting/statement-timeline";
 import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
 import { RecentCommunicationsCard } from "@/components/communications/recent-communications-card";
 import type { CommunicationLogEntry } from "@/types";
+import { canRecordPayments } from "@/lib/constants";
 
 interface UsageCharge {
   id: string;
@@ -234,6 +235,10 @@ export function ViewStatementDialog({
     statement?.status === "draft" &&
     !!userRole &&
     ADD_CHARGE_ROLES.includes(userRole);
+
+  // The page passes onRecordPayment unconditionally, so without this the
+  // Record Payment buttons rendered for anyone who could open a statement.
+  const mayRecordPayment = canRecordPayments(userRole);
 
   const resetChargeForm = () => {
     setChargeDesc("");
@@ -816,7 +821,7 @@ export function ViewStatementDialog({
                 <div className="rounded-lg overflow-hidden border border-l-4 border-l-emerald-400 border-gray-200">
                   <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
                     <h4 className="text-sm font-semibold text-emerald-800">Payments Received</h4>
-                    {!isFullyPaid && onRecordPayment && (
+                    {!isFullyPaid && onRecordPayment && mayRecordPayment && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1281,7 +1286,7 @@ export function ViewStatementDialog({
             Close
           </Button>
           {/* Record Payment — finalized/exported, not yet fully paid */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && (() => {
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && mayRecordPayment && (() => {
             const balanceDue = computeSettlement(statement.total_amount, statement.billing_payments).balanceDue;
             return (
               <Button

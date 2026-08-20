@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
+import { canRecordPayments } from "@/lib/constants";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -39,8 +40,11 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admin, manager, or accounts can record payments" }, { status: 403 });
+  if (!dbUser || !canRecordPayments(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record payments. Use \"Report paid\" to tell accounts about one." },
+      { status: 403 },
+    );
   }
 
   const body = await request.json();

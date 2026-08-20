@@ -263,6 +263,32 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+// ==========================================
+// Payment Recording Permission
+// ==========================================
+// Who may record money as received — against a billing statement, a security
+// deposit, a deposit top-up or an ad-hoc invoice.
+//
+// Deliberately narrower than the roles that can *see* receivables. Recording
+// a payment moves the ledger, and everyone else now has "Report paid"
+// instead: they tell accounts what the customer told them, and accounts
+// confirm it against the bank. One team owns the bank statement, so one team
+// records against it.
+//
+// `manager` was removed when reporting shipped. It had recorded exactly one
+// payment in the system's history, a ₹5 test, so nothing real depended on it.
+// Managers keep everything else — finalising and sending invoices, voiding,
+// approving deposit adjustments.
+//
+// NOT the same list as the roles that record *booking* payments at the front
+// desk (see src/components/bookings/record-payment-dialog.tsx) — taking
+// money for a booking is a floor-manager job and is untouched by this.
+export const PAYMENT_RECORDING_ROLES = ["admin", "accounts"] as const;
+
+export function canRecordPayments(role: string | null | undefined): boolean {
+  return !!role && (PAYMENT_RECORDING_ROLES as readonly string[]).includes(role);
+}
+
 export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {

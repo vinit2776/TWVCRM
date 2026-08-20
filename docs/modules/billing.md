@@ -433,7 +433,7 @@ The override is a **request action only** — it does NOT generate or send a GST
 **The button is not gated behind any feature flag (Tally Sync or CRM GST settings).** Since the override only creates a request and does not itself generate an invoice, it is always available to eligible roles when the above conditions are met.
 
 ### Payment Recording Rules
-1. **Roles:** Only `admin`, `manager`, or `accounts` can record payments.
+1. **Roles:** Only `admin` or `accounts` can record payments (`PAYMENT_RECORDING_ROLES` in `src/lib/constants.ts`). Everyone else uses **Report paid** to tell accounts about a payment they were told about; accounts verify it against the bank and record it.
 2. **Cannot record payment on a draft statement** — returns 400.
 3. **TDS settlement:** `cash_received + tds_amount = invoice_total` for full settlement. TDS alone (without cash) does NOT settle the invoice.
 4. **Auto-triggers GST invoice** when a payment causes `payment_status → paid` (legacy CRM path). In v2 handoff mode, routes to `handleStatementPaid()` instead.
@@ -473,7 +473,7 @@ The override is a **request action only** — it does NOT generate or send a GST
 | View statements, usage charges | All authenticated |
 | Finalize statement | All authenticated (via PATCH) |
 | Finalize + send (one-click) | `admin`, `manager`, `accounts` |
-| Record payment | `admin`, `manager`, `accounts` |
+| Record payment | `admin`, `accounts` |
 | Generate GST invoice | `admin`, `manager`, `accounts` (or webhook with `x-internal-secret`) |
 | Add charge to draft | `admin`, `manager`, `accounts` |
 | Waive usage charge | `admin`, `manager` |

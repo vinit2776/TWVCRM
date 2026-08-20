@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { canRecordPayments } from "@/lib/constants";
 
 /**
  * POST /api/proposals/[id]/payment
@@ -43,9 +44,11 @@ export async function POST(
     .single();
 
   // Same roles as the deposit route — recording a payment is an accounts action.
-  const ALLOWED_ROLES = ["admin", "manager", "accounts"];
-  if (!actor || !ALLOWED_ROLES.includes(actor.role)) {
-    return NextResponse.json({ error: "Not authorised to record manual payments" }, { status: 403 });
+  if (!actor || !canRecordPayments(actor.role)) {
+    return NextResponse.json(
+      { error: "Only admin or accounts can record a payment. Use \"Report paid\" to tell accounts about one." },
+      { status: 403 },
+    );
   }
 
   const formData = await request.formData();
