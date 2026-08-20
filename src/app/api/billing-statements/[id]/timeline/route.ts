@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { formatCurrency } from "@/lib/utils";
+import { STATEMENT_PAYMENT_MODE_LABELS as PAYMENT_MODE_LABEL } from "@/lib/constants";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
 import type { StatementTimelineEvent } from "@/types";
 
@@ -77,13 +78,13 @@ export async function GET(
       pi_cancelled_at, pi_cancelled_by, pi_override_reason,
       gst_invoice_number, gst_invoice_sent_at, gst_invoice_sent_to, gst_invoice_viewed_at,
       exported_at, voided_at, voided_by, void_reason,
-      emailed_to, tally_delivered_at, handoff_state, payment_status
+      emailed_to, tally_delivered_at, handoff_state, payment_status, contract_id
     `)
     .eq("id", id)
     .maybeSingle();
   if (!stmt) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
 
-  const [sendLogRes, remindersRes, paymentsRes, uploadsRes, auditRes] = await Promise.all([
+  const [sendLogRes, remindersRes, paymentsRes, uploadsRes, auditRes, reportsRes] = await Promise.all([
     admin.from("billing_send_log")
       .select("id, send_type, recipient, status, error, triggered_by, triggered_by_user_id, sent_at")
       .eq("billing_statement_id", id),
@@ -100,6 +101,17 @@ export async function GET(
       .select("id, action, changes, performed_by, created_at")
       .eq("entity_type", "billing_statement")
       .eq("entity_id", id),
+    // Payment reports are keyed to the thread's entity, not to the statement,
+    // so they can't be filtered in SQL here — matched below against this
+    // statement and its contract.
+    admin.from("query_payment_reports")
+      .select(`
+        id, amount, paid_on, payment_mode, payment_reference, payer_name, payer_differs,
+        status, resolution_note, claimed_statement_id, created_by, created_at,
+        reviewed_by, reviewed_at,
+        query:queries!query_payment_reports_query_id_fkey(id, entity_type, entity_id)
+      `)
+      .order("created_at", { ascending: true }),
   ]);
 
   // ── Resolve actor names ───────────────────────────────────────────────────
@@ -114,6 +126,7 @@ export async function GET(
     ...(paymentsRes.data || []).map((r) => r.recorded_by),
     ...(uploadsRes.data || []).map((r) => r.uploaded_by),
     ...(auditRes.data || []).map((r) => r.performed_by),
+    ...(reportsRes.data || []).flatMap((r) => [r.created_by, r.reviewed_by]),
   ].filter(Boolean))) as string[];
 
   const actorById = new Map<string, string>();
@@ -280,6 +293,64 @@ export async function GET(
       detail: bits.join(" · ") || null,
       actor: actorName(u.uploaded_by),
     });
+  }
+
+  // ── 7. Reported payments ──────────────────────────────────────────────────
+  //
+  // Two events per report, because the claim and the answer are separate
+  // facts and often days apart: someone said the customer paid, and later
+  // accounts said whether it was there. Recording the payment is already
+  // covered by source 4; what was missing was the claim that led to it and
+  // the rejections that led nowhere, which used to leave no trace on the
+  // statement at all once the AR banner cleared.
+  //
+  // A report is matched to this statement when it was raised on the statement
+  // itself, or on its contract naming this invoice. A contract-scoped report
+  // whose reporter didn't know the invoice belongs to all of that contract's
+  // statements — the same rule the AR banner uses, so the two agree.
+  for (const rep of reportsRes.data || []) {
+    const q = (Array.isArray(rep.query) ? rep.query[0] : rep.query) as
+      | { id: string; entity_type: string; entity_id: string }
+      | null;
+    if (!q) continue;
+
+    const onThisStatement = q.entity_type === "billing_statement" && q.entity_id === id;
+    const onThisContract =
+      q.entity_type === "contract" &&
+      !!stmt.contract_id &&
+      q.entity_id === stmt.contract_id &&
+      (!rep.claimed_statement_id || rep.claimed_statement_id === id);
+    if (!onThisStatement && !onThisContract) continue;
+
+    const bits = [
+      PAYMENT_MODE_LABEL[rep.payment_mode] ?? rep.payment_mode,
+      `paid ${rep.paid_on}`,
+      rep.payment_reference ? `ref ${rep.payment_reference}` : null,
+      rep.payer_differs && rep.payer_name ? `from ${rep.payer_name}` : null,
+    ].filter(Boolean);
+
+    push({
+      id: `report-${rep.id}`, at: rep.created_at, kind: "payment_report",
+      label: "Payment reported by ops",
+      amount: rep.amount,
+      detail: bits.join(" · ") || null,
+      status: "ok", actor: actorName(rep.created_by),
+    });
+
+    if (rep.status !== "reported" && rep.reviewed_at) {
+      const rejected = rep.status === "rejected";
+      push({
+        id: `report-${rep.id}-outcome`, at: rep.reviewed_at, kind: "payment_report",
+        label: rejected ? "Reported payment rejected" : "Reported payment verified",
+        amount: rep.amount,
+        detail: rep.resolution_note || (rejected ? "No such payment found" : "Matched in the bank"),
+        // A rejection explains why a claimed payment never became a receipt —
+        // exactly the kind of thing someone reading this later is hunting for.
+        highlight: rejected,
+        status: rejected ? "failed" : "ok",
+        actor: actorName(rep.reviewed_by),
+      });
+    }
   }
 
   // ── 6. Audit trail ────────────────────────────────────────────────────────
