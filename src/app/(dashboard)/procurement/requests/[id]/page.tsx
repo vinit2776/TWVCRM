@@ -23,6 +23,7 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
+import { CancelChainDialog } from "@/components/procurement/cancel-chain-dialog";
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS, MR_EDITABLE_STATUSES,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -210,6 +211,8 @@ export default function PurchaseRequestDetailPage() {
   const [billCustomerOpen, setBillCustomerOpen] = useState(false);
   // Correct Department (admin-only)
   const [correctDeptOpen, setCorrectDeptOpen] = useState(false);
+  // Revoke approval / Cancel request (post-approval chain-cancellation, admin-only)
+  const [chainCancelDialog, setChainCancelDialog] = useState<"revoked" | "cancelled" | null>(null);
   // Keyed by line item id → string (so empty input is preserved)
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
 
@@ -524,6 +527,27 @@ export default function PurchaseRequestDetailPage() {
             >
               Cancel Request
             </Button>
+          )}
+          {userRole === "admin" && ["approved", "partially_ordered", "po_created"].includes(pr.status) && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setChainCancelDialog("revoked")}
+                disabled={actionLoading}
+              >
+                Revoke approval
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                onClick={() => setChainCancelDialog("cancelled")}
+                disabled={actionLoading}
+              >
+                Cancel request
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -1474,6 +1498,18 @@ export default function PurchaseRequestDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Revoke approval / Cancel request — post-approval chain cancellation, admin-only */}
+      {chainCancelDialog && (
+        <CancelChainDialog
+          open={!!chainCancelDialog}
+          onOpenChange={(open) => { if (!open) setChainCancelDialog(null); }}
+          requestId={pr.id}
+          requestNumber={pr.pr_number}
+          outcome={chainCancelDialog}
+          onSuccess={fetchPr}
+        />
+      )}
 
       {/* Edit prices & resubmit — rejected MRs only. Price-only edits; item identity locked. */}
       <Dialog open={editPricesOpen} onOpenChange={setEditPricesOpen}>
