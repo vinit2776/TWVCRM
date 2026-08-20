@@ -471,10 +471,17 @@ export async function POST(
     const nowYmd = nowIso.slice(0, 10);
 
     // ── Persist Razorpay link + due date ─────────────────────────────────────
+    // Resetting the ladder alongside due_date is load-bearing, not tidiness:
+    // the reminder cron picks a stage from days-overdue against due_date but
+    // gates it on reminder_count, so a stale count behind a fresh due date
+    // reads as "stage already sent" for every rung already fired and the
+    // statement stops being chased until days-overdue catches back up.
     await adminSupabase.from("billing_statements").update({
       razorpay_payment_link_id: rzpLinkId,
       razorpay_payment_link_url: rzpLinkUrl,
       due_date: nowYmd,
+      reminder_count: 0,
+      last_reminder_sent_at: null,
     }).eq("id", id);
 
     // ── Send email to customer ────────────────────────────────────────────────

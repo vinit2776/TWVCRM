@@ -67,7 +67,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, status, payment_status, gst_invoice_number, pi_cancelled_at,
-      statement_number, razorpay_payment_link_id, notes, due_date,
+      statement_number, razorpay_payment_link_id, notes, due_date, reminder_count,
       contract:contracts!billing_statements_contract_id_fkey(id, contract_number)
     `)
     .eq("id", id)
@@ -132,6 +132,15 @@ export async function POST(
     razorpay_payment_link_id: null,
     razorpay_payment_link_url: null,
     due_date: nowYmd,
+    // Moving due_date forward restarts the dunning clock, so the reminder
+    // ladder has to restart with it. The cron picks a stage from days-overdue
+    // against due_date but gates it on reminder_count; leaving a stale count
+    // behind a fresh due date makes every already-fired stage read as "stage
+    // already sent" and the statement goes silent until days-overdue catches
+    // back up — weeks, on a ladder that runs to day 30. See TWV-BS-0167 and
+    // TWV-BS-0149, which went quiet for 29 and 35 days respectively.
+    reminder_count: 0,
+    last_reminder_sent_at: null,
     notes: [
       statement.notes,
       `PI ${statement.statement_number} cancelled ${nowYmd} — early GST invoice queued to Tally inbox. Reason: ${reason}`,
@@ -151,6 +160,8 @@ export async function POST(
     changes: {
       pi_cancelled_at: { old: null, new: nowIso },
       handoff_state: { old: null, new: "direct_gst_requested" },
+      due_date: { old: statement.due_date, new: nowYmd },
+      reminder_count: { old: statement.reminder_count ?? 0, new: 0 },
       razorpay_payment_link_id: { old: existingLinkId, new: null },
       override_reason: { old: null, new: reason },
     },
