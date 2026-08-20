@@ -50,6 +50,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import Link from "next/link";
+import { pushTrailEntry } from "@/lib/nav-trail";
 
 export default function CaseDetailPage({
   params,
@@ -135,7 +137,13 @@ export default function CaseDetailPage({
               )}
               <span>|</span>
               {aggregator ? (
-                <span>{aggregator.company_name || aggregator.name}</span>
+                <Link
+                  href={`/aggregators/${aggregator.id}`}
+                  className="hover:text-foreground hover:underline"
+                  onClick={() => pushTrailEntry({ href: `/aggregators/${aggregator.id}`, label: aggregator.name })}
+                >
+                  {aggregator.company_name || aggregator.name}
+                </Link>
               ) : (
                 <Badge variant="outline">Direct Client</Badge>
               )}

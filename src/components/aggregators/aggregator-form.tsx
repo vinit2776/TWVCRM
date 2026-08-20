@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useForm, useFieldArray, type Resolver } from "react-hook-form";
+import { useForm, useFieldArray, type FieldErrors, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,7 +65,11 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
       same_state_as_twv: aggregator?.same_state_as_twv ?? false,
       commission_percentage: aggregator?.commission_percentage ?? 0,
       billing_method: aggregator?.billing_method ?? "postpaid",
-      credit_limit: aggregator?.credit_limit,
+      // ?? undefined, never a bare null: an aggregator with no credit limit
+      // stores null, and seeding the form with it made every such record
+      // unsaveable — worse for a prepaid aggregator, where the Credit Limit
+      // input isn't even rendered, so the error had nowhere to show.
+      credit_limit: aggregator?.credit_limit ?? undefined,
       notes: aggregator?.notes || "",
       tags: aggregator?.tags || [],
       contacts: aggregator?.contacts?.map((c) => ({
@@ -85,6 +90,19 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   const sameState = watch("same_state_as_twv");
   const billingMethod = watch("billing_method");
 
+  // Without this, a schema error on a field the form doesn't render (or has
+  // scrolled past) makes Save do nothing at all, with no message anywhere —
+  // the user cannot tell a validation failure from a dead button.
+  const onInvalid = (formErrors: FieldErrors<CreateAggregatorInput>) => {
+    const [field, error] = Object.entries(formErrors)[0] ?? [];
+    const message = (error as { message?: string } | undefined)?.message;
+    toast.error(
+      field
+        ? `Could not save — ${field.replace(/_/g, " ")}: ${message ?? "invalid value"}`
+        : "Could not save — please check the form for errors.",
+    );
+  };
+
   const onFormSubmit = async (data: CreateAggregatorInput) => {
     setSubmitting(true);
     try {
@@ -97,7 +115,7 @@ export function AggregatorForm({ aggregator, onSubmit, onCancel }: AggregatorFor
   };
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} onKeyDown={preventEnterSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit(onFormSubmit, onInvalid)} onKeyDown={preventEnterSubmit} className="space-y-6">
       {/* Basic Info */}
       <Card>
         <CardHeader>
