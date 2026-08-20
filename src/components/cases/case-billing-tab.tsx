@@ -21,11 +21,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban, Send, Mail, X } from "lucide-react";
+import { Loader2, FileText, ExternalLink, FileCheck, Zap, Ban, Send, Mail, X, ChevronDown, ChevronUp, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
+import { HANDOFF_STATE_LABELS, voBillParty, type HandoffState } from "@/lib/tally-handoff";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 
@@ -69,6 +69,28 @@ interface InvoicePreview {
   totalAmount: number;
 }
 
+/** What was actually raised — read back from the statement itself, so the
+ *  case owner can see the details that went to accounts without needing
+ *  Tally Inbox access (which sales and case-handling roles do not have). */
+interface StatementDetails {
+  buyerName: string;
+  buyerGstin: string | null;
+  billToAggregator: boolean;
+  endClientName: string | null;
+  caseNumber: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  placeOfSupply: string | null;
+  isInterstate: boolean;
+  subtotal: number;
+  taxPercentage: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+  lines: { description: string; quantity: number; rate: number; amount: number }[];
+}
+
 /** Mirrors CaseInvoicePreview from src/lib/case-invoicing.ts, returned by
  *  GET /api/cases/[id]/invoice. */
 interface GeneratePreview {
@@ -107,6 +129,10 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [details, setDetails] = useState<StatementDetails | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmPreview, setConfirmPreview] = useState<GeneratePreview | null>(null);
@@ -334,6 +360,63 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     }
   };
 
+  // Reads the raised statement back and flattens it into the same summary
+  // the Tally Inbox puts in front of accounts: who is billed, for what, over
+  // what period, with the tax split. Lazy — only fetched when opened.
+  const handleToggleDetails = async () => {
+    if (detailsOpen) { setDetailsOpen(false); return; }
+    setDetailsOpen(true);
+    if (details || !statement) return;
+    setDetailsLoading(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statement.id}`);
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Could not load invoice details");
+        setDetailsOpen(false);
+        return;
+      }
+      const d = json.data ?? json;
+      const party = voBillParty({ case: d.case ?? null, aggregator: d.aggregator ?? null });
+      // line_items is a JSONB array of sections, each holding the real
+      // per-charge rows — same shape proforma-pdf renders from.
+      const lines: StatementDetails["lines"] = [];
+      for (const section of (d.line_items ?? []) as { items?: unknown[] }[]) {
+        for (const item of (section.items ?? []) as Record<string, unknown>[]) {
+          lines.push({
+            description: String(item.description ?? ""),
+            quantity: Number(item.quantity ?? 1),
+            rate: Number(item.rate ?? 0),
+            amount: Number(item.amount ?? 0),
+          });
+        }
+      }
+      setDetails({
+        buyerName: party?.name ?? "—",
+        buyerGstin: party?.gstin ?? null,
+        billToAggregator: d.case?.bill_to === "aggregator",
+        endClientName: d.case ? (d.case.client_company_name || d.case.client_name) : null,
+        caseNumber: d.case?.case_number ?? null,
+        periodStart: d.period_start ?? null,
+        periodEnd: d.period_end ?? null,
+        placeOfSupply: d.place_of_supply ?? null,
+        isInterstate: !!d.is_interstate,
+        subtotal: Number(d.subtotal ?? 0),
+        taxPercentage: Number(d.tax_percentage ?? 0),
+        cgst: Number(d.cgst_amount ?? 0),
+        sgst: Number(d.sgst_amount ?? 0),
+        igst: Number(d.igst_amount ?? 0),
+        total: Number(d.total_amount ?? 0),
+        lines,
+      });
+    } catch {
+      toast.error("Could not load invoice details");
+      setDetailsOpen(false);
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
   const handleVoid = async () => {
     if (!statement || !voidReason.trim()) return;
     setVoidSubmitting(true);
@@ -557,6 +640,117 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   </div>
                 );
               })()}
+              {/* What went to accounts. The Tally Inbox link above is useless
+                  to sales and case-handling roles — they have no access to
+                  that page — so the same details are readable here. */}
+              <div className="rounded-md border">
+                <button
+                  type="button"
+                  onClick={handleToggleDetails}
+                  className="flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-muted/40"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Receipt className="h-3.5 w-3.5 text-muted-foreground" />
+                    View invoice details
+                  </span>
+                  {detailsLoading
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : detailsOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+                {detailsOpen && details && (
+                  <div className="border-t px-3 py-2.5 space-y-2.5 text-sm">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Billed to</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="font-medium min-w-0">{details.buyerName}</span>
+                        <Badge variant="outline" className="shrink-0 text-xs">
+                          {details.billToAggregator ? "Aggregator" : "Client"}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">GSTIN</span>
+                        <span className="font-mono">{details.buyerGstin || "— (B-series, no IRN)"}</span>
+                      </div>
+                      {details.billToAggregator && details.endClientName && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">On behalf of</span>
+                          <span>{details.endClientName}{details.caseNumber ? ` · ${details.caseNumber}` : ""}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Charges</p>
+                      {details.lines.length > 0 ? (
+                        details.lines.map((l, i) => (
+                          <div key={i} className="flex justify-between gap-3 text-xs">
+                            <span className="min-w-0">
+                              {l.description}
+                              {l.quantity !== 1 && (
+                                <span className="text-muted-foreground"> · {l.quantity} × {formatCurrency(l.rate)}</span>
+                              )}
+                            </span>
+                            <span className="tabular-nums shrink-0">{formatCurrency(l.amount)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex justify-between gap-3 text-xs">
+                          <span className="text-muted-foreground">Subtotal</span>
+                          <span className="tabular-nums">{formatCurrency(details.subtotal)}</span>
+                        </div>
+                      )}
+                      {details.periodStart && details.periodEnd && (
+                        <div className="flex justify-between text-xs pt-1">
+                          <span className="text-muted-foreground">Period</span>
+                          <span>{formatDate(details.periodStart)} → {formatDate(details.periodEnd)}</span>
+                        </div>
+                      )}
+                      {details.placeOfSupply && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">Place of supply</span>
+                          <span>
+                            {details.placeOfSupply}
+                            {details.isInterstate && <span className="text-amber-700"> (interstate · IGST)</span>}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Subtotal</span>
+                        <span className="tabular-nums">{formatCurrency(details.subtotal)}</span>
+                      </div>
+                      {details.isInterstate ? (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">IGST @ {details.taxPercentage}%</span>
+                          <span className="tabular-nums">{formatCurrency(details.igst)}</span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">CGST @ {details.taxPercentage / 2}%</span>
+                            <span className="tabular-nums">{formatCurrency(details.cgst)}</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">SGST @ {details.taxPercentage / 2}%</span>
+                            <span className="tabular-nums">{formatCurrency(details.sgst)}</span>
+                          </div>
+                        </>
+                      )}
+                      <div className="flex justify-between font-semibold pt-0.5">
+                        <span>Total</span>
+                        <span className="tabular-nums">{formatCurrency(details.total)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {isUnsentPi && (
                 <Button size="sm" onClick={handleGenerateInvoice} disabled={generating}>
                   <Send className="mr-1.5 h-3.5 w-3.5" />
