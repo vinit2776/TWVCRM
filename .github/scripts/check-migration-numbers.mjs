@@ -35,6 +35,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const MIGRATIONS_DIR = "supabase/migrations";
 const LOCAL_ONLY = process.argv.includes("--local");
@@ -87,6 +88,13 @@ const listRef = (ref) => {
   const out = git("ls-tree", "--name-only", ref, `${MIGRATIONS_DIR}/`);
   return out ? out.trim().split("\n").filter(Boolean).map((p) => p.split("/").pop()) : null;
 };
+
+// Everything above is pure and safe to import. Everything below runs the check
+// and ends in process.exit(1) on failure — so it must not execute when the unit
+// tests import this module for its helpers, or one real collision anywhere in
+// the repo takes the whole test suite down with it.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
 
 const fail = [];
 const note = [];
@@ -170,3 +178,5 @@ if (fail.length > 0) {
 }
 
 console.log("\n✅ No migration number conflicts");
+
+}

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 // The checker is a CI script, but its comparison logic is pure and worth
 // pinning — a false negative here means a silently skipped migration.
 import { numberOf, byNumber, findConflicts } from "../../../.github/scripts/check-migration-numbers.mjs";
@@ -64,5 +65,20 @@ describe("findConflicts", () => {
       { file: "00511_y.sql", where: "origin/b" },
     ]]]);
     expect(findConflicts(introduced, claims)).toHaveLength(2);
+  });
+});
+
+describe("importing the checker", () => {
+  // The script both exports helpers and runs the check. Before the main-guard,
+  // importing it ran the check too — so a single real collision anywhere in the
+  // repo would call process.exit(1) inside vitest and kill the whole suite,
+  // reported as an unrelated test failure. Assert the import stays silent.
+  it("has no side effects", () => {
+    const out = execFileSync(
+      process.execPath,
+      ["-e", "import('./.github/scripts/check-migration-numbers.mjs').then(m => { if (!m.numberOf) process.exit(3); })"],
+      { encoding: "utf8", cwd: process.cwd() },
+    );
+    expect(out).toBe("");
   });
 });
