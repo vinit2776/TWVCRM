@@ -197,8 +197,14 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
         <ModuleChip
           active={kindFilter === "payment_reported"}
           onClick={() => {
+            const next = kindFilter === "payment_reported" ? null : "payment_reported";
             setModuleFilter(null);
-            setKindFilter(kindFilter === "payment_reported" ? null : "payment_reported");
+            setKindFilter(next);
+            // "Awaiting you" excludes threads you spoke in last, which is
+            // every report at the moment you file it — so filtering to
+            // payment reports on that tab reliably showed nothing. Asking for
+            // a kind means "show me these", not "these among what I owe".
+            if (next) setTab("open");
           }}
           label="Payments reported"
         />

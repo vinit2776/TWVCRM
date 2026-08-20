@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Users } from "lucide-react";
+import { AlertTriangle, Loader2, Users } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -15,9 +15,15 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { AttachmentPicker } from "@/components/queries/attachment-picker";
-import { STATEMENT_PAYMENT_MODES } from "@/lib/constants";
+import { STATEMENT_PAYMENT_MODES, STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import { PAYMENT_REPORT_DUE_DAYS, validatePaymentReport } from "@/lib/queries/payment-reports";
+import {
+  PAYMENT_REPORT_DUE_DAYS,
+  PAYMENT_REPORT_STATUS_LABELS,
+  validatePaymentReport,
+  type PaymentReportStatus,
+} from "@/lib/queries/payment-reports";
+import { formatDate } from "@/lib/utils";
 
 /**
  * "The customer says they've paid" — the form ops fill in when a payment
@@ -62,6 +68,40 @@ interface StatementOption {
   balance_due: number;
 }
 
+interface ExistingReport {
+  id: string;
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  status: PaymentReportStatus;
+  created_by: { full_name: string } | null;
+  query: { id: string } | null;
+  timeline?: {
+    messages?: Array<{
+      id: string;
+      event_type: string;
+      body: string | null;
+      created_at: string;
+      author: { full_name: string } | null;
+    }>;
+  } | null;
+}
+
+interface Balance {
+  outstanding: number;
+  pending: number;
+  reportable: number;
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  resolved: "Resolved",
+  reopened: "Reopened",
+  retargeted: "Re-assigned",
+  nudged: "Chased automatically",
+  payment_verified: "Verified and recorded",
+  payment_rejected: "Closed — no such payment",
+};
+
 export function ReportPaymentDialog({
   open, onOpenChange, entityType, entityId, partyLabel, suggestedAmount,
   defaultStatementId, contractId, onReported,
@@ -76,11 +116,15 @@ export function ReportPaymentDialog({
   const [files, setFiles] = useState<File[]>([]);
   const [statementId, setStatementId] = useState<string | null>(null);
   const [statements, setStatements] = useState<StatementOption[] | null>(null);
+  const [existing, setExisting] = useState<ExistingReport[] | null>(null);
+  const [balance, setBalance] = useState<Balance | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setAmount(suggestedAmount && suggestedAmount > 0 ? String(Math.round(suggestedAmount)) : "");
+    setSubmitAttempted(false);
     setPaidOn(new Date().toISOString().slice(0, 10));
     setMode("neft");
     setReference("");
@@ -100,6 +144,25 @@ export function ReportPaymentDialog({
    * reporters simply keep the invoice they started from — the picker
    * disappears rather than the dialog breaking.
    */
+  useEffect(() => {
+    if (!open || !entityId) { setExisting(null); setBalance(null); return; }
+    let cancelled = false;
+    setExisting(null);
+    setBalance(null);
+    fetch(
+      `/api/queries/payment-reports?entity_type=${encodeURIComponent(entityType)}&entity_id=${encodeURIComponent(entityId)}`,
+      { cache: "no-store" },
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled) return;
+        setExisting(j?.items ?? []);
+        setBalance(j?.balance ?? null);
+      })
+      .catch(() => { if (!cancelled) { setExisting([]); setBalance(null); } });
+    return () => { cancelled = true; };
+  }, [open, entityType, entityId]);
+
   useEffect(() => {
     if (!open || !contractId) { setStatements(null); return; }
     let cancelled = false;
@@ -151,16 +214,32 @@ export function ReportPaymentDialog({
       toast.error(json.error || "Could not report this payment");
       return;
     }
+    const openThread = json.query_id
+      ? {
+          label: "View",
+          onClick: () => { window.location.href = `/queries?open=${json.query_id}`; },
+        }
+      : undefined;
+
     if (json.attachments_failed?.length) {
-      toast.warning(`Reported, but these attachments failed: ${json.attachments_failed.join(", ")}`);
+      toast.warning(`Reported, but these attachments failed: ${json.attachments_failed.join(", ")}`, {
+        action: openThread,
+      });
     } else {
-      toast.success("Sent to accounts to verify against the bank");
+      // Linking straight to the thread matters more than it looks: a report
+      // you just filed is not "awaiting you", so it does not appear on the
+      // Queries page's default tab and people concluded it hadn't saved.
+      toast.success("Sent to accounts to verify against the bank", { action: openThread });
     }
     onOpenChange(false);
     onReported();
   }
 
   const amountNum = Number(amount);
+  const pendingReports = (existing ?? []).filter((r) => r.status === "reported");
+  // Only block on a *loaded* balance. A failed lookup must not silently
+  // become "nothing left to report" and lock someone out of reporting.
+  const fullyReported = !!balance && balance.reportable <= 0 && pendingReports.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -171,6 +250,69 @@ export function ReportPaymentDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {pendingReports.length > 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
+                <AlertTriangle className="h-3.5 w-3.5 flex-none" />
+                Already reported, waiting on accounts
+              </div>
+              {existing!.map((rep) => (
+                <div key={rep.id} className="rounded border border-amber-200 bg-background/70 p-2 space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2 text-xs">
+                    <span className="font-semibold tabular-nums">{formatCurrency(rep.amount)}</span>
+                    <span className="px-1.5 py-0.5 rounded-full border text-[10px] text-amber-800 border-amber-300">
+                      {PAYMENT_REPORT_STATUS_LABELS[rep.status]}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {formatDate(rep.paid_on)} · {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
+                    {rep.created_by ? ` · reported by ${rep.created_by.full_name}` : ""}
+                  </div>
+                  {(rep.timeline?.messages ?? []).length > 0 && (
+                    <ol className="space-y-0.5 border-t pt-1.5">
+                      {[...(rep.timeline!.messages ?? [])]
+                        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+                        .map((m) => (
+                          <li key={m.id} className="text-[11px] text-muted-foreground leading-snug">
+                            <span className="font-medium text-foreground">
+                              {EVENT_LABELS[m.event_type] ?? m.author?.full_name ?? "Note"}
+                            </span>
+                            {/* A plain message already renders as its author's
+                                name above, so naming them again reads as
+                                "Noorul (Noorul)". Only typed events need the
+                                actor spelled out separately. */}
+                            {m.event_type !== "message" && m.author ? ` by ${m.author.full_name}` : ""}
+                            {" · "}{formatDate(m.created_at)}
+                            {m.body ? <span className="block">{m.body}</span> : null}
+                          </li>
+                        ))}
+                    </ol>
+                  )}
+                  {rep.query?.id && (
+                    <a
+                      href={`/queries?open=${rep.query.id}`}
+                      className="text-[11px] text-teal-700 underline hover:no-underline inline-block"
+                    >
+                      Open the thread
+                    </a>
+                  )}
+                </div>
+              ))}
+              {balance && balance.reportable > 0 && (
+                <p className="text-[11px] text-amber-900">
+                  {formatCurrency(balance.reportable)} of {formatCurrency(balance.outstanding)} is still
+                  unreported — report only the part that hasn&apos;t been claimed yet.
+                </p>
+              )}
+              {fullyReported && (
+                <p className="text-[11px] text-amber-900">
+                  The full outstanding amount is already reported. There is nothing further to report until
+                  accounts verify or reject it.
+                </p>
+              )}
+            </div>
+          )}
+
           {entityType === "proposal_deposit" && (
             <p className="text-xs rounded-md border border-violet-200 bg-violet-50 text-violet-900 p-2.5">
               Security deposit. Once accounts confirm it against the bank it is recorded on the
@@ -178,6 +320,8 @@ export function ReportPaymentDialog({
             </p>
           )}
 
+          {!fullyReported && (
+          <>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Amount</Label>
@@ -286,16 +430,20 @@ export function ReportPaymentDialog({
             Goes to Accounts to check against the bank, due in {PAYMENT_REPORT_DUE_DAYS} days.
             Nothing is marked paid until they confirm it.
           </p>
+          </>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Cancel
+            {fullyReported ? "Close" : "Cancel"}
           </Button>
+          {!fullyReported && (
           <Button onClick={submit} disabled={submitting || !entityId}>
             {submitting && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
             Send{amountNum > 0 ? ` ${formatCurrency(amountNum)}` : ""} to accounts
           </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

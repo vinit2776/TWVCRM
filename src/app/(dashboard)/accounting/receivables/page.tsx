@@ -201,6 +201,7 @@ interface PendingPaymentReport {
   payment_mode: string;
   payer_name: string | null;
   payer_differs: boolean;
+  claimed_statement_id: string | null;
   created_by: { full_name: string };
   query: { id: string; entity_type: string; entity_id: string } | null;
 }
@@ -374,8 +375,34 @@ export default function AccountsReceivablePage() {
   const reportsForRow = useCallback(
     (row: ReceivableRow): PendingPaymentReport[] => [
       ...(reportsByEntity.get(`billing_statement:${row.id}`) ?? []),
-      ...(row.contract?.id ? reportsByEntity.get(`contract:${row.contract.id}`) ?? [] : []),
+      // Contract-scoped reports belong to whichever invoice the reporter said
+      // the customer paid. Before claimed_statement_id existed there was no
+      // way to know, so the banner had to appear on every open row of the
+      // contract — which meant one ₹5 claim against a customer with four open
+      // invoices drew four identical banners. Now it lands on the named one,
+      // and only falls back to all rows when the reporter genuinely didn't
+      // know which invoice it was.
+      ...(row.contract?.id
+        ? (reportsByEntity.get(`contract:${row.contract.id}`) ?? []).filter(
+            (rep) => !rep.claimed_statement_id || rep.claimed_statement_id === row.id,
+          )
+        : []),
     ],
+    [reportsByEntity],
+  );
+
+  /**
+   * Reports on the Other-receivables rows — security deposits, which hang off
+   * the proposal rather than a statement or contract.
+   *
+   * These were being fetched and were simply never looked up: reportsForRow
+   * only ever asked for billing_statement and contract keys, so reporting a
+   * deposit paid produced no confirmation anywhere on this page. The report
+   * saved correctly; there was just nothing rendering it.
+   */
+  const reportsForOtherRow = useCallback(
+    (row: OtherReceivableRow): PendingPaymentReport[] =>
+      row.kind === "deposit" ? reportsByEntity.get(`proposal_deposit:${row.id}`) ?? [] : [],
     [reportsByEntity],
   );
 
@@ -926,6 +953,7 @@ export default function AccountsReceivablePage() {
         canRecordPayment={canRecordPayment}
         onRecorded={load}
         onReportDeposit={setReportDepositRow}
+        reportsForRow={reportsForOtherRow}
       />
 
       <ReportPaymentDialog
@@ -1101,12 +1129,13 @@ interface OtherSummary {
  * no proforma lifecycle and no partial payments, so most statement columns
  * would be empty for them.
  */
-function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onReportDeposit }: {
+function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onReportDeposit, reportsForRow }: {
   rows: OtherReceivableRow[];
   summary: OtherSummary | null;
   canRecordPayment: boolean;
   onRecorded: () => void;
   onReportDeposit: (row: OtherReceivableRow) => void;
+  reportsForRow: (row: OtherReceivableRow) => PendingPaymentReport[];
 }) {
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -1176,7 +1205,8 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
               {rows.map((r) => {
                 const style = OTHER_KIND_STYLE[r.kind];
                 return (
-                  <tr key={`${r.kind}-${r.id}`} className="border-b last:border-0 hover:bg-gray-50">
+                  <Fragment key={`${r.kind}-${r.id}`}>
+                  <tr className="border-b last:border-0 hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         {r.href
@@ -1271,6 +1301,34 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
                       </div>
                     </td>
                   </tr>
+                  {reportsForRow(r).length > 0 && (
+                    <tr className="bg-amber-50/70">
+                      <td colSpan={6} className="px-4 py-2">
+                        {reportsForRow(r).map((rep) => (
+                          <div key={rep.id} className="flex items-start gap-2 text-xs text-amber-900">
+                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
+                            <span>
+                              <span className="font-semibold">
+                                {formatCurrency(rep.amount)} reported paid, not yet verified
+                              </span>
+                              {" — "}
+                              {STATEMENT_PAYMENT_MODE_LABELS[rep.payment_mode] ?? rep.payment_mode}
+                              {" on "}{formatDate(rep.paid_on)}, by {rep.created_by.full_name}.
+                              {rep.payer_differs && rep.payer_name && (
+                                <> Paid from <span className="font-medium">{rep.payer_name}</span>.</>
+                              )}
+                              {" "}
+                              <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
+                                Open to verify
+                              </a>
+                              <span className="text-amber-700"> · Still outstanding until accounts confirm it.</span>
+                            </span>
+                          </div>
+                        ))}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
