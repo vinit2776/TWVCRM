@@ -7,8 +7,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Loader2, FileText, Send, Bell, IndianRupee, Receipt, GitCommitHorizontal,
-  Eye, AlertTriangle,
+  Loader2, FileText, Send, Bell, IndianRupee, BadgeIndianRupee, Receipt,
+  GitCommitHorizontal, Eye, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
@@ -29,6 +29,8 @@ const KIND_ICON: Record<StatementTimelineKind, React.ComponentType<{ className?:
   send: Send,
   reminder: Bell,
   payment: IndianRupee,
+  // Distinct from `payment`: a claim someone made, not money in the bank.
+  payment_report: BadgeIndianRupee,
   gst: Receipt,
   audit: GitCommitHorizontal,
 };
@@ -38,6 +40,9 @@ const KIND_STYLE: Record<StatementTimelineKind, string> = {
   send: "bg-blue-100 text-blue-700 border-blue-200",
   reminder: "bg-amber-100 text-amber-700 border-amber-200",
   payment: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  // Teal, matching the "Report paid" button on AR — and deliberately not the
+  // emerald of a real payment, which this is not until accounts verify it.
+  payment_report: "bg-teal-100 text-teal-700 border-teal-200",
   gst: "bg-violet-100 text-violet-700 border-violet-200",
   audit: "bg-gray-100 text-gray-500 border-gray-200",
 };

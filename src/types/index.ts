@@ -4137,6 +4137,7 @@ export type StatementTimelineKind =
   | "send"
   | "reminder"
   | "payment"
+  | "payment_report"
   | "gst"
   | "audit";
 
