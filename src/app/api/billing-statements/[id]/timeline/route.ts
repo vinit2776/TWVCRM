@@ -103,9 +103,10 @@ export async function GET(
   ]);
 
   // ── Resolve actor names ───────────────────────────────────────────────────
-  // gst_invoice_uploads.uploaded_by stores the Supabase auth id rather than
-  // users.id (unlike every other table here), so look up both columns and key
-  // the map by each — otherwise the uploader renders as blank.
+  // Every actor column here holds a users.id. gst_invoice_uploads.uploaded_by
+  // held an auth id until 00514 remapped it; the auth_id lookup below is kept
+  // as a cheap fallback so a row restored from a pre-00514 backup still renders
+  // an uploader instead of a blank.
   const actorIds = Array.from(new Set([
     stmt.finalized_by, stmt.proforma_sent_by, stmt.pi_cancelled_by, stmt.voided_by,
     ...(sendLogRes.data || []).map((r) => r.triggered_by_user_id),
