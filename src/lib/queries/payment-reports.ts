@@ -21,11 +21,46 @@
 import type { UserRole } from "@/types";
 import { STATEMENT_PAYMENT_MODES } from "@/lib/constants";
 
-/** Reports hang off one of these. See resolveReportEntity(). */
-export const PAYMENT_REPORT_ENTITY_TYPES = ["contract", "billing_statement"] as const;
+/** Reports hang off one of these. */
+export const PAYMENT_REPORT_ENTITY_TYPES = [
+  "contract",
+  "billing_statement",
+  "proposal_deposit",
+] as const;
 export type PaymentReportEntityType = (typeof PAYMENT_REPORT_ENTITY_TYPES)[number];
 
+/**
+ * What a report settles against, and therefore what counts as proof it was
+ * verified.
+ *
+ *   invoice — a billing statement. Proof is the billing_payments row created
+ *             when accounts record it, stored in billing_payment_id.
+ *   deposit — a proposal security deposit. Recorded on the proposal itself,
+ *             so there is no payment row; proof is that proposal's
+ *             deposit_payment_status becoming 'paid', re-checked server-side
+ *             before a report may be marked verified.
+ */
+export type PaymentReportTargetKind = "invoice" | "deposit";
+
+export function targetKindForEntity(entityType: PaymentReportEntityType): PaymentReportTargetKind {
+  return entityType === "proposal_deposit" ? "deposit" : "invoice";
+}
+
+/**
+ * Deposits are recorded by admin/manager/accounts
+ * (/api/proposals/[id]/deposit-payment), a wider set than the invoice path.
+ * Verification stays on the narrower PAYMENT_REPORT_REVIEW_ROLES either way:
+ * confirming an unverified claim means reading the bank statement, which is
+ * a different act from recording a payment you were already told about.
+ */
+export const DEPOSIT_RECORD_ROLES: readonly UserRole[] = ["admin", "manager", "accounts"];
+
 export type PaymentReportStatus = "reported" | "verified" | "rejected";
+
+export const PAYMENT_REPORT_TARGET_LABELS: Record<PaymentReportTargetKind, string> = {
+  invoice: "Invoice payment",
+  deposit: "Security deposit",
+};
 
 export const PAYMENT_REPORT_STATUS_LABELS: Record<PaymentReportStatus, string> = {
   reported: "Reported · unverified",

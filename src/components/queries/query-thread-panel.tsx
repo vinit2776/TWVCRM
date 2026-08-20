@@ -329,6 +329,9 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
           report={thread.payment_report}
           entityType={thread.entity_type}
           entityId={thread.entity_id}
+          entityTitle={thread.entity?.title ?? null}
+          entityReference={thread.entity?.reference ?? null}
+          entityAmount={thread.entity?.amount ?? null}
           onChanged={() => {
             void loadThread(thread.id);
             onChanged?.();

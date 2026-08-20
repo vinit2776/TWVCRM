@@ -201,6 +201,8 @@ export interface QueryStats {
 export interface QueryPaymentReport {
   id: string;
   status: "reported" | "verified" | "rejected";
+  /** 'invoice' settles a statement; 'deposit' settles a proposal deposit. */
+  target_kind: "invoice" | "deposit";
   amount: number;
   paid_on: string;
   payment_mode: string;
