@@ -65,6 +65,8 @@ interface Props {
 interface StatementOption {
   id: string;
   statement_number: string | null;
+  /** What the invoice is called on screen — GST number once one exists. */
+  reference: string;
   balance_due: number;
 }
 
@@ -381,7 +383,7 @@ export function ReportPaymentDialog({
                 <SelectContent>
                   {statements.map((st) => (
                     <SelectItem key={st.id} value={st.id}>
-                      {st.statement_number ?? "Draft"} · {formatCurrency(st.balance_due)} due
+                      {st.reference} · {formatCurrency(st.balance_due)} due
                     </SelectItem>
                   ))}
                   <SelectItem value="unknown">They didn&apos;t say</SelectItem>

@@ -101,3 +101,23 @@ export function isStale(dueDate: string | null): boolean {
 export function depositIsChaseable(proposalStatus: string | null | undefined): boolean {
   return proposalStatus === "accepted";
 }
+
+/**
+ * The reference a billing statement is known by on screen.
+ *
+ * Once a GST invoice exists it always wins: that is the number on the
+ * document the customer holds, and it is what the AR row, the proforma link
+ * and every email show. The statement number is an internal handle that stops
+ * being the thing anyone says out loud.
+ *
+ * Centralised because the two disagreeing is worse than either choice. The
+ * report dialog's invoice picker offered "TWV-BS-0103" while the AR row for
+ * the same invoice read "TWV/INV/26-27/0004", so someone reported a payment
+ * against one name and then could not find it under the other.
+ */
+export function statementReference(row: {
+  statement_number?: string | null;
+  gst_invoice_number?: string | null;
+}): string {
+  return row.gst_invoice_number || row.statement_number || "Draft";
+}

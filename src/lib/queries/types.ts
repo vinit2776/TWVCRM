@@ -212,7 +212,7 @@ export interface QueryPaymentReport {
   billing_payment_id: string | null;
   /** The invoice the reporter was told this covers. Pre-selects allocation. */
   claimed_statement_id: string | null;
-  claimed_statement: { id: string; statement_number: string | null } | null;
+  claimed_statement: { id: string; statement_number: string | null; gst_invoice_number: string | null } | null;
   resolution_note: string | null;
   reviewed_at: string | null;
   reviewed_by: QueryAuthor | null;

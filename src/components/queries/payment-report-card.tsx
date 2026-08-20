@@ -11,6 +11,7 @@ import {
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { statementReference } from "@/lib/receivables";
 import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -53,6 +54,8 @@ interface Props {
 interface StatementOption {
   id: string;
   statement_number: string | null;
+  /** What the invoice is called on screen — GST number once one exists. */
+  reference: string;
   total_amount: number;
   balance_due: number;
 }
@@ -160,8 +163,14 @@ export function PaymentReportCard({
           {report.payer_differs && report.payer_name && (
             <Row label="Remitter" value={report.payer_name} emphasis />
           )}
-          {report.claimed_statement?.statement_number && (
-            <Row label="Against invoice" value={report.claimed_statement.statement_number} emphasis />
+          {report.claimed_statement && (
+            <Row
+              label="Against invoice"
+              // Same rule as the AR row, so the invoice is called one thing
+              // everywhere rather than two.
+              value={statementReference(report.claimed_statement)}
+              emphasis
+            />
           )}
           <Row
             label="Reported by"
@@ -211,7 +220,7 @@ export function PaymentReportCard({
                     <SelectContent>
                       {statements.map((s) => (
                         <SelectItem key={s.id} value={s.id}>
-                          {s.statement_number ?? "Draft"} · {formatCurrency(s.balance_due)} due
+                          {s.reference} · {formatCurrency(s.balance_due)} due
                         </SelectItem>
                       ))}
                     </SelectContent>
