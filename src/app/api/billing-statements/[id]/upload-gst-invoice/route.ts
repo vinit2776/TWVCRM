@@ -62,7 +62,6 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-  const authUserId = user.id;
   if (!["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -315,7 +314,7 @@ export async function POST(
     .from("gst_invoice_uploads")
     .insert({
       billing_statement_id: statement.id,
-      uploaded_by: authUserId,
+      uploaded_by: dbUser.id,
       tally_invoice_number: meta.tally_invoice_number,
       tally_invoice_series: meta.tally_invoice_series,
       irn: meta.irn,
@@ -326,7 +325,7 @@ export async function POST(
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
       name_check_status: "approved",
-      name_check_decided_by: authUserId,
+      name_check_decided_by: dbUser.id,
       name_check_decided_at: new Date().toISOString(),
     })
     .select("id")
