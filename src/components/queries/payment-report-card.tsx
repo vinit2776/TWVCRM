@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -36,6 +37,15 @@ interface Props {
   report: QueryPaymentReport;
   entityType: string;
   entityId: string;
+  /**
+   * Display fields from the thread's entity summary. Only used to label the
+   * deposit-recording dialog, which shows who and how much rather than
+   * making accounts look it up again.
+   */
+  entityTitle?: string | null;
+  entityReference?: string | null;
+  /** The deposit required (or already received). Drives the shortfall check. */
+  entityAmount?: number | null;
   /** Refresh the thread after any outcome. */
   onChanged: () => void;
 }
@@ -47,7 +57,13 @@ interface StatementOption {
   balance_due: number;
 }
 
-export function PaymentReportCard({ report, entityType, entityId, onChanged }: Props) {
+export function PaymentReportCard({
+  report, entityType, entityId, entityTitle, entityReference, entityAmount, onChanged,
+}: Props) {
+  // A deposit is recorded on the proposal itself, so there is no invoice to
+  // allocate to and no billing_payments row to link. Verification proves
+  // itself differently — see the verify route.
+  const isDeposit = report.target_kind === "deposit";
   const { user } = useCurrentUser();
   const canReview = canReviewPaymentReport(user?.role) && report.status === "reported";
 
@@ -67,7 +83,7 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
   );
   const [recordOpen, setRecordOpen] = useState(false);
 
-  const needsAllocation = entityType === "contract";
+  const needsAllocation = entityType === "contract" && !isDeposit;
 
   useEffect(() => {
     if (!canReview || !needsAllocation) return;
@@ -224,11 +240,13 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
                   <Button
                     size="sm"
                     className="h-7 text-xs bg-green-600 hover:bg-green-700"
-                    disabled={busy || !statementId}
+                    disabled={busy || (!isDeposit && !statementId)}
                     title={
-                      statementId
-                        ? "Record this payment against the invoice"
-                        : "Pick which invoice this pays first"
+                      isDeposit
+                        ? "Record this deposit against the proposal"
+                        : statementId
+                          ? "Record this payment against the invoice"
+                          : "Pick which invoice this pays first"
                     }
                     onClick={() => setRecordOpen(true)}
                   >
@@ -287,6 +305,36 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
         )}
       </div>
 
+      {isDeposit && recordOpen && (
+        <RecordOtherPaymentDialog
+          row={{
+            id: entityId,
+            kind: "deposit",
+            reference: entityReference ?? "Deposit",
+            party_name: entityTitle ?? "",
+            total_amount: entityAmount ?? report.amount,
+            balance_due: entityAmount ?? report.amount,
+            due_date: null,
+            days_overdue: null,
+            payment_link_url: null,
+            is_stale: false,
+            followup_enabled: false,
+            reminder_count: 0,
+            href: null,
+          }}
+          onClose={() => setRecordOpen(false)}
+          onDone={() => {
+            setRecordOpen(false);
+            // The route re-reads the proposal and refuses unless its
+            // deposit_payment_status is actually 'paid', so this can't mark a
+            // report verified off the back of a dialog that only looked like
+            // it worked.
+            void settle("verified");
+          }}
+        />
+      )}
+
+      {!isDeposit && (
       <RecordPaymentDialog
         open={recordOpen}
         onOpenChange={setRecordOpen}
@@ -314,6 +362,7 @@ export function PaymentReportCard({ report, entityType, entityId, onChanged }: P
           void settle("verified", paymentId);
         }}
       />
+      )}
     </>
   );
 }

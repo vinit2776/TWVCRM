@@ -35,6 +35,7 @@ interface ReportRow {
   amount: number;
   paid_on: string;
   payment_mode: string;
+  target_kind: "invoice" | "deposit";
   created_by: string;
   query: {
     id: string;
@@ -101,7 +102,7 @@ export async function PATCH(
   const { data: reportData, error: fetchErr } = await admin
     .from("query_payment_reports")
     .select(`
-      id, query_id, status, amount, paid_on, payment_mode, created_by,
+      id, query_id, status, amount, paid_on, payment_mode, target_kind, created_by,
       query:queries!query_payment_reports_query_id_fkey(
         id, entity_type, entity_id, status, audience, audience_roles, audience_user_ids
       )
@@ -124,9 +125,37 @@ export async function PATCH(
   const def = queryEntityDef(report.query.entity_type);
   if (!def) return NextResponse.json({ error: "Report not found" }, { status: 404 });
 
-  // ── Verified: the payment must already exist, and must be real ───────────
+  // ── Verified: the money must actually have been recorded ─────────────────
+  //
+  // Two shapes of proof, because deposits have no payment row of their own.
+  // For a deposit the equivalent evidence is the proposal's
+  // deposit_payment_status having flipped to 'paid' — re-read here rather
+  // than trusted from the client, so a report cannot be marked verified by
+  // anyone who merely says the deposit was recorded.
   let paymentId: string | null = null;
-  if (outcome === "verified") {
+
+  if (outcome === "verified" && report.target_kind === "deposit") {
+    const { data: proposal } = await admin
+      .from("proposals")
+      .select("id, deposit_payment_status, deposit_payment_amount")
+      .eq("id", report.query.entity_id)
+      .maybeSingle();
+
+    if (!proposal) {
+      return NextResponse.json({ error: "That proposal no longer exists" }, { status: 400 });
+    }
+    if (proposal.deposit_payment_status !== "paid") {
+      return NextResponse.json(
+        {
+          error:
+            "Record the deposit first — this proposal's deposit still reads as unpaid, so there is nothing to verify against.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (outcome === "verified" && report.target_kind === "invoice") {
     paymentId = typeof body.billing_payment_id === "string" ? body.billing_payment_id.trim() : "";
     if (!paymentId) {
       return NextResponse.json(
@@ -198,7 +227,9 @@ export async function PATCH(
 
   const defaultNote =
     outcome === "verified"
-      ? "Found in the bank and recorded against the invoice."
+      ? report.target_kind === "deposit"
+        ? "Found in the bank and recorded against the deposit."
+        : "Found in the bank and recorded against the invoice."
       : "Not in the bank yet — will keep looking.";
 
   const { error: msgErr } = await admin.from("query_messages").insert({

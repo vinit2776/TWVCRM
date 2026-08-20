@@ -18,6 +18,7 @@ import {
   PAYMENT_REPORT_ENTITY_TYPES,
   defaultNeededBy,
   describeReport,
+  targetKindForEntity,
   validatePaymentReport,
   type PaymentReportEntityType,
 } from "@/lib/queries/payment-reports";
@@ -157,6 +158,15 @@ export async function POST(req: NextRequest) {
   if (entityErr) return NextResponse.json({ error: entityErr.message }, { status: 500 });
   if (!entityRow) return NextResponse.json({ error: `${def.label} not found` }, { status: 404 });
 
+  const targetKind = targetKindForEntity(entityType as PaymentReportEntityType);
+
+  if (targetKind === "deposit" && claimedStatementId) {
+    return NextResponse.json(
+      { error: "A security deposit isn't settled against an invoice" },
+      { status: 400 },
+    );
+  }
+
   // Validate the claimed invoice belongs to what the report hangs off, so a
   // mistyped id can't quietly point accounts at another customer's invoice.
   let claimedStatementNumber: string | null = null;
@@ -191,7 +201,9 @@ export async function POST(req: NextRequest) {
   // reconcile on. Both, not either — a card with no words reads as a form
   // submission rather than someone telling you something.
   const messageBody = [
-    `Customer reports paying ${summaryLine}.`,
+    targetKind === "deposit"
+      ? `Customer reports paying the security deposit — ${summaryLine}.`
+      : `Customer reports paying ${summaryLine}.`,
     claimedStatementNumber ? `Against invoice ${claimedStatementNumber}.` : null,
     fields.payer_differs && fields.payer_name
       ? `Paid from a different account: ${fields.payer_name}.`
@@ -246,6 +258,7 @@ export async function POST(req: NextRequest) {
       payer_name: fields.payer_name,
       payer_differs: fields.payer_differs,
       claimed_statement_id: claimedStatementId,
+      target_kind: targetKind,
       created_by: dbUser.id,
     })
     .select("id")
@@ -276,7 +289,10 @@ export async function POST(req: NextRequest) {
     entityId,
     author: dbUser,
     participantIds: [dbUser.id],
-    headline: "Payment reported — needs verification",
+    headline:
+      targetKind === "deposit"
+        ? "Deposit payment reported — needs verification"
+        : "Payment reported — needs verification",
     message: messageBody,
     notificationType: "payment_reported",
   });
