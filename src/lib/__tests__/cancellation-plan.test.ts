@@ -81,7 +81,7 @@ describe("amcServiceEventsBlocker", () => {
 });
 
 describe("processedAdvanceBlocker", () => {
-  it("blocks a PO with a processed advance, naming the PO and the amount, without pointing at a nonexistent recovery action", () => {
+  it("blocks a PO with a processed advance, naming the PO and the amount, and points at the Reverse advance action now that it exists", () => {
     const blocker = processedAdvanceBlocker({
       poNumber: "PO-2608-031",
       advanceStatus: "processed",
@@ -90,16 +90,20 @@ describe("processedAdvanceBlocker", () => {
     expect(blocker).not.toBeNull();
     expect(blocker!.reason).toContain("PO-2608-031");
     expect(blocker!.reason).toContain("₹15,000");
-    expect(blocker!.reason.toLowerCase()).toContain("finance");
-    // Must not imply a button the CRM doesn't have.
+    // Now that a "reverse_advance" action exists, the message must tell the
+    // user to reverse the advance rather than punting to Finance manually.
+    expect(blocker!.reason.toLowerCase()).toContain("reverse the advance");
     expect(blocker!.reason.toLowerCase()).not.toContain("click");
-    expect(blocker!.reason.toLowerCase()).not.toContain("use the");
   });
 
   it("does not block a PO with no advance or a pending/rejected one", () => {
     expect(processedAdvanceBlocker({ poNumber: "PO-1", advanceStatus: null, advanceAmount: 0 })).toBeNull();
     expect(processedAdvanceBlocker({ poNumber: "PO-1", advanceStatus: "pending", advanceAmount: 5000 })).toBeNull();
     expect(processedAdvanceBlocker({ poNumber: "PO-1", advanceStatus: "not_required", advanceAmount: 0 })).toBeNull();
+  });
+
+  it("does not block a PO whose advance has been reversed (migration 00517) — this is the whole point of the reversal feature", () => {
+    expect(processedAdvanceBlocker({ poNumber: "PO-1", advanceStatus: "reversed", advanceAmount: 15000 })).toBeNull();
   });
 });
 
@@ -275,5 +279,31 @@ describe("resolveCancellationImpact — paid bill blocks the whole chain", () =>
     expect(impact.blockers.some((b) => b.reason.includes("PO-2608-032") && b.reason.includes("15,000"))).toBe(true);
     expect(impact.effects.every((e) => (e.kind as string) !== "advance_recovery")).toBe(true);
     expect(impact.plan.advance_recoveries).toHaveLength(0);
+  });
+
+  it("does NOT block when the PO's advance has been reversed — proves the Reverse advance action actually unblocks cancellation", async () => {
+    const tables: Record<string, Row[]> = {
+      purchase_requests: [{ id: "pr-3", pr_number: "MR-2608-012", status: "approved", department: "operational" }],
+      billing_statements: [],
+      purchase_orders: [
+        { id: "po-3", po_number: "PO-2608-033", po_type: "goods", status: "ordered", pr_id: "pr-3", location_id: null, advance_status: "reversed", advance_amount: 15000, amc_terminated_at: null },
+      ],
+      amc_service_events: [],
+      vendor_bills: [],
+      vendor_bill_payments: [],
+      vendor_bill_tds: [],
+      po_delivery_receipts: [],
+    };
+    const supabase = makeFakeSupabase(tables) as unknown as Parameters<typeof resolveCancellationImpact>[0];
+
+    const impact = await resolveCancellationImpact(supabase, {
+      rootType: "purchase_request",
+      rootId: "pr-3",
+      outcome: "cancelled",
+      reason: "Test: advance was reversed via refund, cancel now proceeds",
+    });
+
+    expect(impact.blockers).toHaveLength(0);
+    expect(impact.plan.purchase_orders).toHaveLength(1);
   });
 });

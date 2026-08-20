@@ -2426,7 +2426,7 @@ export interface PoBillSummary {
   creator?: { id: string; full_name?: string } | null;
 }
 
-export type PoAdvanceStatus = "not_required" | "pending" | "processed";
+export type PoAdvanceStatus = "not_required" | "pending" | "processed" | "reversed";
 
 export type AssetDocumentTier = "commercial" | "operational";
 
@@ -2497,6 +2497,17 @@ export interface PurchaseOrder {
   advance_processed_by?: string | null;
   advance_processed_at?: string | null;
   advance_payment_date?: string | null;
+  // Advance reversal fields (migration 00517)
+  advance_reversed_at?: string | null;
+  advance_reversed_by?: string | null;
+  advance_reversal_reason?: string | null;
+  advance_reversal_mode?: "refund_received" | "adjusted" | "written_off" | null;
+  advance_writeoff_reviewed_at?: string | null;
+  advance_writeoff_reviewed_by?: string | null;
+  /** Joined by GET /api/procurement/orders/[id] so the UI can name the actor
+   *  directly instead of inferring it from the audit trail. */
+  advance_reverser?: { id: string; full_name?: string } | null;
+  advance_writeoff_reviewer?: { id: string; full_name?: string } | null;
   // AMC fields
   amc_start_date?: string | null;
   amc_end_date?: string | null;
