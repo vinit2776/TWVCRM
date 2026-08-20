@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { Zap, Save, AlertTriangle } from "lucide-react";
+import { Zap, Save, AlertTriangle, Eye, EyeOff, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ElectricityTelemetryPanel } from "./electricity-telemetry-panel";
 
 interface Vendor { id: string; name: string }
 
@@ -43,6 +44,8 @@ const DEFAULTS = {
   landlord_gst_rate: 18 as number | null,
   tds_section: null as string | null,
   tds_rate: null as number | null,
+  onegrid_enabled: false,
+  onegrid_api_key: null as string | null,
 };
 
 export function ElectricityConfigTab({ locationId, canEdit }: Props) {
@@ -52,6 +55,7 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
   const [allocation, setAllocation] = useState<Allocation | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [showOnegridKey, setShowOnegridKey] = useState(false);
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -77,6 +81,8 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
           landlord_gst_rate: json.data.landlord_gst_rate,
           tds_section: json.data.tds_section,
           tds_rate: json.data.tds_rate,
+          onegrid_enabled: json.data.onegrid_enabled ?? false,
+          onegrid_api_key: json.data.onegrid_api_key ?? null,
         });
       }
     }
@@ -345,6 +351,60 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
         </CardContent>
       </Card>
 
+      {/* OneGrid telemetry */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            OneGrid Telemetry
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Enable live meter telemetry</p>
+              <p className="text-xs text-muted-foreground">
+                Reads voltage, power factor, frequency and energy consumption from this
+                location&apos;s OneGrid-registered meters
+              </p>
+            </div>
+            <Switch
+              checked={form.onegrid_enabled}
+              onCheckedChange={(v) => setForm((f) => ({ ...f, onegrid_enabled: v }))}
+              disabled={readOnly}
+            />
+          </div>
+          {form.onegrid_enabled && (
+            <div className="space-y-1">
+              <Label>OneGrid API Key</Label>
+              <div className="relative">
+                <Input
+                  type={showOnegridKey ? "text" : "password"}
+                  value={form.onegrid_api_key ?? ""}
+                  onChange={(e) => setForm((f) => ({ ...f, onegrid_api_key: e.target.value || null }))}
+                  placeholder="onegrid-XXXXXXXXXXXX"
+                  className="pr-10"
+                  disabled={readOnly}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                  onClick={() => setShowOnegridKey(!showOnegridKey)}
+                >
+                  {showOnegridKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                This location&apos;s org-scoped key from OneGrid ops — it can only read meters
+                registered to that org
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {canEdit && (
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={saving}>
@@ -352,6 +412,10 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
             {saving ? "Saving…" : config ? "Update Settings" : "Save Settings"}
           </Button>
         </div>
+      )}
+
+      {Boolean(config?.onegrid_enabled && config?.onegrid_api_key) && (
+        <ElectricityTelemetryPanel locationId={locationId} />
       )}
     </div>
   );
