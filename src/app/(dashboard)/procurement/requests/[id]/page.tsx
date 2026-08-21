@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
   Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart, ShieldCheck,
-  Activity, ArrowRight, Receipt, Pencil, Paperclip,
+  Activity, ArrowRight, Receipt, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
+import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 import { BillCustomerDialog } from "@/components/procurement/bill-customer-dialog";
 import { CorrectDepartmentDialog } from "@/components/procurement/correct-department-dialog";
 import {
@@ -608,15 +609,20 @@ export default function PurchaseRequestDetailPage() {
                     <div className="space-y-1">
                       {activeStatements.map((s) => (
                         <div key={s.id} className="flex items-center justify-between text-xs bg-white/70 rounded px-2 py-1.5 border border-pink-100">
-                          <span className="font-mono">{s.statement_number}</span>
+                          <Link
+                            href={`/api/billing-statements/${s.id}/${s.gst_invoice_number ? "gst-invoice-pdf" : "proforma-pdf"}`}
+                            target="_blank"
+                            className="font-mono text-pink-900 hover:underline"
+                          >
+                            {s.statement_number}
+                          </Link>
                           <Badge className={BILLING_STATEMENT_STATUS_COLORS[s.status] ?? ""} variant="secondary">
                             {BILLING_STATEMENT_STATUS_LABELS[s.status] ?? s.status}
                           </Badge>
-                          {(s.supporting_documents?.length ?? 0) > 0 && (
-                            <span className="flex items-center gap-0.5 text-pink-700" title="Supporting documents attached">
-                              <Paperclip className="h-3 w-3" /> {s.supporting_documents!.length}
-                            </span>
-                          )}
+                          <ReimbursementSupportingDocuments
+                            statementId={s.id}
+                            count={s.supporting_documents?.length ?? 0}
+                          />
                           <span className="font-medium">{formatCurrency(s.total_amount)}</span>
                         </div>
                       ))}

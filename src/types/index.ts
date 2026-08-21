@@ -2335,6 +2335,7 @@ export interface PurchaseRequest {
     total_amount: number;
     voided_at: string | null;
     created_at: string;
+    gst_invoice_number?: string | null;
     supporting_documents?: Array<{ id: string }>;
   }>;
 }
