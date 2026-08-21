@@ -74,6 +74,8 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [stampPreviewLoading, setStampPreviewLoading] = useState(false);
   const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
+  const [cancelStampOpen, setCancelStampOpen] = useState(false);
+  const [cancellingStamp, setCancellingStamp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
@@ -437,14 +439,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
       setStampPreviewUrl(blobUrl);
       setStampPreviewRef(stampRef);
+      // Just open the confirmation dialog — don't auto-open a new tab here.
+      // Auto-opening stole focus to the PDF tab before the user ever saw the
+      // dialog's own "Open preview PDF" button; let them choose when to look.
       setStampConfirmOpen(true);
-      // Embedding a blob: PDF in an <iframe> renders blank for some users —
-      // Chrome's PDF viewer doesn't reliably activate inside iframes (varies
-      // by "open vs download PDFs" setting). A synthetic anchor click is also
-      // more reliable than window.open(), which can silently no-op or open
-      // an unfocused background tab a user won't notice.
-      const { openBlobInNewTab } = await import("@/lib/company-stamp");
-      openBlobInNewTab(blobUrl);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate preview");
     } finally {
@@ -477,6 +475,29 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       toast.error(err instanceof Error ? err.message : "Failed to stamp agreement");
     } finally {
       setStampingSignSeal(false);
+    }
+  };
+
+  const handleCancelStamp = async () => {
+    if (!agreement) return;
+    setCancellingStamp(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/cancel-stamp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreement_id: agreement.id }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to cancel the stamp");
+      }
+      toast.success("Sign & seal stamp cancelled — the agreement is editable again");
+      setCancelStampOpen(false);
+      fetchAgreement();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to cancel the stamp");
+    } finally {
+      setCancellingStamp(false);
     }
   };
 
@@ -739,6 +760,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               </Button>
             )}
 
+            {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
+              <Button size="sm" variant="outline" onClick={() => setCancelStampOpen(true)}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Cancel sign & seal
+              </Button>
+            )}
+
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
         </CardContent>
@@ -912,8 +940,9 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             <DialogDescription>
               This is exactly what will be saved as the signed Leave &amp; License Agreement —
               TWV&apos;s signature and seal applied in the Lessor field, ref {stampPreviewRef}.
-              Review it before confirming. This marks the agreement executed, does not go
-              through Leegality, and cannot be undone.
+              Review it before confirming. This marks the agreement executed and does not go
+              through Leegality. You can cancel it afterward from &quot;Cancel sign &amp;
+              seal&quot; if needed.
             </DialogDescription>
           </DialogHeader>
           {stampPreviewUrl && (
@@ -942,6 +971,34 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
                 </>
               ) : (
                 "Confirm & save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel sign & seal?</DialogTitle>
+            <DialogDescription>
+              This removes the stamped signed document and reverts the agreement to its
+              status before stamping — Edit Agreement becomes available again if that status
+              is draft or internally approved. You can re-stamp it afterward if needed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
+              {cancellingStamp ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel sign & seal"
               )}
             </Button>
           </DialogFooter>

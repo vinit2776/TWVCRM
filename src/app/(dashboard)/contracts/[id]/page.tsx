@@ -112,6 +112,8 @@ export default function ContractDetailPage({
   const [stampPreviewUrl, setStampPreviewUrl] = useState<string | null>(null);
   const [stampPreviewPdfBase64, setStampPreviewPdfBase64] = useState<string | null>(null);
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
+  const [cancelStampOpen, setCancelStampOpen] = useState(false);
+  const [cancellingStamp, setCancellingStamp] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   // Manual override for the agreement PDF's DRAFT watermark — only exposed
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
@@ -271,6 +273,12 @@ export default function ContractDetailPage({
 
   const handleDownloadPDF = async () => {
     if (!contract) return;
+    // Once stamped, the signed_document is the document of record — serve that
+    // instead of silently regenerating a fresh, unstamped PDF from live data.
+    if (contract.signed_document?.id) {
+      await handleViewSignedDoc();
+      return;
+    }
     const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
@@ -399,7 +407,7 @@ export default function ContractDetailPage({
     if (!contract) return;
     setStampPreviewLoading(true);
     try {
-      const { generateStampReference, openBlobInNewTab } = await import("@/lib/company-stamp");
+      const { generateStampReference } = await import("@/lib/company-stamp");
       const stampRef = generateStampReference();
       const pdfBase64 = await handleGeneratePDFBase64({ applyCompanyStamp: true, stampRef });
       const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
@@ -407,13 +415,10 @@ export default function ContractDetailPage({
       setStampPreviewUrl(blobUrl);
       setStampPreviewPdfBase64(pdfBase64);
       setStampPreviewRef(stampRef);
+      // Just open the confirmation dialog — don't auto-open a new tab here.
+      // Auto-opening stole focus to the PDF tab before the user ever saw the
+      // dialog's own "Open preview PDF" button; let them choose when to look.
       setStampConfirmOpen(true);
-      // Embedding a blob: PDF in an <iframe> renders blank for some users —
-      // Chrome's PDF viewer doesn't reliably activate inside iframes (varies
-      // by "open vs download PDFs" setting). A synthetic anchor click is also
-      // more reliable than window.open(), which can silently no-op or open
-      // an unfocused background tab a user won't notice.
-      openBlobInNewTab(blobUrl);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to generate preview");
     } finally {
@@ -442,6 +447,26 @@ export default function ContractDetailPage({
       toast.error(e instanceof Error ? e.message : "Failed to stamp contract");
     } finally {
       setStampingSignSeal(false);
+    }
+  };
+
+  const handleCancelStamp = async () => {
+    if (!contract) return;
+    setCancellingStamp(true);
+    try {
+      const res = await fetch(`/api/contracts/${id}/cancel-stamp`, { method: "POST" });
+      if (res.ok) {
+        toast.success("Sign & seal stamp cancelled — the plain agreement is available again");
+        setCancelStampOpen(false);
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to cancel the stamp");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to cancel the stamp");
+    } finally {
+      setCancellingStamp(false);
     }
   };
 
@@ -604,7 +629,14 @@ export default function ContractDetailPage({
             </Button>
           )}
 
-          {contract.status === "draft" && (
+          {contract.signed_document && contract.stamp_reference && userRole === "admin" && (
+            <Button variant="outline" onClick={() => setCancelStampOpen(true)}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Cancel sign & seal
+            </Button>
+          )}
+
+          {contract.status === "draft" && !contract.signed_document && (
             <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
@@ -744,8 +776,11 @@ export default function ContractDetailPage({
               Terminate
             </Button>
           )}
-          {/* Email button for sent/viewed/accepted/rejected */}
-          {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && (
+          {/* Email button for sent/viewed/accepted/rejected — hidden once stamped,
+              since the email dialog always sends a freshly generated (unstamped)
+              PDF and re-sending that as if it were still under review would be
+              misleading once a signed copy exists. */}
+          {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && !contract.signed_document && (
             <Button variant="outline" onClick={() => setEmailDialogOpen(true)}>
               <Mail className="mr-2 h-4 w-4" />
               Email
@@ -2045,8 +2080,8 @@ export default function ContractDetailPage({
               This is exactly what will be saved as the signed contract for{" "}
               {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
               {stampPreviewRef}. Review it before confirming. This does not go through
-              Leegality and cannot be undone from here — to replace it afterward, use the
-              &quot;Replace&quot; option on the Signed Contract card.
+              Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
+              if needed.
             </DialogDescription>
           </DialogHeader>
           {stampPreviewUrl && (
@@ -2075,6 +2110,34 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Confirm & save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel sign & seal?</DialogTitle>
+            <DialogDescription>
+              This removes the stamped signed document from {contract.contract_number} and
+              restores the plain agreement — Download PDF, Send Agreement, and Email become
+              available again. You can re-stamp it afterward if needed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
+              {cancellingStamp ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel sign & seal"
               )}
             </Button>
           </DialogFooter>

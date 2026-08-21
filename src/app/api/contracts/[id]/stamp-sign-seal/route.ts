@@ -113,7 +113,7 @@ export async function POST(
 
   const { data: updated, error: updateErr } = await supabase
     .from("contracts")
-    .update({ signed_document_id: docRecord.id })
+    .update({ signed_document_id: docRecord.id, stamp_reference: stampRef })
     .eq("id", contractId)
     .select("*")
     .single();

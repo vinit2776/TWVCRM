@@ -137,6 +137,8 @@ export async function POST(
       signed_document_id: docRecord.id,
       status: "executed",
       signed_at: new Date().toISOString(),
+      stamp_reference: stampRef,
+      pre_stamp_status: agreement.status,
     })
     .eq("id", agreementId)
     .eq("case_id", caseId)
