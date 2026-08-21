@@ -912,18 +912,20 @@ export default function AccountsReceivablePage() {
                             </div>
 
                             <div className="text-left sm:text-right w-full sm:w-auto sm:min-w-[150px]">
-                              <div className="text-lg font-bold text-teal-700">{formatCurrency(r.balance_due)}</div>
-                              <div className="text-[10.5px] text-muted-foreground">
-                                of {formatCurrency(r.total_amount)}
+                              <div className="flex items-baseline gap-2 justify-start sm:justify-end flex-wrap">
+                                <div className="text-lg font-bold text-teal-700">{formatCurrency(r.balance_due)}</div>
                                 {r.amount_paid > 0 && (
-                                  <>
-                                    {" · "}
-                                    <button onClick={() => setPaymentDetailRow(r)} className="hover:underline" title="View payment detail">
-                                      {formatCurrency(r.amount_paid)}
-                                    </button>
-                                    {" paid"}
-                                  </>
+                                  <button
+                                    onClick={() => setPaymentDetailRow(r)}
+                                    className="text-[10px] font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-full px-2 py-0.5 whitespace-nowrap"
+                                    title="View payment detail"
+                                  >
+                                    {formatCurrency(r.amount_paid)} paid
+                                  </button>
                                 )}
+                              </div>
+                              <div className="text-[10.5px] text-muted-foreground">
+                                of {formatCurrency(r.total_amount)} total
                               </div>
                               <div className="text-[10.5px] text-muted-foreground mt-1.5">
                                 Last sent {r.proforma_sent_at ? formatDate(r.proforma_sent_at) : "Never"}
