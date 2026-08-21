@@ -438,6 +438,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       setStampPreviewUrl(blobUrl);
       setStampPreviewRef(stampRef);
       setStampConfirmOpen(true);
+      // Embedding a blob: PDF in an <iframe> renders blank for some users —
+      // Chrome's PDF viewer doesn't reliably activate inside iframes (varies
+      // by "open vs download PDFs" setting). A full tab gets Chrome's real
+      // PDF viewer UI every time, so open it directly instead of embedding.
+      window.open(blobUrl, "_blank", "noopener");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate preview");
     } finally {
@@ -910,11 +915,22 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             </DialogDescription>
           </DialogHeader>
           {stampPreviewUrl && (
-            <iframe
-              src={stampPreviewUrl}
-              className="w-full h-[500px] rounded-md border"
-              title="Stamped Leave & License Agreement preview"
-            />
+            <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Preview opened in a new tab. If you don&apos;t see it (or closed it), reopen it
+                below before confirming.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => window.open(stampPreviewUrl, "_blank", "noopener")}
+              >
+                <Eye className="mr-1.5 h-3.5 w-3.5" />
+                Open preview PDF
+              </Button>
+            </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
