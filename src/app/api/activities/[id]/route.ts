@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calendar";
 import { istLocalToUtcIso } from "@/lib/utils";
+import { autoUpdateLeadStatus } from "@/lib/auto-status";
 
 export async function PATCH(
   request: NextRequest,
@@ -19,12 +20,13 @@ export async function PATCH(
   }
 
   const body = await request.json();
-  const { action, follow_up_date: rawFollowUpDate } = body as {
-    action: "close" | "reschedule";
+  const { action, follow_up_date: rawFollowUpDate, note: rawNote } = body as {
+    action: "close" | "reschedule" | "complete_tour";
     follow_up_date?: string;
+    note?: string;
   };
 
-  if (!action || !["close", "reschedule"].includes(action)) {
+  if (!action || !["close", "reschedule", "complete_tour"].includes(action)) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 
@@ -33,6 +35,53 @@ export async function PATCH(
       { error: "follow_up_date is required for reschedule" },
       { status: 400 }
     );
+  }
+
+  // Mark an existing "Tour" activity as completed in place — appends the
+  // optional note to its description and backdates meeting_end_at so
+  // autoUpdateLeadStatus advances the lead to tour_completed. Keeps the
+  // outcome tied to the same activity record instead of logging a new one.
+  if (action === "complete_tour") {
+    const { data: existing, error: fetchError } = await supabase
+      .from("activities")
+      .select("type, lead_id, description")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: "Activity not found" }, { status: 404 });
+    }
+    if (existing.type !== "tour") {
+      return NextResponse.json(
+        { error: "Only tour activities can be marked completed" },
+        { status: 400 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const note = typeof rawNote === "string" ? rawNote.trim() : "";
+    const description = note
+      ? existing.description
+        ? `${existing.description}\n\nTour completed: ${note}`
+        : `Tour completed: ${note}`
+      : existing.description;
+
+    const { data, error } = await supabase
+      .from("activities")
+      .update({ meeting_end_at: now, description, updated_at: now })
+      .eq("id", id)
+      .select(
+        "*, creator:users!activities_created_by_fkey(*), follow_up_actor:users!activities_follow_up_actioned_by_fkey(*)"
+      )
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    await autoUpdateLeadStatus(supabase, existing.lead_id, "tour", { meetingEndAt: now });
+
+    return NextResponse.json({ data });
   }
 
   // toDatetimeLocalValue()/<input type="datetime-local"> send a naive

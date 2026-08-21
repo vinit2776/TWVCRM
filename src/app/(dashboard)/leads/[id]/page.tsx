@@ -95,7 +95,11 @@ export default function LeadDetailPage({
 
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);
-  }, []);
+    // Logging an activity can auto-advance lead status (e.g. tour_scheduled
+    // -> tour_completed) — refetch so the status pill and Lead Journey
+    // reflect it without a manual page reload.
+    refetchLead();
+  }, [refetchLead]);
 
   const openActivityForm = useCallback((type: "call" | "meeting" | "note" | "tour") => {
     setActivityDefaultType(type);
@@ -728,6 +732,7 @@ export default function LeadDetailPage({
                 leadId={id}
                 lead={lead}
                 highlightId={highlightActivityId}
+                onLeadRefresh={refetchLead}
               />
             </CardContent>
           </Card>
