@@ -408,6 +408,11 @@ export default function ContractDetailPage({
       setStampPreviewPdfBase64(pdfBase64);
       setStampPreviewRef(stampRef);
       setStampConfirmOpen(true);
+      // Embedding a blob: PDF in an <iframe> renders blank for some users —
+      // Chrome's PDF viewer doesn't reliably activate inside iframes (varies
+      // by "open vs download PDFs" setting). A full tab gets Chrome's real
+      // PDF viewer UI every time, so open it directly instead of embedding.
+      window.open(blobUrl, "_blank", "noopener");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to generate preview");
     } finally {
@@ -580,6 +585,23 @@ export default function ContractDetailPage({
                 Send for e-Signing
               </Button>
             )}
+
+          {/* Manual/offline alternative to e-Signing — admin applies TWV's own
+              stamp instead of routing the lessor side through Leegality. */}
+          {!contract.signed_document && userRole === "admin" && (
+            <Button
+              variant="outline"
+              onClick={handleOpenStampPreview}
+              disabled={stampPreviewLoading || uploadingSignedDoc}
+            >
+              {stampPreviewLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stamp className="mr-2 h-4 w-4" />
+              )}
+              Stamp with company seal
+            </Button>
+          )}
 
           {contract.status === "draft" && (
             <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
@@ -1587,22 +1609,6 @@ export default function ContractDetailPage({
                   )}
                 </div>
               )}
-              {!contract.signed_document && userRole === "admin" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full mt-2"
-                  onClick={handleOpenStampPreview}
-                  disabled={stampPreviewLoading || uploadingSignedDoc}
-                >
-                  {stampPreviewLoading ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Stamp className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  Stamp with company seal
-                </Button>
-              )}
               {!contract.signed_document && contract.status === "active" && (
                 <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
@@ -2043,11 +2049,22 @@ export default function ContractDetailPage({
             </DialogDescription>
           </DialogHeader>
           {stampPreviewUrl && (
-            <iframe
-              src={stampPreviewUrl}
-              className="w-full h-[500px] rounded-md border"
-              title="Stamped contract preview"
-            />
+            <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Preview opened in a new tab. If you don&apos;t see it (or closed it), reopen it
+                below before confirming.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => window.open(stampPreviewUrl, "_blank", "noopener")}
+              >
+                <Eye className="mr-1.5 h-3.5 w-3.5" />
+                Open preview PDF
+              </Button>
+            </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
