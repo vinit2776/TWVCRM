@@ -298,7 +298,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes, supportingDocsRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -340,7 +340,20 @@ export async function GET(req: NextRequest) {
       .eq("entity_type", "billing_statement")
       .in("entity_id", statementIds)
       .eq("status", "open"),
+    // Reimbursement supporting docs (receipts/vendor bills) — surfaced in the
+    // upload form so accounts can glance at the receipt before/while typing
+    // in the Tally invoice details, not just after via the MR page.
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("reimbursement_supporting_documents")
+      .select("id, billing_statement_id")
+      .in("billing_statement_id", statementIds),
   ]);
+
+  const supportingDocsCountByStatement = new Map<string, number>();
+  for (const r of supportingDocsRes.data || []) {
+    const sid = (r as { billing_statement_id: string }).billing_statement_id;
+    supportingDocsCountByStatement.set(sid, (supportingDocsCountByStatement.get(sid) ?? 0) + 1);
+  }
 
   // Open query count per statement — one grouped-in-JS count from a single
   // batched query, same pattern as uploadByStatement below. Scoped by
@@ -593,6 +606,7 @@ export async function GET(req: NextRequest) {
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
       open_query_count: openQueryCountByStatement.get(s.id) ?? 0,
+      supporting_documents_count: supportingDocsCountByStatement.get(s.id) ?? 0,
       // New detail fields
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",

@@ -18,6 +18,9 @@ const billCustomerSchema = z.object({
   notes: z.string().optional(),
   // Customer-facing proof (receipts, vendor bills) already uploaded directly to
   // storage via /api/documents/upload-url — this route only persists the metadata.
+  // Required, not optional: every reimbursement statement this route creates
+  // must be able to show the customer what they're being charged for — the
+  // GST invoice upload flow merges these into the invoice PDF automatically.
   supportingDocuments: z
     .array(
       z.object({
@@ -26,8 +29,8 @@ const billCustomerSchema = z.object({
         mimeType: z.string().min(1),
       })
     )
-    .max(10)
-    .optional(),
+    .min(1, "At least one supporting document (receipt or vendor bill) is required to bill a reimbursement to the customer.")
+    .max(10),
 });
 
 /**

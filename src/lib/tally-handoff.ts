@@ -333,6 +333,11 @@ export interface InboxRow {
   /** Open query thread count for this statement — drives the "Query" button
    *  badge in the Tally Inbox. See src/lib/queries/registry.ts. */
   open_query_count: number;
+  /** Reimbursement receipts/vendor bills attached at Bill Customer time —
+   *  merged into the GST invoice PDF automatically at upload. See
+   *  src/lib/reimbursement-supporting-docs.ts. Always 0 for non-reimbursement
+   *  statement types. */
+  supporting_documents_count: number;
   /** Present only when the request specified `?include=timeline`. */
   timeline_events?: TimelineEvent[];
 
