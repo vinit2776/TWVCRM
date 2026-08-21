@@ -299,11 +299,15 @@ export function BillCustomerDialog({
 
               <div className="space-y-1.5 pt-2">
                 <Label>
-                  Supporting Documents <span className="text-muted-foreground font-normal">(optional)</span>
+                  Supporting Documents <span className="text-red-600 font-normal">(required)</span>
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Receipts / vendor bills — attached as extra pages on the invoice sent to the customer.
+                  Receipts / vendor bills — merged as extra pages onto the invoice sent to the customer, so it&apos;s
+                  self-explanatory without anyone chasing the receipt separately.
                 </p>
+                {supportingDocs.length === 0 && (
+                  <p className="text-xs text-amber-700">At least one document is required before you can continue.</p>
+                )}
                 {supportingDocs.length > 0 && (
                   <div className="space-y-1">
                     {supportingDocs.map((d) => (
@@ -351,7 +355,7 @@ export function BillCustomerDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button onClick={goToPreview} disabled={subtotal <= 0}>
+              <Button onClick={goToPreview} disabled={subtotal <= 0 || supportingDocs.length === 0}>
                 Preview Invoice
               </Button>
             </DialogFooter>

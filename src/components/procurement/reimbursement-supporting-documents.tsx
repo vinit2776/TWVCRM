@@ -13,7 +13,17 @@ interface SupportingDocument {
   signed_url: string | null;
 }
 
-export function ReimbursementSupportingDocuments({ statementId, count }: { statementId: string; count: number }) {
+export function ReimbursementSupportingDocuments({
+  statementId,
+  count,
+  triggerClassName = "flex items-center gap-0.5 text-pink-700 hover:text-pink-900 hover:underline",
+}: {
+  statementId: string;
+  count: number;
+  /** Overrides the trigger's color classes so this fits the surrounding card's
+   *  theme (e.g. the Tally Inbox's neutral palette vs. the MR page's pink one). */
+  triggerClassName?: string;
+}) {
   const [docs, setDocs] = useState<SupportingDocument[] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -38,14 +48,17 @@ export function ReimbursementSupportingDocuments({ statementId, count }: { state
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex items-center gap-0.5 text-pink-700 hover:text-pink-900 hover:underline"
+          className={triggerClassName}
           title="View supporting documents"
         >
           <Paperclip className="h-3 w-3" /> {count}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-2" align="start">
-        <p className="text-xs font-medium text-muted-foreground px-1 pb-1">Supporting documents</p>
+        <p className="text-xs font-medium text-muted-foreground px-1">Supporting documents</p>
+        <p className="text-[11px] text-muted-foreground px-1 pb-1.5">
+          Included as extra pages in the invoice sent to the customer.
+        </p>
         {loading && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-1 py-1">
             <Loader2 className="h-3 w-3 animate-spin" /> Loading…

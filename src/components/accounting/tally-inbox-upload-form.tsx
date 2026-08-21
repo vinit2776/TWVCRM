@@ -15,6 +15,7 @@ import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
+import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
 interface Props {
   row: InboxRow;
@@ -293,6 +294,18 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         <div className="border-t pt-2">
           <div className="flex items-baseline justify-between gap-2 mb-1">
             <div className="text-muted-foreground">Line items</div>
+            {/* Reimbursement statements must have a receipt/vendor bill attached
+                (enforced at Bill Customer time) — surfaced here so accounts can
+                cross-check it against the Tally amount before uploading. It's
+                merged into the invoice PDF automatically at upload; nothing to
+                do here beyond looking. */}
+            {(row.line_items.statement_type as string) === "reimbursement" && row.supporting_documents_count > 0 && (
+              <ReimbursementSupportingDocuments
+                statementId={row.statement_id}
+                count={row.supporting_documents_count}
+                triggerClassName="flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+              />
+            )}
             {/* When the buyer is the aggregator, nothing else on this row says
                 which referred client the fee is for. Statements created before
                 the description carried it have only this. */}

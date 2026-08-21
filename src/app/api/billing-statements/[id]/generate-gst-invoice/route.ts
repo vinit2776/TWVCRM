@@ -8,6 +8,7 @@ import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue"
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 export const maxDuration = 30;
 
@@ -178,6 +179,14 @@ export async function POST(
     for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
   }
 
+  // Customer-facing proof attached at bill-customer time — appended as extra
+  // pages after the PDF is generated below (see mergeSupportingDocuments in
+  // reimbursement-supporting-docs.ts). Mirrors dispatchGstDirect's handling
+  // in send-proforma.ts, the other path that self-generates a GST invoice.
+  const supportingDocs = (statement.statement_type as string) === "reimbursement"
+    ? await fetchSupportingDocuments(adminSupabase, statement.id)
+    : [];
+
   // Generate GST invoice PDF
   const invoiceData: GstInvoiceData = {
     invoiceNumber,
@@ -199,10 +208,14 @@ export async function POST(
     isInterstate,
     taxPercentage,
     upiId,
+    supportingDocsCount: supportingDocs.length || undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  let pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  if (supportingDocs.length > 0) {
+    pdfBuffer = await mergeSupportingDocuments(adminSupabase, pdfBuffer, supportingDocs);
+  }
 
   const storagePath = `invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
   const { error: uploadErr } = await adminSupabase.storage

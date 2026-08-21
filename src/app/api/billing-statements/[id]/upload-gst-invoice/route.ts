@@ -5,6 +5,7 @@ import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 /**
  * POST /api/billing-statements/[id]/upload-gst-invoice
@@ -102,7 +103,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
-      statement_number, period_start, period_end,
+      statement_number, period_start, period_end, statement_type,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -137,6 +138,7 @@ export async function POST(
     statement_number: string | null;
     period_start: string | null;
     period_end: string | null;
+    statement_type: string | null;
     contract: {
       id: string;
       billing_mode: "proforma_first" | "gst_direct" | null;
@@ -295,6 +297,17 @@ export async function POST(
 
   if (normalized.mimeType === "application/pdf") {
     normalized.buffer = await stampSignatureOnPdf(normalized.buffer);
+
+    // Reimbursement invoices carry customer-facing proof (receipts, vendor
+    // bills) — append them here so the merged PDF, once stored below, is the
+    // one file every downstream view/resend/email route reads from. Merging
+    // per-route instead would risk double-appending pages on a resend.
+    if (statement.statement_type === "reimbursement") {
+      const supportingDocs = await fetchSupportingDocuments(adminClient, statement.id);
+      if (supportingDocs.length > 0) {
+        normalized.buffer = await mergeSupportingDocuments(adminClient, Buffer.from(normalized.buffer), supportingDocs);
+      }
+    }
   }
 
   const timestamp = Date.now();
