@@ -10,6 +10,23 @@ export function generateStampReference(): string {
 }
 
 /**
+ * Opens a blob: URL in a new tab. Uses a synthetic <a target="_blank"> click
+ * rather than window.open() — a plain window.open() call can silently no-op
+ * or open an unfocused background tab a user won't notice, even from a real
+ * click handler; browsers treat an anchor click as genuine navigation, which
+ * popup blockers don't intercept and which reliably gets focus.
+ */
+export function openBlobInNewTab(url: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/**
  * Draws the company signature + seal directly above a signature line, using
  * the caller's own layout coordinates — no text-detection/guessing involved.
  * `x` is the column's left edge, `lineY` is the y where the signature line

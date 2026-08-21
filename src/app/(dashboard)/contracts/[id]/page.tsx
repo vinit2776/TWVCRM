@@ -399,7 +399,7 @@ export default function ContractDetailPage({
     if (!contract) return;
     setStampPreviewLoading(true);
     try {
-      const { generateStampReference } = await import("@/lib/company-stamp");
+      const { generateStampReference, openBlobInNewTab } = await import("@/lib/company-stamp");
       const stampRef = generateStampReference();
       const pdfBase64 = await handleGeneratePDFBase64({ applyCompanyStamp: true, stampRef });
       const bytes = Uint8Array.from(atob(pdfBase64), (c) => c.charCodeAt(0));
@@ -410,9 +410,10 @@ export default function ContractDetailPage({
       setStampConfirmOpen(true);
       // Embedding a blob: PDF in an <iframe> renders blank for some users —
       // Chrome's PDF viewer doesn't reliably activate inside iframes (varies
-      // by "open vs download PDFs" setting). A full tab gets Chrome's real
-      // PDF viewer UI every time, so open it directly instead of embedding.
-      window.open(blobUrl, "_blank", "noopener");
+      // by "open vs download PDFs" setting). A synthetic anchor click is also
+      // more reliable than window.open(), which can silently no-op or open
+      // an unfocused background tab a user won't notice.
+      openBlobInNewTab(blobUrl);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to generate preview");
     } finally {
@@ -2054,15 +2055,11 @@ export default function ContractDetailPage({
                 Preview opened in a new tab. If you don&apos;t see it (or closed it), reopen it
                 below before confirming.
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                onClick={() => window.open(stampPreviewUrl, "_blank", "noopener")}
-              >
-                <Eye className="mr-1.5 h-3.5 w-3.5" />
-                Open preview PDF
+              <Button asChild variant="outline" size="sm" className="shrink-0">
+                <a href={stampPreviewUrl} target="_blank" rel="noopener noreferrer">
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                  Open preview PDF
+                </a>
               </Button>
             </div>
           )}
