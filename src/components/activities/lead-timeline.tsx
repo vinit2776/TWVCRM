@@ -24,6 +24,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { formatDate, formatDateTime, formatDuration, formatCurrency, toDatetimeLocalValue } from "@/lib/utils";
 import {
@@ -121,12 +122,16 @@ function ActivityItem({
   activity,
   leadId,
   onActionComplete,
+  onLeadRefresh,
   highlightId,
   isLast,
 }: {
   activity: Activity;
   leadId: string;
   onActionComplete: () => void;
+  /** Refreshes the parent lead record (status pill, Lead Journey) — the
+   * timeline's own refresh only re-fetches activities, not the lead. */
+  onLeadRefresh?: () => void;
   highlightId?: string;
   isLast?: boolean;
 }) {
@@ -139,6 +144,9 @@ function ActivityItem({
   const [newDateStatus, setNewDateStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [highlighted, setHighlighted] = useState(false);
   const [logActivityOpen, setLogActivityOpen] = useState(false);
+  const [isCompletingTour, setIsCompletingTour] = useState(false);
+  const [tourNote, setTourNote] = useState("");
+  const [tourActing, setTourActing] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -151,6 +159,15 @@ function ActivityItem({
   }, [highlightId, activity.id]);
 
   const hasPendingFollowUp = activity.follow_up_date && !activity.is_follow_up_done;
+
+  // Mirrors the isCompleted check in autoUpdateLeadStatus — a tour only
+  // counts as done once its end time has actually passed.
+  const tourCompletedAt =
+    activity.type === "tour" &&
+    activity.meeting_end_at &&
+    new Date(activity.meeting_end_at) <= new Date()
+      ? activity.meeting_end_at
+      : null;
 
   const handleLogAndClose = async () => {
     try {
@@ -181,6 +198,25 @@ function ActivityItem({
       }
     } finally {
       setActing(false);
+    }
+  };
+
+  const handleCompleteTour = async () => {
+    setTourActing(true);
+    try {
+      const res = await fetch(`/api/activities/${activity.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "complete_tour", note: tourNote || undefined }),
+      });
+      if (res.ok) {
+        setIsCompletingTour(false);
+        setTourNote("");
+        onActionComplete();
+        onLeadRefresh?.();
+      }
+    } finally {
+      setTourActing(false);
     }
   };
 
@@ -236,6 +272,77 @@ function ActivityItem({
                 <MapPin className="h-3 w-3" />
                 {activity.meeting_location}
               </p>
+            )}
+
+            {/* Tour schedule — the created_at date on the right is when this
+                was logged, not when the tour is/was for, so show that
+                explicitly. Date and location render independently since
+                either field can be left blank when logging the tour. */}
+            {activity.type === "tour" && activity.meeting_start_at && (
+              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                <CalendarDays className="h-3 w-3 shrink-0" />
+                Scheduled for {formatDateTime(activity.meeting_start_at)}
+              </p>
+            )}
+            {activity.type === "tour" && activity.meeting_location && (
+              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                <MapPin className="h-3 w-3 shrink-0" />
+                {activity.meeting_location}
+              </p>
+            )}
+
+            {/* Tour completion — inline so a rep can close the loop right on
+                the scheduled tour instead of hunting for it elsewhere. */}
+            {activity.type === "tour" && (
+              <div className="mt-2 space-y-1 text-xs">
+                {tourCompletedAt ? (
+                  <span className="flex items-center gap-1 text-green-600">
+                    <CheckCircle2 className="h-3 w-3 shrink-0" />
+                    Tour completed {formatDateTime(tourCompletedAt)}
+                  </span>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setIsCompletingTour((v) => !v)}
+                      className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-green-700 bg-green-50 border border-green-200 hover:bg-green-100 transition-colors"
+                      title="Mark this tour as completed"
+                    >
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                      Mark Tour Completed
+                    </button>
+                    {isCompletingTour && (
+                      <div className="flex flex-col gap-1.5 pl-0.5 pt-1">
+                        <Textarea
+                          value={tourNote}
+                          onChange={(e) => setTourNote(e.target.value)}
+                          placeholder="What happened on the tour? (optional)"
+                          rows={2}
+                          className="text-xs"
+                        />
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={handleCompleteTour}
+                            disabled={tourActing}
+                            className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsCompletingTour(false);
+                              setTourNote("");
+                            }}
+                            disabled={tourActing}
+                            className="text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             )}
 
             {/* Follow-up section */}
@@ -568,12 +675,16 @@ interface LeadTimelineProps {
   lead: Lead;
   /** Activity ID to scroll-to + highlight on mount */
   highlightId?: string;
+  /** Refreshes the parent lead record — needed so inline actions (e.g.
+   * marking a tour completed) update the status pill / Lead Journey without
+   * a page reload. */
+  onLeadRefresh?: () => void;
 }
 
 const BILLING_COMMS_PAGE_SIZE = 50;
 const ACTIVITIES_PAGE_SIZE = 50;
 
-export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
+export function LeadTimeline({ leadId, lead, highlightId, onLeadRefresh }: LeadTimelineProps) {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -773,6 +884,7 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
               activity={item.activity}
               leadId={leadId}
               onActionComplete={handleRefresh}
+              onLeadRefresh={onLeadRefresh}
               highlightId={highlightId}
               isLast={isLast}
             />
