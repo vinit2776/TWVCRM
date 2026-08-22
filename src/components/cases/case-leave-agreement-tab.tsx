@@ -120,23 +120,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  // Served through the API rather than a signed storage URL so an unstamped
+  // agreement is watermarked DRAFT on the way out — see
+  // /api/cases/[id]/leave-license/pdf.
   const handleViewPdf = async () => {
-    if (pdfUrl) {
-      window.open(pdfUrl, "_blank");
-      return;
-    }
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.pdf_url) {
-          window.open(json.pdf_url, "_blank");
-          setPdfUrl(json.pdf_url);
-        } else {
-          toast.error("No PDF available for this agreement");
-        }
-      }
+      window.open(`/api/cases/${caseId}/leave-license/pdf`, "_blank");
     } finally {
       setViewing(false);
     }
@@ -358,22 +348,22 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       return;
     }
 
-    // Re-fetch a fresh signed URL
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`);
-      const json = await res.json();
-      const url = json.pdf_url;
-      if (!url) {
-        toast.error("PDF not found — regenerate the agreement first");
+      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error || "PDF not found — regenerate the agreement first");
         return;
       }
-      // Trigger browser download
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `leave-license-${caseId}.pdf`;
       a.rel = "noopener";
       a.click();
+      URL.revokeObjectURL(url);
     } catch {
       toast.error("Download failed");
     } finally {
