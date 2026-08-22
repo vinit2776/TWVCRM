@@ -7,6 +7,7 @@ import {
   HANDOFF_STATE_LABELS,
   INBOX_ACTIONABLE_STATES,
   isInboxRole,
+  isRealCompanyName,
   type BookingHandoffState,
   type BookingInboxRow,
   type BookingPaymentConfirmation,
@@ -904,11 +905,6 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(t.updated_at)) / 3_600_000));
     const bucket = bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
 
-    // Some leads have "Individual" typed literally into the free-text company
-    // field (meaning "no company"), not an actual business name — treat that
-    // the same as blank so the person's real name is used instead.
-    const isRealCompanyName = (v: string | null | undefined): v is string =>
-      !!v && v.trim().toLowerCase() !== "individual";
     const customerName = [lead?.company, t.booking?.guest_company].find(isRealCompanyName)
       || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
       || null;

@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
-import { voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
+import { isRealCompanyName, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
 interface Props {
@@ -48,7 +48,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
   const expectedPrefix = customerHasGstin ? "SD/A/" : "SD/B/";
   const partyName =
-    lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
+    (lead && isRealCompanyName(lead.company) ? lead.company : null)
+    || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
     || voParty?.name || "(unnamed)";
 
   const [invoiceNumber, setInvoiceNumber] = useState("");
