@@ -151,6 +151,10 @@ export interface InboxAggregator {
   primary_email: string | null;
   primary_phone: string | null;
   gst_number: string | null;
+  billing_address?: string | null;
+  billing_city?: string | null;
+  billing_state?: string | null;
+  billing_pincode?: string | null;
 }
 
 /** Owner of a per-case Virtual Office statement (prepaid aggregator or direct
@@ -167,7 +171,22 @@ export interface InboxCase {
   client_email: string | null;
   client_phone: string | null;
   client_gst_number: string | null;
+  client_address?: string | null;
+  client_city?: string | null;
+  client_state?: string | null;
+  client_pincode?: string | null;
   aggregator: InboxAggregator | null;
+}
+
+/** Joins address/city/state/pincode into a single display line, skipping blanks. */
+function formatAddressLine(
+  address: string | null | undefined,
+  city: string | null | undefined,
+  state: string | null | undefined,
+  pincode: string | null | undefined,
+): string | null {
+  const parts = [address, city, state, pincode].map((p) => p?.trim()).filter((p): p is string => !!p);
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 /** The party a Virtual Office statement actually bills.
@@ -180,7 +199,7 @@ export interface InboxCase {
 export function voBillParty(source: {
   case: InboxCase | null;
   aggregator: InboxAggregator | null;
-}): { name: string; email: string | null; phone: string | null; gstin: string | null } | null {
+}): { name: string; email: string | null; phone: string | null; gstin: string | null; address: string | null } | null {
   if (source.case) {
     const billToAggregator = source.case.bill_to === "aggregator" ? source.case.aggregator : null;
     if (billToAggregator) {
@@ -189,6 +208,12 @@ export function voBillParty(source: {
         email: billToAggregator.primary_email,
         phone: billToAggregator.primary_phone,
         gstin: billToAggregator.gst_number,
+        address: formatAddressLine(
+          billToAggregator.billing_address,
+          billToAggregator.billing_city,
+          billToAggregator.billing_state,
+          billToAggregator.billing_pincode,
+        ),
       };
     }
     return {
@@ -196,6 +221,12 @@ export function voBillParty(source: {
       email: source.case.client_email,
       phone: source.case.client_phone,
       gstin: source.case.client_gst_number,
+      address: formatAddressLine(
+        source.case.client_address,
+        source.case.client_city,
+        source.case.client_state,
+        source.case.client_pincode,
+      ),
     };
   }
   if (source.aggregator) {
@@ -204,6 +235,12 @@ export function voBillParty(source: {
       email: source.aggregator.primary_email,
       phone: source.aggregator.primary_phone,
       gstin: source.aggregator.gst_number,
+      address: formatAddressLine(
+        source.aggregator.billing_address,
+        source.aggregator.billing_city,
+        source.aggregator.billing_state,
+        source.aggregator.billing_pincode,
+      ),
     };
   }
   return null;

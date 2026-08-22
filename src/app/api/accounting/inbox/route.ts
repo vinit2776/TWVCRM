@@ -11,6 +11,7 @@ import {
   type BookingInboxRow,
   type BookingPaymentConfirmation,
   type HandoffState,
+  type InboxAggregator,
   type InboxPayment,
   type InboxResponse,
   type InboxRow,
@@ -113,9 +114,10 @@ export async function GET(req: NextRequest) {
       ),
       case:cases!billing_statements_case_id_fkey(
         id, case_number, bill_to, client_name, client_company_name, client_email, client_phone, client_gst_number,
-        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+        client_address, client_city, client_state, client_pincode,
+        aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, billing_address, billing_city, billing_state, billing_pincode)
       ),
-      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
+      aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, billing_address, billing_city, billing_state, billing_pincode)
     `);
 
   if (singleId) {
@@ -240,9 +242,13 @@ export async function GET(req: NextRequest) {
       client_email: string | null;
       client_phone: string | null;
       client_gst_number: string | null;
-      aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
+      client_address: string | null;
+      client_city: string | null;
+      client_state: string | null;
+      client_pincode: string | null;
+      aggregator: InboxAggregator | null;
     } | null;
-    aggregator: { id: string; name: string; primary_email: string | null; primary_phone: string | null; gst_number: string | null } | null;
+    aggregator: InboxAggregator | null;
   }>;
 
   // JS post-filter for search. The result set is already capped (closed=200,
