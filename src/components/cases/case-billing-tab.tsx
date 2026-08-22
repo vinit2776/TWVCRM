@@ -115,6 +115,9 @@ interface GeneratePreview {
   isInterstate: boolean;
   placeOfSupply: string;
   billingMode: "proforma_first" | "gst_direct";
+  /** Required case documents not yet approved. Advisory only — never blocks. */
+  outstandingDocuments: { label: string; status: string }[];
+  requiredDocumentCount: number;
 }
 
 const CREDIT_NOTE_ROLES = ["accounts", "admin"];
@@ -969,6 +972,26 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   <span className="tabular-nums">{formatCurrency(confirmPreview.total)}</span>
                 </div>
               </div>
+
+              {confirmPreview.outstandingDocuments?.length > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 space-y-1.5">
+                  <p className="font-medium">
+                    {confirmPreview.outstandingDocuments.length} of {confirmPreview.requiredDocumentCount} required
+                    {" "}document{confirmPreview.requiredDocumentCount === 1 ? "" : "s"} not yet approved
+                  </p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {confirmPreview.outstandingDocuments.map((d) => (
+                      <li key={d.label}>
+                        {d.label}
+                        <span className="text-amber-700"> — {d.status === "pending" ? "not uploaded" : d.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-amber-800">
+                    You can still raise this invoice. Chase the documents before the agreement is executed.
+                  </p>
+                </div>
+              )}
 
               {!confirmPreview.buyerEmail && (
                 <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
