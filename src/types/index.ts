@@ -587,6 +587,7 @@ export interface Contract {
   renewed_by_name?: string | null;
   signed_document_id?: string;
   signed_document?: CrmDocument;
+  stamp_reference?: string | null;
   printer_department_id?: string;
   // Renewal chain
   parent_contract_id?: string | null;
@@ -2063,6 +2064,8 @@ export interface CaseAgreement {
   generated_document?: CrmDocument;
   signed_document_id?: string;
   signed_document?: CrmDocument;
+  stamp_reference?: string | null;
+  pre_stamp_status?: AgreementStatus | null;
   internal_approved_by?: string;
   internal_approved_at?: string;
   sent_to_client_at?: string;
