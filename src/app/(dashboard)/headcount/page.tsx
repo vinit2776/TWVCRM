@@ -691,6 +691,7 @@ export default function HeadcountPage() {
                       </th>
                     ))}
                     <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Energy</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Logged by</th>
                     {canDelete && <th className="px-4 py-3 w-10" />}
                   </tr>
@@ -723,6 +724,11 @@ export default function HeadcountPage() {
                           )}>
                             {r.total_count}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-right text-sm">
+                          {r.energy_today_wh != null
+                            ? <span className="font-medium">{Math.round(r.energy_today_wh).toLocaleString("en-IN")} Wh</span>
+                            : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {(r.recorder as { full_name?: string })?.full_name?.split(" ")[0] ?? "—"}
