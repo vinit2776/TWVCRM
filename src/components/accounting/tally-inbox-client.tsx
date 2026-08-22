@@ -14,7 +14,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
@@ -379,7 +379,7 @@ export function TallyInboxClient() {
   const handleSend = useCallback((statementId: string, row: InboxRow) => {
     const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
     const recipients = Array.from(new Set([
-      lead?.email,
+      lead?.email ?? voBillParty(row)?.email,
       ...(lead?.billing_emails ?? []),
     ].filter((e): e is string => !!e)));
     setPendingSend({ type: "statement", id: statementId, recipients });
@@ -1680,6 +1680,14 @@ const InboxRowItem = memo(function InboxRowItem({
             </span>
           )}
         </div>
+
+        {/* ── VO case/aggregator billing address — accounts needs this to raise the Tally invoice ── */}
+        {voBillParty(row)?.address && (
+          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={voBillParty(row)!.address!}>
+            <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" aria-hidden />
+            <span className="truncate">{voBillParty(row)!.address}</span>
+          </div>
+        )}
 
         {/* ── Lifecycle tracker ── */}
         <InboxRowLifecycleTracker row={row} />
