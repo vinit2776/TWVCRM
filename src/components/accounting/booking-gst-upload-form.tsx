@@ -11,6 +11,7 @@ interface Props {
   spaceName: string | null;
   customerName: string | null;
   customerGstin: string | null;
+  customerAddress: string | null;
   totalAmount: number;
   irnRequired: boolean;
   expectedSeries: string;
@@ -25,6 +26,7 @@ export function BookingGstUploadForm({
   spaceName,
   customerName,
   customerGstin,
+  customerAddress,
   totalAmount,
   irnRequired,
   expectedSeries,
@@ -162,6 +164,13 @@ export function BookingGstUploadForm({
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
           {irnRequired && <span className="ml-2 text-blue-900">· IRN required</span>}
+        </div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          {customerAddress ? (
+            <>Address: {customerAddress}</>
+          ) : (
+            <span className="text-amber-700">No address on file — check with the customer before raising the invoice.</span>
+          )}
         </div>
       </div>
 
