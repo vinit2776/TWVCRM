@@ -37,6 +37,8 @@ export interface VoCaseForRenewal {
   tenure_months: number;
   start_date: string;
   end_date: string;
+  /** Agreed escalation applied to the license fee on renewal; 0 renews flat. */
+  renewal_escalation_percentage?: number | null;
   purpose: string;
   renewal_billing_statement_id?: string | null;
   renewal_reminder_count?: number;
@@ -124,7 +126,9 @@ export function generateRenewalPI(params: {
   const location = caseData.location;
   const locationName = location?.name ?? "The WorkVilla";
   const gstRate = 18;
-  const subtotal = caseData.rate;
+  // Same helper the billing statement uses — the printed PI and the invoice
+  // must never quote different amounts for the same renewal.
+  const subtotal = renewalRate(caseData);
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
   const sgst = gstAmount / 2;
@@ -196,6 +200,28 @@ export function generateRenewalPI(params: {
 // Create a billing statement for a VO renewal
 // ---------------------------------------------------------------------------
 
+/**
+ * The license fee for the next term.
+ *
+ * Every agreement's renewal clause promised an escalation while
+ * createRenewalBillingStatement billed caseData.rate flat, so each renewal
+ * invoice contradicted the executed contract. The escalation is now an agreed
+ * per-case figure (migration 00527) and this is the single place it is
+ * applied — the renewal notice quotes this same function, so the number in the
+ * email and the number on the invoice cannot drift apart.
+ *
+ * Rounded to whole rupees: a fee of Rs. 18,000 at 5% is Rs. 18,900, not
+ * Rs. 18,900.0000001, and part-rupee line items read as errors on an invoice.
+ */
+export function renewalRate(caseData: {
+  rate: number;
+  renewal_escalation_percentage?: number | null;
+}): number {
+  const escalation = caseData.renewal_escalation_percentage ?? 0;
+  if (!escalation || escalation <= 0) return caseData.rate;
+  return Math.round(caseData.rate * (1 + escalation / 100));
+}
+
 export async function createRenewalBillingStatement(params: {
   adminSupabase: SupabaseClient;
   caseData: VoCaseForRenewal;
@@ -206,7 +232,7 @@ export async function createRenewalBillingStatement(params: {
 }): Promise<string> {
   const { adminSupabase, caseData, periodStart, periodEnd, dueDate, piNumber } = params;
 
-  const subtotal = caseData.rate;
+  const subtotal = renewalRate(caseData);
   const gstRate = 18;
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
