@@ -695,9 +695,10 @@ export function generateLeaveLicensePdf(
   );
   ctx.y += 10;
 
-  ctx.checkPageBreak(45);
-
-  let lessorSignatureCell: { x: number; y: number; width: number; height: number } | null = null;
+  // A stamped run makes the first body row taller (see didParseCell below),
+  // so reserve for that height — otherwise the block starts low enough to
+  // split, stranding the Lessor cell on the previous page.
+  ctx.checkPageBreak(options?.applyCompanyStamp ? 62 : 45);
 
   autoTable(doc, {
     startY: ctx.y,
@@ -733,15 +734,21 @@ export function generateLeaveLicensePdf(
       }
     },
     didDrawCell: (data) => {
+      // Draw the stamp here, not after autoTable() returns. autoTable is on
+      // the correct page while it renders this cell; once it has finished,
+      // the document's current page is wherever the table ENDED. When the
+      // signature table splits across a page break the two differ, and the
+      // seal landed on the following page at coordinates that mean nothing
+      // there — the reported "wrong page, wrong area".
       if (options?.applyCompanyStamp && data.section === "body" && data.row.index === 0 && data.column.index === 0) {
-        lessorSignatureCell = { x: data.cell.x, y: data.cell.y, width: data.cell.width, height: data.cell.height };
+        drawCompanyStampInBox(
+          doc,
+          { x: data.cell.x, y: data.cell.y, width: data.cell.width, height: data.cell.height },
+          options?.stampRef,
+        );
       }
     },
   });
-
-  if (lessorSignatureCell) {
-    drawCompanyStampInBox(doc, lessorSignatureCell, options?.stampRef);
-  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx.y = (doc as any).lastAutoTable.finalY + 10;
