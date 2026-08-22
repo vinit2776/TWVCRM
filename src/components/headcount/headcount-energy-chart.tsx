@@ -55,6 +55,7 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
         const cfgRes = await fetch(`/api/locations/${locationId}/electricity-config`);
         const cfgJson = await cfgRes.json();
         const isEnabled = Boolean(cfgJson.data?.onegrid_enabled);
+        const savedDefaultDeviceId = cfgJson.data?.onegrid_default_device_id as string | null | undefined;
         if (cancelled) return;
         setEnabled(isEnabled);
         if (!isEnabled) { setLoading(false); return; }
@@ -65,9 +66,13 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const plants = Object.values(devJson.data?.by_plant ?? {}) as any[];
         const options: DeviceOption[] = plants.flatMap((p) => p.devices);
-        const main = options.find((d) => d.meter_role === "main") ?? options[0];
-        if (!main) { setEnabled(false); setLoading(false); return; }
-        if (!cancelled) setDeviceId(main.device_id);
+        // Match the same priority as the location's Electricity tab: saved default first,
+        // so the two views never silently disagree about which meter they're reading.
+        const saved = savedDefaultDeviceId && options.find((d) => d.device_id === savedDefaultDeviceId);
+        const main = options.find((d) => d.meter_role === "main");
+        const chosen = saved || main || options[0];
+        if (!chosen) { setEnabled(false); setLoading(false); return; }
+        if (!cancelled) setDeviceId(chosen.device_id);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load");
