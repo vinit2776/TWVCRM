@@ -87,6 +87,7 @@ const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "acc
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/analytics", label: "Analytics", icon: BarChart3Icon, roles: ["admin"] },
   { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
   // Queries sits here rather than under Finance because it spans modules —
   // a thread can hang off a statement, a vendor bill, a contract or a PO.
