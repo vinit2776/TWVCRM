@@ -9,6 +9,7 @@ import {
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { dltSms } from "@/lib/whatsapp";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
 
 /**
  * GET: Get agreement details with a signed URL for viewing the PDF
@@ -526,9 +527,20 @@ export async function PATCH(
             .download(doc.file_path);
           if (fileData) {
             const arrayBuffer = await fileData.arrayBuffer();
+            // The client must never receive an unstamped agreement that looks
+            // final. Watermarked on the way out only — the stored file stays
+            // clean because it is what goes to Leegality for e-signature.
+            const draft = isDraftAgreement(currentAgreement as {
+              status?: string | null;
+              signed_document_id?: string | null;
+              stamp_reference?: string | null;
+            });
+            const bytes = draft
+              ? await applyDraftWatermark(new Uint8Array(arrayBuffer))
+              : new Uint8Array(arrayBuffer);
             pdfAttachment = {
-              filename: `${agreementNumber || "Agreement"}.pdf`,
-              content: Buffer.from(arrayBuffer),
+              filename: `${draft ? "DRAFT-" : ""}${agreementNumber || "Agreement"}.pdf`,
+              content: Buffer.from(bytes),
               contentType: "application/pdf",
             };
           }
