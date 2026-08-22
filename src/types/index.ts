@@ -3140,6 +3140,10 @@ export interface SpaceHeadcount {
   total_count: number;
   notes?: string | null;
   created_at: string;
+  energy_reading_wh?: number | null;
+  energy_today_wh?: number | null;
+  energy_device_id?: string | null;
+  energy_captured_at?: string | null;
 }
 
 // ==========================================

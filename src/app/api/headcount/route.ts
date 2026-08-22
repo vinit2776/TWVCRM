@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { captureHeadcountEnergy } from "@/lib/headcount-energy-capture";
 
 // GET  — list headcount entries (with filters)
 // POST — create a new headcount entry
@@ -22,6 +24,7 @@ export async function GET(request: NextRequest) {
       `id, location_id, recorded_at, recorded_by,
        open_desk, private_cabin, meeting_room, conference_room,
        total_count, notes, created_at,
+       energy_reading_wh, energy_today_wh, energy_device_id, energy_captured_at,
        location:locations!space_headcounts_location_id_fkey(id, name, code, capacity_config),
        recorder:users!space_headcounts_recorded_by_fkey(id, full_name)`,
       { count: "exact" }
@@ -94,12 +97,15 @@ export async function POST(request: NextRequest) {
       `id, location_id, recorded_at, recorded_by,
        open_desk, private_cabin, meeting_room, conference_room,
        total_count, notes, created_at,
+       energy_reading_wh, energy_today_wh, energy_device_id, energy_captured_at,
        location:locations!space_headcounts_location_id_fkey(id, name, code, capacity_config),
        recorder:users!space_headcounts_recorded_by_fkey(id, full_name)`
     )
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  after(() => captureHeadcountEnergy(data.id, location_id));
 
   return NextResponse.json({ data }, { status: 201 });
 }
