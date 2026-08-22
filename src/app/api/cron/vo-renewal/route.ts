@@ -31,12 +31,27 @@ async function handler(request: Request) {
   const adminSupabase = await createAdminClient();
   const todayIST = getTodayIST();
 
+  // ?dry_run=1 — run every selection query for real, then stop before any
+  // side effect and report what would have happened. Each matched case here
+  // otherwise creates a billing statement AND a live Razorpay payment link
+  // AND emails AND WhatsApps the customer, so there is no safe way to
+  // rehearse this against production without an explicit mode.
+  //
+  // Added because this cron had never once selected a row in production: it
+  // opens on status = 'active', and until the case pipeline became
+  // event-derived no case ever reached that state. Its first real run will
+  // therefore be its first run ever, against live customers.
+  const dryRun = new URL(request.url).searchParams.get("dry_run") === "1";
+
   const results = {
+    dryRun,
     renewalOpened: [] as string[],
     remindersSent: [] as string[],
     graceStarted: [] as string[],
     lapsed: [] as string[],
     errors: [] as string[],
+    /** Populated only on a dry run: why each active case is or isn't eligible. */
+    diagnostics: [] as Record<string, unknown>[],
   };
 
   // -------------------------------------------------------------------------
@@ -52,6 +67,11 @@ async function handler(request: Request) {
 
   for (const c of openCases ?? []) {
     try {
+      const caseDataDry = c as VoCaseForRenewal;
+      if (dryRun) {
+        results.renewalOpened.push(`${caseDataDry.case_number} (would open renewal: statement + Razorpay link + email + WhatsApp)`);
+        continue;
+      }
       const caseData = c as VoCaseForRenewal;
       const { statementId, piNumber, totalAmount, dueDate, periodStart, periodEnd } =
         await openRenewalStatement(adminSupabase, caseData, 1);
@@ -139,6 +159,11 @@ async function handler(request: Request) {
 
   for (const c of pendingCases ?? []) {
     try {
+      const caseDataDry = c as VoCaseForRenewal;
+      if (dryRun) {
+        results.remindersSent.push(`${caseDataDry.case_number} (would send next reminder + fresh Razorpay link)`);
+        continue;
+      }
       const caseData = c as VoCaseForRenewal & { renewal_reminder_count: number };
       const daysLeft = daysBetween(todayIST, c.end_date);
 
@@ -244,6 +269,11 @@ async function handler(request: Request) {
 
   for (const c of expiredCases ?? []) {
     try {
+      const caseDataDry = c as VoCaseForRenewal;
+      if (dryRun) {
+        results.graceStarted.push(`${caseDataDry.case_number} (would enter grace period + final notice)`);
+        continue;
+      }
       const caseData = c as VoCaseForRenewal;
       const graceEnds = addDays(todayIST, 7);
       const piNumber = buildPiNumber(caseData.case_number, 5); // final notice
@@ -347,6 +377,11 @@ async function handler(request: Request) {
 
   for (const c of graceExpired ?? []) {
     try {
+      const caseDataDry = c as VoCaseForRenewal;
+      if (dryRun) {
+        results.lapsed.push(`${caseDataDry.case_number} (would lapse + generate discontinuation drafts)`);
+        continue;
+      }
       const caseData = c as VoCaseForRenewal;
       const location = caseData.location as { name: string; address?: string; city?: string; state?: string } | null;
       const locationName = location?.name ?? "The WorkVilla";
@@ -402,6 +437,50 @@ async function handler(request: Request) {
 
   console.log("[cron/vo-renewal] Result:", JSON.stringify(results));
 
+  // On a dry run, also explain every case the cron could ever act on. A case
+  // that reaches 'active' without an end_date is invisible to all four stages
+  // — every one of them compares end_date or renewal_grace_ends_at, and SQL
+  // comparisons are never true against NULL — so it renews never and lapses
+  // never, silently running on indefinitely.
+  if (dryRun) {
+    const { data: liveCases } = await adminSupabase
+      .from("cases")
+      .select("case_number, status, start_date, end_date, tenure_months, renewal_reminder_count, client_email")
+      .in("status", ["active", "renewal_due", "grace_period"]);
+
+    for (const c of liveCases ?? []) {
+      const endDate = c.end_date as string | null;
+      if (!endDate) {
+        results.diagnostics.push({
+          case: c.case_number,
+          status: c.status,
+          eligible: false,
+          reason: "end_date is NULL — no stage of this cron can ever select it",
+          fix: c.start_date && c.tenure_months
+            ? `derivable: ${c.start_date} + ${c.tenure_months} months`
+            : "start_date or tenure_months also missing",
+        });
+        continue;
+      }
+      const daysToEnd = Math.round(
+        (new Date(endDate).getTime() - new Date(todayIST).getTime()) / 86_400_000
+      );
+      results.diagnostics.push({
+        case: c.case_number,
+        status: c.status,
+        eligible: true,
+        end_date: endDate,
+        days_to_end: daysToEnd,
+        renewal_opens_on: addDays(endDate, -30),
+        next_action:
+          daysToEnd > 30 ? `nothing until ${addDays(endDate, -30)}`
+          : daysToEnd >= 0 ? "renewal window open — reminders due"
+          : "past end_date — grace/lapse handling due",
+        would_notify: c.client_email ?? "(no email on file)",
+      });
+    }
+  }
+
   return NextResponse.json({
     success: true,
     date: todayIST,
@@ -414,11 +493,13 @@ async function handler(request: Request) {
 // ---------------------------------------------------------------------------
 
 function getTodayIST(): string {
-  return new Date(
-    new Date().toLocaleString("en-CA", { timeZone: "Asia/Kolkata" })
-  )
-    .toISOString()
-    .split("T")[0];
+  // toLocaleDateString, not toLocaleString round-tripped through new Date().
+  // en-CA's date-time form is "2026-08-22, 9:47:31 p.m.", which Date cannot
+  // parse — it yields Invalid Date and .toISOString() throws RangeError,
+  // killing this cron on its first line of work before it reads a single
+  // case. cron_health recorded exactly that. The date-only form returns
+  // "2026-08-22" directly, with no parsing round-trip to get wrong.
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 function addDays(dateStr: string, days: number): string {
