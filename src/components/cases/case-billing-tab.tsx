@@ -28,6 +28,8 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, voBillParty, type HandoffState } from "@/lib/tally-handoff";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
+import { StatementPaymentPanel } from "@/components/billing/payment-collected-panel";
+import type { InboxPayment } from "@/lib/tally-handoff";
 
 interface CaseBillingTabProps {
   caseId: string;
@@ -130,6 +132,8 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
 
+  const [payments, setPayments] = useState<InboxPayment[]>([]);
+
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [details, setDetails] = useState<StatementDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -157,7 +161,35 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
       ]);
       setCaseInfo(caseRes.data ?? null);
       const rows = (stmtRes.data ?? []) as CaseStatement[];
-      setStatement(rows.find((s) => !s.voided_at) ?? null);
+      const live = rows.find((s) => !s.voided_at) ?? null;
+      setStatement(live);
+
+      // "Paid" on its own doesn't answer how, when, or against what reference
+      // — the questions actually asked when a client disputes or accounts
+      // reconcile. Same billing_payments rows the Tally Inbox shows.
+      if (live) {
+        try {
+          const payRes = await fetch(`/api/billing-statements/${live.id}/payment`).then((r) => r.json());
+          const raw = (payRes.data ?? []) as Record<string, unknown>[];
+          setPayments(raw.map((p) => ({
+            id: String(p.id),
+            amount: Number(p.amount ?? 0),
+            payment_date: String(p.payment_date ?? ""),
+            payment_mode: String(p.payment_mode ?? ""),
+            payment_reference: (p.payment_reference as string | null) ?? null,
+            notes: (p.notes as string | null) ?? null,
+            razorpay_payment_id: (p.razorpay_payment_id as string | null) ?? null,
+            recorded_by_name: ((p.recorder as { full_name?: string } | null)?.full_name) ?? null,
+            settled: (p.settled as boolean | null) ?? null,
+            settled_at: (p.settled_at as string | null) ?? null,
+            settlement_utr: (p.settlement_utr as string | null) ?? null,
+          })));
+        } catch {
+          setPayments([]);
+        }
+      } else {
+        setPayments([]);
+      }
     } catch {
       toast.error("Failed to load billing info");
     } finally {
@@ -640,6 +672,13 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
                   </div>
                 );
               })()}
+              {payments.length > 0 && (
+                <StatementPaymentPanel
+                  payments={payments}
+                  totalAmount={statement.total_amount}
+                />
+              )}
+
               {/* What went to accounts. The Tally Inbox link above is useless
                   to sales and case-handling roles — they have no access to
                   that page — so the same details are readable here. */}

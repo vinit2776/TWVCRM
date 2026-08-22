@@ -26,6 +26,30 @@ export async function GET(
     .order("payment_date", { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Join settlement state for Razorpay payments, mirroring the inbox feed —
+  // without it a settled payment reads as "not synced yet" wherever this
+  // endpoint backs the shared payment panel.
+  const rzpIds = (data || [])
+    .map((p) => p.razorpay_payment_id as string | null)
+    .filter(Boolean) as string[];
+
+  if (rzpIds.length > 0) {
+    const { data: sRows } = await supabase
+      .from("razorpay_settlement_cache")
+      .select("razorpay_payment_id, settled, settled_at, settlement_utr")
+      .in("razorpay_payment_id", rzpIds);
+    const byId = new Map((sRows || []).map((s) => [s.razorpay_payment_id as string, s]));
+    for (const p of data || []) {
+      const s = byId.get(p.razorpay_payment_id as string);
+      Object.assign(p, {
+        settled: (s?.settled as boolean | undefined) ?? null,
+        settled_at: (s?.settled_at as string | null) ?? null,
+        settlement_utr: (s?.settlement_utr as string | null) ?? null,
+      });
+    }
+  }
+
   return NextResponse.json({ data });
 }
 
