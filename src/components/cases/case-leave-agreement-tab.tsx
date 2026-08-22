@@ -948,8 +948,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
           {stampPreviewUrl && (
             <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                Preview opened in a new tab. If you don&apos;t see it (or closed it), reopen it
-                below before confirming.
+                Review the exact PDF before confirming.
               </p>
               <Button asChild variant="outline" size="sm" className="shrink-0">
                 <a href={stampPreviewUrl} target="_blank" rel="noopener noreferrer">
