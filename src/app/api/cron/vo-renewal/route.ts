@@ -12,6 +12,7 @@ import {
 import { generateDiscontinuationDrafts } from "@/lib/vo-discontinuation";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { withCronHealth } from "@/lib/cron-ping";
+import { renewalRecipients } from "@/lib/renewal-recipients";
 
 /**
  * VO Renewal cron — SCHEDULE CURRENTLY DISABLED in vercel.json.
@@ -42,6 +43,10 @@ import { withCronHealth } from "@/lib/cron-ping";
  *   3. renewal_due cases past end_date → grace_period + final notice PI
  *   4. grace_period cases past grace_ends_at → lapsed + discontinuation drafts
  */
+// Every renewal query joins the aggregator — without it renewalRecipients()
+// cannot tell a partner-billed case from a direct one, and every notice
+// defaults to the end client. Written inline rather than shared, because
+// Supabase infers the row type from the literal passed to .select().
 async function handler(request: Request) {
   const authHeader = request.headers.get("Authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -80,7 +85,7 @@ async function handler(request: Request) {
   const openDate = addDays(todayIST, 30);
   const { data: openCases } = await adminSupabase
     .from("cases")
-    .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
+    .select("*, location:locations!cases_location_id_fkey(name, address, city, state), aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone)")
     .eq("status", "active")
     .eq("renewal_notices_enabled", true)
     .eq("end_date", openDate)
@@ -115,9 +120,59 @@ async function handler(request: Request) {
         razorpayUrl: razorpayLink.url,
       });
 
+      const routing = renewalRecipients(caseData);
+      if (routing.blocked) {
+        results.errors.push(`${caseData.case_number}: ${routing.blocked}`);
+        continue;
+      }
+
+      // An unreachable billing party is the difference between a renewal
+      // chased and one silently missed, so it is reported rather than left
+      // to a false in the send result.
+      if (!routing.billing.email) {
+        results.errors.push(
+          `${caseData.case_number}: no email on file for ${routing.billing.name} (${routing.billing.kind}) — renewal notice not sent`,
+        );
+      }
+
+
+
+
+      // The client is told too, with the amount and link, so a partner
+
+      // sitting on the renewal cannot silently cost them their address.
+
+      if (routing.headsUp?.email) {
+
+        await sendRenewalEmail({
+
+          caseData,
+
+          reminderNumber: 1,
+
+          isGraceNotice: false,
+
+          piNumber,
+
+          periodStart,
+
+          periodEnd,
+
+          totalAmount,
+
+          razorpayUrl: razorpayLink.url,
+
+          recipient: routing.headsUp,
+
+        });
+
+      }
+
+
       const [emailSent, whatsAppSent] = await Promise.all([
         sendRenewalEmail({
           caseData,
+          recipient: routing.billing,
           reminderNumber: 1,
           isGraceNotice: false,
           piNumber,
@@ -129,6 +184,7 @@ async function handler(request: Request) {
         }),
         sendRenewalWhatsApp({
           caseData,
+          recipient: routing.billing,
           isGraceNotice: false,
           piNumber,
           totalAmount,
@@ -173,7 +229,7 @@ async function handler(request: Request) {
   // -------------------------------------------------------------------------
   const { data: pendingCases } = await adminSupabase
     .from("cases")
-    .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
+    .select("*, location:locations!cases_location_id_fkey(name, address, city, state), aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone)")
     .eq("status", "renewal_due")
     .eq("renewal_notices_enabled", true)
     .gt("end_date", todayIST)
@@ -218,9 +274,41 @@ async function handler(request: Request) {
       });
 
       const ccAccounts = nextCount >= 4;
+      const routing = renewalRecipients(caseData);
+      if (routing.blocked) {
+        results.errors.push(`${caseData.case_number}: ${routing.blocked}`);
+        continue;
+      }
+
+      // An unreachable billing party is the difference between a renewal
+      // chased and one silently missed, so it is reported rather than left
+      // to a false in the send result.
+      if (!routing.billing.email) {
+        results.errors.push(
+          `${caseData.case_number}: no email on file for ${routing.billing.name} (${routing.billing.kind}) — renewal notice not sent`,
+        );
+      }
+
+      // The client is told too, with the amount and link, so a partner
+      // sitting on the renewal cannot silently cost them their address.
+      if (routing.headsUp?.email) {
+        await sendRenewalEmail({
+          caseData,
+          reminderNumber: nextCount,
+          isGraceNotice: false,
+          piNumber,
+          periodStart,
+          periodEnd,
+          totalAmount,
+          razorpayUrl: razorpayLink.url,
+          recipient: routing.headsUp,
+        });
+      }
+
       const [emailSent, whatsAppSent] = await Promise.all([
         sendRenewalEmail({
           caseData,
+          recipient: routing.billing,
           reminderNumber: nextCount,
           isGraceNotice: false,
           piNumber,
@@ -243,6 +331,7 @@ async function handler(request: Request) {
         }),
         sendRenewalWhatsApp({
           caseData,
+          recipient: routing.billing,
           isGraceNotice: false,
           piNumber,
           totalAmount,
@@ -285,7 +374,7 @@ async function handler(request: Request) {
   // -------------------------------------------------------------------------
   const { data: expiredCases } = await adminSupabase
     .from("cases")
-    .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
+    .select("*, location:locations!cases_location_id_fkey(name, address, city, state), aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone)")
     .eq("status", "renewal_due")
     .eq("renewal_notices_enabled", true)
     .lte("end_date", todayIST);
@@ -336,9 +425,58 @@ async function handler(request: Request) {
         razorpayUrl: razorpayLink.url,
       });
 
+      const routing = renewalRecipients(caseData);
+      if (routing.blocked) {
+        results.errors.push(`${caseData.case_number}: ${routing.blocked}`);
+        continue;
+      }
+
+      // An unreachable billing party is the difference between a renewal
+      // chased and one silently missed, so it is reported rather than left
+      // to a false in the send result.
+      if (!routing.billing.email) {
+        results.errors.push(
+          `${caseData.case_number}: no email on file for ${routing.billing.name} (${routing.billing.kind}) — renewal notice not sent`,
+        );
+      }
+
+
+
+      // The client is told too, with the amount and link, so a partner
+
+      // sitting on the renewal cannot silently cost them their address.
+
+      if (routing.headsUp?.email) {
+
+        await sendRenewalEmail({
+
+          caseData,
+
+          reminderNumber: 5,
+
+          isGraceNotice: true,
+
+          piNumber,
+
+          periodStart,
+
+          periodEnd,
+
+          totalAmount,
+
+          razorpayUrl: razorpayLink.url,
+
+          recipient: routing.headsUp,
+
+        });
+
+      }
+
+
       const [emailSent, whatsAppSent] = await Promise.all([
         sendRenewalEmail({
           caseData,
+          recipient: routing.billing,
           reminderNumber: 5,
           isGraceNotice: true,
           piNumber,
@@ -350,6 +488,7 @@ async function handler(request: Request) {
         }),
         sendRenewalWhatsApp({
           caseData,
+          recipient: routing.billing,
           isGraceNotice: true,
           piNumber,
           totalAmount,
@@ -394,7 +533,7 @@ async function handler(request: Request) {
   // -------------------------------------------------------------------------
   const { data: graceExpired } = await adminSupabase
     .from("cases")
-    .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
+    .select("*, location:locations!cases_location_id_fkey(name, address, city, state), aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone)")
     .eq("status", "grace_period")
     .eq("renewal_notices_enabled", true)
     .lte("renewal_grace_ends_at", new Date().toISOString());
