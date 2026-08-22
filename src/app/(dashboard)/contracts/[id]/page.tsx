@@ -585,6 +585,11 @@ export default function ContractDetailPage({
               <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contract.status]}>
                 {CONTRACT_STATUS_LABELS[contract.status]}
               </Badge>
+              {contract.signed_document && (
+                <Badge className="bg-green-100 text-green-700 border-green-200">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Signed
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               {contract.title}
