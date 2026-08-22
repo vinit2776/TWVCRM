@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
 
 /**
  * POST: Upload a manually signed stamp-paper PDF and mark the L&L agreement as executed.
@@ -140,6 +141,8 @@ export async function POST(
       .from("cases")
       .update({ ll_agreement_status: "executed" })
       .eq("id", caseId);
+
+    await advanceCaseOnAgreementExecuted(supabase, caseId);
   }
 
   logAudit(supabase, {

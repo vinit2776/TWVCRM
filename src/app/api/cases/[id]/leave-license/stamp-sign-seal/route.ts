@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { generateLeaveLicensePdf, type LeaveLicenseVariables } from "@/lib/leave-license-generator";
 import { generateStampReference } from "@/lib/company-stamp";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
 
 const PRE_EXECUTED_STATUSES = [
   "draft",
@@ -154,6 +155,8 @@ export async function POST(
       .from("cases")
       .update({ ll_agreement_status: "executed" })
       .eq("id", caseId);
+
+    await advanceCaseOnAgreementExecuted(supabase, caseId);
   }
 
   logAudit(supabase, {

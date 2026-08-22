@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { verifyWebhookSignature, parseWebhookPayload, downloadStampedDocument } from "@/lib/leegality";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
+import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
 
 /**
  * Fetch the signed PDF from Leegality and store it in crm-documents.
@@ -196,6 +197,8 @@ export async function POST(request: NextRequest) {
           .from("cases")
           .update({ ll_agreement_status: "executed" })
           .eq("id", agreement.case_id);
+
+        await advanceCaseOnAgreementExecuted(adminSupabase, agreement.case_id);
 
         console.log(`[Leegality Webhook] L&L agreement ${agreement.id} marked executed.`);
       }

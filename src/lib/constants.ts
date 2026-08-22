@@ -1129,30 +1129,44 @@ export const KYC_DOCUMENTS: Record<string, string[]> = {
 // ==========================================
 // Case Status Constants
 // ==========================================
+// Event-derived pipeline. Each state is written by the system when the
+// corresponding thing actually happens — see the write-sites listed in
+// supabase/migrations/00521_case_status_paid.sql. "Change Status" remains as
+// an admin override for corrections, not as the normal mechanism.
+//
+// Seven hand-off states were retired here (docs_requested, under_review,
+// compliance_check, sent_for_client_approval, client_approved,
+// signing_in_progress, executed): they described who was holding the file
+// rather than what had happened, and had 3 cases between them across the
+// product's entire history. The enum still carries them — Postgres cannot
+// drop a value — so a code rollback restores the old pipeline unaided.
 export const CASE_STATUSES = [
-  "intake_received", "docs_requested", "docs_received", "under_review",
-  "compliance_check", "internal_approved", "sent_for_client_approval",
-  "client_approved", "signing_in_progress", "executed",
-  "invoiced", "active", "renewal_due", "grace_period", "renewed", "lapsed",
+  "intake_received", "docs_received", "internal_approved",
+  "invoiced", "paid", "active",
+  "renewal_due", "grace_period", "renewed", "lapsed",
 ] as const;
 
+// Retired states keep labels so historical rows and audit entries still read
+// properly wherever they are displayed.
 export const CASE_STATUS_LABELS: Record<string, string> = {
   intake_received: "Intake Received",
-  docs_requested: "Docs Requested",
   docs_received: "Docs Received",
-  under_review: "Under Review",
-  compliance_check: "Compliance Check",
-  internal_approved: "Internally Approved",
-  sent_for_client_approval: "Sent for Client Approval",
-  client_approved: "Client Approved",
-  signing_in_progress: "Signing in Progress",
-  executed: "Executed",
+  internal_approved: "Approved",
   invoiced: "Invoiced",
+  paid: "Paid",
   active: "Active",
   renewal_due: "Renewal Due",
   grace_period: "Grace Period",
   renewed: "Renewed",
   lapsed: "Lapsed",
+  // Retired — retained for historical rows only.
+  docs_requested: "Docs Requested",
+  under_review: "Under Review",
+  compliance_check: "Compliance Check",
+  sent_for_client_approval: "Sent for Client Approval",
+  client_approved: "Client Approved",
+  signing_in_progress: "Signing in Progress",
+  executed: "Executed",
 };
 
 export const CASE_STATUS_COLORS: Record<string, string> = {
@@ -1162,6 +1176,7 @@ export const CASE_STATUS_COLORS: Record<string, string> = {
   under_review: "bg-indigo-100 text-indigo-800",
   compliance_check: "bg-purple-100 text-purple-800",
   internal_approved: "bg-emerald-100 text-emerald-800",
+  paid: "bg-green-100 text-green-800",
   sent_for_client_approval: "bg-cyan-100 text-cyan-800",
   client_approved: "bg-teal-100 text-teal-800",
   signing_in_progress: "bg-orange-100 text-orange-800",
@@ -1175,30 +1190,36 @@ export const CASE_STATUS_COLORS: Record<string, string> = {
 };
 
 // Valid status transitions for the case state machine
+// Allowed manual overrides. The system writes these states from events; this
+// map only constrains what a human may correct a case to via "Change Status".
+// Retired states are keys-only (a case still sitting on one can be moved off
+// it) and are never targets.
 export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
-  intake_received: ["docs_requested"],
-  docs_requested: ["docs_received"],
-  docs_received: ["under_review"],
-  under_review: ["compliance_check", "docs_requested"],
-  compliance_check: ["internal_approved", "under_review"],
-  internal_approved: ["sent_for_client_approval"],
-  sent_for_client_approval: ["client_approved", "internal_approved"],
-  client_approved: ["signing_in_progress"],
-  signing_in_progress: ["executed"],
-  executed: ["invoiced"],
-  invoiced: ["active"],
+  intake_received: ["docs_received"],
+  docs_received: ["internal_approved", "intake_received"],
+  internal_approved: ["invoiced", "docs_received"],
+  invoiced: ["paid", "internal_approved"],
+  paid: ["active", "invoiced"],
   active: ["renewal_due", "lapsed"],
   renewal_due: ["grace_period", "renewed", "lapsed"],
   grace_period: ["renewed", "lapsed"],
   renewed: ["active"],
   lapsed: [],
+  // Retired — exits only, so legacy rows are not stranded.
+  docs_requested: ["docs_received", "intake_received"],
+  under_review: ["docs_received", "internal_approved"],
+  compliance_check: ["internal_approved", "docs_received"],
+  sent_for_client_approval: ["internal_approved"],
+  client_approved: ["internal_approved"],
+  signing_in_progress: ["internal_approved"],
+  executed: ["active", "paid"],
 };
 
 // Group statuses for Kanban / pipeline view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
   review_approval: { label: "Review & Approval", statuses: ["under_review", "compliance_check", "internal_approved", "sent_for_client_approval", "client_approved"] },
-  execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced"] },
+  execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced", "paid"] },
   active: { label: "Active", statuses: ["active"] },
   closed: { label: "Closed", statuses: ["renewal_due", "grace_period", "renewed", "lapsed"] },
 };
