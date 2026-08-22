@@ -62,6 +62,24 @@ export interface CenterDetail {
   top_clients: Array<{ lead_id: string; name: string; billed: number }>;
 }
 
+export type BreakdownMetric = "sales" | "billed" | "collections";
+
+export interface BreakdownItem {
+  id: string;
+  reference: string;
+  client_name: string;
+  date: string;
+  amount: number;
+  href: string | null;
+}
+
+export interface BreakdownResponse {
+  metric: BreakdownMetric;
+  range: DateRange;
+  total: number;
+  items: BreakdownItem[];
+}
+
 export const ROOM_TYPE_LABELS: Record<string, string> = {
   hot_desk: "Hot Desk",
   dedicated_desk: "Dedicated Desk",
