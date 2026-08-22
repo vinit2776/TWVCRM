@@ -23,6 +23,7 @@ import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { logAudit } from "@/lib/audit";
 import { caseDisplayName } from "@/lib/case-workflow";
+import { advanceCaseStage } from "@/lib/case-status-events";
 
 interface CaseForInvoicing {
   id: string;
@@ -259,6 +260,8 @@ export async function createCaseInvoiceStatement(
   if (error || !statement) {
     throw new CaseInvoicingError(`Failed to create case invoice: ${error?.message}`, 500);
   }
+
+  await advanceCaseStage(supabase, caseData.id, "invoiced");
 
   const handoff = await handleStatementFinalized(supabase, statement.id, billingMode, "case_invoice_request");
 

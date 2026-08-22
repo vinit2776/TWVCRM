@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { computeSettlement, type SettlementPaymentStatus } from "@/lib/settlement";
+import { advanceCaseStage } from "@/lib/case-status-events";
 
 /**
  * Shared tail of "a payment landed on a statement": recompute settlement
@@ -43,6 +44,17 @@ export async function finalizeBillingPayment(
   }
 
   if (newPaymentStatus === "paid" && previousPaymentStatus !== "paid") {
+    // Every route that settles a payment funnels through here, so this is the
+    // one place a VO case's stage needs to learn about it.
+    const { data: stmt } = await supabase
+      .from("billing_statements")
+      .select("case_id, statement_type")
+      .eq("id", statementId)
+      .maybeSingle();
+    if (stmt?.case_id && stmt.statement_type === "vo_case") {
+      await advanceCaseStage(supabase, stmt.case_id as string, "paid");
+    }
+
     const v2Enabled = await isHandoffV2Enabled(supabase);
     if (v2Enabled) {
       await handleStatementPaid(supabase, statementId, reason);

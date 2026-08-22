@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
+import { advanceCaseStage } from "@/lib/case-status-events";
 
 /**
  * GET: List all document slots for a case
@@ -170,15 +171,12 @@ export async function POST(
       .eq("id", caseId)
       .single();
 
-    if (currentCase?.status === "docs_requested") {
-      await adminSupabase
-        .from("cases")
-        .update({
-          status: "docs_received",
-          docs_received_at: new Date().toISOString(),
-        })
-        .eq("id", caseId);
-    }
+    // Previously gated on status === "docs_requested", a state the derived
+    // pipeline no longer produces — which is why 38 cases held documents
+    // while still showing "Intake Received". advanceCaseStage is forward-only,
+    // so this cannot pull a case back from a later stage.
+    void currentCase;
+    await advanceCaseStage(adminSupabase, caseId, "docs_received");
   }
 
   // Audit log

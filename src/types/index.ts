@@ -1875,11 +1875,16 @@ export interface AggregatorRateCard {
 // ==========================================
 // Case (Virtual Office) Types
 // ==========================================
+// Mirrors the case_status Postgres enum. Note grace_period was added to the
+// enum in 00521's predecessor 00381 but never reached this type; 'paid' comes
+// from 00521. The retired hand-off states stay here because historical rows
+// still carry them.
 export type CaseStatus =
   | "intake_received" | "docs_requested" | "docs_received" | "under_review"
   | "compliance_check" | "internal_approved" | "sent_for_client_approval"
   | "client_approved" | "signing_in_progress" | "executed"
-  | "invoiced" | "active" | "renewal_due" | "renewed" | "lapsed";
+  | "invoiced" | "paid" | "active"
+  | "renewal_due" | "grace_period" | "renewed" | "lapsed";
 
 export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred";
 
