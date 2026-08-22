@@ -1215,6 +1215,18 @@ export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
   executed: ["active", "paid"],
 };
 
+// Statuses where the agreement is actually live, so its end_date means
+// something. The 00525 backfill derived end_date for every case from
+// start_date + tenure_months regardless of whether the agreement was ever
+// executed — so a case still at intake carries a date for a term that never
+// began. Expiry is only ever surfaced, filtered or highlighted for these.
+//
+// 'lapsed' is deliberately absent: it is terminal, and a permanently red row
+// for a closed case is noise rather than a warning.
+export const EXPIRY_RELEVANT_STATUSES = [
+  "active", "renewal_due", "grace_period",
+] as const;
+
 // Group statuses for Kanban / pipeline view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
