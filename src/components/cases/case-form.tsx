@@ -76,6 +76,7 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
       represented_by_id_number: caseData?.represented_by_id_number || "",
       rate: caseData?.rate || undefined,
       tenure_months: caseData?.tenure_months || 12,
+      renewal_escalation_percentage: caseData?.renewal_escalation_percentage ?? 0,
       start_date: caseData?.start_date || "",
       security_deposit: caseData?.security_deposit || 0,
       location_id: caseData?.location_id || "",
@@ -386,6 +387,23 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
               <Label>End Date</Label>
               <Input type="date" value={endDate} disabled className="bg-muted" />
               <p className="text-xs text-muted-foreground">Auto-calculated from start date + tenure</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Renewal escalation (%)</Label>
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                max="100"
+                {...register("renewal_escalation_percentage", { valueAsNumber: true })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Applied to the fee on renewal and written into the agreement&apos;s renewal
+                clause. Leave at 0 to renew at the same rate.
+              </p>
+              {errors.renewal_escalation_percentage && (
+                <p className="text-sm text-red-500">{errors.renewal_escalation_percentage.message}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Security Deposit (INR)</Label>

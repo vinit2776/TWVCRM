@@ -676,6 +676,9 @@ const caseFieldsSchema = z.object({
   rate: z.number().positive("Rate must be positive").optional(),
   tenure_months: z.number().int().positive(),
   start_date: z.string().optional(),
+  // Agreed increase applied to the license fee on renewal. Rendered into the
+  // agreement's renewal clause and applied by renewalRate(); 0 renews flat.
+  renewal_escalation_percentage: z.number().min(0).max(100).optional(),
   security_deposit: z.number().min(0),
   notes: z.string().optional(),
   tags: z.array(z.string()),

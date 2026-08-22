@@ -49,6 +49,10 @@ export interface LeaveLicenseVariables {
   rate: number;
   rate_formatted: string;
   tenure_months: number;
+  /** Agreed renewal escalation. 0 means the term renews at the same rate, and
+   *  the clause below drops the escalation sentence rather than promising a
+   *  increase nobody agreed to. */
+  renewal_escalation_percentage?: number;
   start_date: string;
   start_date_formatted: string;
   end_date: string;
@@ -108,6 +112,7 @@ export function mergeLeaveLicenseVariables(params: {
   witness2AadhaarLast4?: string;
   witness2Mobile?: string;
   estampValue?: number;
+  renewalEscalationPercentage?: number;
 }): LeaveLicenseVariables {
   const startDate = new Date(params.startDate);
   const endDate = new Date(startDate);
@@ -136,6 +141,7 @@ export function mergeLeaveLicenseVariables(params: {
     rate: params.rate,
     rate_formatted: formatCurrency(params.rate),
     tenure_months: params.tenureMonths,
+    renewal_escalation_percentage: params.renewalEscalationPercentage ?? 0,
     start_date: params.startDate,
     start_date_formatted: formatDate(params.startDate),
     end_date: endDate.toISOString(),
@@ -419,8 +425,16 @@ export function generateLeaveLicensePdf(
     BRAND_DARK,
     5
   );
+  // The escalation sentence states the figure actually agreed for this case.
+  // It was previously hardcoded to "a minimum 5%" on every agreement while the
+  // renewal billing applied none, so every renewal invoice contradicted the
+  // executed contract.
+  const escalation = variables.renewal_escalation_percentage ?? 0;
   addBodyText(
-    "Following the expiration of the Term mentioned hereinabove, this Agreement may be renewed for a further period as mutually agreed by the parties, on terms and conditions as mutually agreed by the parties. Each renewal term shall be subject to a minimum 5% escalation in License Fees."
+    "Following the expiration of the Term mentioned hereinabove, this Agreement may be renewed for a further period as mutually agreed by the parties, on terms and conditions as mutually agreed by the parties."
+    + (escalation > 0
+      ? ` Each renewal term shall be subject to an escalation of ${escalation % 1 === 0 ? escalation : escalation.toFixed(2)}% in License Fees.`
+      : "")
   );
   ctx.y += 6;
 

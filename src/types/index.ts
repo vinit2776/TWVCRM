@@ -1959,6 +1959,9 @@ export interface VoCase {
   /** Whether the renewal cron may notify anyone about this case. False for
    *  cases predating the end_date backfill — see migration 00526. */
   renewal_notices_enabled?: boolean;
+  /** Agreed increase applied to the license fee on renewal; 0 renews flat.
+   *  Written into the agreement's renewal clause — see migration 00527. */
+  renewal_escalation_percentage?: number;
   compliance_passed: boolean;
   compliance_passed_at?: string;
   // Timestamps

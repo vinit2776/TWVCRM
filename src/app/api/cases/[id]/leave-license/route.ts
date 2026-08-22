@@ -144,6 +144,7 @@ export async function POST(
     tenureMonths: caseData.tenure_months || 12,
     startDate: caseData.start_date || new Date().toISOString(),
     securityDeposit: caseData.security_deposit || 0,
+    renewalEscalationPercentage: caseData.renewal_escalation_percentage ?? 0,
   });
 
   // Generate PDF
