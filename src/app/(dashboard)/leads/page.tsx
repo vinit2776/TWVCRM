@@ -19,6 +19,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLeads, useUsers } from "@/hooks/use-leads";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { MultiSelectFilter } from "@/components/shared/multi-select-filter";
 import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
@@ -42,7 +43,7 @@ export default function LeadsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
@@ -74,7 +75,7 @@ export default function LeadsPage() {
     page,
     search,
     status: statusFilter || undefined,
-    source: sourceFilter || undefined,
+    source: sourceFilter.length > 0 ? sourceFilter.join(",") : undefined,
     location_id: locationFilter || undefined,
     assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
@@ -98,7 +99,7 @@ export default function LeadsPage() {
   // filters are currently applied — clear them so nothing hides the leads that need action.
   const handleReviewOverdue = () => {
     setStatusFilter("");
-    setSourceFilter("");
+    setSourceFilter([]);
     setLocationFilter(null);
     setAssignedToFilter("");
     setSearch("");
@@ -202,25 +203,15 @@ export default function LeadsPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select
-            value={sourceFilter}
-            onValueChange={(val) => {
-              setSourceFilter(val === "all" ? "" : val);
+          <MultiSelectFilter
+            options={LEAD_SOURCES.map((s) => ({ value: s, label: LEAD_SOURCE_LABELS[s] }))}
+            selected={sourceFilter}
+            onChange={(vals) => {
+              setSourceFilter(vals);
               setPage(1);
             }}
-          >
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="All Sources" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Sources</SelectItem>
-              {LEAD_SOURCES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {LEAD_SOURCE_LABELS[s]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder="All Sources"
+          />
           <div className="w-[180px]">
             <LocationSelector
               value={locationFilter}

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
   const status = searchParams.get("status");
-  const source = searchParams.get("source");
+  const sources = searchParams.get("source")?.split(",").filter(Boolean) ?? [];
   const search = searchParams.get("search");
   const assigned_to = searchParams.get("assigned_to");
   const rating = searchParams.get("rating");
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
   let countQuery = supabase.from("leads").select("id", { count: "exact", head: true });
   if (!include_archived) countQuery = countQuery.is("archived_at", null);
   if (status) countQuery = countQuery.eq("status", status);
-  if (source) countQuery = countQuery.eq("source", source);
+  if (sources.length > 0) countQuery = countQuery.in("source", sources);
   if (assigned_to) countQuery = countQuery.eq("assigned_to", assigned_to);
   if (rating) countQuery = countQuery.eq("rating", rating);
   if (location_id) countQuery = countQuery.eq("location_id", location_id);
@@ -107,7 +107,7 @@ export async function GET(request: NextRequest) {
 
   if (!include_archived) priorityQuery = priorityQuery.is("leads.archived_at", null);
   if (status) priorityQuery = priorityQuery.eq("leads.status", status);
-  if (source) priorityQuery = priorityQuery.eq("leads.source", source);
+  if (sources.length > 0) priorityQuery = priorityQuery.in("leads.source", sources);
   if (assigned_to) priorityQuery = priorityQuery.eq("leads.assigned_to", assigned_to);
   if (rating) priorityQuery = priorityQuery.eq("leads.rating", rating);
   if (location_id) priorityQuery = priorityQuery.eq("leads.location_id", location_id);
@@ -167,7 +167,7 @@ export async function GET(request: NextRequest) {
     let restQuery = supabase.from("leads").select(LEAD_SELECT);
     if (!include_archived) restQuery = restQuery.is("archived_at", null);
     if (status) restQuery = restQuery.eq("status", status);
-    if (source) restQuery = restQuery.eq("source", source);
+    if (sources.length > 0) restQuery = restQuery.in("source", sources);
     if (assigned_to) restQuery = restQuery.eq("assigned_to", assigned_to);
     if (rating) restQuery = restQuery.eq("rating", rating);
     if (location_id) restQuery = restQuery.eq("location_id", location_id);
