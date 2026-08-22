@@ -93,11 +93,11 @@ export async function GET(
   }
 
   // billed / collections both start from the same statement set.
-  let statements: Array<{ id: string; contract_id: string; total_amount: number; period_start: string; period_end: string; due_date: string | null; statement_number: string | null; gst_invoice_number: string | null }> = [];
+  let statements: Array<{ id: string; contract_id: string; total_amount: number; period_start: string; period_end: string; due_date: string | null; statement_number: string | null; gst_invoice_number: string | null; payment_status: string | null }> = [];
   if (contractIds.length > 0) {
     const { data, error } = await supabase
       .from("billing_statements")
-      .select("id, contract_id, total_amount, period_start, period_end, due_date, statement_number, gst_invoice_number")
+      .select("id, contract_id, total_amount, period_start, period_end, due_date, statement_number, gst_invoice_number, payment_status")
       .in("contract_id", contractIds)
       .in("status", ["finalized", "exported"])
       .gte("period_start", range.start)
@@ -117,6 +117,7 @@ export async function GET(
         // /billing has no per-statement detail route — link to the parent
         // contract, which lists its own billing statements.
         href: `/contracts/${s.contract_id}`,
+        payment_status: (s.payment_status ?? "unpaid") as "unpaid" | "partially_paid" | "paid",
       }))
       .sort((a, b) => b.amount - a.amount);
     const total = items.reduce((s, i) => s + i.amount, 0);

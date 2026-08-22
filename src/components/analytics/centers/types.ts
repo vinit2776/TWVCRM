@@ -64,6 +64,8 @@ export interface CenterDetail {
 
 export type BreakdownMetric = "sales" | "billed" | "collections";
 
+export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid";
+
 export interface BreakdownItem {
   id: string;
   reference: string;
@@ -71,6 +73,8 @@ export interface BreakdownItem {
   date: string;
   amount: number;
   href: string | null;
+  /** Set only for "billed" items — the statement's current payment_status. */
+  payment_status?: BillingPaymentStatus;
 }
 
 export interface BreakdownResponse {
