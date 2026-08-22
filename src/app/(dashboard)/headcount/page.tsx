@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLocations } from "@/hooks/use-locations";
+import { HeadcountEnergyChart } from "@/components/headcount/headcount-energy-chart";
 import { toast } from "sonner";
 import { cn, formatDate } from "@/lib/utils";
 import type { SpaceHeadcount, LocationCapacityConfig } from "@/types";
@@ -618,7 +619,19 @@ export default function HeadcountPage() {
         </div>
       )}
 
+      {activeTab === "entry" && locationId && (
+        <HeadcountEnergyChart locationId={locationId} mode="day" />
+      )}
+
       {/* ═══ HISTORY TAB ═══════════════════════════════════════════════════ */}
+      {activeTab === "history" && filterLocation !== "__all" && (
+        <HeadcountEnergyChart
+          locationId={filterLocation}
+          mode="range"
+          dateFrom={filterFrom || undefined}
+          dateTo={filterTo || undefined}
+        />
+      )}
       {activeTab === "history" && (
         <div className="bg-card rounded-xl border shadow-sm overflow-hidden">
           {/* Filters */}
