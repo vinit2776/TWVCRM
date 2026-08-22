@@ -1956,6 +1956,9 @@ export interface VoCase {
     handoff_state?: string | null;
     total_amount?: number | null;
   } | null;
+  /** Whether the renewal cron may notify anyone about this case. False for
+   *  cases predating the end_date backfill — see migration 00526. */
+  renewal_notices_enabled?: boolean;
   compliance_passed: boolean;
   compliance_passed_at?: string;
   // Timestamps

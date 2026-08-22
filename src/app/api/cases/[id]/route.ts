@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { caseEndDate } from "@/lib/case-workflow";
 
 export async function GET(
   _request: NextRequest,
@@ -118,9 +119,24 @@ export async function PATCH(
     .eq("id", id)
     .single();
 
+  // Keep the expiry honest when either of its inputs moves. A stale end_date
+  // would leave the renewal cron chasing the wrong date rather than none.
+  const patch: Record<string, unknown> = { ...result.data };
+  const touchesTerm = "start_date" in patch || "tenure_months" in patch;
+  if (touchesTerm) {
+    const startDate = (patch.start_date as string | undefined) ?? oldCase?.start_date;
+    const tenure = (patch.tenure_months as number | undefined) ?? oldCase?.tenure_months;
+    const derived = caseEndDate(startDate, tenure);
+    // Renewal advances end_date beyond the original term, so only ever move
+    // it forward — never pull a renewed case back to its first term's end.
+    if (derived && (!oldCase?.end_date || derived > oldCase.end_date)) {
+      patch.end_date = derived;
+    }
+  }
+
   const { data, error } = await supabase
     .from("cases")
-    .update(result.data)
+    .update(patch)
     .eq("id", id)
     .select(
       "*, aggregator:aggregators!cases_aggregator_id_fkey(id, name, company_name, code), location:locations!cases_location_id_fkey(id, name, code), assignee:users!cases_assigned_to_fkey(id, full_name, email)"

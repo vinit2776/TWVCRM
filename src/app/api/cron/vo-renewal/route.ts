@@ -14,7 +14,27 @@ import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { withCronHealth } from "@/lib/cron-ping";
 
 /**
- * VO Renewal cron — runs daily at 9:30 AM IST (4:00 AM UTC).
+ * VO Renewal cron — SCHEDULE CURRENTLY DISABLED in vercel.json.
+ *
+ * Removed from the cron list by 00525, which backfilled cases.end_date. Until
+ * that backfill, every stage here selected nothing (they all compare end_date,
+ * which was NULL on all 58 cases) so the job was inert. With expiry dates
+ * populated it would start selecting cases immediately — and it notifies
+ * caseData.client_email / client_phone directly, with no concept of an
+ * aggregator. 51 of 58 cases are billed to a postpaid aggregator who owns the
+ * client relationship, so its first live run would email 51 partners' clients
+ * asking them for renewal money.
+ *
+ * Re-add the schedule once recipients route by billing party. Until then the
+ * endpoint stays callable by hand, and ?dry_run=1 reports what it would do.
+ *
+ * Every stage below also filters on cases.renewal_notices_enabled, which 00526
+ * set to false for every case that predates the end_date backfill. Those
+ * expiry dates were derived by a migration rather than agreed with anyone, and
+ * some are already in the past — so no automated notice may go out about them,
+ * however this job is invoked. New cases default to true.
+ *
+ * Ran daily at 9:30 AM IST (4:00 AM UTC) when scheduled.
  *
  * Handles four scenarios in one pass:
  *   1. active cases 30 days from end_date → renewal_due + Reminder 1 + PI
@@ -62,6 +82,7 @@ async function handler(request: Request) {
     .from("cases")
     .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
     .eq("status", "active")
+    .eq("renewal_notices_enabled", true)
     .eq("end_date", openDate)
     .not("end_date", "is", null);
 
@@ -154,6 +175,7 @@ async function handler(request: Request) {
     .from("cases")
     .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
     .eq("status", "renewal_due")
+    .eq("renewal_notices_enabled", true)
     .gt("end_date", todayIST)
     .lt("renewal_reminder_count", 4);
 
@@ -265,6 +287,7 @@ async function handler(request: Request) {
     .from("cases")
     .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
     .eq("status", "renewal_due")
+    .eq("renewal_notices_enabled", true)
     .lte("end_date", todayIST);
 
   for (const c of expiredCases ?? []) {
@@ -373,6 +396,7 @@ async function handler(request: Request) {
     .from("cases")
     .select("*, location:locations!cases_location_id_fkey(name, address, city, state)")
     .eq("status", "grace_period")
+    .eq("renewal_notices_enabled", true)
     .lte("renewal_grace_ends_at", new Date().toISOString());
 
   for (const c of graceExpired ?? []) {

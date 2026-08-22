@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
+import { caseEndDate } from "@/lib/case-workflow";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -162,6 +163,9 @@ export async function POST(request: NextRequest) {
     .insert({
       ...result.data,
       rate,
+      // Without this the case has no expiry, and every renewal stage —
+      // reminder, grace, lapse — silently skips it forever.
+      end_date: caseEndDate(result.data.start_date, result.data.tenure_months),
       status: "intake_received",
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
