@@ -106,6 +106,25 @@ export function calculateEndDate(
 }
 
 /**
+ * The same term end as a plain YYYY-MM-DD, which is what cases.end_date is.
+ *
+ * calculateEndDate returns a full ISO timestamp and had no callers at all,
+ * so end_date was never populated on any case — and every stage of the
+ * renewal cron compares end_date, where SQL comparisons are never true
+ * against NULL. Nothing could renew, and nothing could lapse.
+ *
+ * Returns null when either input is missing rather than inventing a date:
+ * a wrong expiry on a virtual office is worse than a visibly absent one.
+ */
+export function caseEndDate(
+  startDate: string | null | undefined,
+  tenureMonths: number | null | undefined,
+): string | null {
+  if (!startDate || !tenureMonths || tenureMonths <= 0) return null;
+  return calculateEndDate(startDate, tenureMonths).slice(0, 10);
+}
+
+/**
  * Get the status group (for Kanban board) that a status belongs to.
  */
 export function getStatusGroup(
