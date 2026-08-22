@@ -100,6 +100,13 @@ export function isInboxRole(role: string | null | undefined): role is InboxRole 
 /** Aging threshold beyond which inbox items get escalation flagging. */
 export const AGING_ESCALATE_HOURS = 48;
 
+/** Some leads have "Individual" typed literally into the free-text company
+ *  field (meaning "no company"), not an actual business name — treat that
+ *  the same as blank so the person's real name is used instead. */
+export function isRealCompanyName(v: string | null | undefined): v is string {
+  return !!v && v.trim().toLowerCase() !== "individual";
+}
+
 // -----------------------------------------------------------------------------
 // API response shape — consumed by the inbox-client component.
 // -----------------------------------------------------------------------------

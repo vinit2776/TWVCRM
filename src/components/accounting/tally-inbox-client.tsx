@@ -36,6 +36,7 @@ import {
   type HandoffBucket,
   type InboxResponse,
   type InboxRow,
+  isRealCompanyName,
   voBillParty,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
@@ -71,7 +72,7 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
 function partyDisplay(row: InboxRow): string {
   const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
   if (lead) {
-    if (lead.company) return lead.company;
+    if (isRealCompanyName(lead.company)) return lead.company;
     const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
     return name || lead.email || "(unnamed)";
   }

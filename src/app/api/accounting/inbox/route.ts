@@ -7,6 +7,7 @@ import {
   HANDOFF_STATE_LABELS,
   INBOX_ACTIONABLE_STATES,
   isInboxRole,
+  isRealCompanyName,
   type BookingHandoffState,
   type BookingInboxRow,
   type BookingPaymentConfirmation,
@@ -910,8 +911,7 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(t.updated_at)) / 3_600_000));
     const bucket = bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
 
-    const customerName = lead?.company
-      || t.booking?.guest_company
+    const customerName = [lead?.company, t.booking?.guest_company].find(isRealCompanyName)
       || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
       || null;
 
