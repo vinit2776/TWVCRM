@@ -5,7 +5,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
-import type { CenterSummary } from "./types";
+import type { BreakdownMetric, CenterSummary } from "./types";
 
 export type SortColumn = "sales" | "collections" | "billed" | "collection_efficiency_pct" | "occupancy_pct";
 
@@ -15,6 +15,19 @@ interface Props {
   sortDir: "asc" | "desc";
   onSort: (col: SortColumn) => void;
   onSelectCenter: (locationId: string) => void;
+  onSelectBreakdown: (locationId: string, metric: BreakdownMetric) => void;
+}
+
+function BreakdownCell({ amount, onClick }: { amount: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="rounded text-left underline decoration-dotted decoration-muted-foreground/50 underline-offset-4 hover:decoration-primary hover:text-primary"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+    >
+      {formatCurrency(amount)}
+    </button>
+  );
 }
 
 const COLUMNS: Array<{ key: SortColumn; label: string }> = [
@@ -25,7 +38,7 @@ const COLUMNS: Array<{ key: SortColumn; label: string }> = [
   { key: "occupancy_pct", label: "Occupancy" },
 ];
 
-export function ComparisonTable({ centers, sortColumn, sortDir, onSort, onSelectCenter }: Props) {
+export function ComparisonTable({ centers, sortColumn, sortDir, onSort, onSelectCenter, onSelectBreakdown }: Props) {
   const sorted = [...centers].sort((a, b) => {
     const diff = a[sortColumn] - b[sortColumn];
     return sortDir === "asc" ? diff : -diff;
@@ -69,9 +82,15 @@ export function ComparisonTable({ centers, sortColumn, sortDir, onSort, onSelect
               }}
             >
               <TableCell className="font-medium">{c.location_name}</TableCell>
-              <TableCell>{formatCurrency(c.sales)}</TableCell>
-              <TableCell>{formatCurrency(c.collections)}</TableCell>
-              <TableCell>{formatCurrency(c.billed)}</TableCell>
+              <TableCell>
+                <BreakdownCell amount={c.sales} onClick={() => onSelectBreakdown(c.location_id, "sales")} />
+              </TableCell>
+              <TableCell>
+                <BreakdownCell amount={c.collections} onClick={() => onSelectBreakdown(c.location_id, "collections")} />
+              </TableCell>
+              <TableCell>
+                <BreakdownCell amount={c.billed} onClick={() => onSelectBreakdown(c.location_id, "billed")} />
+              </TableCell>
               <TableCell>{c.collection_efficiency_pct}%</TableCell>
               <TableCell>
                 {c.occupancy_pct}%{" "}

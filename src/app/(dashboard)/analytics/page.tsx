@@ -13,9 +13,11 @@ import { OccupancyMeters } from "@/components/analytics/centers/occupancy-meters
 import { PeriodFilter } from "@/components/analytics/centers/period-filter";
 import { CenterFilterChips } from "@/components/analytics/centers/center-filter-chips";
 import { DetailSheet } from "@/components/analytics/centers/detail-sheet";
+import { BreakdownDialog } from "@/components/analytics/centers/breakdown-dialog";
 import { rangeForPreset, priorRangeOf, isMtd, type PeriodPresetId } from "@/components/analytics/centers/period";
 import type {
   SummaryResponse, TrendResponse, TrendMetric, CenterDetail, DateRange,
+  BreakdownMetric, BreakdownResponse,
 } from "@/components/analytics/centers/types";
 
 const TrendChart = dynamic(
@@ -35,6 +37,7 @@ export default function CenterAnalyticsPage() {
   const [sortColumn, setSortColumn] = useState<SortColumn>("sales");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedCenterId, setSelectedCenterId] = useState<string | null>(null);
+  const [breakdownRequest, setBreakdownRequest] = useState<{ locationId: string; metric: BreakdownMetric } | null>(null);
 
   const priorRange = useMemo(() => priorRangeOf(range), [range]);
 
@@ -69,6 +72,14 @@ export default function CenterAnalyticsPage() {
   const { data: detail, loading: detailLoading } = useFetch<CenterDetail | null>(
     selectedCenterId ? `/api/analytics/centers/${selectedCenterId}/detail` : "",
     { params: { start: range.start, end: range.end }, initialData: null, enabled: !!selectedCenterId }
+  );
+  const { data: breakdown, loading: breakdownLoading } = useFetch<BreakdownResponse | null>(
+    breakdownRequest ? `/api/analytics/centers/${breakdownRequest.locationId}/breakdown` : "",
+    {
+      params: { metric: breakdownRequest?.metric, start: range.start, end: range.end },
+      initialData: null,
+      enabled: !!breakdownRequest,
+    }
   );
 
   // Seed the center filter with every center once the first summary lands,
@@ -145,6 +156,7 @@ export default function CenterAnalyticsPage() {
             sortDir={sortDir}
             onSort={handleSort}
             onSelectCenter={setSelectedCenterId}
+            onSelectBreakdown={(locationId, metric) => setBreakdownRequest({ locationId, metric })}
           />
         </CardContent>
       </Card>
@@ -198,6 +210,15 @@ export default function CenterAnalyticsPage() {
         loading={detailLoading}
         open={!!selectedCenterId}
         onOpenChange={(open) => { if (!open) setSelectedCenterId(null); }}
+      />
+
+      <BreakdownDialog
+        open={!!breakdownRequest}
+        onOpenChange={(open) => { if (!open) setBreakdownRequest(null); }}
+        centerName={allCenters.find((c) => c.location_id === breakdownRequest?.locationId)?.location_name ?? ""}
+        metric={breakdownRequest?.metric ?? null}
+        data={breakdown}
+        loading={breakdownLoading}
       />
     </div>
   );
