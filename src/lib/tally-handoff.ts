@@ -120,6 +120,10 @@ export interface InboxLead {
   phone: string | null;
   gst_number: string | null;
   billing_emails?: string[] | null;
+  street?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
 }
 
 export interface InboxContract {
@@ -186,7 +190,7 @@ export interface InboxCase {
 }
 
 /** Joins address/city/state/pincode into a single display line, skipping blanks. */
-function formatAddressLine(
+export function formatAddressLine(
   address: string | null | undefined,
   city: string | null | undefined,
   state: string | null | undefined,
@@ -194,6 +198,14 @@ function formatAddressLine(
 ): string | null {
   const parts = [address, city, state, pincode].map((p) => p?.trim()).filter((p): p is string => !!p);
   return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** Formats a lead's billing address for display — same shape as voBillParty's
+ *  address, so accounts sees one consistent format regardless of whether the
+ *  invoice bills a lead, a case client, or an aggregator. */
+export function leadAddress(lead: InboxLead | null | undefined): string | null {
+  if (!lead) return null;
+  return formatAddressLine(lead.street, lead.city, lead.state, lead.zip_code);
 }
 
 /** The party a Virtual Office statement actually bills.
@@ -472,6 +484,7 @@ export interface BookingInboxRow {
   lead_id_proof_path: string | null;
   lead_billing_emails: string[] | null;
   customer_gstin: string | null;
+  customer_address: string | null;
   irn_required: boolean;
   expected_series: "SDIPL-REG" | "SDIPL-UNREG";
   expected_prefix: string;

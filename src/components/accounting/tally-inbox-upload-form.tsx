@@ -14,7 +14,7 @@
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
-import { isRealCompanyName, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
+import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
 interface Props {
@@ -45,6 +45,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const voParty = voBillParty(row);
   const customerGstin = lead?.gst_number || voParty?.gstin || null;
   const customerHasGstin = !!customerGstin;
+  const customerAddress = leadAddress(lead ?? null) || voParty?.address || null;
   const expectedSeries = customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
   const expectedPrefix = customerHasGstin ? "SD/A/" : "SD/B/";
   const partyName =
@@ -235,6 +236,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
           {row.irn_required && <span className="ml-2 text-blue-900">· IRN required</span>}
+        </div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          {customerAddress ? (
+            <>Address: {customerAddress}</>
+          ) : (
+            <span className="text-amber-700">No address on file — check with the customer before raising the invoice.</span>
+          )}
         </div>
       </div>
 

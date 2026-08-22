@@ -19,6 +19,7 @@ import {
   type InboxSnapshot,
   type InboxUpload,
   type TimelineEvent,
+  leadAddress,
   voBillParty,
 } from "@/lib/tally-handoff";
 
@@ -98,19 +99,22 @@ export async function GET(req: NextRequest) {
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
         id, proposal_number,
         lead:leads!proposals_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
       ),
       invoice:proforma_invoices!billing_statements_invoice_id_fkey(
         id, invoice_number, title, internal_notes,
         lead:leads!proforma_invoices_lead_id_fkey(
-          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails,
+          street, city, state, zip_code
         )
       ),
       case:cases!billing_statements_case_id_fkey(
@@ -204,6 +208,10 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
     proposal: {
@@ -217,6 +225,10 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
     invoice: {
@@ -232,6 +244,10 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
     } | null;
     case: {
@@ -685,7 +701,7 @@ export async function GET(req: NextRequest) {
         guest_name, guest_email, guest_phone, guest_company,
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
-        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, billing_emails, id_proof_path),
+        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, billing_emails, id_proof_path, street, city, state, zip_code),
         booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label)
       )
     `);
@@ -743,6 +759,10 @@ export async function GET(req: NextRequest) {
         phone: string | null;
         gst_number: string | null;
         id_proof_path: string | null;
+        street: string | null;
+        city: string | null;
+        state: string | null;
+        zip_code: string | null;
       } | null;
       booking_addons: {
         id: string;
@@ -914,6 +934,7 @@ export async function GET(req: NextRequest) {
     const customerName = [lead?.company, t.booking?.guest_company].find(isRealCompanyName)
       || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
       || null;
+    const customerAddress = leadAddress(lead);
 
     return {
       row_type: "booking" as const,
@@ -947,6 +968,7 @@ export async function GET(req: NextRequest) {
       lead_id_proof_path: lead?.id_proof_path ?? null,
       lead_billing_emails: ((lead as unknown as { billing_emails?: string[] })?.billing_emails ?? null),
       customer_gstin: customerGstin,
+      customer_address: customerAddress,
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
       expected_prefix: customerHasGstin ? "SD/A/" : "SD/B/",

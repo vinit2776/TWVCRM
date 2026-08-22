@@ -37,6 +37,7 @@ import {
   type InboxResponse,
   type InboxRow,
   isRealCompanyName,
+  leadAddress,
   voBillParty,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
@@ -1514,6 +1515,12 @@ const InboxRowItem = memo(function InboxRowItem({
   const hasUpload = row.latest_upload !== null;
   const isClosed = row.handoff_state === "complete";
 
+  // Billing address for whoever the invoice actually bills — a case/aggregator
+  // (VO) party if one applies, otherwise the lead behind the contract/proposal/invoice.
+  const displayAddress =
+    voBillParty(row)?.address
+    ?? leadAddress(row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead ?? null);
+
   // Tally bridge match status — derived from latest_snapshot + has_discrepancy.
   // Bridge v2 isn't deployed yet, so most rows will be "not synced".
   const bridgeStatus: { label: string; cls: string; title: string } = (() => {
@@ -1682,11 +1689,11 @@ const InboxRowItem = memo(function InboxRowItem({
           )}
         </div>
 
-        {/* ── VO case/aggregator billing address — accounts needs this to raise the Tally invoice ── */}
-        {voBillParty(row)?.address && (
-          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={voBillParty(row)!.address!}>
+        {/* ── Billing address — accounts needs this to raise the Tally invoice ── */}
+        {displayAddress && (
+          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={displayAddress}>
             <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" aria-hidden />
-            <span className="truncate">{voBillParty(row)!.address}</span>
+            <span className="truncate">{displayAddress}</span>
           </div>
         )}
 
@@ -2419,6 +2426,14 @@ function BookingInboxRowItem({
           )}
         </div>
 
+        {/* ── Billing address — accounts needs this to raise the Tally invoice ── */}
+        {row.customer_address && (
+          <div className="col-span-2 flex items-start gap-1 text-[11px] text-muted-foreground" title={row.customer_address}>
+            <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" aria-hidden />
+            <span className="truncate">{row.customer_address}</span>
+          </div>
+        )}
+
         {/* Lifecycle tracker */}
         <BookingInboxLifecycleTracker state={row.handoff_state} />
 
@@ -2682,6 +2697,7 @@ function BookingInboxRowItem({
           spaceName={row.space_name}
           customerName={row.customer_name}
           customerGstin={row.customer_gstin}
+          customerAddress={row.customer_address}
           totalAmount={row.statement_total_amount}
           irnRequired={row.irn_required}
           expectedSeries={row.expected_series ?? (row.irn_required ? "SDIPL-REG" : "SDIPL-UNREG")}
