@@ -415,7 +415,10 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
       )}
 
       {Boolean(config?.onegrid_enabled && config?.onegrid_api_key) && (
-        <ElectricityTelemetryPanel locationId={locationId} />
+        <ElectricityTelemetryPanel
+          locationId={locationId}
+          defaultDeviceId={(config?.onegrid_default_device_id as string | null) ?? null}
+        />
       )}
     </div>
   );

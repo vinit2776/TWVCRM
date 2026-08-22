@@ -4021,6 +4021,7 @@ export interface LocationElectricityConfig {
   tds_rate: number | null;
   onegrid_enabled: boolean;
   onegrid_api_key: string | null;
+  onegrid_default_device_id: string | null;
   // Deprecated: customer settings moved to contract_electricity_config
   customer_utility_pct: number;
   customer_generator_pct: number;

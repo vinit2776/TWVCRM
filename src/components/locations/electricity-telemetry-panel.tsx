@@ -15,6 +15,7 @@ import {
 import {
   Loader2, RefreshCw, Zap, Gauge, Activity, AlertTriangle, PlugZap,
 } from "lucide-react";
+import { toast } from "sonner";
 
 interface DeviceOption {
   device_id: string;
@@ -43,10 +44,16 @@ function daysAgoISO(n: number) {
   return d.toISOString().split("T")[0];
 }
 
-export function ElectricityTelemetryPanel({ locationId }: { locationId: string }) {
+interface Props {
+  locationId: string;
+  defaultDeviceId?: string | null;
+}
+
+export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props) {
   const [deviceOptions, setDeviceOptions] = useState<DeviceOption[]>([]);
   const [noTelemetryYet, setNoTelemetryYet] = useState<string[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>("");
+  const [savedDefaultDevice, setSavedDefaultDevice] = useState<string | null>(defaultDeviceId ?? null);
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [devicesError, setDevicesError] = useState<string | null>(null);
 
@@ -75,15 +82,16 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
       setDeviceOptions(options);
       setNoTelemetryYet(data.no_telemetry_yet ?? []);
       if (options.length > 0) {
+        const saved = savedDefaultDevice && options.find((d) => d.device_id === savedDefaultDevice);
         const main = options.find((d) => d.meter_role === "main");
-        setSelectedDevice(main?.device_id ?? options[0].device_id);
+        setSelectedDevice((saved || main)?.device_id ?? options[0].device_id);
       }
     } catch (err) {
       setDevicesError(err instanceof Error ? err.message : "Failed to load devices");
     } finally {
       setDevicesLoading(false);
     }
-  }, [locationId]);
+  }, [locationId, savedDefaultDevice]);
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
 
@@ -148,9 +156,26 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
+  const handleSelectDevice = useCallback(async (deviceId: string) => {
+    setSelectedDevice(deviceId);
+    if (deviceId === savedDefaultDevice) return;
+    try {
+      const res = await fetch(`/api/locations/${locationId}/telemetry/default-device`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: deviceId }),
+      });
+      if (!res.ok) throw new Error();
+      setSavedDefaultDevice(deviceId);
+      toast.success("Default meter updated for this location");
+    } catch {
+      toast.error("Couldn't save this as the default meter");
+    }
+  }, [locationId, savedDefaultDevice]);
+
   const latest = useMemo(() => (live?.series.length ? live.series[live.series.length - 1] : null), [live]);
-  const todayKwh = useMemo(
-    () => (live?.series ?? []).reduce((sum, r) => sum + (r.energy_delta_wh ?? 0), 0) / 1000,
+  const todayWh = useMemo(
+    () => (live?.series ?? []).reduce((sum, r) => sum + (r.energy_delta_wh ?? 0), 0),
     [live]
   );
   const totalRangeKwh = useMemo(() => history.reduce((s, d) => s + d.kwh, 0), [history]);
@@ -199,7 +224,7 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="flex items-center gap-3">
-          <Select value={selectedDevice} onValueChange={setSelectedDevice}>
+          <Select value={selectedDevice} onValueChange={handleSelectDevice}>
             <SelectTrigger className="w-72">
               <SelectValue placeholder="Select meter…" />
             </SelectTrigger>
@@ -211,6 +236,9 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
               ))}
             </SelectContent>
           </Select>
+          {selectedDevice === savedDefaultDevice && (
+            <Badge variant="secondary">Default for this location</Badge>
+          )}
           {noTelemetryYet.includes(selectedDevice) && (
             <Badge variant="outline" className="text-amber-600 border-amber-300">
               Registered, not reporting yet
@@ -239,7 +267,7 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
 
         {latest && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <StatTile icon={<Zap className="h-3.5 w-3.5" />} label="Today" value={`${todayKwh.toFixed(1)} kWh`} />
+            <StatTile icon={<Zap className="h-3.5 w-3.5" />} label="Today" value={`${todayWh.toFixed(0)} Wh`} />
             <StatTile icon={<Gauge className="h-3.5 w-3.5" />} label="Voltage" value={latest.Vll_Avg != null ? `${latest.Vll_Avg.toFixed(1)} V` : "—"} />
             <StatTile icon={<Activity className="h-3.5 w-3.5" />} label="Power Factor" value={latest.PF_Avg != null ? latest.PF_Avg.toFixed(2) : "—"} />
             <StatTile icon={<Activity className="h-3.5 w-3.5" />} label="Frequency" value={latest.Freq != null ? `${latest.Freq.toFixed(2)} Hz` : "—"} />
@@ -286,7 +314,7 @@ export function ElectricityTelemetryPanel({ locationId }: { locationId: string }
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} unit=" kWh" />
                   <Tooltip formatter={(v: number | undefined) => [`${v ?? 0} kWh`, "Consumption"]} />
-                  <Bar dataKey="kwh" fill="#015E65" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="kwh" fill="#015E65" radius={[4, 4, 0, 0]} maxBarSize={60} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
