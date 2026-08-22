@@ -99,9 +99,30 @@ export async function GET(
         : null,
     });
 
+    // Outstanding KYC, surfaced as a warning rather than a gate. Measured on
+    // 22 Aug 2026: 0 of the 5 cases ever invoiced had all required documents
+    // approved, and two of them were already paid in full — so enforcing this
+    // would halt invoicing outright. Show the gap at the point of decision
+    // and let the operator judge.
+    const { data: docRows } = await adminSupabase
+      .from("case_documents")
+      .select("label, document_type, status, is_required")
+      .eq("case_id", caseId);
+
+    const outstandingDocuments = (docRows ?? [])
+      .filter((d) => d.is_required !== false && d.status !== "approved")
+      .map((d) => ({
+        label: (d.label as string) || (d.document_type as string),
+        status: d.status as string,
+      }));
+
+    const requiredDocumentCount = (docRows ?? []).filter((d) => d.is_required !== false).length;
+
     return NextResponse.json({
       data: {
         ...preview,
+        outstandingDocuments,
+        requiredDocumentCount,
         // Who the proforma would actually email, so the dialog can warn when
         // the chosen bill-to party has no address on file.
         buyerEmail: preview.billTo === "aggregator"
