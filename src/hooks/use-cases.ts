@@ -15,6 +15,8 @@ interface UseCasesOptions {
   search?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
+  /** Only live agreements whose term ends within N days, including past. */
+  expiring_within?: number;
 }
 
 export function useCases(options: UseCasesOptions = {}) {
@@ -30,6 +32,7 @@ export function useCases(options: UseCasesOptions = {}) {
       search: options.search,
       sort_by: options.sort_by,
       sort_order: options.sort_order,
+      expiring_within: options.expiring_within,
     },
   });
 }
