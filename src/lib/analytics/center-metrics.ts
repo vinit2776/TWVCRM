@@ -438,6 +438,8 @@ export interface UnitHeatmapStats {
    */
   monthly_revenue: number;
   vacant_now: boolean;
+  /** The contract currently occupying this unit, for linking to /contracts/[id] — null when vacant. */
+  contract_id: string | null;
 }
 
 /**
@@ -509,6 +511,7 @@ export function computeUnitHeatmapStats(
       occupancy_pct,
       monthly_revenue: Math.round(monthly_revenue),
       vacant_now: !currentAlloc,
+      contract_id: currentAlloc?.contract_id ?? null,
     };
   });
 }

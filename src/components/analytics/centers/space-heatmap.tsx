@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
@@ -96,26 +97,7 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
           ) : (
             <>
               <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5">
-                {visibleUnits.map((u) => {
-                  const vacant = u.occupancy_pct === 0;
-                  return (
-                    <div
-                      key={u.unit_id}
-                      className={`relative flex min-h-[62px] flex-col justify-between rounded-md p-2 text-xs ${vacant ? "border border-dashed border-muted-foreground/40 bg-muted/20" : ""}`}
-                      style={vacant ? undefined : { background: heatColor(u.occupancy_pct), color: heatTextColor(u.occupancy_pct) }}
-                      title={`${u.code} — ${ROOM_TYPE_LABELS[u.type] ?? u.type} — ${u.occupancy_pct}% occupied — ${u.monthly_revenue > 0 ? formatCurrency(perSeatRevenue(u)) + "/seat/mo" : "no current tenant"}`}
-                    >
-                      <span className={`absolute right-1.5 top-1.5 text-[10px] font-semibold ${vacant ? "text-muted-foreground" : "opacity-80"}`}>
-                        {u.occupancy_pct}%
-                      </span>
-                      <span className={`text-[11px] font-bold ${vacant ? "text-muted-foreground" : ""}`}>{u.code}</span>
-                      <span className={`text-[10px] ${vacant ? "text-muted-foreground" : "opacity-85"}`}>
-                        {u.capacity} seat{u.capacity !== 1 ? "s" : ""}
-                        {u.monthly_revenue > 0 ? ` · ${formatCurrency(perSeatRevenue(u))}/seat` : ""}
-                      </span>
-                    </div>
-                  );
-                })}
+                {visibleUnits.map((u) => <HeatmapCell key={u.unit_id} unit={u} />)}
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                 <span>0% occupied</span>
@@ -132,6 +114,39 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function HeatmapCell({ unit: u }: { unit: HeatmapUnit }) {
+  const vacant = u.occupancy_pct === 0;
+  const cellClass = `relative flex min-h-[62px] flex-col justify-between rounded-md p-2 text-xs ${vacant ? "border border-dashed border-muted-foreground/40 bg-muted/20" : ""} ${u.contract_id ? "transition-transform hover:scale-[1.03] hover:shadow-md" : ""}`;
+  const cellStyle = vacant ? undefined : { background: heatColor(u.occupancy_pct), color: heatTextColor(u.occupancy_pct) };
+  const cellTitle = `${u.code} — ${ROOM_TYPE_LABELS[u.type] ?? u.type} — ${u.occupancy_pct}% occupied — ${u.monthly_revenue > 0 ? formatCurrency(perSeatRevenue(u)) + "/seat/mo" : "no current tenant"}${u.contract_id ? " — click to open the contract" : ""}`;
+
+  const content = (
+    <>
+      <span className={`absolute right-1.5 top-1.5 text-[10px] font-semibold ${vacant ? "text-muted-foreground" : "opacity-80"}`}>
+        {u.occupancy_pct}%
+      </span>
+      <span className={`text-[11px] font-bold ${vacant ? "text-muted-foreground" : ""}`}>{u.code}</span>
+      <span className={`text-[10px] ${vacant ? "text-muted-foreground" : "opacity-85"}`}>
+        {u.capacity} seat{u.capacity !== 1 ? "s" : ""}
+        {u.monthly_revenue > 0 ? ` · ${formatCurrency(perSeatRevenue(u))}/seat` : ""}
+      </span>
+    </>
+  );
+
+  if (u.contract_id) {
+    return (
+      <Link href={`/contracts/${u.contract_id}`} className={cellClass} style={cellStyle} title={cellTitle}>
+        {content}
+      </Link>
+    );
+  }
+  return (
+    <div className={cellClass} style={cellStyle} title={cellTitle}>
+      {content}
     </div>
   );
 }
