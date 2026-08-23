@@ -23,6 +23,16 @@ function heatTextColor(pct: number): string {
   return pct >= 55 ? "#ffffff" : "#0b0b0b";
 }
 
+/**
+ * monthly_revenue is the unit's apportioned share of its contract (see
+ * center-metrics.ts) — for a multi-seat cabin that's still a cabin-level
+ * total, not a rate a reader can compare across differently-sized units.
+ * Per-seat is what actually lines up a 2-seat cabin against a 6-seat one.
+ */
+function perSeatRevenue(u: HeatmapUnit): number {
+  return u.capacity > 0 ? u.monthly_revenue / u.capacity : 0;
+}
+
 export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading: boolean }) {
   const centers = useMemo(() => {
     const byId = new Map<string, string>();
@@ -93,7 +103,7 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
                       key={u.unit_id}
                       className={`relative flex min-h-[62px] flex-col justify-between rounded-md p-2 text-xs ${vacant ? "border border-dashed border-muted-foreground/40 bg-muted/20" : ""}`}
                       style={vacant ? undefined : { background: heatColor(u.occupancy_pct), color: heatTextColor(u.occupancy_pct) }}
-                      title={`${u.code} — ${ROOM_TYPE_LABELS[u.type] ?? u.type} — ${u.occupancy_pct}% occupied — ${u.monthly_revenue > 0 ? formatCurrency(u.monthly_revenue) + "/mo" : "no current tenant"}`}
+                      title={`${u.code} — ${ROOM_TYPE_LABELS[u.type] ?? u.type} — ${u.occupancy_pct}% occupied — ${u.monthly_revenue > 0 ? formatCurrency(perSeatRevenue(u)) + "/seat/mo" : "no current tenant"}`}
                     >
                       <span className={`absolute right-1.5 top-1.5 text-[10px] font-semibold ${vacant ? "text-muted-foreground" : "opacity-80"}`}>
                         {u.occupancy_pct}%
@@ -101,7 +111,7 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
                       <span className={`text-[11px] font-bold ${vacant ? "text-muted-foreground" : ""}`}>{u.code}</span>
                       <span className={`text-[10px] ${vacant ? "text-muted-foreground" : "opacity-85"}`}>
                         {u.capacity} seat{u.capacity !== 1 ? "s" : ""}
-                        {u.monthly_revenue > 0 ? ` · ${formatCurrency(u.monthly_revenue)}/mo` : ""}
+                        {u.monthly_revenue > 0 ? ` · ${formatCurrency(perSeatRevenue(u))}/seat` : ""}
                       </span>
                     </div>
                   );
