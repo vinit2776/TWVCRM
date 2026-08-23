@@ -53,9 +53,30 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
     [units]
   );
 
-  const visibleUnits = units
+  const centerUnits = units
     .filter((u) => u.location_id === effectiveCenterId)
     .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+
+  // Only the types actually present at this center — a "Hot Desk" chip on a
+  // center with none would be a dead filter.
+  const roomTypes = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const u of centerUnits) {
+      if (!seen.has(u.type)) { seen.add(u.type); ordered.push(u.type); }
+    }
+    return ordered;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveCenterId, units]);
+
+  const [activeRoomType, setActiveRoomType] = useState<string | null>(null);
+  // Falls back to "All types" if the selected type doesn't exist at whichever
+  // center is now showing (switched centers with a type filter still applied).
+  const effectiveRoomType = activeRoomType && roomTypes.includes(activeRoomType) ? activeRoomType : null;
+
+  const visibleUnits = effectiveRoomType
+    ? centerUnits.filter((u) => u.type === effectiveRoomType)
+    : centerUnits;
 
   if (loading) {
     return (
@@ -92,8 +113,33 @@ export function SpaceHeatmap({ units, loading }: { units: HeatmapUnit[]; loading
           </div>
         </CardHeader>
         <CardContent>
+          {roomTypes.length > 1 && (
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              <Button
+                size="sm"
+                variant={effectiveRoomType === null ? "secondary" : "outline"}
+                className={effectiveRoomType === null ? "" : "opacity-60"}
+                onClick={() => setActiveRoomType(null)}
+              >
+                All types
+              </Button>
+              {roomTypes.map((t) => (
+                <Button
+                  key={t}
+                  size="sm"
+                  variant={t === effectiveRoomType ? "secondary" : "outline"}
+                  className={t === effectiveRoomType ? "" : "opacity-60"}
+                  onClick={() => setActiveRoomType(t)}
+                >
+                  {ROOM_TYPE_LABELS[t] ?? t}
+                </Button>
+              ))}
+            </div>
+          )}
           {visibleUnits.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No active spaces at this center.</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              {effectiveRoomType ? `No ${(ROOM_TYPE_LABELS[effectiveRoomType] ?? effectiveRoomType).toLowerCase()} spaces at this center.` : "No active spaces at this center."}
+            </p>
           ) : (
             <>
               <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5">
