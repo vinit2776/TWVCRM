@@ -97,6 +97,8 @@ export interface HeatmapUnit {
   /** Current tenant's monthly-equivalent rate, capacity-apportioned — a snapshot, not range-based. */
   monthly_revenue: number;
   vacant_now: boolean;
+  /** The contract currently occupying this unit — null when vacant. */
+  contract_id: string | null;
 }
 
 export interface HeatmapResponse {
