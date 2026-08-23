@@ -20,6 +20,9 @@ import {
   istDayBounds,
   todayIstDate,
   fetchPaymentsTotal,
+  fetchActiveSpaceUnits,
+  fetchSpaceAllocations,
+  isAllocationActiveAsOf,
 } from "@/lib/analytics/center-metrics";
 
 async function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -150,27 +153,25 @@ export async function GET(
 
   // ── Room-type occupancy (current, includes business_centre — unlike the
   //    summary/trend occupancy_pct, this is a full room-mix breakdown) ────
-  const [{ data: units, error: unitsErr }, { data: occupants, error: occErr }] = await Promise.all([
-    supabase.from("space_units").select("id, type, capacity").eq("location_id", locationId).eq("is_active", true),
-    supabase.from("space_seat_occupants").select("id, space_unit_id, start_date, end_date").eq("location_id", locationId),
+  const [units, allocations] = await Promise.all([
+    fetchActiveSpaceUnits(supabase, locationId),
+    fetchSpaceAllocations(supabase, locationId),
   ]);
-  if (unitsErr) return NextResponse.json({ error: unitsErr.message }, { status: 500 });
-  if (occErr) return NextResponse.json({ error: occErr.message }, { status: 500 });
 
   const today = todayIstDate();
-  const unitTypeById = new Map((units ?? []).map((u) => [u.id as string, u.type as string]));
+  const unitById = new Map(units.map((u) => [u.id, u]));
   const capacityByType = new Map<string, number>();
-  for (const u of units ?? []) {
-    const t = u.type as string;
-    capacityByType.set(t, (capacityByType.get(t) ?? 0) + Number(u.capacity || 0));
+  for (const u of units) {
+    capacityByType.set(u.type, (capacityByType.get(u.type) ?? 0) + Number(u.capacity || 0));
   }
   const occupiedByType = new Map<string, number>();
-  for (const o of occupants ?? []) {
-    const isActive = (o.start_date as string) <= today && (!o.end_date || (o.end_date as string) >= today);
-    if (!isActive) continue;
-    const t = unitTypeById.get(o.space_unit_id as string);
-    if (!t) continue;
-    occupiedByType.set(t, (occupiedByType.get(t) ?? 0) + 1);
+  const countedUnits = new Set<string>();
+  for (const a of allocations) {
+    if (!isAllocationActiveAsOf(a, today)) continue;
+    const unit = unitById.get(a.space_unit_id);
+    if (!unit || countedUnits.has(unit.id)) continue;
+    countedUnits.add(unit.id);
+    occupiedByType.set(unit.type, (occupiedByType.get(unit.type) ?? 0) + Number(unit.capacity || 0));
   }
   const rooms = Array.from(capacityByType.entries()).map(([type, capacity]) => ({
     type,
