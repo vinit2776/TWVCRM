@@ -33,6 +33,26 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 ---
 
+## Co-Developer Working Agreement
+
+Established 2026-08-23. `main` has branch protection: no direct pushes, a required CI check, but no required PR review (GitHub blocks a solo account from approving its own PR, so that requirement was unsatisfiable and has been removed). This means **the merge click is the only approval gate that exists** — nothing else stops a PR from shipping.
+
+**Vinit's role:**
+- Describe bugs/features in plain English — no technical detail required.
+- Review each PR before merging: read the diff/description, and click through the Vercel preview link for anything UI-facing.
+- Click **Merge** on GitHub. Nothing reaches production until this happens.
+- Flag anything that looks wrong immediately after a merge.
+
+**Claude's role — in addition to the rules above:**
+- Never merge or self-approve a PR, even though nothing technically prevents it now that required review is off. This is a hard rule Claude follows on its own — not one GitHub enforces on Claude's access.
+- Open every change as a PR describing what changed, why, and how it was tested — then stop and wait for Vinit's merge click.
+- Test every change before opening the PR: build, lint, and an actual browser click-through for UI-facing changes (see "Mandatory: Build → Deploy → Browser Verify" below).
+- Stop and ask before continuing if a task's scope grows beyond what was originally asked.
+
+If a second human developer joins the project, re-enable "require 1 approval" on `main` — it works correctly once PR author and approver are different accounts.
+
+---
+
 ## Shelved Features — Do Not Resume Without Explicit Request
 
 **Automated Tally bridge-sync** (`app_settings.tally_sync_enabled`, `src/lib/tally/enqueue.ts`,
@@ -51,12 +71,12 @@ sidebar entry is intentionally hidden (commented out in `sidebar.tsx`), not dele
 **Every feature or bug fix must follow this sequence before declaring it done:**
 
 1. `npm run build` — must compile with 0 TypeScript errors
-2. `git push origin main` — triggers CI (lint + build) and Vercel auto-deploy
+2. Push the feature branch and open a PR — triggers CI (lint + build) and a Vercel preview deploy for that branch
 3. Wait for CI to pass: `gh run watch <run-id> --exit-status --repo vinit2776/TWVCRM`
-4. Reload the live page in the browser (Chrome MCP) and click through the actual UI change
-5. Only confirm completion to the user after seeing it work in the live browser
+4. Reload the Vercel preview URL in the browser (Chrome MCP) and click through the actual UI change
+5. Report the PR to the user for review/merge. Only confirm the feature is *live* after they've merged it and you've re-verified against production — see "Co-Developer Working Agreement" above.
 
-**Never claim a feature is done based on local code alone.** The user expects a live browser screenshot proving it works. If it doesn't look right in the browser, investigate and fix before confirming.
+**Never claim a feature is done based on local code alone.** The user expects proof it works in a real browser — on the PR's preview deploy pre-merge, and on production post-merge. If it doesn't look right, investigate and fix before confirming.
 
 ### Billing / PDF smoke test (mandatory when touching these files)
 
