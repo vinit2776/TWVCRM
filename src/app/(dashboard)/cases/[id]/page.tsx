@@ -12,6 +12,7 @@ import {
   MapPin,
   RefreshCw,
   User,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { caseDisplayName } from "@/lib/case-workflow";
 import { caseExpiry } from "@/lib/case-expiry";
+import { RenewalNoticeDialog } from "@/components/cases/renewal-notice-dialog";
 import {
   Dialog,
   DialogContent,
@@ -65,6 +67,7 @@ export default function CaseDetailPage({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [renewalNoticeOpen, setRenewalNoticeOpen] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -204,9 +207,25 @@ export default function CaseDetailPage({
               <p className="text-lg font-semibold tabular-nums">{formatDate(caseData.end_date)}</p>
             </div>
             <p className="text-sm">{expiry.relative}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRenewalNoticeOpen(true)}
+              className="bg-background"
+            >
+              <Send className="mr-1.5 h-3.5 w-3.5" />
+              Send renewal intimation
+            </Button>
           </div>
         );
       })()}
+
+      <RenewalNoticeDialog
+        caseId={id}
+        open={renewalNoticeOpen}
+        onClose={() => setRenewalNoticeOpen(false)}
+        onSent={refetch}
+      />
 
       <Tabs defaultValue="overview">
         <TabsList className="flex-wrap">
