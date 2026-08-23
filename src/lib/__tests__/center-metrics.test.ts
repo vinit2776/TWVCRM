@@ -6,9 +6,14 @@ import {
   isAllocationActiveAsOf,
   computeOccupancyByLocation,
   sumSalesInRange,
+  allocationOverlapDays,
+  daysInRange,
+  computeUnitHeatmapStats,
   type SpaceUnitRow,
   type SpaceAllocationRow,
   type ContractRow,
+  type SpaceUnitDetailRow,
+  type HeatmapAllocationRow,
 } from "@/lib/analytics/center-metrics";
 
 describe("trailingMonthWindows", () => {
@@ -165,5 +170,101 @@ describe("sumSalesInRange", () => {
       { id: "edge", location_id: "loc1", total_amount: 50, activated_at: "2026-09-01T00:00:00.000+05:30" },
     ];
     expect(sumSalesInRange(edge, range, "loc1")).toBe(0);
+  });
+});
+
+describe("daysInRange / allocationOverlapDays", () => {
+  it("counts a single day as 1, not 0", () => {
+    expect(daysInRange("2026-08-01", "2026-08-01")).toBe(1);
+  });
+
+  it("counts a whole month inclusively", () => {
+    expect(daysInRange("2026-08-01", "2026-08-31")).toBe(31);
+  });
+
+  it("clips an allocation's overlap to the range on both ends", () => {
+    // Allocation runs Jul 15 - Aug 10; range is the whole of August.
+    const days = allocationOverlapDays({ start_date: "2026-07-15", end_date: "2026-08-10" }, "2026-08-01", "2026-08-31");
+    expect(days).toBe(10); // Aug 1-10
+  });
+
+  it("treats a null end_date as open-ended, clipped to the range end", () => {
+    const days = allocationOverlapDays({ start_date: "2026-08-20", end_date: null }, "2026-08-01", "2026-08-31");
+    expect(days).toBe(12); // Aug 20-31
+  });
+
+  it("returns 0 when the allocation doesn't overlap the range at all", () => {
+    const days = allocationOverlapDays({ start_date: "2026-06-01", end_date: "2026-06-30" }, "2026-08-01", "2026-08-31");
+    expect(days).toBe(0);
+  });
+
+  it("returns the full range when the allocation spans it entirely", () => {
+    const days = allocationOverlapDays({ start_date: "2026-01-01", end_date: null }, "2026-08-01", "2026-08-31");
+    expect(days).toBe(31);
+  });
+});
+
+describe("computeUnitHeatmapStats", () => {
+  const units: SpaceUnitDetailRow[] = [
+    { id: "u1", location_id: "loc1", type: "private_cabin", capacity: 6, code: "CB-01", name: "Cabin 01" },
+    { id: "u2", location_id: "loc1", type: "private_cabin", capacity: 2, code: "CB-02", name: "Cabin 02" },
+    { id: "u3", location_id: "loc1", type: "hot_desk", capacity: 1, code: "HD-01", name: "Hot Desk 01" },
+  ];
+  const range = { start: "2026-08-01", end: "2026-08-31" }; // 31 days
+  const today = "2026-08-21";
+
+  function alloc(over: Partial<HeatmapAllocationRow>): HeatmapAllocationRow {
+    return {
+      id: "a", space_unit_id: "u1", contract_id: "c1",
+      start_date: "2026-08-01", end_date: null, contract_status: "active",
+      contract_total_amount: 62000, contract_tenure_months: 1,
+      ...over,
+    };
+  }
+
+  it("computes occupancy_pct as the fraction of the range covered, not a snapshot", () => {
+    // 15 of 31 days.
+    const allocations = [alloc({ start_date: "2026-08-01", end_date: "2026-08-15" })];
+    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    const u1 = stats.find((s) => s.unit_id === "u1")!;
+    expect(u1.occupancy_pct).toBe(Math.round((15 / 31) * 100));
+    // Allocation ended Aug 15, well before "today" (Aug 21) — vacant now,
+    // even though it was occupied for part of the queried range.
+    expect(u1.vacant_now).toBe(true);
+    expect(u1.monthly_revenue).toBe(0);
+  });
+
+  it("excludes allocations whose contract is no longer active/renewed from occupancy", () => {
+    const allocations = [alloc({ contract_status: "terminated" })];
+    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    expect(stats.find((s) => s.unit_id === "u1")!.occupancy_pct).toBe(0);
+  });
+
+  it("gives a single-unit contract its full monthly-equivalent rate", () => {
+    // total_amount 62000 over 1 month tenure = 62000/mo, u1 is the only unit.
+    const allocations = [alloc({ contract_total_amount: 62000, contract_tenure_months: 1 })];
+    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    const u1 = stats.find((s) => s.unit_id === "u1")!;
+    expect(u1.monthly_revenue).toBe(62000);
+    expect(u1.vacant_now).toBe(false);
+    expect(u1.occupancy_pct).toBe(100); // active the whole range, open-ended
+  });
+
+  it("splits a multi-unit contract's rate by capacity share", () => {
+    // One contract holds u1 (capacity 6) and u2 (capacity 2) today.
+    // Monthly-equivalent = 80000/mo, total capacity 8 -> u1 gets 6/8, u2 gets 2/8.
+    const allocations = [
+      alloc({ id: "a1", space_unit_id: "u1", contract_total_amount: 80000, contract_tenure_months: 1 }),
+      alloc({ id: "a2", space_unit_id: "u2", contract_total_amount: 80000, contract_tenure_months: 1 }),
+    ];
+    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    expect(stats.find((s) => s.unit_id === "u1")!.monthly_revenue).toBe(60000); // 80000 * 6/8
+    expect(stats.find((s) => s.unit_id === "u2")!.monthly_revenue).toBe(20000); // 80000 * 2/8
+  });
+
+  it("marks a unit with no allocations at all as fully vacant", () => {
+    const stats = computeUnitHeatmapStats(units, [], range, today);
+    const u3 = stats.find((s) => s.unit_id === "u3")!;
+    expect(u3).toMatchObject({ occupancy_pct: 0, monthly_revenue: 0, vacant_now: true });
   });
 });

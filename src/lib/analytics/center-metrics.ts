@@ -9,9 +9,10 @@
  *     the underlying record belongs to (contract activation date, billing
  *     statement period_start) — not by when cash happened to move.
  *   - Occupancy is a SNAPSHOT metric — "as of" a single date, computed from
- *     space_seat_occupants.start_date/end_date. There is no historical
- *     capacity tracking, so the capacity denominator is always current even
- *     when the occupied numerator is computed for a past date.
+ *     contract_space_allocations.start_date/end_date (a contract's claim on
+ *     a whole space_unit). There is no historical capacity tracking, so the
+ *     capacity denominator is always current even when the occupied
+ *     numerator is computed for a past date.
  */
 
 import { z } from "zod";
@@ -271,4 +272,169 @@ export function computeOccupancyByLocation(
     entry.occupied = Math.min(entry.occupied, entry.capacity);
   }
   return byLocation;
+}
+
+// ── Space Heat Map (per-unit occupancy % of period + current revenue) ─────
+
+export interface SpaceUnitDetailRow extends SpaceUnitRow {
+  code: string;
+  name: string;
+}
+
+export async function fetchSpaceUnitsDetailed(supabase: Supabase): Promise<SpaceUnitDetailRow[]> {
+  const { data, error } = await supabase
+    .from("space_units")
+    .select("id, location_id, type, capacity, code, name")
+    .eq("is_active", true);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SpaceUnitDetailRow[];
+}
+
+export interface HeatmapAllocationRow {
+  id: string;
+  space_unit_id: string;
+  contract_id: string;
+  start_date: string;
+  end_date: string | null;
+  contract_status: string | null;
+  contract_total_amount: number;
+  /** Always >= 1 — a 0-tenure contract would make monthly-equivalent division blow up. */
+  contract_tenure_months: number;
+}
+
+/**
+ * All allocations with the contract fields the heat map needs beyond what
+ * `fetchSpaceAllocations` carries (total_amount, tenure_months) — kept
+ * separate rather than widening the shared row, since summary/trend/detail
+ * don't need revenue.
+ */
+export async function fetchSpaceAllocationsForHeatmap(supabase: Supabase): Promise<HeatmapAllocationRow[]> {
+  const { data, error } = await supabase
+    .from("contract_space_allocations")
+    .select("id, space_unit_id, contract_id, start_date, end_date, contract:contracts(status, total_amount, tenure_months)");
+  if (error) throw new Error(error.message);
+  type Row = {
+    id: string; space_unit_id: string; contract_id: string; start_date: string; end_date: string | null;
+    contract: { status: string | null; total_amount: number | null; tenure_months: number | null } | null;
+  };
+  return ((data ?? []) as unknown as Row[]).map((r) => ({
+    id: r.id,
+    space_unit_id: r.space_unit_id,
+    contract_id: r.contract_id,
+    start_date: r.start_date,
+    end_date: r.end_date,
+    contract_status: r.contract?.status ?? null,
+    contract_total_amount: Number(r.contract?.total_amount || 0),
+    contract_tenure_months: Math.max(1, Number(r.contract?.tenure_months || 1)),
+  }));
+}
+
+/** Inclusive day-overlap between an allocation's active window and [rangeStart, rangeEnd]. */
+export function allocationOverlapDays(
+  a: { start_date: string; end_date: string | null },
+  rangeStart: string,
+  rangeEnd: string
+): number {
+  const s = a.start_date > rangeStart ? a.start_date : rangeStart;
+  const e = a.end_date && a.end_date < rangeEnd ? a.end_date : rangeEnd;
+  if (s > e) return 0;
+  const sMs = Date.parse(`${s}T00:00:00Z`);
+  const eMs = Date.parse(`${e}T00:00:00Z`);
+  return Math.round((eMs - sMs) / 86400000) + 1;
+}
+
+/** Inclusive day count of a range — e.g. Aug 1 to Aug 1 is 1 day, not 0. */
+export function daysInRange(rangeStart: string, rangeEnd: string): number {
+  return allocationOverlapDays({ start_date: rangeStart, end_date: rangeEnd }, rangeStart, rangeEnd);
+}
+
+function isContractLive(status: string | null): boolean {
+  return status === "active" || status === "renewed";
+}
+
+export interface UnitHeatmapStats {
+  unit_id: string;
+  code: string;
+  name: string;
+  type: string;
+  capacity: number;
+  location_id: string;
+  /** % of days in the range this unit had a live-contract allocation — a real gradient, not a snapshot. */
+  occupancy_pct: number;
+  /**
+   * The CURRENT tenant's monthly-equivalent rate (contract.total_amount /
+   * tenure_months), apportioned by capacity share across every unit that
+   * same contract holds today. This is a snapshot (today), unlike
+   * occupancy_pct (the whole range) — revenue only means something for
+   * whoever occupies the unit right now, not a blend across past tenants.
+   */
+  monthly_revenue: number;
+  vacant_now: boolean;
+}
+
+/**
+ * Per-unit occupancy-over-range and current revenue, for the Space Heat
+ * Map. Takes the raw fetches (not fetched internally) so the route can
+ * batch them alongside the locations query.
+ */
+export function computeUnitHeatmapStats(
+  units: SpaceUnitDetailRow[],
+  allocations: HeatmapAllocationRow[],
+  range: DateRange,
+  todayDate: string
+): UnitHeatmapStats[] {
+  const totalRangeDays = daysInRange(range.start, range.end);
+  const unitById = new Map(units.map((u) => [u.id, u]));
+
+  const allocationsByUnit = new Map<string, HeatmapAllocationRow[]>();
+  for (const a of allocations) {
+    if (!allocationsByUnit.has(a.space_unit_id)) allocationsByUnit.set(a.space_unit_id, []);
+    allocationsByUnit.get(a.space_unit_id)!.push(a);
+  }
+
+  // Group units by whichever contract currently holds them, so a multi-unit
+  // contract's rate splits by seat share instead of crediting the full
+  // amount to every unit it touches.
+  const currentUnitIdsByContract = new Map<string, string[]>();
+  for (const a of allocations) {
+    if (!isContractLive(a.contract_status)) continue;
+    if (!isAllocationActiveAsOf(a, todayDate)) continue;
+    if (!currentUnitIdsByContract.has(a.contract_id)) currentUnitIdsByContract.set(a.contract_id, []);
+    currentUnitIdsByContract.get(a.contract_id)!.push(a.space_unit_id);
+  }
+
+  return units.map((u) => {
+    const unitAllocations = allocationsByUnit.get(u.id) ?? [];
+
+    const occupiedDays = unitAllocations
+      .filter((a) => isContractLive(a.contract_status))
+      .reduce((sum, a) => sum + allocationOverlapDays(a, range.start, range.end), 0);
+    const occupancy_pct = totalRangeDays > 0
+      ? Math.round((Math.min(occupiedDays, totalRangeDays) / totalRangeDays) * 100)
+      : 0;
+
+    const currentAlloc = unitAllocations.find(
+      (a) => isContractLive(a.contract_status) && isAllocationActiveAsOf(a, todayDate)
+    );
+
+    let monthly_revenue = 0;
+    if (currentAlloc) {
+      const siblingUnitIds = currentUnitIdsByContract.get(currentAlloc.contract_id) ?? [u.id];
+      const siblingCapacity = siblingUnitIds.reduce((s, id) => s + (unitById.get(id)?.capacity ?? 0), 0);
+      const monthlyEquivalent = currentAlloc.contract_total_amount / currentAlloc.contract_tenure_months;
+      monthly_revenue = siblingCapacity > 0 ? monthlyEquivalent * (u.capacity / siblingCapacity) : 0;
+    }
+
+    return {
+      unit_id: u.id,
+      code: u.code,
+      name: u.name,
+      type: u.type,
+      capacity: u.capacity,
+      location_id: u.location_id,
+      occupancy_pct,
+      monthly_revenue: Math.round(monthly_revenue),
+      vacant_now: !currentAlloc,
+    };
+  });
 }

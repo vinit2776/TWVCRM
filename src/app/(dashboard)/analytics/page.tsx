@@ -14,10 +14,11 @@ import { PeriodFilter } from "@/components/analytics/centers/period-filter";
 import { CenterFilterChips } from "@/components/analytics/centers/center-filter-chips";
 import { DetailSheet } from "@/components/analytics/centers/detail-sheet";
 import { BreakdownDialog } from "@/components/analytics/centers/breakdown-dialog";
+import { SpaceHeatmap } from "@/components/analytics/centers/space-heatmap";
 import { rangeForPreset, priorRangeOf, isMtd, type PeriodPresetId } from "@/components/analytics/centers/period";
 import type {
   SummaryResponse, TrendResponse, TrendMetric, CenterDetail, DateRange,
-  BreakdownMetric, BreakdownResponse,
+  BreakdownMetric, BreakdownResponse, HeatmapResponse,
 } from "@/components/analytics/centers/types";
 
 const TrendChart = dynamic(
@@ -72,6 +73,10 @@ export default function CenterAnalyticsPage() {
   const { data: detail, loading: detailLoading } = useFetch<CenterDetail | null>(
     selectedCenterId ? `/api/analytics/centers/${selectedCenterId}/detail` : "",
     { params: { start: range.start, end: range.end }, initialData: null, enabled: !!selectedCenterId }
+  );
+  const { data: heatmap, loading: heatmapLoading } = useFetch<HeatmapResponse | null>(
+    "/api/analytics/centers/heatmap",
+    { params: { start: range.start, end: range.end }, initialData: null }
   );
   const { data: breakdown, loading: breakdownLoading } = useFetch<BreakdownResponse | null>(
     breakdownRequest ? `/api/analytics/centers/${breakdownRequest.locationId}/breakdown` : "",
@@ -204,6 +209,8 @@ export default function CenterAnalyticsPage() {
           <OccupancyMeters centers={filteredCenters} />
         </CardContent>
       </Card>
+
+      <SpaceHeatmap units={heatmap?.units ?? []} loading={heatmapLoading && !heatmap} />
 
       <DetailSheet
         detail={detail}

@@ -84,6 +84,26 @@ export interface BreakdownResponse {
   items: BreakdownItem[];
 }
 
+export interface HeatmapUnit {
+  unit_id: string;
+  code: string;
+  name: string;
+  type: string;
+  capacity: number;
+  location_id: string;
+  location_name: string;
+  /** % of days in the selected range this unit had a live-contract allocation. */
+  occupancy_pct: number;
+  /** Current tenant's monthly-equivalent rate, capacity-apportioned — a snapshot, not range-based. */
+  monthly_revenue: number;
+  vacant_now: boolean;
+}
+
+export interface HeatmapResponse {
+  range: DateRange;
+  units: HeatmapUnit[];
+}
+
 export const ROOM_TYPE_LABELS: Record<string, string> = {
   hot_desk: "Hot Desk",
   dedicated_desk: "Dedicated Desk",
