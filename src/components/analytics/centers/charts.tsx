@@ -20,7 +20,7 @@ function formatMoney(value: number | undefined) {
   return formatCurrency(value ?? 0);
 }
 
-/** Per-center monthly trend, one call per metric tab (Sales/Collections/Occupancy). */
+/** Per-center monthly trend, one call per metric tab (New MRR/Collections/Occupancy). */
 export function TrendChart({
   series,
   metric,

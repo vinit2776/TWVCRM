@@ -14,7 +14,7 @@ import type { BillingPaymentStatus, BreakdownMetric, BreakdownResponse } from ".
 const SEARCH_THRESHOLD = 6;
 
 const METRIC_LABEL: Record<BreakdownMetric, string> = {
-  sales: "Sales",
+  sales: "New MRR",
   billed: "Billed",
   collections: "Collections",
 };

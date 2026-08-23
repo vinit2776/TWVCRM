@@ -125,7 +125,7 @@ export default function CenterAnalyticsPage() {
       <div>
         <h1 className="text-2xl font-bold">Center Analytics</h1>
         <p className="text-sm text-muted-foreground">
-          Sales, collections and occupancy across every center.
+          New MRR, collections and occupancy across every center.
         </p>
       </div>
 
@@ -175,7 +175,7 @@ export default function CenterAnalyticsPage() {
             </div>
             <Tabs value={trendMetric} onValueChange={(v) => setTrendMetric(v as TrendMetric)}>
               <TabsList>
-                <TabsTrigger value="sales">Sales</TabsTrigger>
+                <TabsTrigger value="sales">MRR</TabsTrigger>
                 <TabsTrigger value="collections">Collections</TabsTrigger>
                 <TabsTrigger value="occ">Occupancy</TabsTrigger>
               </TabsList>

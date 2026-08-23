@@ -31,7 +31,7 @@ function BreakdownCell({ amount, onClick }: { amount: number; onClick: () => voi
 }
 
 const COLUMNS: Array<{ key: SortColumn; label: string }> = [
-  { key: "sales", label: "Sales" },
+  { key: "sales", label: "New MRR" },
   { key: "collections", label: "Collections" },
   { key: "billed", label: "Billed" },
   { key: "collection_efficiency_pct", label: "Coll. eff." },
