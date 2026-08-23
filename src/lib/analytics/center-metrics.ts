@@ -1,13 +1,23 @@
 /**
  * Shared data access for the Center Analytics page (admin-only, center-wise
- * sales/collections/occupancy). See docs/plans/center-analytics-data-source.md
+ * new MRR/collections/occupancy). See docs/plans/center-analytics-data-source.md
  * for the decisions behind each definition below — they are not the only
  * reasonable reading of the schema, they're the ones that were picked.
  *
+ * "New MRR" (sumSalesInRange, the "sales" field/param throughout this
+ * module): contracts.total_amount/subtotal ARE the monthly recurring rent
+ * already, NOT a full-tenure deal value — confirmed against billing.ts
+ * (never divides by tenure_months) and monthly-summary/route.ts
+ * (reconstructs history as monthsElapsed * contract.total_amount). This
+ * metric was originally scoped assuming total_amount was the full-tenure
+ * value and labeled "Sales" on that basis; once corrected, it's really
+ * "new monthly recurring rent added in the period" — relabeled "New MRR"
+ * in the UI, kept as `sales` internally to avoid an unrequested rename.
+ *
  * Two different notions of "when" show up here and must not be confused:
- *   - Sales / Collections / Billed are COHORT metrics, bucketed by the date
- *     the underlying record belongs to (contract activation date, billing
- *     statement period_start) — not by when cash happened to move.
+ *   - New MRR / Collections / Billed are COHORT metrics, bucketed by the
+ *     date the underlying record belongs to (contract activation date,
+ *     billing statement period_start) — not by when cash happened to move.
  *   - Occupancy is a SNAPSHOT metric — "as of" a single date, computed from
  *     contract_space_allocations.start_date/end_date (a contract's claim on
  *     a whole space_unit). There is no historical capacity tracking, so the
@@ -80,7 +90,7 @@ export function trailingMonthWindows(months: number): Array<{ key: string; start
   return windows;
 }
 
-// ── Sales (contract activations) ──────────────────────────────────────────
+// ── New MRR (contract activations) ─────────────────────────────────────────
 
 export interface ContractRow {
   id: string;
@@ -90,7 +100,7 @@ export interface ContractRow {
 }
 
 /**
- * All contracts with a location, trimmed to the columns Sales/Collections
+ * All contracts with a location, trimmed to the columns New MRR/Collections
  * need. Not range-filtered — the table is low-thousands of rows today (see
  * scoping doc), and both the summary and trend routes need to bucket this
  * same set by different windows, so one fetch + JS bucketing beats N queries.

@@ -1,14 +1,16 @@
 /**
  * GET /api/analytics/centers/summary?start=YYYY-MM-DD&end=YYYY-MM-DD&location_id=<uuid>
  *
- * Per-center sales/collections/billed/occupancy for one date range — backs
+ * Per-center new-MRR/collections/billed/occupancy for one date range — backs
  * the Center Analytics KPI tiles and comparison table. Admin only.
  *
  * See docs/plans/center-analytics-data-source.md for what each metric means
- * and why: Sales/Collections/Billed are bucketed by when the underlying
+ * and why: New MRR/Collections/Billed are bucketed by when the underlying
  * record belongs to the range (contract activation, billing period_start),
  * not by when cash moved; Occupancy is a snapshot as of `end` (clamped to
- * today), not a range aggregate.
+ * today), not a range aggregate. New MRR is `contracts.total_amount` summed
+ * for contracts activated in range — that field is the monthly recurring
+ * rent, not a full-tenure deal value (see center-metrics.ts's module doc).
  */
 
 import { NextRequest, NextResponse } from "next/server";
