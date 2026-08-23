@@ -6,6 +6,7 @@ import {
   sendRenewalEmail,
   sendRenewalWhatsApp,
   logRenewalReminder,
+  renewalRate,
   generateRenewalPI,
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
@@ -252,7 +253,12 @@ async function handler(request: Request) {
       const periodStart = caseData.end_date; // same period
       const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
       const dueDate = addDays(todayIST, 7);
-      const totalAmount = computeTotal(caseData.rate);
+      // renewalRate, not caseData.rate: this total is what the email, the
+  // WhatsApp, the Razorpay link and the PI all quote, while
+  // createRenewalBillingStatement bills renewalRate(). Using the flat rate
+  // here would show and charge the customer the old amount while invoicing
+  // the escalated one.
+  const totalAmount = computeTotal(renewalRate(caseData));
 
       // Fresh Razorpay link for each reminder
       const razorpayLink = await createRenewalRazorpayLink({
@@ -391,7 +397,12 @@ async function handler(request: Request) {
       const piNumber = buildPiNumber(caseData.case_number, 5); // final notice
       const periodStart = caseData.end_date;
       const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
-      const totalAmount = computeTotal(caseData.rate);
+      // renewalRate, not caseData.rate: this total is what the email, the
+  // WhatsApp, the Razorpay link and the PI all quote, while
+  // createRenewalBillingStatement bills renewalRate(). Using the flat rate
+  // here would show and charge the customer the old amount while invoicing
+  // the escalated one.
+  const totalAmount = computeTotal(renewalRate(caseData));
       const dueDate = graceEnds;
 
       // Reuse existing billing statement or create one
@@ -701,7 +712,12 @@ async function openRenewalStatement(
   const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
   const dueDate = addDays(getTodayIST(), 7);
   const piNumber = buildPiNumber(caseData.case_number, reminderNumber);
-  const totalAmount = computeTotal(caseData.rate);
+  // renewalRate, not caseData.rate: this total is what the email, the
+  // WhatsApp, the Razorpay link and the PI all quote, while
+  // createRenewalBillingStatement bills renewalRate(). Using the flat rate
+  // here would show and charge the customer the old amount while invoicing
+  // the escalated one.
+  const totalAmount = computeTotal(renewalRate(caseData));
 
   const statementId = await createRenewalBillingStatement({
     adminSupabase,
