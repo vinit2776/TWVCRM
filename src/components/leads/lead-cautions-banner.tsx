@@ -96,7 +96,13 @@ export function LeadCautionsBanner({
     const iconColor    = hasDanger ? "text-red-600"     : hasWarning ? "text-amber-600"     : "text-blue-600";
     const moreColor    = hasDanger ? "text-red-800"     : "text-amber-800";
 
-    const visible = cautions.slice(0, 3);
+    // Every danger caution needs an acknowledge button — they always sort
+    // first (see the API's severity ordering), so capping at a flat 3 would
+    // hide the 4th+ danger caution's button while hasUnackedDanger still
+    // requires it, permanently gating the booking submit button with no way
+    // for staff to clear it. Extend the visible slice to cover all dangers.
+    const dangerCount = cautions.filter((c) => c.severity === "danger").length;
+    const visible = cautions.slice(0, Math.max(3, dangerCount));
     return (
       <div className={`rounded-md border-l-4 ${bannerBorder} ${bannerBg} p-4 space-y-3 shadow-sm`}>
         <div className={`flex items-center gap-2 font-semibold text-sm ${headingColor}`}>
@@ -141,9 +147,9 @@ export function LeadCautionsBanner({
             );
           })}
         </div>
-        {cautions.length > 3 && (
+        {cautions.length > visible.length && (
           <p className={`text-[11px] ${moreColor}`}>
-            + {cautions.length - 3} more — see lead profile for the full history.
+            + {cautions.length - visible.length} more — see lead profile for the full history.
           </p>
         )}
         {hasUnackedDanger && (
