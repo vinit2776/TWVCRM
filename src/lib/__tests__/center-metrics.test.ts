@@ -9,11 +9,13 @@ import {
   allocationOverlapDays,
   daysInRange,
   computeUnitHeatmapStats,
+  currentMonthlyRate,
   type SpaceUnitRow,
   type SpaceAllocationRow,
   type ContractRow,
   type SpaceUnitDetailRow,
   type HeatmapAllocationRow,
+  type ContractRatePhase,
 } from "@/lib/analytics/center-metrics";
 
 describe("trailingMonthWindows", () => {
@@ -204,6 +206,29 @@ describe("daysInRange / allocationOverlapDays", () => {
   });
 });
 
+describe("currentMonthlyRate", () => {
+  const phases: ContractRatePhase[] = [
+    { phase_order: 1, duration_months: 3, monthly_rate: 10000, end_date: null },
+    { phase_order: 2, duration_months: 9, monthly_rate: 12000, end_date: null },
+  ];
+  const anchor = "2026-01-01"; // phase 1: Jan-Mar, phase 2: Apr-Dec
+
+  it("falls back to the flat amount when the contract has no phases", () => {
+    expect(currentMonthlyRate(19145, anchor, undefined, "2026-08-21")).toBe(19145);
+    expect(currentMonthlyRate(19145, anchor, [], "2026-08-21")).toBe(19145);
+  });
+
+  it("uses the phase covering the given date, not the flat amount", () => {
+    expect(currentMonthlyRate(9999, anchor, phases, "2026-02-15")).toBe(10000); // phase 1
+    expect(currentMonthlyRate(9999, anchor, phases, "2026-06-15")).toBe(12000); // phase 2
+  });
+
+  it("continues flat at the last phase's rate once phases run out", () => {
+    // Phases cover Jan-Dec; asking about next February should still be phase 2's rate.
+    expect(currentMonthlyRate(9999, anchor, phases, "2027-02-01")).toBe(12000);
+  });
+});
+
 describe("computeUnitHeatmapStats", () => {
   const units: SpaceUnitDetailRow[] = [
     { id: "u1", location_id: "loc1", type: "private_cabin", capacity: 6, code: "CB-01", name: "Cabin 01" },
@@ -212,12 +237,15 @@ describe("computeUnitHeatmapStats", () => {
   ];
   const range = { start: "2026-08-01", end: "2026-08-31" }; // 31 days
   const today = "2026-08-21";
+  const noPhases = new Map<string, ContractRatePhase[]>();
 
   function alloc(over: Partial<HeatmapAllocationRow>): HeatmapAllocationRow {
     return {
       id: "a", space_unit_id: "u1", contract_id: "c1",
       start_date: "2026-08-01", end_date: null, contract_status: "active",
-      contract_total_amount: 62000, contract_tenure_months: 1,
+      // contract_monthly_flat_amount IS the monthly rent already — confirmed
+      // against billing.ts, which never divides by tenure_months anywhere.
+      contract_monthly_flat_amount: 62000, contract_phase_anchor: "2026-08-01",
       ...over,
     };
   }
@@ -225,7 +253,7 @@ describe("computeUnitHeatmapStats", () => {
   it("computes occupancy_pct as the fraction of the range covered, not a snapshot", () => {
     // 15 of 31 days.
     const allocations = [alloc({ start_date: "2026-08-01", end_date: "2026-08-15" })];
-    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    const stats = computeUnitHeatmapStats(units, allocations, noPhases, range, today);
     const u1 = stats.find((s) => s.unit_id === "u1")!;
     expect(u1.occupancy_pct).toBe(Math.round((15 / 31) * 100));
     // Allocation ended Aug 15, well before "today" (Aug 21) — vacant now,
@@ -236,34 +264,46 @@ describe("computeUnitHeatmapStats", () => {
 
   it("excludes allocations whose contract is no longer active/renewed from occupancy", () => {
     const allocations = [alloc({ contract_status: "terminated" })];
-    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    const stats = computeUnitHeatmapStats(units, allocations, noPhases, range, today);
     expect(stats.find((s) => s.unit_id === "u1")!.occupancy_pct).toBe(0);
   });
 
-  it("gives a single-unit contract its full monthly-equivalent rate", () => {
-    // total_amount 62000 over 1 month tenure = 62000/mo, u1 is the only unit.
-    const allocations = [alloc({ contract_total_amount: 62000, contract_tenure_months: 1 })];
-    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+  it("gives a single-unit, flat-rate contract its full monthly amount (not divided by tenure)", () => {
+    const allocations = [alloc({ contract_monthly_flat_amount: 62000 })];
+    const stats = computeUnitHeatmapStats(units, allocations, noPhases, range, today);
     const u1 = stats.find((s) => s.unit_id === "u1")!;
     expect(u1.monthly_revenue).toBe(62000);
     expect(u1.vacant_now).toBe(false);
     expect(u1.occupancy_pct).toBe(100); // active the whole range, open-ended
   });
 
+  it("uses the contract's current rate phase instead of its flat amount, when it has one", () => {
+    const phases = new Map<string, ContractRatePhase[]>([
+      ["c1", [
+        { phase_order: 1, duration_months: 6, monthly_rate: 15000, end_date: null },
+        { phase_order: 2, duration_months: 6, monthly_rate: 18000, end_date: null },
+      ]],
+    ]);
+    // Anchor Jan 1 -> phase 2 (18000) covers Jul-Dec, which includes "today" (Aug 21).
+    const allocations = [alloc({ contract_monthly_flat_amount: 9999, contract_phase_anchor: "2026-01-01" })];
+    const stats = computeUnitHeatmapStats(units, allocations, phases, range, today);
+    expect(stats.find((s) => s.unit_id === "u1")!.monthly_revenue).toBe(18000);
+  });
+
   it("splits a multi-unit contract's rate by capacity share", () => {
     // One contract holds u1 (capacity 6) and u2 (capacity 2) today.
-    // Monthly-equivalent = 80000/mo, total capacity 8 -> u1 gets 6/8, u2 gets 2/8.
+    // Flat monthly rate 80000, total capacity 8 -> u1 gets 6/8, u2 gets 2/8.
     const allocations = [
-      alloc({ id: "a1", space_unit_id: "u1", contract_total_amount: 80000, contract_tenure_months: 1 }),
-      alloc({ id: "a2", space_unit_id: "u2", contract_total_amount: 80000, contract_tenure_months: 1 }),
+      alloc({ id: "a1", space_unit_id: "u1", contract_monthly_flat_amount: 80000 }),
+      alloc({ id: "a2", space_unit_id: "u2", contract_monthly_flat_amount: 80000 }),
     ];
-    const stats = computeUnitHeatmapStats(units, allocations, range, today);
+    const stats = computeUnitHeatmapStats(units, allocations, noPhases, range, today);
     expect(stats.find((s) => s.unit_id === "u1")!.monthly_revenue).toBe(60000); // 80000 * 6/8
     expect(stats.find((s) => s.unit_id === "u2")!.monthly_revenue).toBe(20000); // 80000 * 2/8
   });
 
   it("marks a unit with no allocations at all as fully vacant", () => {
-    const stats = computeUnitHeatmapStats(units, [], range, today);
+    const stats = computeUnitHeatmapStats(units, [], noPhases, range, today);
     const u3 = stats.find((s) => s.unit_id === "u3")!;
     expect(u3).toMatchObject({ occupancy_pct: 0, monthly_revenue: 0, vacant_now: true });
   });

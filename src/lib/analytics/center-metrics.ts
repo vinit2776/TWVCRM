@@ -18,6 +18,7 @@
 import { z } from "zod";
 import type { createClient } from "@/lib/supabase/server";
 import { paymentCredit } from "@/lib/settlement";
+import { computePhaseBoundaries } from "@/lib/rate-phase-dates";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
@@ -297,25 +298,38 @@ export interface HeatmapAllocationRow {
   start_date: string;
   end_date: string | null;
   contract_status: string | null;
-  contract_total_amount: number;
-  /** Always >= 1 — a 0-tenure contract would make monthly-equivalent division blow up. */
-  contract_tenure_months: number;
+  /**
+   * contracts.total_amount/subtotal ARE the monthly recurring rent already —
+   * NOT a full-tenure deal value (confirmed against billing.ts, which never
+   * divides by tenure_months anywhere, and monthly-summary/route.ts, which
+   * reconstructs history as `monthsElapsed * contract.total_amount`). Prefer
+   * subtotal (pre-tax) over total_amount, matching billing.ts's own
+   * `ownFlatAmount = subtotal || total_amount` choice.
+   */
+  contract_monthly_flat_amount: number;
+  contract_phase_anchor: string | null;
+}
+
+export interface ContractRatePhase {
+  phase_order: number;
+  duration_months: number;
+  monthly_rate: number;
+  end_date: string | null;
 }
 
 /**
  * All allocations with the contract fields the heat map needs beyond what
- * `fetchSpaceAllocations` carries (total_amount, tenure_months) — kept
- * separate rather than widening the shared row, since summary/trend/detail
- * don't need revenue.
+ * `fetchSpaceAllocations` carries — kept separate rather than widening the
+ * shared row, since summary/trend/detail don't need revenue.
  */
 export async function fetchSpaceAllocationsForHeatmap(supabase: Supabase): Promise<HeatmapAllocationRow[]> {
   const { data, error } = await supabase
     .from("contract_space_allocations")
-    .select("id, space_unit_id, contract_id, start_date, end_date, contract:contracts(status, total_amount, tenure_months)");
+    .select("id, space_unit_id, contract_id, start_date, end_date, contract:contracts(status, total_amount, subtotal, start_date, phase_start_date)");
   if (error) throw new Error(error.message);
   type Row = {
     id: string; space_unit_id: string; contract_id: string; start_date: string; end_date: string | null;
-    contract: { status: string | null; total_amount: number | null; tenure_months: number | null } | null;
+    contract: { status: string | null; total_amount: number | null; subtotal: number | null; start_date: string | null; phase_start_date: string | null } | null;
   };
   return ((data ?? []) as unknown as Row[]).map((r) => ({
     id: r.id,
@@ -324,9 +338,52 @@ export async function fetchSpaceAllocationsForHeatmap(supabase: Supabase): Promi
     start_date: r.start_date,
     end_date: r.end_date,
     contract_status: r.contract?.status ?? null,
-    contract_total_amount: Number(r.contract?.total_amount || 0),
-    contract_tenure_months: Math.max(1, Number(r.contract?.tenure_months || 1)),
+    contract_monthly_flat_amount: Number(r.contract?.subtotal || r.contract?.total_amount || 0),
+    contract_phase_anchor: r.contract?.phase_start_date || r.contract?.start_date || null,
   }));
+}
+
+/** contract_id -> its tiered rate phases (empty for a flat-rate contract). */
+export async function fetchRatePhasesByContract(
+  supabase: Supabase,
+  contractIds: string[]
+): Promise<Map<string, ContractRatePhase[]>> {
+  const map = new Map<string, ContractRatePhase[]>();
+  if (contractIds.length === 0) return map;
+  const { data, error } = await supabase
+    .from("contract_rate_phases")
+    .select("contract_id, phase_order, duration_months, monthly_rate, end_date")
+    .in("contract_id", contractIds);
+  if (error) throw new Error(error.message);
+  for (const row of (data ?? []) as Array<ContractRatePhase & { contract_id: string }>) {
+    const list = map.get(row.contract_id) ?? [];
+    list.push({ phase_order: row.phase_order, duration_months: row.duration_months, monthly_rate: Number(row.monthly_rate), end_date: row.end_date ?? null });
+    map.set(row.contract_id, list);
+  }
+  return map;
+}
+
+/**
+ * The monthly rate a contract is actually charging as of `asOfDate` — walks
+ * its tiered rate_phases (see rate-phase-dates.ts, the same module billing.ts
+ * uses) to find the phase covering that date, continuing flat at the last
+ * phase's rate once phases run out. Falls back to the flat subtotal/
+ * total_amount when the contract has no phases at all.
+ */
+export function currentMonthlyRate(
+  flatAmount: number,
+  phaseAnchor: string | null,
+  phases: ContractRatePhase[] | undefined,
+  asOfDate: string
+): number {
+  if (!phases || phases.length === 0 || !phaseAnchor) return flatAmount;
+  const boundaries = computePhaseBoundaries(phaseAnchor, phases);
+  const covering = boundaries.find((b) => asOfDate >= b.start && asOfDate <= b.end);
+  if (covering) return covering.rate;
+  const last = boundaries[boundaries.length - 1];
+  // Past every configured phase — billing.ts continues flat at the last
+  // phase's rate rather than reverting to the pre-phase flat amount.
+  return asOfDate > last.end ? last.rate : flatAmount;
 }
 
 /** Inclusive day-overlap between an allocation's active window and [rangeStart, rangeEnd]. */
@@ -362,11 +419,12 @@ export interface UnitHeatmapStats {
   /** % of days in the range this unit had a live-contract allocation — a real gradient, not a snapshot. */
   occupancy_pct: number;
   /**
-   * The CURRENT tenant's monthly-equivalent rate (contract.total_amount /
-   * tenure_months), apportioned by capacity share across every unit that
-   * same contract holds today. This is a snapshot (today), unlike
-   * occupancy_pct (the whole range) — revenue only means something for
-   * whoever occupies the unit right now, not a blend across past tenants.
+   * The CURRENT tenant's monthly rate (walking its rate_phases when it has
+   * any, else its flat subtotal/total_amount — see currentMonthlyRate),
+   * apportioned by capacity share across every unit that same contract
+   * holds today. This is a snapshot (today), unlike occupancy_pct (the
+   * whole range) — revenue only means something for whoever occupies the
+   * unit right now, not a blend across past tenants.
    */
   monthly_revenue: number;
   vacant_now: boolean;
@@ -380,6 +438,7 @@ export interface UnitHeatmapStats {
 export function computeUnitHeatmapStats(
   units: SpaceUnitDetailRow[],
   allocations: HeatmapAllocationRow[],
+  ratePhasesByContract: Map<string, ContractRatePhase[]>,
   range: DateRange,
   todayDate: string
 ): UnitHeatmapStats[] {
@@ -421,8 +480,13 @@ export function computeUnitHeatmapStats(
     if (currentAlloc) {
       const siblingUnitIds = currentUnitIdsByContract.get(currentAlloc.contract_id) ?? [u.id];
       const siblingCapacity = siblingUnitIds.reduce((s, id) => s + (unitById.get(id)?.capacity ?? 0), 0);
-      const monthlyEquivalent = currentAlloc.contract_total_amount / currentAlloc.contract_tenure_months;
-      monthly_revenue = siblingCapacity > 0 ? monthlyEquivalent * (u.capacity / siblingCapacity) : 0;
+      const rate = currentMonthlyRate(
+        currentAlloc.contract_monthly_flat_amount,
+        currentAlloc.contract_phase_anchor,
+        ratePhasesByContract.get(currentAlloc.contract_id),
+        todayDate
+      );
+      monthly_revenue = siblingCapacity > 0 ? rate * (u.capacity / siblingCapacity) : 0;
     }
 
     return {
