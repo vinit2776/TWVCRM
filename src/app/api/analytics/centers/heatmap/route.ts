@@ -2,9 +2,11 @@
  * GET /api/analytics/centers/heatmap?start=YYYY-MM-DD&end=YYYY-MM-DD
  *
  * Per-space-unit occupancy (percent of days in range with a live-contract
- * allocation) and current revenue (this unit's tenant's monthly-equivalent
- * rate, capacity-apportioned across any other units the same contract
- * holds today) — backs the Space Heat Map section. Admin only.
+ * allocation) and current revenue (this unit's tenant's actual monthly
+ * rate — walking rate_phases when the contract has any, else its flat
+ * subtotal/total_amount, which ARE the monthly rent already, not a
+ * full-tenure value — capacity-apportioned across any other units the same
+ * contract holds today) — backs the Space Heat Map section. Admin only.
  *
  * Returns every active unit across every location in one call — the page
  * groups by center for its tabs and computes the "most occupied" / "highest
@@ -18,6 +20,7 @@ import {
   todayIstDate,
   fetchSpaceUnitsDetailed,
   fetchSpaceAllocationsForHeatmap,
+  fetchRatePhasesByContract,
   computeUnitHeatmapStats,
 } from "@/lib/analytics/center-metrics";
 
@@ -59,7 +62,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  const stats = computeUnitHeatmapStats(units, allocations, range, todayIstDate());
+  let ratePhasesByContract;
+  try {
+    ratePhasesByContract = await fetchRatePhasesByContract(
+      supabase,
+      Array.from(new Set(allocations.map((a) => a.contract_id)))
+    );
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+  }
+
+  const stats = computeUnitHeatmapStats(units, allocations, ratePhasesByContract, range, todayIstDate());
   const result = stats.map((s) => ({
     ...s,
     location_name: locationNameById.get(s.location_id) ?? "Unknown",
