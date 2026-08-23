@@ -114,6 +114,7 @@ export default function ContractDetailPage({
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   // Manual override for the agreement PDF's DRAFT watermark — only exposed
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
@@ -401,11 +402,13 @@ export default function ContractDetailPage({
     setStampPreviewUrl(null);
     setStampPreviewPdfBase64(null);
     setStampPreviewRef(null);
+    setStampError(null);
   };
 
   const handleOpenStampPreview = async () => {
     if (!contract) return;
     setStampPreviewLoading(true);
+    setStampError(null);
     try {
       const { generateStampReference } = await import("@/lib/company-stamp");
       const stampRef = generateStampReference();
@@ -429,6 +432,7 @@ export default function ContractDetailPage({
   const handleStampSignSeal = async () => {
     if (!contract || !stampPreviewPdfBase64 || !stampPreviewRef) return;
     setStampingSignSeal(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/contracts/${id}/stamp-sign-seal`, {
         method: "POST",
@@ -441,10 +445,10 @@ export default function ContractDetailPage({
         fetchContract(false);
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to stamp contract");
+        setStampError(err?.error || "Failed to stamp contract");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to stamp contract");
+      setStampError(e instanceof Error ? e.message : "Failed to stamp contract");
     } finally {
       setStampingSignSeal(false);
     }
@@ -453,6 +457,7 @@ export default function ContractDetailPage({
   const handleCancelStamp = async () => {
     if (!contract) return;
     setCancellingStamp(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/contracts/${id}/cancel-stamp`, { method: "POST" });
       if (res.ok) {
@@ -461,10 +466,10 @@ export default function ContractDetailPage({
         fetchContract(false);
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to cancel the stamp");
+        setStampError(err?.error || "Failed to cancel the stamp");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to cancel the stamp");
+      setStampError(e instanceof Error ? e.message : "Failed to cancel the stamp");
     } finally {
       setCancellingStamp(false);
     }
@@ -635,7 +640,7 @@ export default function ContractDetailPage({
           )}
 
           {contract.signed_document && contract.stamp_reference && userRole === "admin" && (
-            <Button variant="outline" onClick={() => setCancelStampOpen(true)}>
+            <Button variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
               <XCircle className="mr-2 h-4 w-4" />
               Cancel sign & seal
             </Button>
@@ -2102,6 +2107,11 @@ export default function ContractDetailPage({
               </Button>
             </div>
           )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
               Cancel
@@ -2120,7 +2130,7 @@ export default function ContractDetailPage({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel sign & seal?</DialogTitle>
@@ -2130,8 +2140,13 @@ export default function ContractDetailPage({
               available again. You can re-stamp it afterward if needed.
             </DialogDescription>
           </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
               Keep it
             </Button>
             <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>

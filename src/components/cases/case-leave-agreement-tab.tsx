@@ -76,6 +76,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
@@ -409,11 +410,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
     setStampPreviewUrl(null);
     setStampPreviewRef(null);
+    setStampError(null);
   };
 
   const handleOpenStampPreview = async () => {
     if (!agreement) return;
     setStampPreviewLoading(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/preview-stamp`, {
         method: "POST",
@@ -443,6 +446,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleStampSignSeal = async () => {
     if (!agreement || !stampPreviewRef) return;
     setStampingSignSeal(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/stamp-sign-seal`, {
         method: "POST",
@@ -462,7 +466,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       closeStampPreview();
       fetchAgreement();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to stamp agreement");
+      setStampError(err instanceof Error ? err.message : "Failed to stamp agreement");
     } finally {
       setStampingSignSeal(false);
     }
@@ -471,6 +475,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleCancelStamp = async () => {
     if (!agreement) return;
     setCancellingStamp(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/cancel-stamp`, {
         method: "POST",
@@ -485,7 +490,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       setCancelStampOpen(false);
       fetchAgreement();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel the stamp");
+      setStampError(err instanceof Error ? err.message : "Failed to cancel the stamp");
     } finally {
       setCancellingStamp(false);
     }
@@ -751,7 +756,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             )}
 
             {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
-              <Button size="sm" variant="outline" onClick={() => setCancelStampOpen(true)}>
+              <Button size="sm" variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
                 <XCircle className="mr-2 h-4 w-4" />
                 Cancel sign & seal
               </Button>
@@ -948,6 +953,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               </Button>
             </div>
           )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
               Cancel
@@ -966,7 +976,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel sign & seal?</DialogTitle>
@@ -976,8 +986,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               is draft or internally approved. You can re-stamp it afterward if needed.
             </DialogDescription>
           </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
               Keep it
             </Button>
             <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
