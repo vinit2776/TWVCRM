@@ -3,11 +3,11 @@ import {
   trailingMonthWindows,
   todayIstDate,
   istDayBounds,
-  isOccupiedAsOf,
+  isAllocationActiveAsOf,
   computeOccupancyByLocation,
   sumSalesInRange,
   type SpaceUnitRow,
-  type SeatOccupantRow,
+  type SpaceAllocationRow,
   type ContractRow,
 } from "@/lib/analytics/center-metrics";
 
@@ -52,21 +52,32 @@ describe("istDayBounds", () => {
   });
 });
 
-describe("isOccupiedAsOf", () => {
-  const base: SeatOccupantRow = {
-    id: "o1", location_id: "loc1", space_unit_id: "u1",
-    start_date: "2026-06-01", end_date: null,
+describe("isAllocationActiveAsOf", () => {
+  const base: SpaceAllocationRow = {
+    id: "a1", space_unit_id: "u1",
+    start_date: "2026-06-01", end_date: null, contract_status: "active",
   };
 
-  it("is occupied once started, with no end date", () => {
-    expect(isOccupiedAsOf(base, "2026-08-21")).toBe(true);
-    expect(isOccupiedAsOf(base, "2026-05-31")).toBe(false);
+  it("is occupied once started, with no end date, while the contract is active", () => {
+    expect(isAllocationActiveAsOf(base, "2026-08-21")).toBe(true);
+    expect(isAllocationActiveAsOf(base, "2026-05-31")).toBe(false);
   });
 
   it("stops being occupied strictly after end_date", () => {
     const ended = { ...base, end_date: "2026-07-15" };
-    expect(isOccupiedAsOf(ended, "2026-07-15")).toBe(true); // still occupied on the end date itself
-    expect(isOccupiedAsOf(ended, "2026-07-16")).toBe(false);
+    expect(isAllocationActiveAsOf(ended, "2026-07-15")).toBe(true); // still occupied on the end date itself
+    expect(isAllocationActiveAsOf(ended, "2026-07-16")).toBe(false);
+  });
+
+  it("accepts a renewed contract, not just active", () => {
+    expect(isAllocationActiveAsOf({ ...base, contract_status: "renewed" }, "2026-08-21")).toBe(true);
+  });
+
+  it("doesn't count a within-date allocation whose contract was terminated", () => {
+    // The allocation row itself was never closed out, but the contract
+    // moved on — this is exactly the data-hygiene gap the contract-status
+    // check guards against (see space-analytics/route.ts).
+    expect(isAllocationActiveAsOf({ ...base, contract_status: "terminated" }, "2026-08-21")).toBe(false);
   });
 });
 
@@ -86,29 +97,41 @@ describe("computeOccupancyByLocation", () => {
     expect(result.get("loc2")).toEqual({ capacity: 8, occupied: 0 });
   });
 
-  it("counts only seats active as of the given date", () => {
-    const occupants: SeatOccupantRow[] = [
-      { id: "o1", location_id: "loc1", space_unit_id: "u1", start_date: "2026-06-01", end_date: null },
-      { id: "o2", location_id: "loc1", space_unit_id: "u2", start_date: "2026-06-01", end_date: "2026-07-01" }, // ended before asOf
-      { id: "o3", location_id: "loc1", space_unit_id: "u3", start_date: "2026-06-01", end_date: null }, // business_centre — excluded
+  it("counts a unit's full capacity as occupied when it has an active allocation", () => {
+    const allocations: SpaceAllocationRow[] = [
+      { id: "a1", space_unit_id: "u1", start_date: "2026-06-01", end_date: null, contract_status: "active" },
+      { id: "a2", space_unit_id: "u2", start_date: "2026-06-01", end_date: "2026-07-01", contract_status: "active" }, // ended before asOf
+      { id: "a3", space_unit_id: "u3", start_date: "2026-06-01", end_date: null, contract_status: "active" }, // business_centre — excluded
     ];
-    const result = computeOccupancyByLocation(units, occupants, "2026-08-21");
-    expect(result.get("loc1")).toEqual({ capacity: 15, occupied: 1 });
+    const result = computeOccupancyByLocation(units, allocations, "2026-08-21");
+    // u1's full capacity (10), not a headcount of 1 — an allocation claims the whole unit.
+    expect(result.get("loc1")).toEqual({ capacity: 15, occupied: 10 });
   });
 
   it("clamps occupied at capacity rather than reporting over 100%", () => {
-    const crowded: SeatOccupantRow[] = Array.from({ length: 20 }, (_, i) => ({
-      id: `o${i}`, location_id: "loc1", space_unit_id: "u1", start_date: "2026-06-01", end_date: null,
-    }));
-    const result = computeOccupancyByLocation(units, crowded, "2026-08-21");
-    expect(result.get("loc1")!.occupied).toBe(15); // clamped, not 20
+    // Two different (malformed/overlapping) allocations both claiming u1 —
+    // still just u1's capacity, not double-counted.
+    const overlapping: SpaceAllocationRow[] = [
+      { id: "a1", space_unit_id: "u1", start_date: "2026-06-01", end_date: null, contract_status: "active" },
+      { id: "a2", space_unit_id: "u1", start_date: "2026-06-01", end_date: null, contract_status: "active" },
+    ];
+    const result = computeOccupancyByLocation(units, overlapping, "2026-08-21");
+    expect(result.get("loc1")!.occupied).toBe(10); // u1's capacity, counted once
   });
 
-  it("ignores a seat whose unit is inactive/deleted (not in `units`)", () => {
-    const orphaned: SeatOccupantRow[] = [
-      { id: "o1", location_id: "loc1", space_unit_id: "u-does-not-exist", start_date: "2026-06-01", end_date: null },
+  it("ignores an allocation whose unit is inactive/deleted (not in `units`)", () => {
+    const orphaned: SpaceAllocationRow[] = [
+      { id: "a1", space_unit_id: "u-does-not-exist", start_date: "2026-06-01", end_date: null, contract_status: "active" },
     ];
     const result = computeOccupancyByLocation(units, orphaned, "2026-08-21");
+    expect(result.get("loc1")!.occupied).toBe(0);
+  });
+
+  it("ignores an allocation whose contract is no longer active/renewed", () => {
+    const stale: SpaceAllocationRow[] = [
+      { id: "a1", space_unit_id: "u1", start_date: "2026-06-01", end_date: null, contract_status: "terminated" },
+    ];
+    const result = computeOccupancyByLocation(units, stale, "2026-08-21");
     expect(result.get("loc1")!.occupied).toBe(0);
   });
 });

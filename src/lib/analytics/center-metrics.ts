@@ -170,12 +170,21 @@ export interface SpaceUnitRow {
   capacity: number;
 }
 
-export interface SeatOccupantRow {
+/**
+ * A contract's claim on a whole space_unit (cabin/office/desk) — NOT
+ * space_seat_occupants, which despite its name is barely populated in
+ * production (verified: locations with dozens of contracted cabins showed
+ * 0 seat-occupant rows). contract_space_allocations is the table the
+ * Locations > Spaces tab actually reads to mark a unit "Contracted" vs
+ * "Vacant" (see src/app/api/locations/[id]/space-analytics/route.ts), so
+ * it's the real source of truth here too.
+ */
+export interface SpaceAllocationRow {
   id: string;
-  location_id: string;
   space_unit_id: string;
   start_date: string;
   end_date: string | null;
+  contract_status: string | null;
 }
 
 export async function fetchActiveSpaceUnits(supabase: Supabase, locationId?: string | null): Promise<SpaceUnitRow[]> {
@@ -187,32 +196,53 @@ export async function fetchActiveSpaceUnits(supabase: Supabase, locationId?: str
 }
 
 /**
- * All seat-occupant rows (no date filter — fetched once, "active as of any
- * date" is computed in JS via `isOccupiedAsOf`). Occupancy has no history
- * table; start_date/end_date on this row IS the history.
+ * All allocations, any status (fetched once; "active as of a date" is
+ * computed in JS via `isAllocationActiveAsOf`, same reasoning as the old
+ * seat-occupant fetch: start_date/end_date IS the history).
  */
-export async function fetchSeatOccupants(supabase: Supabase, locationId?: string | null): Promise<SeatOccupantRow[]> {
-  let q = supabase.from("space_seat_occupants").select("id, location_id, space_unit_id, start_date, end_date");
-  if (locationId) q = q.eq("location_id", locationId);
-  const { data, error } = await q;
+export async function fetchSpaceAllocations(supabase: Supabase, locationId?: string | null): Promise<SpaceAllocationRow[]> {
+  const { data, error } = await supabase
+    .from("contract_space_allocations")
+    .select("id, space_unit_id, start_date, end_date, contract:contracts(status, location_id)");
   if (error) throw new Error(error.message);
-  return (data ?? []) as SeatOccupantRow[];
+  type Row = { id: string; space_unit_id: string; start_date: string; end_date: string | null; contract: { status: string | null; location_id: string } | null };
+  const rows = (data ?? []) as unknown as Row[];
+  const filtered = locationId ? rows.filter((r) => r.contract?.location_id === locationId) : rows;
+  return filtered.map((r) => ({
+    id: r.id,
+    space_unit_id: r.space_unit_id,
+    start_date: r.start_date,
+    end_date: r.end_date,
+    contract_status: r.contract?.status ?? null,
+  }));
 }
 
-export function isOccupiedAsOf(o: SeatOccupantRow, asOfDate: string): boolean {
-  return o.start_date <= asOfDate && (!o.end_date || o.end_date >= asOfDate);
+/**
+ * Active as of `asOfDate` AND the contract is currently active/renewed —
+ * matches space-analytics/route.ts's definition, which guards against a
+ * terminated contract's allocation row never being closed out. The
+ * contract-status half is a current-only signal (no history for it), so
+ * for past trend points this is an approximation: a contract active today
+ * is assumed to have been legitimately active during its own past window.
+ */
+export function isAllocationActiveAsOf(a: SpaceAllocationRow, asOfDate: string): boolean {
+  const dateOk = a.start_date <= asOfDate && (!a.end_date || a.end_date >= asOfDate);
+  const contractOk = a.contract_status === "active" || a.contract_status === "renewed";
+  return dateOk && contractOk;
 }
 
 /**
  * Occupied/capacity per location as of `asOfDate`, excluding business_centre
  * units — mirrors the existing dashboard occupancy widget's definition
- * (they're hourly/day-rate, not "seats"). Room-type breakdowns that want
- * business_centre included should filter `units`/`occupants` themselves
- * rather than call this.
+ * (they're hourly/day-rate, not "seats"). Occupied capacity is unit-grained:
+ * an allocated cabin counts its FULL capacity as occupied, not a headcount —
+ * matching how contract_space_allocations actually works (a contract claims
+ * a whole unit). Room-type breakdowns that want business_centre included
+ * should filter `units`/`allocations` themselves rather than call this.
  */
 export function computeOccupancyByLocation(
   units: SpaceUnitRow[],
-  occupants: SeatOccupantRow[],
+  allocations: SpaceAllocationRow[],
   asOfDate: string
 ): Map<string, { capacity: number; occupied: number }> {
   const byLocation = new Map<string, { capacity: number; occupied: number }>();
@@ -222,19 +252,20 @@ export function computeOccupancyByLocation(
     entry.capacity += Number(u.capacity || 0);
     byLocation.set(u.location_id, entry);
   }
-  // Built from the same business_centre-excluded set as capacity above — a
-  // business_centre occupant must not count as "occupied" here just because
-  // its location happens to have other, countable units.
-  const unitLocationById = new Map(
-    units.filter((u) => u.type !== "business_centre").map((u) => [u.id, u.location_id])
-  );
-  for (const o of occupants) {
-    if (!isOccupiedAsOf(o, asOfDate)) continue;
-    const unitLoc = unitLocationById.get(o.space_unit_id);
-    if (!unitLoc) continue; // seat's unit is inactive or excluded (business_centre)
-    const entry = byLocation.get(unitLoc);
+  // Built from the same business_centre-excluded set as capacity above — an
+  // allocation on a business_centre unit must not count as "occupied" here
+  // just because its location happens to have other, countable units.
+  const unitById = new Map(units.filter((u) => u.type !== "business_centre").map((u) => [u.id, u]));
+  const countedUnits = new Set<string>(); // one allocation per unit is enough to mark it occupied
+  for (const a of allocations) {
+    if (!isAllocationActiveAsOf(a, asOfDate)) continue;
+    const unit = unitById.get(a.space_unit_id);
+    if (!unit) continue; // unit is inactive or excluded (business_centre)
+    if (countedUnits.has(unit.id)) continue;
+    countedUnits.add(unit.id);
+    const entry = byLocation.get(unit.location_id);
     if (!entry) continue;
-    entry.occupied += 1;
+    entry.occupied += Number(unit.capacity || 0);
   }
   for (const entry of byLocation.values()) {
     entry.occupied = Math.min(entry.occupied, entry.capacity);
