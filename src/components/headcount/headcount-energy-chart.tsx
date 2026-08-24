@@ -192,6 +192,17 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
 
   if (enabled === false) return null;
 
+  // Recharts' "dataMin"/"dataMax" domain keywords don't reliably compute a
+  // numeric domain once a <Bar> is mixed with a type="number" axis — every
+  // bar and axis tick collapses onto a single x position once there are
+  // more than a couple of points (only ever showed up once a meter reported
+  // densely enough in one day to expose it). Computing the domain ourselves
+  // sidesteps whatever's broken in that path.
+  const dayAllTs = [...dayRows.map((r) => r.ts), ...dayPoints.map((p) => p.ts)];
+  const dayXDomain: [number, number] = dayAllTs.length
+    ? [Math.min(...dayAllTs), Math.max(...dayAllTs)]
+    : [0, 1];
+
   return (
     <Card>
       <CardHeader>
@@ -226,7 +237,7 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
               <ComposedChart data={dayRows} margin={{ left: 4, right: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
-                  dataKey="ts" type="number" domain={["dataMin", "dataMax"]}
+                  dataKey="ts" type="number" domain={dayXDomain} allowDuplicatedCategory={false}
                   tickFormatter={formatHourTick} tick={{ fontSize: 11 }}
                 />
                 <YAxis yAxisId="wh" tick={{ fontSize: 11 }} width={50} label={{ value: "Wh", angle: -90, position: "insideLeft", fontSize: 11 }} />

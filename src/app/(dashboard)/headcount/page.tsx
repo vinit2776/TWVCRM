@@ -18,6 +18,8 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLocations } from "@/hooks/use-locations";
 import { HeadcountEnergyChart } from "@/components/headcount/headcount-energy-chart";
+import { EnergyLedgerDayChart } from "@/components/headcount/energy-ledger-day-chart";
+import { EnergyLedgerDayDialog } from "@/components/headcount/energy-ledger-day-dialog";
 import { toast } from "sonner";
 import { cn, formatDate } from "@/lib/utils";
 import type { SpaceHeadcount, LocationCapacityConfig } from "@/types";
@@ -42,6 +44,14 @@ function formatTime(iso: string) {
 
 function formatDateShort(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
+}
+
+// en-CA gives YYYY-MM-DD directly
+function istDateKey(iso: string) {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+function todayISTKey() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 function toLocalDatetimeInput(iso?: string) {
@@ -623,6 +633,13 @@ export default function HeadcountPage() {
         <HeadcountEnergyChart locationId={locationId} mode="day" />
       )}
 
+      {activeTab === "entry" && locationId && (
+        <div className="bg-card rounded-xl border shadow-sm p-4">
+          <h3 className="text-sm font-semibold mb-3">Local energy log — today</h3>
+          <EnergyLedgerDayChart locationId={locationId} date={todayISTKey()} />
+        </div>
+      )}
+
       {/* ═══ HISTORY TAB ═══════════════════════════════════════════════════ */}
       {activeTab === "history" && filterLocation !== "__all" && (
         <HeadcountEnergyChart
@@ -692,6 +709,7 @@ export default function HeadcountPage() {
                     ))}
                     <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Energy</th>
+                    <th className="px-2 py-3 w-10" />
                     <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Logged by</th>
                     {canDelete && <th className="px-4 py-3 w-10" />}
                   </tr>
@@ -729,6 +747,14 @@ export default function HeadcountPage() {
                           {r.energy_today_wh != null
                             ? <span className="font-medium">{Math.round(r.energy_today_wh).toLocaleString("en-IN")} Wh</span>
                             : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-2 py-3">
+                          <EnergyLedgerDayDialog
+                            locationId={r.location_id}
+                            locationName={(r.location as { name?: string })?.name ?? "—"}
+                            date={istDateKey(r.recorded_at)}
+                            dateLabel={formatDateShort(r.recorded_at)}
+                          />
                         </td>
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {(r.recorder as { full_name?: string })?.full_name?.split(" ")[0] ?? "—"}
