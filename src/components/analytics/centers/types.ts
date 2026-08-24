@@ -113,3 +113,32 @@ export const ROOM_TYPE_LABELS: Record<string, string> = {
   managed_office: "Managed Office",
   business_centre: "Business Centre",
 };
+
+export interface ProjectionCenterSeries {
+  location_id: string;
+  location_name: string;
+  /** 12 months, Apr-Mar — sum of active/renewal-in-progress contracts overlapping each month, at current phase rate. */
+  confirmed: number[];
+  /** 12 months — hypothetical revenue added back after a contract's own end_date, at its stored escalation %. */
+  if_renewed: number[];
+}
+
+export interface ProjectionContractRow {
+  id: string;
+  location_id: string;
+  location_name: string;
+  client_name: string;
+  monthly_rate: number;
+  end_date: string | null;
+  status: string;
+  escalation_percentage: number;
+  renewed_rate: number;
+}
+
+export interface ProjectionsResponse {
+  fy: { year: number; label: string; is_current: boolean; start: string; end: string };
+  /** 12 YYYY-MM month keys, Apr-Mar. */
+  months: string[];
+  centers: ProjectionCenterSeries[];
+  contracts: ProjectionContractRow[];
+}

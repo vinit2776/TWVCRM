@@ -10,12 +10,18 @@ import {
   daysInRange,
   computeUnitHeatmapStats,
   currentMonthlyRate,
+  currentFyYear,
+  fyMonths,
+  fyLabel,
+  computeProjection,
+  buildProjectionContractDetails,
   type SpaceUnitRow,
   type SpaceAllocationRow,
   type ContractRow,
   type SpaceUnitDetailRow,
   type HeatmapAllocationRow,
   type ContractRatePhase,
+  type ProjectionContractRow,
 } from "@/lib/analytics/center-metrics";
 
 describe("trailingMonthWindows", () => {
@@ -306,5 +312,196 @@ describe("computeUnitHeatmapStats", () => {
     const stats = computeUnitHeatmapStats(units, [], noPhases, range, today);
     const u3 = stats.find((s) => s.unit_id === "u3")!;
     expect(u3).toMatchObject({ occupancy_pct: 0, monthly_revenue: 0, vacant_now: true });
+  });
+});
+
+describe("currentFyYear / fyMonths / fyLabel", () => {
+  it("resolves the FY start year from the Apr-Mar boundary", () => {
+    expect(currentFyYear("2026-08-24")).toBe(2026); // mid-FY
+    expect(currentFyYear("2026-04-01")).toBe(2026); // first day of the FY
+    expect(currentFyYear("2026-03-31")).toBe(2025); // last day of the prior FY
+    expect(currentFyYear("2027-01-15")).toBe(2026); // Jan still belongs to the FY that started the prior April
+  });
+
+  it("returns the 12 Apr-Mar month keys in order, spanning the calendar year boundary", () => {
+    const months = fyMonths(2026);
+    expect(months).toHaveLength(12);
+    expect(months[0]).toBe("2026-04");
+    expect(months[8]).toBe("2026-12");
+    expect(months[9]).toBe("2027-01"); // rolls into the next calendar year
+    expect(months[11]).toBe("2027-03");
+  });
+
+  it("labels the FY by its two constituent calendar years", () => {
+    expect(fyLabel(2026)).toBe("FY 2026–27");
+    expect(fyLabel(2099)).toBe("FY 2099–00"); // wraps at the century, same as elsewhere in the app
+  });
+});
+
+describe("computeProjection", () => {
+  const noPhases = new Map<string, ContractRatePhase[]>();
+
+  function contract(over: Partial<ProjectionContractRow>): ProjectionContractRow {
+    return {
+      id: "c1", location_id: "loc1", status: "active",
+      start_date: "2025-01-01", end_date: null,
+      subtotal: 20000, total_amount: 20000,
+      phase_start_date: null, escalation_percentage: 10, lead_id: "lead1",
+      ...over,
+    };
+  }
+
+  it("sums a contract that spans the whole FY into every confirmed month, none into if_renewed", () => {
+    const { months, centers } = computeProjection([contract({})], noPhases, 2026);
+    const loc = centers.find((c) => c.location_id === "loc1")!;
+    expect(loc.confirmed).toEqual(months.map(() => 20000));
+    expect(loc.if_renewed).toEqual(months.map(() => 0));
+  });
+
+  it("stops confirmed revenue dead at end_date, with no renewal assumed", () => {
+    const { centers } = computeProjection(
+      [contract({ end_date: "2026-07-15" })],
+      noPhases,
+      2026
+    );
+    const loc = centers.find((c) => c.location_id === "loc1")!;
+    // Apr, May, Jun still overlap the contract's window; Jul's end_date (15th)
+    // is still >= monthStart (Jul 1) so Jul counts too; Aug onward does not.
+    expect(loc.confirmed.slice(0, 4)).toEqual([20000, 20000, 20000, 20000]);
+    expect(loc.confirmed.slice(4)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("fills months after end_date with the escalated rate in if_renewed, not confirmed", () => {
+    const { centers } = computeProjection(
+      [contract({ end_date: "2026-07-15", escalation_percentage: 10 })],
+      noPhases,
+      2026
+    );
+    const loc = centers.find((c) => c.location_id === "loc1")!;
+    // Aug (idx 4) onward: rate 20000 * 1.10 = 22000, added to if_renewed only.
+    expect(loc.if_renewed.slice(4)).toEqual([22000, 22000, 22000, 22000, 22000, 22000, 22000, 22000]);
+    expect(loc.confirmed.slice(4)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("falls back to 0% escalation when escalation_percentage is null, not the renewal API's 10% default", () => {
+    const { centers } = computeProjection(
+      [contract({ end_date: "2026-07-15", escalation_percentage: null })],
+      noPhases,
+      2026
+    );
+    const loc = centers.find((c) => c.location_id === "loc1")!;
+    expect(loc.if_renewed.slice(4)).toEqual([20000, 20000, 20000, 20000, 20000, 20000, 20000, 20000]);
+  });
+
+  it("uses the phase-aware rate for confirmed months, and the rate at end_date (not the flat amount) for if_renewed", () => {
+    const phases = new Map<string, ContractRatePhase[]>([
+      ["c1", [
+        { phase_order: 1, duration_months: 3, monthly_rate: 15000, end_date: null }, // Apr-Jun
+        { phase_order: 2, duration_months: 3, monthly_rate: 18000, end_date: null }, // Jul-Sep
+      ]],
+    ]);
+    const { centers } = computeProjection(
+      [contract({
+        subtotal: 9999, total_amount: 9999, phase_start_date: "2026-04-01",
+        end_date: "2026-08-15", escalation_percentage: 0,
+      })],
+      phases,
+      2026
+    );
+    const loc = centers.find((c) => c.location_id === "loc1")!;
+    expect(loc.confirmed[0]).toBe(15000); // Apr, phase 1
+    expect(loc.confirmed[3]).toBe(18000); // Jul, phase 2
+    // end_date (Aug 15) is still >= Aug's monthStart, so Aug is confirmed too.
+    expect(loc.confirmed[4]).toBe(18000);
+    // Sep is the first month starting after end_date -> if_renewed picks up
+    // phase 2's 18000 (the rate the contract was actually charging when it
+    // ended), not the 9999 pre-phase flat amount.
+    expect(loc.if_renewed[5]).toBe(18000);
+  });
+
+  it("keeps separate locations' totals independent", () => {
+    const { centers } = computeProjection(
+      [contract({ location_id: "loc1" }), contract({ id: "c2", location_id: "loc2", subtotal: 5000 })],
+      noPhases,
+      2026
+    );
+    expect(centers.find((c) => c.location_id === "loc1")!.confirmed[0]).toBe(20000);
+    expect(centers.find((c) => c.location_id === "loc2")!.confirmed[0]).toBe(5000);
+  });
+
+  it("ignores a contract that hasn't started yet within the FY, and one with a zero rate", () => {
+    const { centers } = computeProjection(
+      [
+        contract({ start_date: "2027-06-01" }), // starts after this FY ends
+        contract({ id: "c2", subtotal: 0, total_amount: 0 }),
+      ],
+      noPhases,
+      2026
+    );
+    const loc = centers.find((c) => c.location_id === "loc1");
+    expect(loc?.confirmed.every((v) => v === 0) ?? true).toBe(true);
+  });
+});
+
+describe("buildProjectionContractDetails", () => {
+  const noPhases = new Map<string, ContractRatePhase[]>();
+  const clientNames = new Map([["lead1", "Acme Corp"]]);
+
+  function contract(over: Partial<ProjectionContractRow>): ProjectionContractRow {
+    return {
+      id: "c1", location_id: "loc1", status: "active",
+      start_date: "2025-01-01", end_date: null,
+      subtotal: 20000, total_amount: 20000,
+      phase_start_date: null, escalation_percentage: 10, lead_id: "lead1",
+      ...over,
+    };
+  }
+
+  it("resolves the client name via the lead map and computes the escalated renewed rate", () => {
+    const [detail] = buildProjectionContractDetails([contract({})], noPhases, clientNames, "2026-08-21");
+    expect(detail.client_name).toBe("Acme Corp");
+    expect(detail.monthly_rate).toBe(20000);
+    expect(detail.renewed_rate).toBe(22000); // 20000 * 1.10
+  });
+
+  it("falls back to a placeholder name for a lead not in the map", () => {
+    const [detail] = buildProjectionContractDetails(
+      [contract({ lead_id: "unknown" })], noPhases, clientNames, "2026-08-21"
+    );
+    expect(detail.client_name).toBe("(unnamed)");
+  });
+
+  it("prices the rate as of end_date for an already-ended contract, not as of today", () => {
+    const phases = new Map<string, ContractRatePhase[]>([
+      ["c1", [
+        { phase_order: 1, duration_months: 3, monthly_rate: 15000, end_date: null },
+        { phase_order: 2, duration_months: 3, monthly_rate: 18000, end_date: null },
+      ]],
+    ]);
+    const detail = buildProjectionContractDetails(
+      [contract({
+        subtotal: 9999, total_amount: 9999, phase_start_date: "2026-01-01",
+        end_date: "2026-02-15", // still inside phase 1 (Jan-Mar)
+      })],
+      phases,
+      clientNames,
+      "2026-08-21" // "today" is well into phase 2 — must not leak into the rate
+    )[0];
+    expect(detail.monthly_rate).toBe(15000);
+    expect(detail.renewed_rate).toBe(16500); // 15000 * 1.10
+  });
+
+  it("sorts by end_date ascending, with open-ended contracts last", () => {
+    const details = buildProjectionContractDetails(
+      [
+        contract({ id: "c1", end_date: null }),
+        contract({ id: "c2", end_date: "2026-06-01" }),
+        contract({ id: "c3", end_date: "2026-05-01" }),
+      ],
+      noPhases,
+      clientNames,
+      "2026-08-21"
+    );
+    expect(details.map((d) => d.id)).toEqual(["c3", "c2", "c1"]);
   });
 });

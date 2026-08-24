@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useFetch } from "@/hooks/use-fetch";
 
@@ -15,6 +15,7 @@ import { CenterFilterChips } from "@/components/analytics/centers/center-filter-
 import { DetailSheet } from "@/components/analytics/centers/detail-sheet";
 import { BreakdownDialog } from "@/components/analytics/centers/breakdown-dialog";
 import { SpaceHeatmap } from "@/components/analytics/centers/space-heatmap";
+import { ProjectionsTab } from "@/components/analytics/centers/projections-tab";
 import { rangeForPreset, priorRangeOf, isMtd, type PeriodPresetId } from "@/components/analytics/centers/period";
 import type {
   SummaryResponse, TrendResponse, TrendMetric, CenterDetail, DateRange,
@@ -125,92 +126,105 @@ export default function CenterAnalyticsPage() {
       <div>
         <h1 className="text-2xl font-bold">Center Analytics</h1>
         <p className="text-sm text-muted-foreground">
-          New MRR, collections and occupancy across every center.
+          New MRR, collections, occupancy and revenue projections across every center.
         </p>
       </div>
 
-      <div className="space-y-3">
-        <PeriodFilter preset={preset} range={range} onChange={handlePeriodChange} />
-        {allCenters.length > 1 && (
-          <CenterFilterChips centers={allCenters} activeIds={activeCenterIds} onToggle={toggleCenter} />
-        )}
-      </div>
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="projections">Projections</TabsTrigger>
+        </TabsList>
 
-      {summaryError && (
-        <p className="text-sm text-destructive">Couldn&apos;t load analytics: {summaryError}</p>
-      )}
-
-      {summaryLoading && !summary ? (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i}><CardContent className="pt-6 h-24 animate-pulse bg-muted/40 rounded-md" /></Card>
-          ))}
-        </div>
-      ) : (
-        <KpiTiles current={filteredCenters} previous={prevSummary ? filteredPrevCenters : null} isMtd={isMtd(range)} />
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Center comparison</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ComparisonTable
-            centers={filteredCenters}
-            sortColumn={sortColumn}
-            sortDir={sortDir}
-            onSort={handleSort}
-            onSelectCenter={setSelectedCenterId}
-            onSelectBreakdown={(locationId, metric) => setBreakdownRequest({ locationId, metric })}
-          />
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="lg:col-span-3">
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div>
-              <CardTitle className="text-base">Trend by center</CardTitle>
-              <p className="text-xs text-muted-foreground">Last 6 months</p>
-            </div>
-            <Tabs value={trendMetric} onValueChange={(v) => setTrendMetric(v as TrendMetric)}>
-              <TabsList>
-                <TabsTrigger value="sales">MRR</TabsTrigger>
-                <TabsTrigger value="collections">Collections</TabsTrigger>
-                <TabsTrigger value="occ">Occupancy</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </CardHeader>
-          <CardContent>
-            {trendLoading && !trend ? (
-              <div className="h-[300px] animate-pulse bg-muted/40 rounded-md" />
-            ) : (
-              <TrendChart series={filteredTrendSeries} metric={trendMetric} highlightMonths={highlightMonths} />
+        <TabsContent value="overview" className="space-y-6 mt-4">
+          <div className="space-y-3">
+            <PeriodFilter preset={preset} range={range} onChange={handlePeriodChange} />
+            {allCenters.length > 1 && (
+              <CenterFilterChips centers={allCenters} activeIds={activeCenterIds} onToggle={toggleCenter} />
             )}
-          </CardContent>
-        </Card>
+          </div>
 
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Billed vs collected</CardTitle>
-            <p className="text-xs text-muted-foreground">Selected period</p>
-          </CardHeader>
-          <CardContent>
-            <BilledCollectedChart centers={filteredCenters} />
-          </CardContent>
-        </Card>
-      </div>
+          {summaryError && (
+            <p className="text-sm text-destructive">Couldn&apos;t load analytics: {summaryError}</p>
+          )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Occupancy by center</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <OccupancyMeters centers={filteredCenters} />
-        </CardContent>
-      </Card>
+          {summaryLoading && !summary ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i}><CardContent className="pt-6 h-24 animate-pulse bg-muted/40 rounded-md" /></Card>
+              ))}
+            </div>
+          ) : (
+            <KpiTiles current={filteredCenters} previous={prevSummary ? filteredPrevCenters : null} isMtd={isMtd(range)} />
+          )}
 
-      <SpaceHeatmap units={heatmap?.units ?? []} loading={heatmapLoading && !heatmap} />
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Center comparison</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ComparisonTable
+                centers={filteredCenters}
+                sortColumn={sortColumn}
+                sortDir={sortDir}
+                onSort={handleSort}
+                onSelectCenter={setSelectedCenterId}
+                onSelectBreakdown={(locationId, metric) => setBreakdownRequest({ locationId, metric })}
+              />
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-6 lg:grid-cols-5">
+            <Card className="lg:col-span-3">
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle className="text-base">Trend by center</CardTitle>
+                  <p className="text-xs text-muted-foreground">Last 6 months</p>
+                </div>
+                <Tabs value={trendMetric} onValueChange={(v) => setTrendMetric(v as TrendMetric)}>
+                  <TabsList>
+                    <TabsTrigger value="sales">MRR</TabsTrigger>
+                    <TabsTrigger value="collections">Collections</TabsTrigger>
+                    <TabsTrigger value="occ">Occupancy</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </CardHeader>
+              <CardContent>
+                {trendLoading && !trend ? (
+                  <div className="h-[300px] animate-pulse bg-muted/40 rounded-md" />
+                ) : (
+                  <TrendChart series={filteredTrendSeries} metric={trendMetric} highlightMonths={highlightMonths} />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-base">Billed vs collected</CardTitle>
+                <p className="text-xs text-muted-foreground">Selected period</p>
+              </CardHeader>
+              <CardContent>
+                <BilledCollectedChart centers={filteredCenters} />
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Occupancy by center</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OccupancyMeters centers={filteredCenters} />
+            </CardContent>
+          </Card>
+
+          <SpaceHeatmap units={heatmap?.units ?? []} loading={heatmapLoading && !heatmap} />
+        </TabsContent>
+
+        <TabsContent value="projections" className="mt-4">
+          <ProjectionsTab />
+        </TabsContent>
+      </Tabs>
 
       <DetailSheet
         detail={detail}
