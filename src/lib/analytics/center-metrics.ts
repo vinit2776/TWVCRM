@@ -515,3 +515,172 @@ export function computeUnitHeatmapStats(
     };
   });
 }
+
+// ── Revenue Projections (existing contracts, FY horizon, escalation-aware) ─
+
+/**
+ * A contract's start year for the Indian financial year (Apr-Mar) it falls
+ * in "today" — same one-liner every other FY consumer in this codebase
+ * defines locally (tds/receivable/route.ts, accounting/tds/page.tsx); kept
+ * duplicated here rather than extracted, matching that precedent.
+ */
+export function currentFyYear(todayDate: string): number {
+  const month = Number(todayDate.slice(5, 7));
+  const year = Number(todayDate.slice(0, 4));
+  return month >= 4 ? year : year - 1;
+}
+
+/** The 12 YYYY-MM month keys of FY `fyYear`, Apr(fyYear) through Mar(fyYear+1). */
+export function fyMonths(fyYear: number): string[] {
+  const months: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const y = i < 9 ? fyYear : fyYear + 1;
+    const m = ((3 + i) % 12) + 1;
+    months.push(`${y}-${String(m).padStart(2, "0")}`);
+  }
+  return months;
+}
+
+export function fyLabel(fyYear: number): string {
+  return `FY ${fyYear}–${String((fyYear + 1) % 100).padStart(2, "0")}`;
+}
+
+export interface ProjectionContractRow {
+  id: string;
+  location_id: string;
+  status: string;
+  start_date: string;
+  end_date: string | null;
+  subtotal: number | null;
+  total_amount: number | null;
+  phase_start_date: string | null;
+  escalation_percentage: number | null;
+  lead_id: string;
+}
+
+/**
+ * Every contract that could contribute confirmed or hypothetical-renewal
+ * revenue to a projection: active/renewal_in_progress only, same live-set
+ * convention as everywhere else in this module — a contract that's expired,
+ * terminated, or still pre-activation contributes nothing here.
+ */
+export async function fetchProjectionContracts(
+  supabase: Supabase,
+  locationId?: string | null
+): Promise<ProjectionContractRow[]> {
+  let q = supabase
+    .from("contracts")
+    .select("id, location_id, status, start_date, end_date, subtotal, total_amount, phase_start_date, escalation_percentage, lead_id")
+    .in("status", ["active", "renewal_in_progress"]);
+  if (locationId) q = q.eq("location_id", locationId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ProjectionContractRow[];
+}
+
+export interface LocationProjectionSeries {
+  location_id: string;
+  /** Sum of contracts overlapping that month, at their current phase rate. Stops dead at end_date. */
+  confirmed: number[];
+  /**
+   * Incremental revenue added back for months after a contract's own
+   * end_date, as if it renewed on schedule: last-charged rate x
+   * (1 + escalation_percentage/100) — the same formula the real renewal
+   * flow uses (contracts/[id]/renew/route.ts), applied once per contract,
+   * not compounded per month. Zero for a contract still within its term.
+   */
+  if_renewed: number[];
+}
+
+/**
+ * Monthly confirmed + hypothetical-if-renewed revenue per location across
+ * the 12 months of `fyYear`. Confirmed is phase-aware (currentMonthlyRate
+ * walks rate_phases same as the heat map); if_renewed applies the
+ * contract's own stored escalation_percentage once, off the rate it was
+ * actually charging when it ended — not the pre-phase flat amount.
+ */
+export function computeProjection(
+  contracts: ProjectionContractRow[],
+  ratePhasesByContract: Map<string, ContractRatePhase[]>,
+  fyYear: number
+): { months: string[]; centers: LocationProjectionSeries[] } {
+  const months = fyMonths(fyYear);
+  const byLocation = new Map<string, { confirmed: number[]; if_renewed: number[] }>();
+
+  for (const c of contracts) {
+    const flat = Number(c.subtotal || c.total_amount || 0);
+    if (!flat) continue;
+    const phases = ratePhasesByContract.get(c.id);
+    const phaseAnchor = c.phase_start_date || c.start_date;
+    const escPct = c.escalation_percentage != null ? Number(c.escalation_percentage) : 0;
+
+    if (!byLocation.has(c.location_id)) {
+      byLocation.set(c.location_id, { confirmed: months.map(() => 0), if_renewed: months.map(() => 0) });
+    }
+    const entry = byLocation.get(c.location_id)!;
+
+    months.forEach((month, idx) => {
+      const monthStart = `${month}-01`;
+      const monthEnd = `${month}-31`; // safe upper bound; months never have a 31st that matters here
+      const started = c.start_date <= monthEnd;
+      const notEnded = !c.end_date || c.end_date >= monthStart;
+      if (started && notEnded) {
+        entry.confirmed[idx] += currentMonthlyRate(flat, phaseAnchor, phases, monthStart);
+      } else if (started && c.end_date && c.end_date < monthStart) {
+        const rateAtEnd = currentMonthlyRate(flat, phaseAnchor, phases, c.end_date);
+        entry.if_renewed[idx] += Math.round(rateAtEnd * (1 + escPct / 100));
+      }
+    });
+  }
+
+  const centers = Array.from(byLocation.entries()).map(([location_id, v]) => ({
+    location_id,
+    confirmed: v.confirmed.map(Math.round),
+    if_renewed: v.if_renewed.map(Math.round),
+  }));
+  return { months, centers };
+}
+
+export interface ProjectionContractDetail {
+  id: string;
+  location_id: string;
+  client_name: string;
+  monthly_rate: number;
+  end_date: string | null;
+  status: string;
+  escalation_percentage: number;
+  renewed_rate: number;
+}
+
+/**
+ * Per-contract detail backing the "contracts ending soonest" drill-down —
+ * the same rate/escalation math as computeProjection, at contract grain
+ * instead of summed by month.
+ */
+export function buildProjectionContractDetails(
+  contracts: ProjectionContractRow[],
+  ratePhasesByContract: Map<string, ContractRatePhase[]>,
+  clientNameByLeadId: Map<string, string>,
+  todayDate: string
+): ProjectionContractDetail[] {
+  return contracts
+    .map((c) => {
+      const flat = Number(c.subtotal || c.total_amount || 0);
+      const phases = ratePhasesByContract.get(c.id);
+      const phaseAnchor = c.phase_start_date || c.start_date;
+      const asOf = c.end_date && c.end_date < todayDate ? c.end_date : todayDate;
+      const rate = Math.round(currentMonthlyRate(flat, phaseAnchor, phases, asOf));
+      const escPct = c.escalation_percentage != null ? Number(c.escalation_percentage) : 0;
+      return {
+        id: c.id,
+        location_id: c.location_id,
+        client_name: clientNameByLeadId.get(c.lead_id) ?? "(unnamed)",
+        monthly_rate: rate,
+        end_date: c.end_date,
+        status: c.status,
+        escalation_percentage: escPct,
+        renewed_rate: Math.round(rate * (1 + escPct / 100)),
+      };
+    })
+    .sort((a, b) => (a.end_date ?? "9999-99-99").localeCompare(b.end_date ?? "9999-99-99"));
+}
