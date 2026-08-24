@@ -22,6 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_location_energy_readings_lookup
 
 ALTER TABLE location_energy_readings ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "location_energy_readings_select_authenticated" ON location_energy_readings;
 CREATE POLICY "location_energy_readings_select_authenticated"
   ON location_energy_readings FOR SELECT
   TO authenticated
