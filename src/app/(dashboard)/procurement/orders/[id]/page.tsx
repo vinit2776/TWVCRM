@@ -9,8 +9,9 @@ import {
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
   AlertTriangle, Undo2, Mail, Wrench, Phone, CalendarDays,
-  XCircle, Edit3, Save,
+  XCircle, Edit3, Save, Lock,
 } from "lucide-react";
+import { format, addMonths, addDays, subDays } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +28,7 @@ import { toast } from "sonner";
 // Type-only import — compiles away, no runtime cost. Keeps Parameters<typeof ...> working.
 import type { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import {
-  PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
+  PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS, BILLING_CYCLE_MONTHS,
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -217,6 +218,45 @@ async function uploadFile(file: File, bucket: string): Promise<string> {
   return data.publicUrl;
 }
 
+// ─── Service report cycle/period derivation ────────────────────────────────────
+// Cycle # and Period To are always derived from the PO's billing cycle and prior
+// reports — only cycle 1's Period From needs a human pick, since the vendor's
+// actual first visit may not land exactly on the contract's start date.
+function deriveServiceReportDefaults(
+  po: PurchaseOrder,
+  periodFromOverride?: string
+): { cycle: number; periodFrom: string; periodTo: string; periodFromLocked: boolean; periodToLocked: boolean } {
+  const reports = po.po_service_reports ?? [];
+  const cycle = reports.length ? Math.max(...reports.map((r) => r.cycle_number)) + 1 : 1;
+  const cycleMonths = po.billing_cycle ? BILLING_CYCLE_MONTHS[po.billing_cycle] : undefined;
+
+  if (cycle === 1) {
+    const periodFrom = periodFromOverride ?? po.service_start_date ?? "";
+    const periodTo = periodFrom && cycleMonths
+      ? format(subDays(addMonths(new Date(`${periodFrom}T00:00:00`), cycleMonths), 1), "yyyy-MM-dd")
+      : "";
+    return { cycle, periodFrom, periodTo, periodFromLocked: false, periodToLocked: !!cycleMonths };
+  }
+
+  const prevReport = reports.find((r) => r.cycle_number === cycle - 1);
+  if (prevReport && cycleMonths) {
+    const periodFrom = format(addDays(new Date(`${prevReport.period_to}T00:00:00`), 1), "yyyy-MM-dd");
+    const periodTo = format(subDays(addMonths(new Date(`${periodFrom}T00:00:00`), cycleMonths), 1), "yyyy-MM-dd");
+    return { cycle, periodFrom, periodTo, periodFromLocked: true, periodToLocked: true };
+  }
+
+  // Fallback (older POs without billing_cycle, or a missing prior report) —
+  // can't derive dates safely, so leave both fields open for manual entry.
+  return { cycle, periodFrom: "", periodTo: "", periodFromLocked: false, periodToLocked: false };
+}
+
+function formatShortDate(dateStr: string): string {
+  if (!dateStr) return "—";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return "—";
+  return format(d, "dd/MM/yy");
+}
+
 // ─── File attachment display ──────────────────────────────────────────────────
 function FileAttachment({
   file,
@@ -365,6 +405,8 @@ export default function PurchaseOrderDetailPage() {
   const [srCycleNumber, setSrCycleNumber] = useState("");
   const [srPeriodFrom, setSrPeriodFrom] = useState("");
   const [srPeriodTo, setSrPeriodTo] = useState("");
+  const [srPeriodFromLocked, setSrPeriodFromLocked] = useState(false);
+  const [srPeriodToLocked, setSrPeriodToLocked] = useState(false);
   const [srFile, setSrFile] = useState<File | null>(null);
   const [srNotes, setSrNotes] = useState("");
   const [srUploading, setSrUploading] = useState(false);
@@ -988,10 +1030,12 @@ export default function PurchaseOrderDetailPage() {
               size="sm"
               className="bg-teal-600 hover:bg-teal-700"
               onClick={() => {
-                const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                setSrCycleNumber(String(nextCycle));
-                setSrPeriodFrom("");
-                setSrPeriodTo("");
+                const d = deriveServiceReportDefaults(po);
+                setSrCycleNumber(String(d.cycle));
+                setSrPeriodFrom(d.periodFrom);
+                setSrPeriodTo(d.periodTo);
+                setSrPeriodFromLocked(d.periodFromLocked);
+                setSrPeriodToLocked(d.periodToLocked);
                 setActionDialog("record_service_report");
               }}
               disabled={actionLoading}
@@ -1736,10 +1780,12 @@ export default function PurchaseOrderDetailPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                    setSrCycleNumber(String(nextCycle));
-                    setSrPeriodFrom("");
-                    setSrPeriodTo("");
+                    const d = deriveServiceReportDefaults(po);
+                    setSrCycleNumber(String(d.cycle));
+                    setSrPeriodFrom(d.periodFrom);
+                    setSrPeriodTo(d.periodTo);
+                    setSrPeriodFromLocked(d.periodFromLocked);
+                    setSrPeriodToLocked(d.periodToLocked);
                     setActionDialog("record_service_report");
                   }}
                 >
@@ -1976,6 +2022,8 @@ export default function PurchaseOrderDetailPage() {
           setSrCycleNumber("");
           setSrPeriodFrom("");
           setSrPeriodTo("");
+          setSrPeriodFromLocked(false);
+          setSrPeriodToLocked(false);
           setSrNotes("");
           if (srFileRef.current) srFileRef.current.value = "";
         }}
@@ -1987,30 +2035,44 @@ export default function PurchaseOrderDetailPage() {
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label>Cycle # <span className="text-red-500">*</span></Label>
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="e.g. 1"
-                  value={srCycleNumber}
-                  onChange={(e) => setSrCycleNumber(e.target.value)}
-                />
+                <Label>Cycle #</Label>
+                <div className="flex h-10 items-center gap-1.5 rounded-md border bg-muted px-3 text-sm text-muted-foreground">
+                  <Lock className="h-3 w-3" /> {srCycleNumber || "—"}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label>Period From <span className="text-red-500">*</span></Label>
-                <Input
-                  type="date"
-                  value={srPeriodFrom}
-                  onChange={(e) => setSrPeriodFrom(e.target.value)}
-                />
+                {srPeriodFromLocked ? (
+                  <div className="flex h-10 items-center gap-1.5 rounded-md border bg-muted px-3 text-sm text-muted-foreground">
+                    <Lock className="h-3 w-3" /> {formatShortDate(srPeriodFrom)}
+                  </div>
+                ) : (
+                  <Input
+                    type="date"
+                    value={srPeriodFrom}
+                    onChange={(e) => {
+                      setSrPeriodFrom(e.target.value);
+                      if (po) {
+                        const d = deriveServiceReportDefaults(po, e.target.value);
+                        setSrPeriodTo(d.periodTo);
+                      }
+                    }}
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Period To <span className="text-red-500">*</span></Label>
-                <Input
-                  type="date"
-                  value={srPeriodTo}
-                  onChange={(e) => setSrPeriodTo(e.target.value)}
-                />
+                {srPeriodToLocked ? (
+                  <div className="flex h-10 items-center gap-1.5 rounded-md border bg-muted px-3 text-sm text-muted-foreground">
+                    <Lock className="h-3 w-3" /> {formatShortDate(srPeriodTo)}
+                  </div>
+                ) : (
+                  <Input
+                    type="date"
+                    value={srPeriodTo}
+                    onChange={(e) => setSrPeriodTo(e.target.value)}
+                  />
+                )}
               </div>
             </div>
             <div className="space-y-1.5">
@@ -2045,6 +2107,8 @@ export default function PurchaseOrderDetailPage() {
                 setSrCycleNumber("");
                 setSrPeriodFrom("");
                 setSrPeriodTo("");
+                setSrPeriodFromLocked(false);
+                setSrPeriodToLocked(false);
                 setSrNotes("");
               }}
             >
