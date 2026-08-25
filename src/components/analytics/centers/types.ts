@@ -125,6 +125,7 @@ export interface ProjectionCenterSeries {
 
 export interface ProjectionContractRow {
   id: string;
+  contract_number: string;
   location_id: string;
   location_name: string;
   client_name: string;
@@ -135,10 +136,23 @@ export interface ProjectionContractRow {
   renewed_rate: number;
 }
 
+export interface ProjectionAdjustment {
+  id: string;
+  contract_id: string;
+  contract_number: string;
+  location_id: string;
+  month: string;
+  amount: number;
+  reason: string;
+  created_by_name: string;
+  created_at: string;
+}
+
 export interface ProjectionsResponse {
   fy: { year: number; label: string; is_current: boolean; start: string; end: string };
   /** 12 YYYY-MM month keys, Apr-Mar. */
   months: string[];
   centers: ProjectionCenterSeries[];
   contracts: ProjectionContractRow[];
+  adjustments: ProjectionAdjustment[];
 }

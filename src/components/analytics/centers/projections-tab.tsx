@@ -13,6 +13,7 @@ import { useFetch } from "@/hooks/use-fetch";
 import { formatCurrency } from "@/lib/utils";
 import { CONTRACT_STATUS_LABELS, CONTRACT_STATUS_COLORS } from "@/lib/constants";
 import { CenterFilterChips } from "./center-filter-chips";
+import { ProjectionAdjustmentsPanel } from "./projection-adjustments-panel";
 import type { ProjectionsResponse } from "./types";
 
 const ProjectionChart = dynamic(
@@ -33,7 +34,7 @@ export function ProjectionsTab() {
   const [activeCenterIds, setActiveCenterIds] = useState<Set<string>>(new Set());
   const [showAllContracts, setShowAllContracts] = useState(false);
 
-  const { data, loading, error } = useFetch<ProjectionsResponse | null>(
+  const { data, loading, error, refetch } = useFetch<ProjectionsResponse | null>(
     "/api/analytics/centers/projections",
     { params: { fy: fyYear ?? undefined }, initialData: null }
   );
@@ -92,6 +93,11 @@ export function ProjectionsTab() {
     [data, activeCenterIds]
   );
   const visibleContracts = showAllContracts ? filteredContracts : filteredContracts.slice(0, CONTRACTS_PAGE_SIZE);
+
+  const adjustmentsInView = useMemo(
+    () => (data?.adjustments ?? []).filter((a) => activeCenterIds.has(a.location_id) && months.includes(a.month)),
+    [data, activeCenterIds, months]
+  );
 
   const monthLabel = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
@@ -154,7 +160,10 @@ export function ProjectionsTab() {
             <CardContent className="pt-6">
               <div className="text-xs font-medium text-muted-foreground">Confirmed FY total</div>
               <div className="mt-1 text-2xl font-bold tracking-tight">{compactCurrency(confirmedTotal)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">Active / renewal-in-progress, pre-GST</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Active / renewal-in-progress, pre-GST
+                {adjustmentsInView.length > 0 && ` · incl. ${adjustmentsInView.length} manual adjustment${adjustmentsInView.length > 1 ? "s" : ""}`}
+              </div>
             </CardContent>
           </Card>
           <Card className="border-amber-200">
@@ -316,6 +325,14 @@ export function ProjectionsTab() {
           </CardContent>
         </Card>
       </div>
+
+      {data && (
+        <ProjectionAdjustmentsPanel
+          adjustments={data.adjustments}
+          contracts={data.contracts}
+          onChanged={refetch}
+        />
+      )}
     </div>
   );
 }

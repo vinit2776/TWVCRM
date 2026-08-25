@@ -33,6 +33,8 @@ import {
   fetchRatePhasesByContract,
   computeProjection,
   buildProjectionContractDetails,
+  fetchProjectionAdjustments,
+  applyProjectionAdjustments,
 } from "@/lib/analytics/center-metrics";
 
 async function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
@@ -98,8 +100,16 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const { months, centers } = computeProjection(contracts, ratePhasesByContract, fyYear);
+  const { months, centers: rawCenters } = computeProjection(contracts, ratePhasesByContract, fyYear);
   const contractDetails = buildProjectionContractDetails(contracts, ratePhasesByContract, clientNameByLeadId, today);
+
+  let adjustments;
+  try {
+    adjustments = await fetchProjectionAdjustments(supabase);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+  }
+  const centers = applyProjectionAdjustments(rawCenters, months, adjustments);
 
   return NextResponse.json({
     data: {
@@ -116,6 +126,7 @@ export async function GET(request: NextRequest) {
         ...c,
         location_name: locationNameById.get(c.location_id) ?? "Unknown",
       })),
+      adjustments,
     },
   });
 }

@@ -15,6 +15,7 @@ import {
   fyLabel,
   computeProjection,
   buildProjectionContractDetails,
+  applyProjectionAdjustments,
   type SpaceUnitRow,
   type SpaceAllocationRow,
   type ContractRow,
@@ -22,6 +23,7 @@ import {
   type HeatmapAllocationRow,
   type ContractRatePhase,
   type ProjectionContractRow,
+  type ProjectionAdjustmentRow,
 } from "@/lib/analytics/center-metrics";
 
 describe("trailingMonthWindows", () => {
@@ -343,7 +345,7 @@ describe("computeProjection", () => {
 
   function contract(over: Partial<ProjectionContractRow>): ProjectionContractRow {
     return {
-      id: "c1", location_id: "loc1", status: "active",
+      id: "c1", contract_number: "TWV-C-0001", location_id: "loc1", status: "active",
       start_date: "2025-01-01", end_date: null,
       subtotal: 20000, total_amount: 20000,
       phase_start_date: null, escalation_percentage: 10, lead_id: "lead1",
@@ -449,7 +451,7 @@ describe("buildProjectionContractDetails", () => {
 
   function contract(over: Partial<ProjectionContractRow>): ProjectionContractRow {
     return {
-      id: "c1", location_id: "loc1", status: "active",
+      id: "c1", contract_number: "TWV-C-0001", location_id: "loc1", status: "active",
       start_date: "2025-01-01", end_date: null,
       subtotal: 20000, total_amount: 20000,
       phase_start_date: null, escalation_percentage: 10, lead_id: "lead1",
@@ -503,5 +505,53 @@ describe("buildProjectionContractDetails", () => {
       "2026-08-21"
     );
     expect(details.map((d) => d.id)).toEqual(["c3", "c2", "c1"]);
+  });
+});
+
+describe("applyProjectionAdjustments", () => {
+  const months = ["2026-04", "2026-05", "2026-06"];
+
+  function adjustment(over: Partial<ProjectionAdjustmentRow>): ProjectionAdjustmentRow {
+    return {
+      id: "adj1", contract_id: "c1", contract_number: "TWV-C-0099", location_id: "loc1",
+      month: "2026-04", amount: 203928, reason: "April rent invoiced offline; payment received",
+      created_by_name: "Vinit Chordia", created_at: "2026-08-25T00:00:00Z",
+      ...over,
+    };
+  }
+
+  it("adds the adjustment amount into confirmed for its month, leaving if_renewed untouched", () => {
+    const centers = [{ location_id: "loc1", confirmed: [0, 203928, 203928], if_renewed: [0, 0, 0] }];
+    const result = applyProjectionAdjustments(centers, months, [adjustment({})]);
+    const loc1 = result.find((c) => c.location_id === "loc1")!;
+    expect(loc1.confirmed).toEqual([203928, 203928, 203928]);
+    expect(loc1.if_renewed).toEqual([0, 0, 0]);
+  });
+
+  it("creates a location entry from scratch when the adjustment is the only activity there", () => {
+    const result = applyProjectionAdjustments([], months, [adjustment({ location_id: "loc2" })]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ location_id: "loc2", confirmed: [203928, 0, 0], if_renewed: [0, 0, 0] });
+  });
+
+  it("ignores an adjustment whose month falls outside the requested FY horizon", () => {
+    const centers = [{ location_id: "loc1", confirmed: [0, 0, 0], if_renewed: [0, 0, 0] }];
+    const result = applyProjectionAdjustments(centers, months, [adjustment({ month: "2027-01" })]);
+    expect(result.find((c) => c.location_id === "loc1")!.confirmed).toEqual([0, 0, 0]);
+  });
+
+  it("sums multiple adjustments landing on the same location and month", () => {
+    const centers = [{ location_id: "loc1", confirmed: [0, 0, 0], if_renewed: [0, 0, 0] }];
+    const result = applyProjectionAdjustments(centers, months, [
+      adjustment({ id: "adj1", amount: 100000 }),
+      adjustment({ id: "adj2", amount: 50000 }),
+    ]);
+    expect(result.find((c) => c.location_id === "loc1")!.confirmed[0]).toBe(150000);
+  });
+
+  it("does not mutate the input centers array", () => {
+    const centers = [{ location_id: "loc1", confirmed: [0, 0, 0], if_renewed: [0, 0, 0] }];
+    applyProjectionAdjustments(centers, months, [adjustment({})]);
+    expect(centers[0].confirmed).toEqual([0, 0, 0]);
   });
 });
