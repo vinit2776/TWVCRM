@@ -547,6 +547,7 @@ export function fyLabel(fyYear: number): string {
 
 export interface ProjectionContractRow {
   id: string;
+  contract_number: string;
   location_id: string;
   status: string;
   start_date: string;
@@ -570,7 +571,7 @@ export async function fetchProjectionContracts(
 ): Promise<ProjectionContractRow[]> {
   let q = supabase
     .from("contracts")
-    .select("id, location_id, status, start_date, end_date, subtotal, total_amount, phase_start_date, escalation_percentage, lead_id")
+    .select("id, contract_number, location_id, status, start_date, end_date, subtotal, total_amount, phase_start_date, escalation_percentage, lead_id")
     .in("status", ["active", "renewal_in_progress"]);
   if (locationId) q = q.eq("location_id", locationId);
   const { data, error } = await q;
@@ -641,8 +642,76 @@ export function computeProjection(
   return { months, centers };
 }
 
+export interface ProjectionAdjustmentRow {
+  id: string;
+  contract_id: string;
+  contract_number: string;
+  location_id: string;
+  month: string;
+  amount: number;
+  reason: string;
+  created_by_name: string;
+  created_at: string;
+}
+
+export async function fetchProjectionAdjustments(supabase: Supabase): Promise<ProjectionAdjustmentRow[]> {
+  const { data, error } = await supabase
+    .from("projection_adjustments")
+    .select("id, contract_id, month, amount, reason, created_at, contract:contracts(location_id, contract_number), created_by_user:users(full_name)")
+    .order("month", { ascending: true });
+  if (error) throw new Error(error.message);
+  type Row = {
+    id: string; contract_id: string; month: string; amount: number; reason: string; created_at: string;
+    contract: { location_id: string; contract_number: string } | null;
+    created_by_user: { full_name: string } | null;
+  };
+  return ((data ?? []) as unknown as Row[])
+    .filter((r) => r.contract) // contract_id is NOT NULL FK, but defend against a race with a deleted contract
+    .map((r) => ({
+      id: r.id,
+      contract_id: r.contract_id,
+      contract_number: r.contract!.contract_number,
+      location_id: r.contract!.location_id,
+      month: r.month,
+      amount: Number(r.amount),
+      reason: r.reason,
+      created_by_name: r.created_by_user?.full_name ?? "Unknown",
+      created_at: r.created_at,
+    }));
+}
+
+/**
+ * Folds manual adjustments into a location's "confirmed" figure for whichever
+ * FY the adjustment's month falls in — additive to the already-computed
+ * projection, not a replacement, so an adjustment supplements a contract's
+ * own start_date/rate_phases rather than needing them changed. Locations with
+ * an adjustment but no other contract activity still get an entry (matching
+ * computeProjection's own zero-array convention) so the amount isn't dropped.
+ */
+export function applyProjectionAdjustments(
+  centers: LocationProjectionSeries[],
+  months: string[],
+  adjustments: ProjectionAdjustmentRow[]
+): LocationProjectionSeries[] {
+  const byLocation = new Map(centers.map((c) => [c.location_id, { ...c, confirmed: [...c.confirmed] }]));
+  for (const adj of adjustments) {
+    const idx = months.indexOf(adj.month);
+    if (idx === -1) continue; // adjustment's month isn't in this FY horizon
+    if (!byLocation.has(adj.location_id)) {
+      byLocation.set(adj.location_id, {
+        location_id: adj.location_id,
+        confirmed: months.map(() => 0),
+        if_renewed: months.map(() => 0),
+      });
+    }
+    byLocation.get(adj.location_id)!.confirmed[idx] += adj.amount;
+  }
+  return Array.from(byLocation.values());
+}
+
 export interface ProjectionContractDetail {
   id: string;
+  contract_number: string;
   location_id: string;
   client_name: string;
   monthly_rate: number;
@@ -673,6 +742,7 @@ export function buildProjectionContractDetails(
       const escPct = c.escalation_percentage != null ? Number(c.escalation_percentage) : 0;
       return {
         id: c.id,
+        contract_number: c.contract_number,
         location_id: c.location_id,
         client_name: clientNameByLeadId.get(c.lead_id) ?? "(unnamed)",
         monthly_rate: rate,
