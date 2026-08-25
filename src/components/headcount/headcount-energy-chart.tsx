@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Zap, AlertTriangle, WifiOff } from "lucide-react";
 import {
@@ -32,6 +32,27 @@ function formatDayTick(date: string) {
   return new Date(date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
 }
 
+const NEARBY_HEADCOUNT_WINDOW_MS = 20 * 60 * 1000; // show a headcount reading if it's within 20 min of the hovered bar
+
+type DayRow = { ts: number; wh: number };
+type DayPoint = { ts: number; count: number };
+
+function lookupNearestDay(rows: DayRow[], points: DayPoint[], ts: number) {
+  const nearestBar = rows.reduce<{ row: DayRow; dist: number } | null>((best, r) => {
+    const dist = Math.abs(r.ts - ts);
+    if (dist > NEARBY_HEADCOUNT_WINDOW_MS) return best;
+    if (!best || dist < best.dist) return { row: r, dist };
+    return best;
+  }, null);
+  const nearestPoint = points.reduce<{ point: DayPoint; dist: number } | null>((best, p) => {
+    const dist = Math.abs(p.ts - ts);
+    if (dist > NEARBY_HEADCOUNT_WINDOW_MS) return best;
+    if (!best || dist < best.dist) return { point: p, dist };
+    return best;
+  }, null);
+  return { nearestBar, nearestPoint };
+}
+
 export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Props) {
   const from = mode === "range" ? (dateFrom || daysAgoISO(30)) : todayISO();
   const to = mode === "range" ? (dateTo || todayISO()) : todayISO();
@@ -42,9 +63,11 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
   const [error, setError] = useState<string | null>(null);
   const [usingFallback, setUsingFallback] = useState(false);
 
-  const [dayRows, setDayRows] = useState<{ ts: number; wh: number }[]>([]);
-  const [dayPoints, setDayPoints] = useState<{ ts: number; count: number }[]>([]);
+  const [dayRows, setDayRows] = useState<DayRow[]>([]);
+  const [dayPoints, setDayPoints] = useState<DayPoint[]>([]);
   const [rangeRows, setRangeRows] = useState<{ date: string; wh: number; peak: number | null }[]>([]);
+  const [dayHover, setDayHover] = useState<{ ts: number; x: number; y: number } | null>(null);
+  const dayContainerRef = useRef<HTMLDivElement>(null);
 
   // Resolve whether this location has telemetry, and which device to read
   useEffect(() => {
@@ -203,6 +226,46 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
     ? [Math.min(...dayAllTs), Math.max(...dayAllTs)]
     : [0, 1];
 
+  // A day at 15-min resolution can have up to 96 bars. A fixed max width
+  // (14px) that made sense for a handful of points overlaps into a solid
+  // block once there are dozens — scale it down as point count grows so
+  // bars stay visually distinct instead of mashing together.
+  const dayBarSize = Math.max(2, Math.min(14, Math.floor(480 / Math.max(dayRows.length, 1))));
+
+  const { nearestBar: dayNearestBar, nearestPoint: dayNearestPoint } = dayHover
+    ? lookupNearestDay(dayRows, dayPoints, dayHover.ts)
+    : { nearestBar: null, nearestPoint: null };
+  const dayContainerWidth = dayContainerRef.current?.clientWidth ?? 0;
+  const dayFlipLeft = dayHover != null && dayContainerWidth > 0 && dayHover.x > dayContainerWidth * 0.6;
+
+  // Recharts v3's own activeIndex/activeLabel tracking (both the default
+  // <Tooltip> and the chart-level onMouseMove callback) freezes at the first
+  // resolved index for the rest of a hover session on this Bar+Scatter combo
+  // — confirmed by dispatching mousemove at many different positions and
+  // watching activeCoordinate.x update on every call while activeIndex never
+  // changed. activeCoordinate.x does track the real cursor position
+  // correctly, so instead of trusting Recharts' snapped label, two rendered
+  // bars' real screen positions are measured once per hover and the
+  // cursor's own clientX is linearly inverted against them.
+  function handleDayMouseMove(e: React.MouseEvent<HTMLDivElement>) {
+    const container = dayContainerRef.current;
+    if (!container || dayRows.length === 0) return;
+    const bars = container.querySelectorAll(".recharts-bar-rectangle path");
+    if (bars.length < 2) return;
+    const firstRect = bars[0].getBoundingClientRect();
+    const lastRect = bars[bars.length - 1].getBoundingClientRect();
+    const x0 = firstRect.left + firstRect.width / 2;
+    const x1 = lastRect.left + lastRect.width / 2;
+    const ts0 = dayRows[0].ts;
+    const ts1 = dayRows[dayRows.length - 1].ts;
+    if (x1 === x0) return;
+    const clampedX = Math.min(Math.max(e.clientX, Math.min(x0, x1)), Math.max(x0, x1));
+    const frac = (clampedX - x0) / (x1 - x0);
+    const ts = ts0 + frac * (ts1 - ts0);
+    const containerRect = container.getBoundingClientRect();
+    setDayHover({ ts, x: e.clientX - containerRect.left, y: e.clientY - containerRect.top });
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -232,7 +295,12 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
           <p className="text-sm text-muted-foreground">No energy or headcount data for today yet.</p>
         )}
         {!loading && !error && mode === "day" && (dayRows.length > 0 || dayPoints.length > 0) && (
-          <div className="h-64">
+          <div
+            ref={dayContainerRef}
+            className="relative h-64"
+            onMouseMove={handleDayMouseMove}
+            onMouseLeave={() => setDayHover(null)}
+          >
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={dayRows} margin={{ left: 4, right: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -242,11 +310,28 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
                 />
                 <YAxis yAxisId="wh" tick={{ fontSize: 11 }} width={50} label={{ value: "Wh", angle: -90, position: "insideLeft", fontSize: 11 }} />
                 <YAxis yAxisId="hc" orientation="right" tick={{ fontSize: 11 }} width={36} allowDecimals={false} label={{ value: "people", angle: 90, position: "insideRight", fontSize: 11 }} />
-                <Tooltip labelFormatter={(v) => formatHourTick(Number(v))} />
-                <Bar yAxisId="wh" dataKey="wh" fill={usingFallback ? "#FAC775" : "#5DCAA5"} maxBarSize={14} name={usingFallback ? "Captured reading (Wh)" : "Consumption (Wh)"} />
+                <Bar yAxisId="wh" dataKey="wh" fill={usingFallback ? "#FAC775" : "#5DCAA5"} barSize={dayBarSize} name={usingFallback ? "Captured reading (Wh)" : "Consumption (Wh)"} background={{ fill: "transparent" }} />
                 <Scatter yAxisId="hc" data={dayPoints} dataKey="count" fill="#D85A30" name="Headcount" />
               </ComposedChart>
             </ResponsiveContainer>
+            {dayHover && (dayNearestBar || dayNearestPoint) && (
+              <div
+                className="pointer-events-none absolute z-10 bg-background border rounded-md shadow-sm px-3 py-2 text-xs space-y-1 whitespace-nowrap"
+                style={{
+                  left: dayHover.x,
+                  top: dayHover.y,
+                  transform: `translate(${dayFlipLeft ? "-100%" : "0%"}, -110%)`,
+                }}
+              >
+                <p className="font-medium">{formatHourTick(dayHover.ts)}</p>
+                {dayNearestBar && (
+                  <p>
+                    {usingFallback ? "Captured reading" : "Consumption"}: {dayNearestBar.row.wh} Wh ({formatHourTick(dayNearestBar.row.ts)})
+                  </p>
+                )}
+                {dayNearestPoint && <p>Headcount: {dayNearestPoint.point.count} (logged {formatHourTick(dayNearestPoint.point.ts)})</p>}
+              </div>
+            )}
           </div>
         )}
         {!loading && !error && mode === "range" && rangeRows.length === 0 && (
