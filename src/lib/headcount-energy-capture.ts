@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import { fetchOnegridDevices, fetchOnegridTelemetry } from "@/lib/onegrid";
+import { recomputeDeltasFromCumulative } from "@/lib/energy-ledger";
 
 // Cold-start / big-gap cap: if this location+device has never been captured
 // before, or the gap since its last row is large, don't ask OneGrid for the
@@ -45,7 +46,7 @@ export async function captureHeadcountEnergy(headcountId: string, locationId: st
     // location doesn't trigger a slow wide-range OneGrid query.
     const { data: lastRow } = await supabase
       .from("location_energy_readings")
-      .select("ts")
+      .select("ts, cumulative_wh")
       .eq("location_id", locationId)
       .eq("device_id", deviceId)
       .order("ts", { ascending: false })
@@ -65,18 +66,18 @@ export async function captureHeadcountEnergy(headcountId: string, locationId: st
       derive: "delta",
       fields: "Energy_Consumption_Cumulative_Wh",
     });
-    const series = telemetry.series;
+    const series = telemetry.series.filter((r) => r.ts);
     if (series.length === 0) return;
 
-    const ledgerRows = series
-      .filter((r) => r.ts)
-      .map((r) => ({
-        location_id: locationId,
-        device_id: deviceId,
-        ts: new Date(r.ts).toISOString(),
-        energy_delta_wh: r.energy_delta_wh ?? null,
-        cumulative_wh: r.Energy_Consumption_Cumulative_Wh ?? null,
-      }));
+    const recomputed = recomputeDeltasFromCumulative(series, lastRow?.cumulative_wh ?? null);
+
+    const ledgerRows = recomputed.map((r) => ({
+      location_id: locationId,
+      device_id: deviceId,
+      ts: new Date(r.ts).toISOString(),
+      energy_delta_wh: r.energy_delta_wh,
+      cumulative_wh: r.cumulative_wh,
+    }));
     if (ledgerRows.length > 0) {
       await supabase
         .from("location_energy_readings")
@@ -84,14 +85,14 @@ export async function captureHeadcountEnergy(headcountId: string, locationId: st
     }
 
     const today = todayIST();
-    const todaysRows = series.filter((r) => String(r.ts).slice(0, 10) === today);
-    const latest = series[series.length - 1];
+    const todaysRows = recomputed.filter((r) => String(r.ts).slice(0, 10) === today);
+    const latest = recomputed[recomputed.length - 1];
     const todayWh = todaysRows.reduce((sum, r) => sum + (r.energy_delta_wh ?? 0), 0);
 
     await supabase
       .from("space_headcounts")
       .update({
-        energy_reading_wh: latest.Energy_Consumption_Cumulative_Wh ?? null,
+        energy_reading_wh: latest.cumulative_wh,
         energy_today_wh: todayWh,
         energy_device_id: deviceId,
         energy_captured_at: new Date().toISOString(),
