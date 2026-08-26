@@ -1805,6 +1805,19 @@ export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 export const ITEM_CATALOG_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
 
 /**
+ * Departments that are purchased centrally (from NUN 5th floor) and then
+ * distributed to individual centers for consumption. These can have an
+ * optional per-center monthly budget in addition to the company-wide cap, and
+ * a material request must say which center it's for. AMC (annual contracts)
+ * and reimbursement (billed back to a customer's contract) are not
+ * center-specific spend and stay global-only. Currently the same set as
+ * ITEM_CATALOG_DEPARTMENTS, but kept as its own export since budget scoping
+ * and catalog tagging are separate concerns that could diverge later.
+ */
+export const CENTER_SCOPED_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+export type CenterScopedDepartment = (typeof CENTER_SCOPED_DEPARTMENTS)[number];
+
+/**
  * Departments whose items are physical, movable stock — the only ones that can
  * appear in Inventory and be transferred / consumed. Administration (office
  * supplies, utility bills) and AMC (service contracts) are excluded: they are

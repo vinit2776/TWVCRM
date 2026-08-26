@@ -28,11 +28,12 @@ import {
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
+  CENTER_SCOPED_DEPARTMENTS,
 } from "@/lib/constants";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-const DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+const DEPARTMENTS = CENTER_SCOPED_DEPARTMENTS;
 
 const DEPT_LABELS: Record<string, string> = {
   pantry: "Pantry",
@@ -53,6 +54,18 @@ const MONTHS = [
   "July","August","September","October","November","December",
 ];
 
+type CenterBudgetRow = {
+  location_id: string;
+  location_name: string;
+  monthly_budget: number | null;
+  is_active: boolean;
+  id: string | null;
+  spent_this_month: number;
+  provisional_this_month: number;
+  utilisation_pct: number | null;
+  is_over_budget: boolean;
+};
+
 type BudgetRow = {
   department: string;
   monthly_budget: number | null;
@@ -65,7 +78,11 @@ type BudgetRow = {
   is_over_budget: boolean;
   updated_at: string | null;
   updater: { full_name: string } | null;
+  centers: CenterBudgetRow[];
+  unattributed_spend_this_month: number;
 };
+
+type CenterEditState = { monthly_budget: string; is_active: boolean };
 
 type MrRow = {
   id: string;
@@ -716,6 +733,95 @@ function AmcBudgetCard({
   );
 }
 
+// ── Per-center budget breakdown ───────────────────────────────────────────────
+
+function CenterBreakdown({
+  centers, unattributedSpend, centerEdits, onCenterEditChange, isAdmin, isCurrentMonth,
+}: {
+  centers: CenterBudgetRow[];
+  unattributedSpend: number;
+  centerEdits: Record<string, CenterEditState>;
+  onCenterEditChange: (locationId: string, patch: Partial<CenterEditState>) => void;
+  isAdmin: boolean;
+  isCurrentMonth: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const sumOfCenters = centers.reduce((s, c) => {
+    const edit = centerEdits[c.location_id];
+    const amt = edit?.monthly_budget ? parseFloat(edit.monthly_budget) : 0;
+    return s + (isNaN(amt) ? 0 : amt);
+  }, 0);
+
+  return (
+    <div className="mt-3 pt-3 border-t">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        Break down by center
+        {sumOfCenters > 0 && <span className="text-muted-foreground font-normal">(sum: {formatCurrency(sumOfCenters)})</span>}
+      </button>
+
+      {open && (
+        <div className="mt-2.5 space-y-2 pl-4">
+          {centers.map((c) => {
+            const edit = centerEdits[c.location_id] ?? { monthly_budget: "", is_active: false };
+            const budgetAmt = parseFloat(edit.monthly_budget) || null;
+            const pct = budgetAmt ? Math.min(Math.round((c.spent_this_month / budgetAmt) * 100), 110) : null;
+            const isOver = budgetAmt != null && c.spent_this_month > budgetAmt;
+            return (
+              <div key={c.location_id} className="flex flex-wrap items-center gap-3">
+                <span className="text-xs w-40 shrink-0 truncate" title={c.location_name}>{c.location_name}</span>
+                <div className="relative w-32 shrink-0">
+                  <IndianRupee className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                  <Input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    value={edit.monthly_budget}
+                    onChange={(e) => onCenterEditChange(c.location_id, { monthly_budget: e.target.value })}
+                    className="pl-6 h-7 text-xs"
+                    placeholder="0"
+                    disabled={!isAdmin || !isCurrentMonth}
+                  />
+                </div>
+                <div className="flex-1 min-w-[100px]">
+                  <span className={`text-xs font-medium ${isOver ? "text-red-700" : pct != null && pct >= 80 ? "text-amber-700" : "text-muted-foreground"}`}>
+                    {formatCurrency(c.spent_this_month)}
+                    {budgetAmt && <span className="font-normal"> / {formatCurrency(budgetAmt)}</span>}
+                  </span>
+                  {budgetAmt ? (
+                    <div className="w-full h-1 rounded-full bg-muted mt-0.5">
+                      <div
+                        className={`h-1 rounded-full ${isOver ? "bg-red-500" : pct != null && pct >= 80 ? "bg-amber-400" : "bg-green-500"}`}
+                        style={{ width: `${Math.min(pct ?? 0, 100)}%` }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                {isAdmin && isCurrentMonth && (
+                  <Switch
+                    checked={edit.is_active}
+                    onCheckedChange={(checked) => onCenterEditChange(c.location_id, { is_active: checked })}
+                    className="shrink-0"
+                  />
+                )}
+              </div>
+            );
+          })}
+          {unattributedSpend > 0 && (
+            <p className="text-[11px] text-muted-foreground italic pt-1">
+              + {formatCurrency(unattributedSpend)} spent this month with no center set (older requests) — not counted against any center above.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
@@ -733,6 +839,9 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   // Editable state for operational departments
   const [edits, setEdits] = useState<Record<string, { monthly_budget: string; is_active: boolean; notes: string }>>({});
+
+  // Editable state for per-center budgets — department -> location_id -> edit
+  const [centerEdits, setCenterEdits] = useState<Record<string, Record<string, CenterEditState>>>({});
 
   // Editable state for AMC annual budget
   const [amcEdit, setAmcEdit] = useState<{ annual_budget: string; is_active: boolean; notes: string }>({
@@ -752,14 +861,24 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
       setRows(safeRows);
 
       const initial: Record<string, { monthly_budget: string; is_active: boolean; notes: string }> = {};
+      const initialCenters: Record<string, Record<string, CenterEditState>> = {};
       for (const row of safeRows) {
         initial[row.department] = {
           monthly_budget: row.monthly_budget != null ? String(row.monthly_budget) : "",
           is_active: row.is_active,
           notes: row.notes ?? "",
         };
+        const centerMap: Record<string, CenterEditState> = {};
+        for (const c of row.centers ?? []) {
+          centerMap[c.location_id] = {
+            monthly_budget: c.monthly_budget != null ? String(c.monthly_budget) : "",
+            is_active: c.is_active,
+          };
+        }
+        initialCenters[row.department] = centerMap;
       }
       setEdits(initial);
+      setCenterEdits(initialCenters);
 
       // AMC summary
       if (json.amc) {
@@ -777,6 +896,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   useEffect(() => { fetchBudgets(); }, [fetchBudgets]);
 
+  const handleCenterEditChange = (dept: string, locationId: string, patch: Partial<CenterEditState>) => {
+    setCenterEdits((prev) => ({
+      ...prev,
+      [dept]: {
+        ...prev[dept],
+        [locationId]: { ...(prev[dept]?.[locationId] ?? { monthly_budget: "", is_active: false }), ...patch },
+      },
+    }));
+  };
+
   // Save operational department budgets
   const handleSave = async () => {
     setSaving(true);
@@ -785,6 +914,11 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
       monthly_budget: edits[dept]?.monthly_budget ? parseFloat(edits[dept].monthly_budget) : null,
       is_active: edits[dept]?.is_active ?? false,
       notes: edits[dept]?.notes || null,
+      centers: Object.entries(centerEdits[dept] ?? {}).map(([location_id, edit]) => ({
+        location_id,
+        monthly_budget: edit.monthly_budget ? parseFloat(edit.monthly_budget) : null,
+        is_active: edit.is_active,
+      })),
     }));
 
     const res = await fetch("/api/procurement/budget", {
@@ -1020,6 +1154,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                       {row.updater ? ` by ${row.updater.full_name}` : ""}
                     </p>
                   )}
+
+                  {/* Per-center breakdown */}
+                  <CenterBreakdown
+                    centers={row.centers ?? []}
+                    unattributedSpend={row.unattributed_spend_this_month ?? 0}
+                    centerEdits={centerEdits[row.department] ?? {}}
+                    onCenterEditChange={(locationId, patch) => handleCenterEditChange(row.department, locationId, patch)}
+                    isAdmin={isAdmin}
+                    isCurrentMonth={isCurrentMonth}
+                  />
                 </CardContent>
               </Card>
             );
