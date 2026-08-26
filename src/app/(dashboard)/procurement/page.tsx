@@ -8,7 +8,7 @@ import {
   ClipboardList, Package, Receipt, AlertTriangle,
   CheckCircle2, Clock, BarChart3, ArrowRight,
   IndianRupee, ShoppingCart, Truck, AlertCircle,
-  CalendarClock, Users, PieChart, Settings, Wrench,
+  CalendarClock, Users, PieChart, Settings, Wrench, MapPin,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -345,6 +345,11 @@ export default function ProcurementDashboard() {
     is_over_budget: boolean;
   } | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
+  const [reimbursementByCenter, setReimbursementByCenter] = useState<{
+    centers: Array<{ location_id: string; location_name: string; spent_this_month: number; mr_count: number }>;
+    unattributed_spend_this_month: number;
+    total_this_month: number;
+  } | null>(null);
 
   const fetchData = () => {
     setLoading(true);
@@ -364,6 +369,9 @@ export default function ProcurementDashboard() {
         if (j.amc) setAmcBudget(j.amc);
       })
       .finally(() => setBudgetLoading(false));
+    fetch("/api/procurement/reimbursement-by-center")
+      .then((r) => r.json())
+      .then((j) => { if (j.data) setReimbursementByCenter(j.data); });
   };
 
   useEffect(() => {
@@ -629,6 +637,39 @@ export default function ProcurementDashboard() {
               <p className="text-sm text-muted-foreground text-center py-2">
                 No AMC budget configured.{" "}
                 <Link href="/settings?tab=dept-budgets" className="underline">Set in Settings</Link>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Reimbursement by Center (admin/manager only) — view only, no cap ── */}
+      {canSeePrices && reimbursementByCenter && reimbursementByCenter.total_this_month > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-muted-foreground" />
+                Reimbursement by Center · {currentMonth}
+              </CardTitle>
+              <span className="text-xs text-muted-foreground">{formatCurrency(reimbursementByCenter.total_this_month)} total</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Recovered from the customer&apos;s contract — visibility only, not counted against any department budget.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {reimbursementByCenter.centers.map((c) => (
+              <div key={c.location_id} className="flex items-center justify-between text-sm">
+                <span className="truncate">{c.location_name}</span>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatCurrency(c.spent_this_month)} <span className="text-xs">({c.mr_count} MR{c.mr_count !== 1 ? "s" : ""})</span>
+                </span>
+              </div>
+            ))}
+            {reimbursementByCenter.unattributed_spend_this_month > 0 && (
+              <p className="text-xs text-muted-foreground italic pt-1 border-t">
+                + {formatCurrency(reimbursementByCenter.unattributed_spend_this_month)} on contracts with no center set
               </p>
             )}
           </CardContent>
