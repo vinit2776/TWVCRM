@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 
@@ -85,7 +85,13 @@ const editPrSchema = z.object({
 }).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
   message: "billable_contract_id is required when department is 'reimbursement'",
   path: ["billable_contract_id"],
-});
+}).refine(
+  (data) => !(CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(data.department) || !!data.location_id,
+  {
+    message: "Select which center this request is for",
+    path: ["location_id"],
+  }
+);
 
 /** AMC-only columns — always rewritten on edit so switching away from AMC clears them. */
 const AMC_FIELDS = [
@@ -369,6 +375,59 @@ export async function PATCH(
                 this_mr: Number(pr.total_estimated_amount ?? 0),
                 over_by: overBy,
               }, { status: 403 });
+            }
+          }
+
+          // Center budget — additional cap on top of the company-wide one
+          // above, for departments purchased centrally and distributed to
+          // individual centers. Only applies when the MR carries a center.
+          if (pr.location_id && (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(pr.department)) {
+            const { data: centerBudget } = await supabase
+              .from("department_budgets")
+              .select("monthly_budget, is_active")
+              .eq("department", pr.department)
+              .eq("budget_period", "monthly")
+              .eq("location_id", pr.location_id)
+              .maybeSingle();
+
+            if (centerBudget?.is_active && centerBudget.monthly_budget) {
+              const centerMonthlyBudget = Number(centerBudget.monthly_budget);
+
+              const { data: centerMrs, error: centerMrsError } = await supabase
+                .from("purchase_requests")
+                .select("total_estimated_amount")
+                .eq("department", pr.department)
+                .eq("location_id", pr.location_id)
+                .eq("expenditure_type", "operational")
+                .gte("created_at", monthStart)
+                .lte("created_at", monthEnd)
+                .in("status", ["approved", "partially_ordered", "po_created"])
+                .neq("id", id);
+              if (centerMrsError) console.error("[procurement approve] center committed spend query failed:", centerMrsError.message);
+
+              const centerSpentSoFar = (centerMrs ?? []).reduce(
+                (sum, mr) => sum + Number(mr.total_estimated_amount ?? 0), 0
+              );
+              const centerProjectedTotal = centerSpentSoFar + Number(pr.total_estimated_amount ?? 0);
+
+              if (centerProjectedTotal > centerMonthlyBudget) {
+                const overBy = centerProjectedTotal - centerMonthlyBudget;
+                const { data: location } = await supabase.from("locations").select("name").eq("id", pr.location_id).maybeSingle();
+                return NextResponse.json({
+                  error: `Center budget exceeded — manager approval not permitted. ` +
+                    `Monthly budget for ${pr.department} at ${location?.name ?? "this center"}: ₹${centerMonthlyBudget.toLocaleString("en-IN")}. ` +
+                    `Already spent: ₹${centerSpentSoFar.toLocaleString("en-IN")}. ` +
+                    `This MR: ₹${Number(pr.total_estimated_amount).toLocaleString("en-IN")}. ` +
+                    `Would exceed budget by ₹${overBy.toLocaleString("en-IN")}. ` +
+                    `Only admin can approve over-budget requests.`,
+                  budget_exceeded: true,
+                  budget_type: "monthly_center",
+                  monthly_budget: centerMonthlyBudget,
+                  spent_so_far: centerSpentSoFar,
+                  this_mr: Number(pr.total_estimated_amount ?? 0),
+                  over_by: overBy,
+                }, { status: 403 });
+              }
             }
           }
         }

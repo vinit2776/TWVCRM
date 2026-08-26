@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
 
 const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
@@ -46,7 +46,13 @@ const createPrSchema = z.object({
 }).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
   message: "billable_contract_id is required when department is 'reimbursement'",
   path: ["billable_contract_id"],
-});
+}).refine(
+  (data) => !(CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(data.department) || !!data.location_id,
+  {
+    message: "Select which center this request is for",
+    path: ["location_id"],
+  }
+);
 
 function generatePrNumber(count: number): string {
   const now = new Date();

@@ -149,6 +149,15 @@ const DEPT_ORDER = ["pantry", "maintenance", "administration", "asset"];
 
 // ── Budget types ──────────────────────────────────────────────────────────────
 
+interface CenterBudgetRow {
+  location_id: string;
+  location_name: string;
+  monthly_budget: number | null;
+  is_active: boolean;
+  spent_this_month: number;
+  is_over_budget: boolean;
+}
+
 interface BudgetRow {
   department: string;
   monthly_budget: number | null;
@@ -158,6 +167,7 @@ interface BudgetRow {
   amc_spent_this_month: number;
   utilisation_pct: number | null;
   is_over_budget: boolean;
+  centers?: CenterBudgetRow[];
 }
 
 // ── Budget Bar component ──────────────────────────────────────────────────────
@@ -298,6 +308,20 @@ function BudgetBar({ row }: { row: BudgetRow }) {
           )}
         </div>
       </div>
+
+      {/* Row 4: per-center budget summary — consolidated across all centers above */}
+      {row.centers && row.centers.some((c) => c.is_active && c.monthly_budget) && (
+        <p className="text-[11px] text-muted-foreground">
+          {row.centers.filter((c) => c.is_active && c.monthly_budget).length} center
+          {row.centers.filter((c) => c.is_active && c.monthly_budget).length === 1 ? "" : "s"} with a budget set
+          {row.centers.some((c) => c.is_over_budget) && (
+            <span className="text-red-700 font-medium">
+              {" · "}{row.centers.filter((c) => c.is_over_budget).length} over budget:{" "}
+              {row.centers.filter((c) => c.is_over_budget).map((c) => c.location_name).join(", ")}
+            </span>
+          )}
+        </p>
+      )}
     </div>
   );
 }
