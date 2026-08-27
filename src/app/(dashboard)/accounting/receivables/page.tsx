@@ -732,7 +732,12 @@ export default function AccountsReceivablePage() {
                 </thead>
                 <tbody className="divide-y">
                   {agingRows.map((r) => {
-                    const avg = avgDays[r.contractId];
+                    // Keyed by customer (lead id), not contract — a customer
+                    // with several contracts must show one consistent number,
+                    // not a different one per contract row. VO cases/
+                    // aggregators have no cross-entity customer id, so they
+                    // fall back to their own id (same as partyOf()'s fallback).
+                    const avg = avgDays[r.lead?.id ?? r.contractId];
                     return (
                       <tr key={r.contractId} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
@@ -789,7 +794,8 @@ export default function AccountsReceivablePage() {
                   <div className="flex flex-col gap-2">
                     {bucket.rows.map((r) => {
                       const party = partyOf(r);
-                      const avg = avgDays[party.id];
+                      // Same customer-level key as the Ageing view — see note there.
+                      const avg = avgDays[party.lead?.id ?? party.id];
                       const reports = reportsForRow(r);
                       const reportOpen = expandedReportId === r.id;
                       return (
