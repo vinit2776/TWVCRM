@@ -234,6 +234,13 @@ const SETTING_DEFS = [
     help: 'lon1,lat1,lon2,lat2 — biases address suggestions to one city so other cities do not clutter results. Default covers Chennai. Empty disables the restriction.',
     fallback: '79.95,12.75,80.35,13.35',
   },
+  {
+    key: 'BRANCHES',
+    label: 'Branches / locations',
+    help: 'Comma-separated, in the order they should appear. These are the options offered on the Branch dropdown in Employee Registration and Edit Employee. Renaming or removing one here does not change what is already saved against an existing employee — see the Edit Employee form for that.',
+    fallback: 'Branch 1,Branch 2,Branch 3',
+    parse: (raw) => String(raw).split(',').map(x => x.trim()).filter(Boolean),
+  },
 ];
 const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d]));
 
@@ -474,8 +481,6 @@ const BALANCE_POOL_LEAVE_TYPES = LEAVE_TYPES.filter(t => !MONTHLY_PAID_LEAVE_TYP
 const DEFAULT_LEAVE_BALANCE = { 'Comp Off': 0 };
 // Employment type, not job title — see `designation` for the free-text position name.
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Hourly basis', 'Contract'];
-// Placeholder names — real branch names/locations to replace these later.
-const BRANCHES = ['Branch 1', 'Branch 2', 'Branch 3'];
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -2422,7 +2427,7 @@ async function renderEmployeeRegistration(user, error) {
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
           <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-            ${BRANCHES.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
+            ${CONFIG.BRANCHES.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
           </select>
         </div>
         <div style="flex:1;min-width:180px;">
@@ -2491,7 +2496,8 @@ async function renderEditEmployee(employee, user, error) {
           <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
           <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             <option value="">&mdash; None &mdash;</option>
-            ${BRANCHES.map(b => `<option value="${escapeHtml(b)}" ${b === employee.branch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+            ${(employee.branch && !CONFIG.BRANCHES.includes(employee.branch) ? [employee.branch, ...CONFIG.BRANCHES] : CONFIG.BRANCHES)
+              .map(b => `<option value="${escapeHtml(b)}" ${b === employee.branch ? 'selected' : ''}>${escapeHtml(b)}</option>${b === employee.branch && !CONFIG.BRANCHES.includes(b) ? ' <!-- no longer in the configured list -->' : ''}`).join('')}
           </select>
         </div>
         <div style="flex:1;min-width:180px;">
@@ -3888,7 +3894,7 @@ async function handleRequest(req, res) {
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown role.'));
     }
-    if (branch && !BRANCHES.includes(branch)) {
+    if (branch && !CONFIG.BRANCHES.includes(branch)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown branch.'));
     }
     if (reportsTo && !(await getEmployee(reportsTo))) {
@@ -3955,7 +3961,11 @@ async function handleRequest(req, res) {
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown role.'));
     }
-    if (branch && !BRANCHES.includes(branch)) {
+    // Also accepts the value already on file for this employee, even if it has since
+    // been renamed or removed from the configured list — otherwise editing any other
+    // field on this employee (or just re-saving the form untouched) would be blocked
+    // with "Unknown branch." until the admin manually picks a currently-valid one.
+    if (branch && branch !== employee.branch && !CONFIG.BRANCHES.includes(branch)) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown branch.'));
     }
     if (reportsTo === employeeId) {
