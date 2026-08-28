@@ -62,6 +62,21 @@ a deployment reachable from the internet — production uses
 `ADMIN_BOOTSTRAP_PASSWORD` instead, which creates one admin account with a
 password only you know. Full list of variables: [.env.example](.env.example).
 
+## Migrating from the old office database
+
+The app previously ran on the office Windows machine against a local
+`attendance.db`. Moving that history into Turso — and, critically, rotating the
+seed credentials it carries with it — is documented step by step in
+[docs/data-migration.md](docs/data-migration.md).
+
+Two helper scripts support it:
+
+```bash
+npm run snapshot -- --file ./attendance.db   # fingerprint every table
+npm run snapshot -- --turso                  # ...and again after import, to diff
+npm run set-password -- admin '<password>'   # rotate a credential, revoking its sessions
+```
+
 ## Deployment
 
 Its own Vercel project, with **Root Directory** set to `attendance-gateway-code`
