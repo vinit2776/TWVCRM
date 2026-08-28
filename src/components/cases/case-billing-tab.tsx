@@ -29,6 +29,7 @@ import { HANDOFF_STATE_LABELS, voBillParty, type HandoffState } from "@/lib/tall
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementPaymentPanel } from "@/components/billing/payment-collected-panel";
+import { CaseAdhocCharges } from "@/components/cases/case-adhoc-charges";
 import type { InboxPayment } from "@/lib/tally-handoff";
 
 interface CaseBillingTabProps {
@@ -865,6 +866,12 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Any additional billing on this case. Sits under the licence-fee
+          invoice because the Billing tab holds every rupee for the case —
+          three VO charges previously went onto a lead for want of anywhere
+          here to put them. */}
+      <CaseAdhocCharges caseId={caseId} />
 
       {statement && showCreditNoteCancel && (
         <CreditNoteUploadDialog
