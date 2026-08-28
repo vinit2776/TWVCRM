@@ -26,6 +26,8 @@ import {
   Pencil,
   Stamp,
   CalendarPlus,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +36,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
@@ -120,6 +123,15 @@ export default function ContractDetailPage({
   // same preview dialog, different source PDF and commit endpoint.
   const [stampMode, setStampMode] = useState<"generate" | "existing">("generate");
   const [stampExistingPreviewLoading, setStampExistingPreviewLoading] = useState(false);
+  // An arbitrary uploaded PDF has no known layout, so the signature block
+  // isn't reliably on the last page (e.g. a trailing KYC/enclosure table can
+  // push it earlier) — cache the source bytes + page count so the admin can
+  // pick the right page and we re-render from a pristine copy each time.
+  const [stampExistingSourceBytes, setStampExistingSourceBytes] = useState<Uint8Array | null>(null);
+  const [stampExistingOriginalUrl, setStampExistingOriginalUrl] = useState<string | null>(null);
+  const [stampExistingPageCount, setStampExistingPageCount] = useState(0);
+  const [stampExistingTargetPage, setStampExistingTargetPage] = useState(1);
+  const [stampExistingRendering, setStampExistingRendering] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   // Manual override for the agreement PDF's DRAFT watermark — only exposed
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
@@ -404,10 +416,15 @@ export default function ContractDetailPage({
   const closeStampPreview = () => {
     setStampConfirmOpen(false);
     if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    if (stampExistingOriginalUrl) URL.revokeObjectURL(stampExistingOriginalUrl);
     setStampPreviewUrl(null);
     setStampPreviewPdfBase64(null);
     setStampPreviewRef(null);
     setStampError(null);
+    setStampExistingSourceBytes(null);
+    setStampExistingOriginalUrl(null);
+    setStampExistingPageCount(0);
+    setStampExistingTargetPage(1);
   };
 
   const handleOpenStampPreview = async () => {
@@ -435,10 +452,83 @@ export default function ContractDetailPage({
     }
   };
 
+  // Bytes → base64 without Buffer (browser context). Chunked to stay well
+  // under the string-arg limits some engines impose on String.fromCharCode.
+  const bytesToBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
+  // Draws TWV's signature + seal onto one page of a pristine copy of
+  // `sourceBytes` (an arbitrary uploaded PDF — layout unknown to us) and
+  // pushes the result into the shared preview dialog state. Re-loading from
+  // the cached original each call means picking a different page never
+  // stacks stamps from a previous render.
+  const renderExistingStampPreview = async (
+    sourceBytes: Uint8Array,
+    pageNumber: number,
+    stampRef: string
+  ) => {
+    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { COMPANY_SIGNATURE_BASE64 } = await import("@/lib/signature-data");
+    const { COMPANY_SEAL_BASE64 } = await import("@/lib/seal-data");
+
+    const pdfDoc = await PDFDocument.load(sourceBytes);
+    const pages = pdfDoc.getPages();
+    const targetIndex = Math.min(Math.max(pageNumber, 1), pages.length) - 1;
+    const targetPage = pages[targetIndex];
+    const { width } = targetPage.getSize();
+
+    const dataUriToBytes = (dataUri: string) =>
+      Uint8Array.from(atob(dataUri.split(",")[1]), (c) => c.charCodeAt(0));
+
+    const sigImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SIGNATURE_BASE64));
+    const sealImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SEAL_BASE64));
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    const sealSize = 56;
+    const sigH = 32;
+    const sigW = sigH * (sigImage.width / sigImage.height);
+    const marginRight = 48;
+    const marginBottom = 56;
+
+    const sealX = width - marginRight - sealSize;
+    const sealY = marginBottom;
+    const sigX = sealX - sigW - 8;
+    const sigY = marginBottom + (sealSize - sigH) / 2;
+
+    targetPage.drawImage(sigImage, { x: sigX, y: sigY, width: sigW, height: sigH });
+    targetPage.drawImage(sealImage, { x: sealX, y: sealY, width: sealSize, height: sealSize });
+    targetPage.drawText(`TWV Ref: ${stampRef}`, {
+      x: sigX,
+      y: marginBottom - 10,
+      size: 6,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+
+    const stampedBytes = await pdfDoc.save();
+    const pdfBase64 = bytesToBase64(stampedBytes);
+    const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(stampedBytes)], { type: "application/pdf" }));
+
+    setStampPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return blobUrl;
+    });
+    setStampPreviewPdfBase64(pdfBase64);
+  };
+
   // Overlays TWV's signature + seal directly onto the document already
   // uploaded as signed_document (e.g. a customer-signed scan), instead of
   // regenerating the agreement from scratch — preserves the customer's
-  // actual signature, unlike handleOpenStampPreview above.
+  // actual signature, unlike handleOpenStampPreview above. An arbitrary
+  // upload has no known layout (a trailing enclosure/KYC table can easily
+  // push the real signature block off the last page), so this defaults to
+  // the last page but lets the admin pick the correct one before saving.
   const handleOpenStampExistingPreview = async () => {
     if (!contract?.signed_document?.id) return;
     setStampMode("existing");
@@ -452,61 +542,40 @@ export default function ContractDetailPage({
       if (!fileRes.ok) throw new Error("Failed to download the uploaded document");
       const fileBytes = new Uint8Array(await fileRes.arrayBuffer());
 
-      const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
-      const { COMPANY_SIGNATURE_BASE64 } = await import("@/lib/signature-data");
-      const { COMPANY_SEAL_BASE64 } = await import("@/lib/seal-data");
+      const { PDFDocument } = await import("pdf-lib");
       const { generateStampReference } = await import("@/lib/company-stamp");
 
+      const probeDoc = await PDFDocument.load(fileBytes);
+      const pageCount = probeDoc.getPageCount();
+      const defaultPage = pageCount;
       const stampRef = generateStampReference();
-      const pdfDoc = await PDFDocument.load(fileBytes);
-      const pages = pdfDoc.getPages();
-      const lastPage = pages[pages.length - 1];
-      const { width } = lastPage.getSize();
 
-      const dataUriToBytes = (dataUri: string) =>
-        Uint8Array.from(atob(dataUri.split(",")[1]), (c) => c.charCodeAt(0));
-
-      const sigImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SIGNATURE_BASE64));
-      const sealImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SEAL_BASE64));
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-      const sealSize = 56;
-      const sigH = 32;
-      const sigW = sigH * (sigImage.width / sigImage.height);
-      const marginRight = 48;
-      const marginBottom = 56;
-
-      const sealX = width - marginRight - sealSize;
-      const sealY = marginBottom;
-      const sigX = sealX - sigW - 8;
-      const sigY = marginBottom + (sealSize - sigH) / 2;
-
-      lastPage.drawImage(sigImage, { x: sigX, y: sigY, width: sigW, height: sigH });
-      lastPage.drawImage(sealImage, { x: sealX, y: sealY, width: sealSize, height: sealSize });
-      lastPage.drawText(`TWV Ref: ${stampRef}`, {
-        x: sigX,
-        y: marginBottom - 10,
-        size: 6,
-        font,
-        color: rgb(0.5, 0.5, 0.5),
-      });
-
-      const stampedBytes = await pdfDoc.save();
-      let binary = "";
-      for (let i = 0; i < stampedBytes.byteLength; i++) {
-        binary += String.fromCharCode(stampedBytes[i]);
-      }
-      const pdfBase64 = btoa(binary);
-
-      const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(stampedBytes)], { type: "application/pdf" }));
-      setStampPreviewUrl(blobUrl);
-      setStampPreviewPdfBase64(pdfBase64);
+      setStampExistingSourceBytes(fileBytes);
+      setStampExistingOriginalUrl(URL.createObjectURL(new Blob([new Uint8Array(fileBytes)], { type: "application/pdf" })));
+      setStampExistingPageCount(pageCount);
+      setStampExistingTargetPage(defaultPage);
       setStampPreviewRef(stampRef);
+
+      await renderExistingStampPreview(fileBytes, defaultPage, stampRef);
       setStampConfirmOpen(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to generate preview");
     } finally {
       setStampExistingPreviewLoading(false);
+    }
+  };
+
+  const handleStampExistingPageChange = async (pageNumber: number) => {
+    if (!stampExistingSourceBytes || !stampPreviewRef) return;
+    const clamped = Math.min(Math.max(pageNumber, 1), stampExistingPageCount || 1);
+    setStampExistingTargetPage(clamped);
+    setStampExistingRendering(true);
+    try {
+      await renderExistingStampPreview(stampExistingSourceBytes, clamped, stampPreviewRef);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update preview");
+    } finally {
+      setStampExistingRendering(false);
     }
   };
 
@@ -2214,6 +2283,62 @@ export default function ContractDetailPage({
               )}
             </DialogDescription>
           </DialogHeader>
+          {stampMode === "existing" && stampExistingPageCount > 0 && (
+            <div className="rounded-md border bg-amber-50 border-amber-200 p-4 space-y-2.5">
+              <p className="text-sm text-amber-900">
+                This upload&apos;s layout is unknown to us — the signature block isn&apos;t
+                necessarily on the last page (e.g. a trailing KYC/enclosure table can push it
+                earlier). Open the original below to find the right page, then set it here.
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                {stampExistingOriginalUrl && (
+                  <Button asChild variant="outline" size="sm">
+                    <a href={stampExistingOriginalUrl} target="_blank" rel="noopener noreferrer">
+                      <Eye className="mr-1.5 h-3.5 w-3.5" />
+                      Open original (unstamped)
+                    </a>
+                  </Button>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm text-amber-900">Stamp page</span>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="h-7 w-7"
+                    disabled={stampExistingRendering || stampExistingTargetPage <= 1}
+                    onClick={() => handleStampExistingPageChange(stampExistingTargetPage - 1)}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={stampExistingPageCount}
+                    value={stampExistingTargetPage}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!isNaN(n)) handleStampExistingPageChange(n);
+                    }}
+                    disabled={stampExistingRendering}
+                    className="h-7 w-14 text-center px-1"
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    className="h-7 w-7"
+                    disabled={stampExistingRendering || stampExistingTargetPage >= stampExistingPageCount}
+                    onClick={() => handleStampExistingPageChange(stampExistingTargetPage + 1)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="text-sm text-amber-900">of {stampExistingPageCount}</span>
+                  {stampExistingRendering && <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-900" />}
+                </div>
+              </div>
+            </div>
+          )}
           {stampPreviewUrl && (
             <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
