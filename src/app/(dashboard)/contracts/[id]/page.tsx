@@ -115,6 +115,11 @@ export default function ContractDetailPage({
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
   const [stampError, setStampError] = useState<string | null>(null);
+  // "generate" regenerates the agreement fresh (stamp-sign-seal); "existing"
+  // overlays the stamp onto an already-uploaded signed document instead —
+  // same preview dialog, different source PDF and commit endpoint.
+  const [stampMode, setStampMode] = useState<"generate" | "existing">("generate");
+  const [stampExistingPreviewLoading, setStampExistingPreviewLoading] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   // Manual override for the agreement PDF's DRAFT watermark — only exposed
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
@@ -407,6 +412,7 @@ export default function ContractDetailPage({
 
   const handleOpenStampPreview = async () => {
     if (!contract) return;
+    setStampMode("generate");
     setStampPreviewLoading(true);
     setStampError(null);
     try {
@@ -429,12 +435,91 @@ export default function ContractDetailPage({
     }
   };
 
+  // Overlays TWV's signature + seal directly onto the document already
+  // uploaded as signed_document (e.g. a customer-signed scan), instead of
+  // regenerating the agreement from scratch — preserves the customer's
+  // actual signature, unlike handleOpenStampPreview above.
+  const handleOpenStampExistingPreview = async () => {
+    if (!contract?.signed_document?.id) return;
+    setStampMode("existing");
+    setStampExistingPreviewLoading(true);
+    setStampError(null);
+    try {
+      const viewRes = await fetch(`/api/documents/${contract.signed_document.id}/view`);
+      if (!viewRes.ok) throw new Error("Failed to get the uploaded document's URL");
+      const { signedUrl } = await viewRes.json();
+      const fileRes = await fetch(signedUrl);
+      if (!fileRes.ok) throw new Error("Failed to download the uploaded document");
+      const fileBytes = new Uint8Array(await fileRes.arrayBuffer());
+
+      const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+      const { COMPANY_SIGNATURE_BASE64 } = await import("@/lib/signature-data");
+      const { COMPANY_SEAL_BASE64 } = await import("@/lib/seal-data");
+      const { generateStampReference } = await import("@/lib/company-stamp");
+
+      const stampRef = generateStampReference();
+      const pdfDoc = await PDFDocument.load(fileBytes);
+      const pages = pdfDoc.getPages();
+      const lastPage = pages[pages.length - 1];
+      const { width } = lastPage.getSize();
+
+      const dataUriToBytes = (dataUri: string) =>
+        Uint8Array.from(atob(dataUri.split(",")[1]), (c) => c.charCodeAt(0));
+
+      const sigImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SIGNATURE_BASE64));
+      const sealImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SEAL_BASE64));
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      const sealSize = 56;
+      const sigH = 32;
+      const sigW = sigH * (sigImage.width / sigImage.height);
+      const marginRight = 48;
+      const marginBottom = 56;
+
+      const sealX = width - marginRight - sealSize;
+      const sealY = marginBottom;
+      const sigX = sealX - sigW - 8;
+      const sigY = marginBottom + (sealSize - sigH) / 2;
+
+      lastPage.drawImage(sigImage, { x: sigX, y: sigY, width: sigW, height: sigH });
+      lastPage.drawImage(sealImage, { x: sealX, y: sealY, width: sealSize, height: sealSize });
+      lastPage.drawText(`TWV Ref: ${stampRef}`, {
+        x: sigX,
+        y: marginBottom - 10,
+        size: 6,
+        font,
+        color: rgb(0.5, 0.5, 0.5),
+      });
+
+      const stampedBytes = await pdfDoc.save();
+      let binary = "";
+      for (let i = 0; i < stampedBytes.byteLength; i++) {
+        binary += String.fromCharCode(stampedBytes[i]);
+      }
+      const pdfBase64 = btoa(binary);
+
+      const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(stampedBytes)], { type: "application/pdf" }));
+      setStampPreviewUrl(blobUrl);
+      setStampPreviewPdfBase64(pdfBase64);
+      setStampPreviewRef(stampRef);
+      setStampConfirmOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate preview");
+    } finally {
+      setStampExistingPreviewLoading(false);
+    }
+  };
+
   const handleStampSignSeal = async () => {
     if (!contract || !stampPreviewPdfBase64 || !stampPreviewRef) return;
     setStampingSignSeal(true);
     setStampError(null);
     try {
-      const res = await fetch(`/api/contracts/${id}/stamp-sign-seal`, {
+      const endpoint =
+        stampMode === "existing"
+          ? `/api/contracts/${id}/stamp-existing-document`
+          : `/api/contracts/${id}/stamp-sign-seal`;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pdfBase64: stampPreviewPdfBase64, stampRef: stampPreviewRef }),
@@ -636,6 +721,25 @@ export default function ContractDetailPage({
                 <Stamp className="mr-2 h-4 w-4" />
               )}
               Stamp with company seal
+            </Button>
+          )}
+
+          {/* Stamp an already-uploaded signed document (e.g. a customer-signed
+              scan) instead of regenerating the agreement — preserves the
+              customer's actual signature. Only offered while that document
+              hasn't already been through either stamp flow. */}
+          {contract.signed_document && !contract.stamp_reference && userRole === "admin" && (
+            <Button
+              variant="outline"
+              onClick={handleOpenStampExistingPreview}
+              disabled={stampExistingPreviewLoading}
+            >
+              {stampExistingPreviewLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stamp className="mr-2 h-4 w-4" />
+              )}
+              Stamp uploaded document
             </Button>
           )}
 
@@ -2085,13 +2189,29 @@ export default function ContractDetailPage({
       <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Preview: stamp with company seal</DialogTitle>
+            <DialogTitle>
+              {stampMode === "existing"
+                ? "Preview: stamp uploaded document"
+                : "Preview: stamp with company seal"}
+            </DialogTitle>
             <DialogDescription>
-              This is exactly what will be saved as the signed contract for{" "}
-              {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
-              {stampPreviewRef}. Review it before confirming. This does not go through
-              Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
-              if needed.
+              {stampMode === "existing" ? (
+                <>
+                  TWV&apos;s signature and seal are added to the document already uploaded
+                  for {contract.contract_number} — the customer&apos;s original signature
+                  is preserved, ref {stampPreviewRef}. Review it before confirming. This
+                  does not go through Leegality. You can cancel it afterward from
+                  &quot;Cancel sign &amp; seal&quot; if needed.
+                </>
+              ) : (
+                <>
+                  This is exactly what will be saved as the signed contract for{" "}
+                  {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
+                  {stampPreviewRef}. Review it before confirming. This does not go through
+                  Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
+                  if needed.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           {stampPreviewUrl && (
