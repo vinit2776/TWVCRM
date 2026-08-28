@@ -167,8 +167,10 @@ if (!process.env.PUNCH_API_KEY) {
 
 // ZKTeco's ADMS push protocol has no header-based auth of its own — the device just
 // POSTs to whatever Server URL it's configured with, identified only by its serial
-// number. Optionally pin that to a known device; unset accepts any SN (fine while
-// this endpoint is internal-network-only, same caveat as PUNCH_API_KEY above).
+// number. That serial is therefore the *only* credential on /iclock/*, so an unset
+// ZK_DEVICE_SN disables those routes entirely rather than accepting any serial:
+// on a public URL, "accept anyone" would let a stranger write punches for any
+// employee whose device PIN they can guess. Set it when the K40 Pro is connected.
 const ZK_DEVICE_SN = process.env.ZK_DEVICE_SN || null;
 
 // LocationIQ powers the field-trip type-ahead + road distance and on-site reverse
@@ -181,7 +183,7 @@ const PLACES_COUNTRY = process.env.PLACES_COUNTRY || 'in';
 // other cities don't clutter the results. Format: lon1,lat1,lon2,lat2. Empty disables it.
 const PLACES_VIEWBOX = process.env.PLACES_VIEWBOX || '79.95,12.75,80.35,13.35';
 if (!ZK_DEVICE_SN) {
-  console.warn('WARNING: ZK_DEVICE_SN not set. The /iclock ADMS endpoints will accept pushes from any device serial number. Set ZK_DEVICE_SN to pin this to your K40 Pro for any real deployment.');
+  console.warn('ZK_DEVICE_SN not set: the /iclock ADMS endpoints are disabled and will reject every push. Set it to the K40 Pro\'s serial number to enable biometric punches.');
 }
 
 // The self-service "Punch In/Out" button on an employee's phone only succeeds while
@@ -3089,7 +3091,9 @@ async function handleRequest(req, res) {
   // /api/punch uses, via the employees.device_pin mapping (see /admin/device-pins).
   if (parsed.pathname.startsWith('/iclock/')) {
     const sn = parsed.searchParams.get('SN') || '';
-    if (ZK_DEVICE_SN && sn !== ZK_DEVICE_SN) {
+    // Fails closed: no configured serial means no device is connected yet, so every
+    // push is rejected. See ZK_DEVICE_SN above.
+    if (!ZK_DEVICE_SN || sn !== ZK_DEVICE_SN) {
       logSecurityEvent('adms_auth_failed', { ip: req.socket.remoteAddress, path: parsed.pathname, sn });
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       return res.end('unauthorized device');
@@ -3914,6 +3918,10 @@ async function handleRequest(req, res) {
 // serverless function (see api/index.js).
 async function serve(req, res) {
   console.log(`[inbound] ${req.method} ${req.url} from ${req.socket && req.socket.remoteAddress}`);
+  // Internal staff tool on a public hostname — nothing here should ever appear in a
+  // search result. Set once here rather than per-route: Node merges headers set this
+  // way with any later writeHead(status, {...}), and no route sets X-Robots-Tag itself.
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow, nosnippet, noarchive, noimageindex');
   try {
     await handleRequest(req, res);
   } catch (err) {

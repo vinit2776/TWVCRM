@@ -152,6 +152,10 @@ const navSections: NavSection[] = [
       { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff", "it_manager", "it_technician"] },
       { href: "/network",     label: "Network",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "office_admin"] },
       { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager", "viewer"] },
+      // Launch page for the Attendance Gateway satellite app. Deliberately a
+      // separate entry from "Attendance" above, which is this CRM's own unrelated
+      // module — the gateway has its own database and its own user accounts.
+      { href: "/attendance-gateway", label: "Attendance Gateway", icon: Fingerprint, roles: ["admin", "manager", "office_admin"] },
     ],
   },
   {
