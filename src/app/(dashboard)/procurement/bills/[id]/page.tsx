@@ -37,6 +37,7 @@ import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
+import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
@@ -800,22 +801,13 @@ export default function VendorBillDetailPage() {
                 </span>
               </div>
             )}
-            {bill.invoice_file_url && (
-              <div className="flex items-center gap-2.5">
-                <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                <span className="text-sm">
-                  <span className="text-muted-foreground">Invoice File: </span>
-                  <a
-                    href={bill.invoice_file_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline inline-flex items-center gap-1"
-                  >
-                    View Invoice <ExternalLink className="h-3 w-3" />
-                  </a>
-                </span>
-              </div>
-            )}
+            <VendorBillDocuments
+              billId={bill.id}
+              approvalStatus={bill.approval_status}
+              approvedAt={bill.approved_at ?? null}
+              documents={bill.vendor_bill_documents ?? []}
+              onChanged={fetchAll}
+            />
             {bill.notes && (
               <div className="flex items-start gap-2.5">
                 <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
