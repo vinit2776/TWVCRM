@@ -2,8 +2,97 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
 import {
-  daysOverdue, isStale, depositIsChaseable, type ReceivableRow,
+  daysOverdue, isStale, depositIsChaseable, todayIst, type ReceivableRow,
 } from "@/lib/receivables";
+
+/**
+ * Average payment days per customer — amount-weighted (payment_date −
+ * due_date) across every payment made in the trailing 12 months, rolled up
+ * by customer rather than by contract. A customer with several contracts
+ * gets one consistent number instead of a different figure on each of their
+ * rows — keyed the same way the page's own partyOf() resolves a customer:
+ * the lead behind a contract/proposal/ad-hoc invoice, or (since there's no
+ * shared customer id across multiple VO cases) the case/aggregator itself.
+ *
+ * Windowed by payment_date, not due_date — a statement due 18 months ago but
+ * paid last week still reflects this customer's *current* behavior.
+ */
+async function computeAvgPaymentDays(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<Record<string, number>> {
+  const cutoff = new Date(Date.parse(todayIst() + "T00:00:00Z") - 365 * 86400000)
+    .toISOString().slice(0, 10);
+
+  const { data: payments } = await supabase
+    .from("billing_payments")
+    .select(`
+      amount, tds_amount, payment_date,
+      billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        due_date, voided_at, contract_id, proposal_id, invoice_id, case_id, aggregator_id
+      )
+    `)
+    .gte("payment_date", cutoff);
+
+  interface PayRow {
+    amount: number;
+    tds_amount: number | null;
+    payment_date: string;
+    billing_statement: {
+      due_date: string | null;
+      voided_at: string | null;
+      contract_id: string | null;
+      proposal_id: string | null;
+      invoice_id: string | null;
+      case_id: string | null;
+      aggregator_id: string | null;
+    } | null;
+  }
+
+  const rows = ((payments || []) as unknown as PayRow[]).filter(
+    (p) => p.billing_statement?.due_date && !p.billing_statement.voided_at
+  );
+
+  const contractIds = [...new Set(rows.map((r) => r.billing_statement!.contract_id).filter((x): x is string => !!x))];
+  const proposalIds = [...new Set(rows.map((r) => r.billing_statement!.proposal_id).filter((x): x is string => !!x))];
+  const invoiceIds = [...new Set(rows.map((r) => r.billing_statement!.invoice_id).filter((x): x is string => !!x))];
+
+  const [{ data: contractLeads }, { data: proposalLeads }, { data: invoiceLeads }] = await Promise.all([
+    contractIds.length ? supabase.from("contracts").select("id, lead_id").in("id", contractIds) : Promise.resolve({ data: [] }),
+    proposalIds.length ? supabase.from("proposals").select("id, lead_id").in("id", proposalIds) : Promise.resolve({ data: [] }),
+    invoiceIds.length ? supabase.from("proforma_invoices").select("id, lead_id").in("id", invoiceIds) : Promise.resolve({ data: [] }),
+  ]);
+  const contractLeadMap = new Map((contractLeads || []).map((c: { id: string; lead_id: string | null }) => [c.id, c.lead_id]));
+  const proposalLeadMap = new Map((proposalLeads || []).map((p: { id: string; lead_id: string | null }) => [p.id, p.lead_id]));
+  const invoiceLeadMap = new Map((invoiceLeads || []).map((i: { id: string; lead_id: string | null }) => [i.id, i.lead_id]));
+
+  const weightedSum = new Map<string, number>();
+  const weightedAmount = new Map<string, number>();
+
+  for (const r of rows) {
+    const s = r.billing_statement!;
+    const customerKey =
+      (s.contract_id && contractLeadMap.get(s.contract_id)) ||
+      (s.proposal_id && proposalLeadMap.get(s.proposal_id)) ||
+      (s.invoice_id && invoiceLeadMap.get(s.invoice_id)) ||
+      s.case_id ||
+      s.aggregator_id ||
+      null;
+    if (!customerKey) continue;
+
+    const amount = paymentCredit({ amount: r.amount, tds_amount: r.tds_amount });
+    if (amount <= 0) continue;
+    const daysDiff = (Date.parse(r.payment_date + "T00:00:00Z") - Date.parse(s.due_date! + "T00:00:00Z")) / 86400000;
+
+    weightedSum.set(customerKey, (weightedSum.get(customerKey) || 0) + amount * daysDiff);
+    weightedAmount.set(customerKey, (weightedAmount.get(customerKey) || 0) + amount);
+  }
+
+  const avgDays: Record<string, number> = {};
+  for (const [key, amt] of weightedAmount) {
+    avgDays[key] = Math.round((weightedSum.get(key)! / amt) * 10) / 10;
+  }
+  return avgDays;
+}
 
 /**
  * GET /api/accounting/receivables
@@ -166,7 +255,9 @@ export async function GET(_req: NextRequest) {
     stale: otherRows.filter((r) => r.is_stale).length,
   };
 
-  return NextResponse.json({ rows, summary, other_rows: otherRows, other_summary: otherSummary });
+  const avgDays = await computeAvgPaymentDays(supabase);
+
+  return NextResponse.json({ rows, summary, other_rows: otherRows, other_summary: otherSummary, avgDays });
 }
 
 /**
