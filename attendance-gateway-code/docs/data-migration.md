@@ -39,16 +39,36 @@ carries the old seeds).
 
 ## Before you start
 
-**Use a direct turso.tech account rather than the Vercel Marketplace integration
-for this database.** The marketplace flow provisions an empty database, and there
-is no supported way to import an existing SQLite file into one from the CLI. A
-directly-created database can be built *from* the file in a single command, which
-is the difference between a one-line import and hand-replaying a SQL dump.
+**Use a direct turso.tech account rather than the Vercel Marketplace
+integration.** The marketplace flow provisions an empty database with no
+supported path for importing an existing SQLite file; a directly-created account
+gets the Turso Cloud dashboard, which imports one directly.
+
+The account is `vinitv` on the Free plan, created 2026-08-28.
+
+The dashboard's **Create Database → Upload SQLite File** is the primary import
+route and needs no tooling at all. Its **Export Database → Download SQLite File**
+is the reverse, which is worth knowing as a backup path once the app is live.
+
+The CLI is optional, and only worth installing if you prefer the commands to the
+UI. On macOS it is behind Homebrew's third-party tap trust check:
 
 ```bash
+brew tap libsql/sqld
+brew trust --formula libsql/sqld/sqld
 brew install tursodatabase/tap/turso
 turso auth login
 ```
+
+Every `turso db` command below has a dashboard equivalent; the CLI form is given
+because it is easier to write down exactly.
+
+**Leave the "Run this database on TursoDB, the Rust rewrite of SQLite" toggle
+off.** The app talks classic libSQL through `@libsql/client`, and that engine is
+a separate beta with different behaviour.
+
+**Turn on Delete Protection** for the live database once it holds the real punch
+history — it is a per-database toggle in the dashboard's Configuration section.
 
 ## 1. Take the file off the office machine
 
@@ -83,8 +103,15 @@ This records the columns, row count, and a content hash of every table.
 
 ## 3. Create the cutover database from the file
 
-A **new** database, alongside the shakeout one — not a modification of it. Name
-it distinctly so the two can never be confused in the Vercel settings.
+A **new** database, alongside the shakeout `twv-attendance-staging` — not a
+modification of it. Name it distinctly so the two can never be confused in the
+Vercel settings, and put it in the same region (AWS AP South / Mumbai), which is
+what `vercel.json`'s `regions: ["bom1"]` pairs the functions with.
+
+In the dashboard: **Create Database → Upload SQLite File**, then create a token
+from the database's Connect panel.
+
+Or by CLI:
 
 ```bash
 turso db create twv-attendance-live --from-file ~/Desktop/attendance.db
