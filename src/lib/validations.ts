@@ -236,6 +236,12 @@ export type CreateProposalInput = z.input<typeof createProposalSchema>;
 // ==========================================
 export const createInvoiceSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID").optional(),
+  // An ad-hoc invoice raised against a Virtual Office case instead of a lead.
+  // The buyer is then resolved from the case's billing route — see
+  // invoiceParty() in src/lib/invoice-party.ts.
+  case_id: z.string().uuid("Invalid case ID").optional(),
+  /** Bill the end client directly on a case that is billed to an aggregator. */
+  bill_client_override: z.boolean().optional(),
   proposal_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Security deposits are never billed through an ad-hoc invoice — they go
