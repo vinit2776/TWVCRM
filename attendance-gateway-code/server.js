@@ -16,11 +16,21 @@ const {
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 
-// Only employee accounts can be in Tamil — admin pages always render in English,
-// regardless of what's stored in users.language (the toggle never shows for admins,
-// so that column stays 'en' for them in practice anyway).
+// Two roles have full run of the app — 'admin' and 'manager' are deliberately
+// equivalent everywhere, including settings and password resets. The only
+// meaningful distinction anywhere in this app is "management" vs. "employee";
+// nothing currently depends on telling admin and manager apart from each other.
+// Kept as a function (not a Set.has check inlined everywhere) so that if a
+// narrower manager role is ever wanted, there is exactly one place to change it.
+function isManagementRole(user) {
+  return !!user && (user.role === 'admin' || user.role === 'manager');
+}
+
+// Only employee accounts can be in Tamil — management pages always render in
+// English, regardless of what's stored in users.language (the toggle never shows
+// for admin/manager, so that column stays 'en' for them in practice anyway).
 function langOf(user) {
-  return (user && user.role !== 'admin' && user.language === 'ta') ? 'ta' : 'en';
+  return (user && !isManagementRole(user) && user.language === 'ta') ? 'ta' : 'en';
 }
 
 const PORT = process.env.PORT || 3001;
@@ -1135,6 +1145,21 @@ async function allEmployees() {
   return await db.prepare('SELECT * FROM employees ORDER BY id').all();
 }
 
+const ACCOUNT_ROLES = ['employee', 'manager'];
+
+// Employee-linked accounts only ('admin' has employee_id = null and is never reached
+// through this map) - batched for the registration page's employee list so it is one
+// query rather than one per row.
+async function accountRolesByEmployeeId() {
+  const rows = await db.prepare("SELECT employee_id, role FROM users WHERE employee_id IS NOT NULL").all();
+  return Object.fromEntries(rows.map(r => [r.employee_id, r.role]));
+}
+
+async function accountRoleForEmployee(employeeId) {
+  const row = await db.prepare('SELECT role FROM users WHERE employee_id = ?').get(employeeId);
+  return (row && row.role) || 'employee';
+}
+
 async function employeeSwitcher(currentId, basePath) {
   const options = (await allEmployees()).map(e =>
     `<option value="${escapeHtml(e.id)}" ${e.id === currentId ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`
@@ -1145,7 +1170,7 @@ async function employeeSwitcher(currentId, basePath) {
 const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
-  const isAdmin = user && user.role === 'admin';
+  const isAdmin = isManagementRole(user);
   const lang = langOf(user);
   const showSwitcher = isAdmin && !ADMIN_TABLE_VIEWS.includes(activeNav);
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
@@ -1555,7 +1580,7 @@ async function renderCalendar(employee, year, month, user) {
     </span>`).join('');
 
   const body = `
-    ${user && user.role === 'admin' ? calendarViewToggle(employee.id, 'mine') : ''}
+    ${isManagementRole(user) ? calendarViewToggle(employee.id, 'mine') : ''}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <a href="/calendar?employee_id=${escapeHtml(employee.id)}&year=${prevYear}&month=${prevMonth}" style="text-decoration:none;font-size:1.2em;">&#8249;</a>
@@ -1569,7 +1594,7 @@ async function renderCalendar(employee, year, month, user) {
 }
 
 async function renderLeave(employee, balances, requests, user, error) {
-  const isAdmin = user && user.role === 'admin';
+  const isAdmin = isManagementRole(user);
   const lang = langOf(user);
   const balanceCards = leaveBalanceCardsHtml(balances, lang);
 
@@ -2391,6 +2416,7 @@ async function nextEmployeeId() {
 
 async function renderEmployeeRegistration(user, error, justCreated) {
   const existingEmployees = await allEmployees();
+  const accountRoles = await accountRolesByEmployeeId();
   const reportsToOptions = existingEmployees
     .map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`)
     .join('');
@@ -2400,12 +2426,13 @@ async function renderEmployeeRegistration(user, error, justCreated) {
       <td><strong>${escapeHtml(e.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(e.id)})</span></td>
       <td>${escapeHtml(e.designation || '—')}</td>
       <td>${escapeHtml(e.branch || '—')}</td>
+      <td>${accountRoles[e.id] === 'manager' ? '<strong style="color:#1565C0;">Manager</strong>' : 'Employee'}</td>
       <td>${escapeHtml(e.shift_start)}&ndash;${escapeHtml(e.shift_end)}</td>
       <td style="white-space:nowrap;">
         <a href="/admin/employee/edit?employee_id=${encodeURIComponent(e.id)}" style="color:#1565C0;text-decoration:none;font-weight:600;margin-right:12px;">Edit</a>
         ${actionButton('/admin/employee/reset-password', { employee_id: e.id }, 'Reset password', '#B26A00')}
       </td>
-    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No employees yet</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No employees yet</td></tr>`;
 
   // Shown once, right after a successful registration — password123 is not a
   // per-employee secret (it is the fixed default for every new account, forced to
@@ -2453,9 +2480,16 @@ Password: password123</code>
           <input type="text" name="name" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Role</label>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Employment Type</label>
           <select name="role" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             ${EMPLOYMENT_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Account Role</label>
+          <select name="account_role" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+            <option value="employee">Employee</option>
+            <option value="manager">Manager</option>
           </select>
         </div>
         <div style="flex:1;min-width:160px;">
@@ -2492,7 +2526,7 @@ Password: password123</code>
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Existing Employees</div>
-      <table><tr><th>Employee</th><th>Designation</th><th>Branch</th><th>Shift</th><th></th></tr>${employeeRows}</table>
+      <table><tr><th>Employee</th><th>Designation</th><th>Branch</th><th>Account</th><th>Shift</th><th></th></tr>${employeeRows}</table>
     </div>
     <div class="card" style="color:#7C8896;font-size:0.9em;">
       A login is created automatically (username = employee ID, default password <code>password123</code>),
@@ -2508,6 +2542,7 @@ async function renderEditEmployee(employee, user, error) {
     .filter(e => e.id !== employee.id)
     .map(e => `<option value="${escapeHtml(e.id)}" ${e.id === employee.reports_to ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`)
     .join('');
+  const currentAccountRole = await accountRoleForEmployee(employee.id);
 
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
@@ -2520,10 +2555,17 @@ async function renderEditEmployee(employee, user, error) {
           <input type="text" name="name" required value="${escapeHtml(employee.name)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Role</label>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Employment Type</label>
           <select name="role" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             <option value="">&mdash; None &mdash;</option>
             ${EMPLOYMENT_TYPES.map(t => `<option value="${escapeHtml(t)}" ${t === employee.role ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Account Role</label>
+          <select name="account_role" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+            <option value="employee" ${currentAccountRole === 'employee' ? 'selected' : ''}>Employee</option>
+            <option value="manager" ${currentAccountRole === 'manager' ? 'selected' : ''}>Manager</option>
           </select>
         </div>
         <div style="flex:1;min-width:160px;">
@@ -2760,7 +2802,7 @@ function calendarViewToggle(employeeId, activeView) {
 }
 
 async function renderCompanyCalendar(year, month, employeeId, user, error) {
-  const isAdmin = user && user.role === 'admin';
+  const isAdmin = isManagementRole(user);
   const monthStr = String(month).padStart(2, '0');
   const firstOfMonth = new Date(`${year}-${monthStr}-01T00:00:00`);
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -3530,7 +3572,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/dashboard' && req.method === 'GET') {
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const dateStr = parsed.searchParams.get('date') || todayStr();
       const rows = await Promise.all((await allEmployees()).map(async employee => ({ employee, status: await computeDayStatus(employee.id, dateStr) })));
       return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true }));
@@ -3556,7 +3598,7 @@ async function handleRequest(req, res) {
     // it must render even before the first employee is ever registered, since setting up
     // holidays ahead of hiring is a reasonable thing for a fresh admin to do first. Check
     // this before the employee lookup below, which the personal calendar genuinely needs.
-    if (parsed.searchParams.get('view') === 'company' && user.role === 'admin') {
+    if (parsed.searchParams.get('view') === 'company' && isManagementRole(user)) {
       return sendHtml(res, await renderCompanyCalendar(year, month, employeeId, user));
     }
     const employee = await getEmployee(employeeId);
@@ -3565,7 +3607,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/leave' && req.method === 'GET') {
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const rows = await Promise.all((await allEmployees()).map(async employee => ({ employee, balances: await getLeaveBalanceDisplay(employee.id) })));
       return sendHtml(res, await renderAdminLeave(await getAllLeaveRequests(), rows, user));
     }
@@ -3604,7 +3646,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/leave/decide' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Only an admin can approve or reject leave.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject leave.'); }
     const form = await readFormBody(req);
     const id = form.id;
     const action = form.action;
@@ -3634,7 +3676,7 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/permission' && req.method === 'GET') {
     const now = new Date();
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const hoursReportRows = await Promise.all((await allEmployees()).map(async employee => ({
         employee,
         ...(await computeMonthlyPermissionSummary(employee.id, now.getFullYear(), now.getMonth() + 1)),
@@ -3689,7 +3731,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/permission/decide' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Only an admin can approve or reject permission requests.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject permission requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
     const action = form.action;
@@ -3712,7 +3754,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/overtime' && req.method === 'GET') {
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const now = new Date();
       const hoursReportRows = await Promise.all((await allEmployees()).map(async employee => ({
         employee,
@@ -3730,7 +3772,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/overtime/apply' && req.method === 'POST') {
-    const isAdmin = user.role === 'admin';
+    const isAdmin = isManagementRole(user);
     // Employees file their own requests, which need a separate admin approval. Admins can also
     // file on behalf of staff who can't (e.g. no phone) — that's recorded as already authorized,
     // skipping the approval step, since the admin is the one asserting it happened.
@@ -3789,7 +3831,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/overtime/decide' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Only an admin can approve or reject overtime requests.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject overtime requests.'); }
     const form = await readFormBody(req);
     const id = form.id;
     const action = form.action;
@@ -3812,7 +3854,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/onsite' && req.method === 'GET') {
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const allPunches = await db.prepare(
         "SELECT * FROM punches WHERE source = 'on-site' ORDER BY timestamp DESC LIMIT 50"
       ).all();
@@ -3829,7 +3871,7 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/field-trip' && req.method === 'GET') {
     if (!CONFIG.LOCATIONIQ_API_KEY) { res.writeHead(404); return res.end('Not found'); }
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       const trips = await db.prepare('SELECT * FROM field_trips ORDER BY id DESC LIMIT 200').all();
       return sendHtml(res, await renderAdminFieldTrips(trips, user));
     }
@@ -3839,7 +3881,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/field-trip/decide' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Only an admin can approve or reject field trips.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject field trips.'); }
     const form = await readFormBody(req);
     const id = form.id;
     const action = form.action;
@@ -3862,7 +3904,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/notifications' && req.method === 'GET') {
-    if (user.role === 'admin') {
+    if (isManagementRole(user)) {
       // Admin is browsing everyone's notifications, not acknowledging their own —
       // must not mark other employees' notifications as read on their behalf.
       return sendHtml(res, await renderAdminNotifications(await getAllNotifications(), user));
@@ -3889,7 +3931,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/toggle-onsite' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const employeeId = form.employee_id;
     const dateStr = form.date || todayStr();
@@ -3911,7 +3953,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const createdId = parsed.searchParams.get('created');
     let justCreated = createdId ? await getEmployee(createdId) : null;
     if (justCreated) {
@@ -3925,7 +3967,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const name = (form.name || '').trim();
     const role = (form.role || '').trim();
@@ -3935,6 +3977,10 @@ async function handleRequest(req, res) {
     const shiftStart = (form.shift_start || '').trim();
     const shiftEnd = (form.shift_end || '').trim();
     const dateJoined = (form.date_joined || '').trim();
+    // Defaults to 'employee' on anything unrecognized rather than erroring the whole
+    // registration over it — this field only controls in-app permissions, never
+    // employment data, so failing safe (least privilege) beats blocking the form.
+    const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : 'employee';
     if (!name || !shiftStart || !shiftEnd || !dateJoined) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Name, shift start, shift end, and date joined are all required.'));
     }
@@ -3975,8 +4021,8 @@ async function handleRequest(req, res) {
     for (const type of BALANCE_POOL_LEAVE_TYPES) {
       await db.prepare('INSERT INTO leave_balances (employee_id, leave_type, balance) VALUES (?, ?, ?)').run(id, type, DEFAULT_LEAVE_BALANCE[type]);
     }
-    await db.prepare('INSERT INTO users (username, password_hash, role, employee_id, must_change_password) VALUES (?, ?, ?, ?, 1)').run(id, hashPassword('password123'), 'employee', id);
-    await logAdminAction(user.username, 'add_employee', 'employee', id, name);
+    await db.prepare('INSERT INTO users (username, password_hash, role, employee_id, must_change_password) VALUES (?, ?, ?, ?, 1)').run(id, hashPassword('password123'), accountRole, id);
+    await logAdminAction(user.username, 'add_employee', 'employee', id, `${name} (${accountRole})`);
     // Back to this form (not straight to the dashboard) so the admin sees the new
     // login details immediately, in the one place they need to copy them from.
     res.writeHead(302, { Location: `/admin/employee-registration?created=${encodeURIComponent(id)}` });
@@ -3984,7 +4030,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/employee/reset-password' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const employeeId = form.employee_id;
     const employee = await getEmployee(employeeId);
@@ -4001,14 +4047,14 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/employee/edit' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const employee = await getEmployee(parsed.searchParams.get('employee_id'));
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     return sendHtml(res, await renderEditEmployee(employee, user));
   }
 
   if (parsed.pathname === '/admin/employee/edit' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const employeeId = form.employee_id;
     const employee = await getEmployee(employeeId);
@@ -4040,9 +4086,21 @@ async function handleRequest(req, res) {
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown "reports to" employee.'));
     }
+    const currentAccountRole = await accountRoleForEmployee(employeeId);
+    // Same "absent or invalid keeps the current value" rule as branch above — an old
+    // cached form or a stray request without this field must not silently demote
+    // someone, since account_role governs what the employee's login can do.
+    const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : currentAccountRole;
     await db.prepare(
       'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ? WHERE id = ?'
     ).run(name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, employeeId);
+    if (accountRole !== currentAccountRole) {
+      await db.prepare('UPDATE users SET role = ? WHERE employee_id = ?').run(accountRole, employeeId);
+      // Session role is copied in at login time, not re-read per request — without this,
+      // the old permission level would keep working until the account's next login.
+      await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(employeeId);
+      await logAdminAction(user.username, 'change_account_role', 'employee', employeeId, `${name}: ${currentAccountRole} -> ${accountRole}`);
+    }
     await logAdminAction(user.username, 'edit_employee', 'employee', employeeId, name);
     res.writeHead(302, { Location: '/admin/employee-registration' });
     return res.end();
@@ -4056,7 +4114,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/holidays/add' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const date = (form.date || '').trim();
     const name = (form.name || '').trim();
@@ -4078,7 +4136,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/holidays/delete' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const date = (form.date || '').trim();
     const returnYear = form.return_year || new Date().getFullYear();
@@ -4091,7 +4149,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/reports' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const { year, month, monthStr } = parseMonthParam(parsed);
     const [statusGrid, leaveRows] = await Promise.all([computeMonthlyStatusGrid(year, month), computeLeaveReport(year, month)]);
     const punchInRows = computePunchInReport(statusGrid);
@@ -4101,7 +4159,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/reports/punch-in.csv' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const { year, month, monthStr } = parseMonthParam(parsed);
     const rows = computePunchInReport(await computeMonthlyStatusGrid(year, month));
     const csv = toCsv(
@@ -4113,7 +4171,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/reports/punch-in-detail.csv' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const { year, month, monthStr } = parseMonthParam(parsed);
     const grid = computePunchInGrid(await computeMonthlyStatusGrid(year, month));
     const dayHeaders = Array.from({ length: grid.daysInMonth }, (_, i) => String(i + 1));
@@ -4126,7 +4184,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/reports/leave.csv' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const { year, month, monthStr } = parseMonthParam(parsed);
     const rows = await computeLeaveReport(year, month);
     const csv = toCsv(
@@ -4138,7 +4196,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/reports/muster.csv' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const { year, month, monthStr } = parseMonthParam(parsed);
     const muster = computeMusterReport(await computeMonthlyStatusGrid(year, month));
     const dayHeaders = Array.from({ length: muster.daysInMonth }, (_, i) => String(i + 1));
@@ -4154,12 +4212,12 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/settings' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     return sendHtml(res, await renderAdminSettings(user));
   }
 
   if (parsed.pathname === '/admin/settings' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const changed = [];
     for (const def of SETTING_DEFS) {
@@ -4203,7 +4261,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/settings/generate-punch-key' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const key = crypto.randomBytes(24).toString('hex');
     await db.prepare(
       'INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ' +
@@ -4221,12 +4279,12 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/device-pins' && req.method === 'GET') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     return sendHtml(res, await renderDevicePins(user));
   }
 
   if (parsed.pathname === '/admin/set-device-pin' && req.method === 'POST') {
-    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const employeeId = form.employee_id;
     const employee = await getEmployee(employeeId);
