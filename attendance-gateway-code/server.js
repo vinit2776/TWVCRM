@@ -475,6 +475,18 @@ const SCHEMA_SQL = `
     start_ts TEXT NOT NULL,
     end_ts TEXT
   );
+  -- Every one of these tables is filtered by employee_id (almost always together with
+  -- a date/timestamp range or a status) on hot paths: the dashboard, reports, and every
+  -- approval list. Without these, each such query is a full table scan against a
+  -- remote DB (Turso) — a network round trip is expensive enough on its own; doing it
+  -- against an unindexed scan multiplies the cost as the tables grow.
+  CREATE INDEX IF NOT EXISTS idx_punches_emp_ts ON punches(employee_id, timestamp);
+  CREATE INDEX IF NOT EXISTS idx_breaks_emp_ts ON breaks(employee_id, start_ts);
+  CREATE INDEX IF NOT EXISTS idx_notifications_emp_read ON notifications(employee_id, read);
+  CREATE INDEX IF NOT EXISTS idx_leave_requests_emp_status ON leave_requests(employee_id, status);
+  CREATE INDEX IF NOT EXISTS idx_permission_requests_emp_status ON permission_requests(employee_id, status);
+  CREATE INDEX IF NOT EXISTS idx_overtime_requests_emp_status ON overtime_requests(employee_id, status);
+  CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(username, ip, attempted_at);
 `;
 
 const {
@@ -608,17 +620,19 @@ async function init() {
   // Jayanti) — fixed Gregorian dates, mandated nationwide regardless of state, unlike
   // festival/gazetted holidays which vary by region and aren't seeded here. Idempotent
   // (INSERT OR IGNORE on the date primary key) so this is safe to run every startup;
-  // covers a fixed multi-year range rather than just the current year.
+  // covers a fixed multi-year range rather than just the current year. One multi-row
+  // insert instead of 21 separate round trips — this runs on every cold start.
+  const nationalHolidayRows = [];
+  const nationalHolidayArgs = [];
   for (let year = 2024; year <= 2030; year++) {
-    const nationalHolidays = [
-      [`${year}-01-26`, 'Republic Day'],
-      [`${year}-08-15`, 'Independence Day'],
-      [`${year}-10-02`, 'Gandhi Jayanti'],
-    ];
-    for (const [date, name] of nationalHolidays) {
-      await db.prepare('INSERT OR IGNORE INTO holidays (date, name) VALUES (?, ?)').run(date, name);
-    }
+    nationalHolidayRows.push('(?, ?)', '(?, ?)', '(?, ?)');
+    nationalHolidayArgs.push(
+      `${year}-01-26`, 'Republic Day',
+      `${year}-08-15`, 'Independence Day',
+      `${year}-10-02`, 'Gandhi Jayanti',
+    );
   }
+  await db.prepare(`INSERT OR IGNORE INTO holidays (date, name) VALUES ${nationalHolidayRows.join(', ')}`).run(...nationalHolidayArgs);
 
   // Sweep sessions already past the absolute TTL so restarts don't leave dead rows.
   await db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - SESSION_ABSOLUTE_TTL_MS);
@@ -729,10 +743,13 @@ async function getAllNotifications() {
   return await db.prepare('SELECT * FROM notifications ORDER BY created_at DESC').all();
 }
 async function unreadNotificationCount(employeeId) {
-  return await db.prepare('SELECT COUNT(*) AS c FROM notifications WHERE employee_id = ? AND read = 0').get(employeeId).c;
+  // `.c` must read off the resolved row, not the pending promise — `await x.get().c`
+  // binds the member access before the await, so it silently evaluated to undefined
+  // and the nav badge below never showed a count.
+  return (await db.prepare('SELECT COUNT(*) AS c FROM notifications WHERE employee_id = ? AND read = 0').get(employeeId)).c;
 }
 async function unreadNotificationCountAll() {
-  return await db.prepare('SELECT COUNT(*) AS c FROM notifications WHERE read = 0').get().c;
+  return (await db.prepare('SELECT COUNT(*) AS c FROM notifications WHERE read = 0').get()).c;
 }
 // Casual/Sick are computed
 // fresh each call from this calendar month's approved requests (no stored balance to
@@ -1289,6 +1306,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
   // languageSet rather than the tour/replay distinction, so it shows exactly
   // once ever, and a mid-tour reload or a later replay never asks again.
   const showLanguagePicker = onboardingKind === 'tour' && !!user && !user.languageSet;
+  const unreadCount = isAdmin ? await unreadNotificationCountAll() : (user ? await unreadNotificationCount(employeeId) : 0);
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
   const currentPath = `/${activeNav === 'calendar-company' ? 'calendar' : activeNav}?employee_id=${encodeURIComponent(employeeId)}`;
@@ -1418,8 +1436,8 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
-          ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${await unreadNotificationCountAll() ? ` (${await unreadNotificationCountAll()})` : ''}</span></a>`
-          : `<a id="navNotifications" href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${await unreadNotificationCount(employeeId) ? ` (${await unreadNotificationCount(employeeId)})` : ''}</span></a>`}
+          ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${unreadCount ? ` (${unreadCount})` : ''}</span></a>`
+          : `<a id="navNotifications" href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${unreadCount ? ` (${unreadCount})` : ''}</span></a>`}
       </div>
       <div class="acct">${langToggle}${(!isAdmin && user) ? `<a href="/dashboard?employee_id=${escapeHtml(employeeId)}&tour=1" style="color:#4C5A68;font-size:0.9em;text-decoration:none;">${t(lang, 'onboarding.replay_tour')}</a>` : ''}${rightSide}</div>
     </nav>
