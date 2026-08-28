@@ -5,8 +5,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "test": "node --test",
-    "snapshot": "node scripts/db-snapshot.js",
-    "set-password": "node scripts/set-password.js"
+    "snapshot": "node --env-file-if-exists=.env scripts/db-snapshot.js",
+    "set-password": "node --env-file-if-exists=.env scripts/set-password.js",
+    "create-admin": "node --env-file-if-exists=.env scripts/create-admin.js"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4"
