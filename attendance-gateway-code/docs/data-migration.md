@@ -8,6 +8,35 @@ Everything below runs from a Mac with Node 22+ and the Turso CLI. Nothing needs
 to be installed on the Windows machine — `attendance.db` is just a file, so the
 migration is a copy, not an export.
 
+## How this fits the launch plan
+
+Decided 2026-08-28: **the office app keeps running as the system of record, and
+the migration happens at cutover, not at launch.** The cloud app goes up first
+against an empty database so login and the leave / permission / overtime flows
+can be shaken out, while the biometric device keeps pushing to the office LAN app
+exactly as it does today.
+
+That ordering has one consequence that will cost you real data if it is missed:
+
+> **The cloud instance is throwaway until cutover.** Do not register real
+> employees, approve real leave, or record real punches in it. At cutover the
+> office database is imported into a *brand new* Turso database which then
+> replaces the shakeout one — and anything entered into the shakeout database is
+> discarded with it.
+
+The reason it replaces rather than merges: `turso db create --from-file` builds a
+new database from the file, and merging the two instead would mean reconciling
+`AUTOINCREMENT` primary keys across `punches`, `leave_requests`,
+`permission_requests`, `overtime_requests` and `field_trips`, where the office
+file and the cloud database will have assigned the same ids to different rows.
+Replacing is an env-var swap; merging is a bespoke reconciliation with no safe
+automatic answer.
+
+So the launch database gets `ADMIN_BOOTSTRAP_PASSWORD` (an empty database, so
+that path fires and no seed credentials ever exist), and the cutover database
+gets the credential rotation in step 5 instead (an imported database, which
+carries the old seeds).
+
 ## Before you start
 
 **Use a direct turso.tech account rather than the Vercel Marketplace integration
@@ -52,16 +81,24 @@ node scripts/db-snapshot.js --file ~/Desktop/attendance.db > /tmp/before.json
 
 This records the columns, row count, and a content hash of every table.
 
-## 3. Create the Turso database from the file
+## 3. Create the cutover database from the file
+
+A **new** database, alongside the shakeout one — not a modification of it. Name
+it distinctly so the two can never be confused in the Vercel settings.
 
 ```bash
-turso db create twv-attendance --from-file ~/Desktop/attendance.db
-turso db show twv-attendance --url
-turso db tokens create twv-attendance
+turso db create twv-attendance-live --from-file ~/Desktop/attendance.db
+turso db show twv-attendance-live --url
+turso db tokens create twv-attendance-live
 ```
 
-Keep the URL and token — they become `TURSO_DATABASE_URL` and
-`TURSO_AUTH_TOKEN`.
+Keep the URL and token. They replace `TURSO_DATABASE_URL` and
+`TURSO_AUTH_TOKEN` in the Vercel project at step 5b — *after* the verification
+and rotation below, so the app is never briefly serving the imported database
+with its old seed credentials still live.
+
+Leave the shakeout database in place until the cutover is confirmed good. It
+costs nothing and is a second rollback option.
 
 ## 4. Prove the import was faithful — before anything touches the app
 
@@ -87,7 +124,7 @@ having run and is expected.
 issued by the old LAN app against a different host and get cleared anyway, and
 login attempts are rate-limiting scratch data.
 
-## 5. Rotate the inherited credentials — do this before DNS
+## 5. Rotate the inherited credentials — before the app is pointed at it
 
 This is the step that matters most, and it is easy to skip because the app looks
 finished without it.
@@ -102,7 +139,7 @@ table is completely empty, which this one is not.
 Audit what came across:
 
 ```bash
-turso db shell twv-attendance \
+turso db shell twv-attendance-live \
   "SELECT username, role, employee_id, must_change_password FROM users ORDER BY role, username"
 ```
 
@@ -117,17 +154,28 @@ the account already had. Then clear the inherited sessions wholesale, since they
 were minted by the old deployment:
 
 ```bash
-turso db shell twv-attendance "DELETE FROM sessions"
+turso db shell twv-attendance-live "DELETE FROM sessions"
 ```
 
 Delete the demo employees once you have confirmed they hold no real punches:
 
 ```bash
-turso db shell twv-attendance \
+turso db shell twv-attendance-live \
   "SELECT employee_id, COUNT(*) FROM punches WHERE employee_id LIKE 'EMP-00%' GROUP BY employee_id"
 ```
 
-Only after this should `attendance.theworkvilla.com` resolve to the app.
+### 5b. Point the app at the imported database
+
+Only now, with the data verified and the inherited credentials rotated, swap the
+Vercel project's `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to the values from
+step 3 and redeploy. Doing it in this order means the app is never serving the
+imported database while `admin`/`admin123` still works on it.
+
+Also remove `ADMIN_BOOTSTRAP_PASSWORD` if it is still set — it was for the empty
+shakeout database and does nothing against an imported one.
+
+Log in once against the new database and confirm the punch history is there
+before touching the office machine again.
 
 ## 6. Cut the device over
 
@@ -142,8 +190,17 @@ next push.
 
 ## Rollback
 
-Keep the original `attendance.db` untouched as the rollback artifact. Restarting
-the `AttendanceGateway` service on the office machine restores the previous setup
-exactly, since the device is still pointed at the same address. Punches recorded
-into Turso during the cloud window would need re-entering by hand, which is the
-argument for keeping the cutover window short.
+Keep the original `attendance.db` untouched as the rollback artifact — copy it,
+do not move it. Because the office app runs right up to the cutover, rolling back
+is genuinely cheap:
+
+1. Stop the relay service on the office machine.
+2. Restart the `AttendanceGateway` service, which retakes port 3001.
+3. The device is still pointed at the same LAN IP and port, so it resumes pushing
+   to the local app with no reconfiguration, and flushes anything it buffered.
+
+The office database is untouched by the migration (it was copied, not moved), so
+this restores the previous setup exactly. The only loss is punches recorded into
+Turso after the swap, which would need re-entering by hand — the argument for
+keeping the window between step 5b and step 6 short, and for doing the cutover
+outside working hours.
