@@ -2995,8 +2995,14 @@ async function readTextBody(req) {
 
 // --- Sessions: persisted in the sessions table, so a restart (crash, NSSM
 // redeploy, power loss) doesn't silently log everyone out. ---
-const SESSION_IDLE_TTL_MS = 8 * 60 * 60 * 1000; // sliding: 8 hours since last request
-const SESSION_ABSOLUTE_TTL_MS = 24 * 60 * 60 * 1000; // hard cap: 24 hours since login, regardless of activity
+// Deliberately long-lived: this is installed as a PWA and used for daily
+// attendance, not signed into fresh each time like a banking app. 30 days idle
+// means it stays open as long as the phone is used at least monthly; 90 days
+// absolute means even someone who opens it every single day still re-enters
+// their password roughly every 3 months — a backstop on how long a lost or
+// stolen phone stays signed in even if it is never reported.
+const SESSION_IDLE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // sliding: 30 days since last request
+const SESSION_ABSOLUTE_TTL_MS = 90 * 24 * 60 * 60 * 1000; // hard cap: 90 days since login, regardless of activity
 // (The one-time sweep of already-expired sessions runs in init(), above.)
 async function createSession(user) {
   const token = crypto.randomBytes(24).toString('hex');
@@ -3499,7 +3505,7 @@ async function handleRequest(req, res) {
     await recordLoginAttempt(username, ip, true);
     const token = await createSession(account);
     res.writeHead(302, {
-      'Set-Cookie': `session=${token}; HttpOnly; Path=/; SameSite=Lax`,
+      'Set-Cookie': `session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_ABSOLUTE_TTL_MS / 1000)}`,
       Location: account.must_change_password ? '/change-password' : '/',
     });
     return res.end();
