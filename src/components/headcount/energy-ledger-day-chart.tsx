@@ -20,6 +20,20 @@ function formatHourTick(ts: number) {
   return new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: true });
 }
 
+// Buckets are 15 min apart, but formatHourTick only shows the hour — four
+// adjacent buckets in the same hour render an identical-looking label, which
+// reads as if hover were stuck at hourly resolution even though the
+// underlying value does change bucket to bucket. The tooltip needs the
+// minute to make that resolution visible; axis ticks stay hour-only since
+// showing every 15-min mark there would be unreadable.
+function formatMinuteTick(ts: number) {
+  return new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function formatWh(wh: number) {
+  return wh >= 1000 ? `${(wh / 1000).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kWh` : `${Math.round(wh)} Wh`;
+}
+
 const NEARBY_HEADCOUNT_WINDOW_MS = 20 * 60 * 1000; // show a headcount reading if it's within 20 min of the hovered bar
 
 function lookupNearest(rows: Row[], points: Point[], ts: number) {
@@ -120,6 +134,8 @@ export function EnergyLedgerDayChart({ locationId, date }: Props) {
   // bars stay visually distinct instead of mashing together.
   const barSize = Math.max(2, Math.min(14, Math.floor(480 / Math.max(rows.length, 1))));
 
+  const totalWh = rows.reduce((sum, r) => sum + r.wh, 0);
+
   const { nearestBar, nearestPoint } = hover ? lookupNearest(rows, points, hover.ts) : { nearestBar: null, nearestPoint: null };
   const containerWidth = containerRef.current?.clientWidth ?? 0;
   const flipLeft = hover != null && containerWidth > 0 && hover.x > containerWidth * 0.6;
@@ -155,9 +171,17 @@ export function EnergyLedgerDayChart({ locationId, date }: Props) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-        <Database className="h-3.5 w-3.5" /> From TWV&apos;s local ledger, not a live OneGrid call — hover any bar or dot
-      </p>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Database className="h-3.5 w-3.5" /> From TWV&apos;s local ledger, not a live OneGrid call — hover any bar or dot
+        </p>
+        {rows.length > 0 && (
+          <p className="text-sm">
+            <span className="text-muted-foreground">Total consumed: </span>
+            <span className="font-semibold">{formatWh(totalWh)}</span>
+          </p>
+        )}
+      </div>
       <div
         ref={containerRef}
         className="relative h-64"
@@ -186,9 +210,9 @@ export function EnergyLedgerDayChart({ locationId, date }: Props) {
               transform: `translate(${flipLeft ? "-100%" : "0%"}, -110%)`,
             }}
           >
-            <p className="font-medium">{formatHourTick(hover.ts)}</p>
-            {nearestBar && <p>Consumption: {nearestBar.row.wh} Wh ({formatHourTick(nearestBar.row.ts)})</p>}
-            {nearestPoint && <p>Headcount: {nearestPoint.point.count} (logged {formatHourTick(nearestPoint.point.ts)})</p>}
+            <p className="font-medium">{formatMinuteTick(hover.ts)}</p>
+            {nearestBar && <p>Consumption: {nearestBar.row.wh} Wh ({formatMinuteTick(nearestBar.row.ts)})</p>}
+            {nearestPoint && <p>Headcount: {nearestPoint.point.count} (logged {formatMinuteTick(nearestPoint.point.ts)})</p>}
           </div>
         )}
       </div>

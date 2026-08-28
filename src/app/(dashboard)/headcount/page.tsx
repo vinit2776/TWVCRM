@@ -53,6 +53,16 @@ function istDateKey(iso: string) {
 function todayISTKey() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
+function shiftDateKey(dateKey: string, deltaDays: number) {
+  const d = new Date(`${dateKey}T12:00:00+05:30`); // noon IST avoids DST/rounding edge cases
+  d.setDate(d.getDate() + deltaDays);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+function formatEnergyLogDateLabel(dateKey: string) {
+  return new Date(`${dateKey}T12:00:00+05:30`).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
+  });
+}
 
 function toLocalDatetimeInput(iso?: string) {
   const d = iso ? new Date(iso) : new Date();
@@ -125,6 +135,9 @@ export default function HeadcountPage() {
   const [totalCount, setTotalCount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // ── Local energy log day nav ──
+  const [energyLogDate, setEnergyLogDate] = useState(todayISTKey());
 
   // ── Geolocation suggestion ──
   type GeoSuggestion = { locationId: string; name: string; distanceM: number } | null;
@@ -635,8 +648,43 @@ export default function HeadcountPage() {
 
       {activeTab === "entry" && locationId && (
         <div className="bg-card rounded-xl border shadow-sm p-4">
-          <h3 className="text-sm font-semibold mb-3">Local energy log — today</h3>
-          <EnergyLedgerDayChart locationId={locationId} date={todayISTKey()} />
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <h3 className="text-sm font-semibold">Local energy log</h3>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button" variant="ghost" size="icon" className="h-7 w-7"
+                onClick={() => setEnergyLogDate((d) => shiftDateKey(d, -1))}
+                title="Previous day"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Input
+                type="date"
+                value={energyLogDate}
+                max={todayISTKey()}
+                onChange={(e) => e.target.value && setEnergyLogDate(e.target.value)}
+                className="h-7 w-[150px] text-xs"
+              />
+              <Button
+                type="button" variant="ghost" size="icon" className="h-7 w-7"
+                onClick={() => setEnergyLogDate((d) => shiftDateKey(d, 1))}
+                disabled={energyLogDate >= todayISTKey()}
+                title="Next day"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              {energyLogDate !== todayISTKey() && (
+                <Button
+                  type="button" variant="outline" size="sm" className="h-7 text-xs"
+                  onClick={() => setEnergyLogDate(todayISTKey())}
+                >
+                  Today
+                </Button>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-2 mb-3">{formatEnergyLogDateLabel(energyLogDate)}</p>
+          <EnergyLedgerDayChart locationId={locationId} date={energyLogDate} />
         </div>
       )}
 

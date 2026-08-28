@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { fetchOnegridDevices, fetchOnegridTelemetry } from "@/lib/onegrid";
+import { recomputeDeltasFromCumulative } from "@/lib/energy-ledger";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
@@ -76,6 +77,22 @@ export async function POST(
   const rangeEnd = new Date(`${end}T00:00:00Z`);
   rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 1); // end date is inclusive
 
+  // Seed local delta recomputation with the ledger's own last-known
+  // cumulative reading before this range, if any — see
+  // recomputeDeltasFromCumulative for why OneGrid's own delta field isn't
+  // trusted directly for a backfill. Threaded across chunks below so the
+  // second and later chunks seed from the previous chunk's own last row.
+  const { data: priorRow } = await supabase
+    .from("location_energy_readings")
+    .select("cumulative_wh")
+    .eq("location_id", id)
+    .eq("device_id", deviceId)
+    .lt("ts", cursor.toISOString())
+    .order("ts", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let previousCumulativeWh: number | null = priorRow?.cumulative_wh ?? null;
+
   const totalDays = Math.ceil((rangeEnd.getTime() - cursor.getTime()) / 86_400_000);
   const chunksTotal = Math.max(1, Math.ceil(totalDays / CHUNK_DAYS));
 
@@ -100,21 +117,24 @@ export async function POST(
         derive: "delta",
         fields: "Energy_Consumption_Cumulative_Wh",
       });
-      const rows = telemetry.series
-        .filter((r) => r.ts)
-        .map((r) => ({
-          location_id: id,
-          device_id: deviceId,
-          ts: new Date(r.ts).toISOString(),
-          energy_delta_wh: r.energy_delta_wh ?? null,
-          cumulative_wh: r.Energy_Consumption_Cumulative_Wh ?? null,
-        }));
+      const recomputed = recomputeDeltasFromCumulative(
+        telemetry.series.filter((r) => r.ts),
+        previousCumulativeWh
+      );
+      const rows = recomputed.map((r) => ({
+        location_id: id,
+        device_id: deviceId,
+        ts: new Date(r.ts).toISOString(),
+        energy_delta_wh: r.energy_delta_wh,
+        cumulative_wh: r.cumulative_wh,
+      }));
       if (rows.length > 0) {
         const { error: upsertError } = await supabase
           .from("location_energy_readings")
           .upsert(rows, { onConflict: "location_id,device_id,ts" });
         if (upsertError) throw new Error(upsertError.message);
         rowsUpserted += rows.length;
+        previousCumulativeWh = rows[rows.length - 1].cumulative_wh ?? previousCumulativeWh;
       }
       syncedThrough = clampedEnd.toISOString().split("T")[0];
     } catch (err) {

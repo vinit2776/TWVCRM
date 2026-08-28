@@ -28,6 +28,16 @@ function daysAgoISO(n: number) {
 function formatHourTick(ts: number) {
   return new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: true });
 }
+
+// Buckets are 15 min apart, but formatHourTick only shows the hour — four
+// adjacent buckets in the same hour render an identical-looking label, which
+// reads as if hover were stuck at hourly resolution even though the
+// underlying value does change bucket to bucket. The tooltip needs the
+// minute to make that resolution visible; axis ticks stay hour-only since
+// showing every 15-min mark there would be unreadable.
+function formatMinuteTick(ts: number) {
+  return new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
+}
 function formatDayTick(date: string) {
   return new Date(date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
 }
@@ -323,13 +333,13 @@ export function HeadcountEnergyChart({ locationId, mode, dateFrom, dateTo }: Pro
                   transform: `translate(${dayFlipLeft ? "-100%" : "0%"}, -110%)`,
                 }}
               >
-                <p className="font-medium">{formatHourTick(dayHover.ts)}</p>
+                <p className="font-medium">{formatMinuteTick(dayHover.ts)}</p>
                 {dayNearestBar && (
                   <p>
-                    {usingFallback ? "Captured reading" : "Consumption"}: {dayNearestBar.row.wh} Wh ({formatHourTick(dayNearestBar.row.ts)})
+                    {usingFallback ? "Captured reading" : "Consumption"}: {dayNearestBar.row.wh} Wh ({formatMinuteTick(dayNearestBar.row.ts)})
                   </p>
                 )}
-                {dayNearestPoint && <p>Headcount: {dayNearestPoint.point.count} (logged {formatHourTick(dayNearestPoint.point.ts)})</p>}
+                {dayNearestPoint && <p>Headcount: {dayNearestPoint.point.count} (logged {formatMinuteTick(dayNearestPoint.point.ts)})</p>}
               </div>
             )}
           </div>
