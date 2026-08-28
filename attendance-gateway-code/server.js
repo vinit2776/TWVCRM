@@ -401,7 +401,8 @@ const SCHEMA_SQL = `
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL,
     employee_id TEXT,
-    onboarding_seen_version INTEGER NOT NULL DEFAULT 0
+    onboarding_seen_version INTEGER NOT NULL DEFAULT 0,
+    language_set INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS permission_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -582,6 +583,15 @@ async function init() {
   try {
     await db.exec('ALTER TABLE users ADD COLUMN onboarding_seen_version INTEGER NOT NULL DEFAULT 0');
     await db.exec(`UPDATE users SET onboarding_seen_version = ${ONBOARDING.CURRENT_VERSION}`);
+  } catch { /* already exists */ }
+  // Whether this account has ever explicitly chosen a language (via the onboarding
+  // language screen or the sidebar toggle), as opposed to just sitting on the
+  // column's 'en' default. Gates the onboarding language-choice screen — an
+  // account that's never onboarded but also never picked a language sees it;
+  // everyone else (including every pre-existing account, backfilled here) doesn't.
+  try {
+    await db.exec('ALTER TABLE users ADD COLUMN language_set INTEGER NOT NULL DEFAULT 0');
+    await db.exec('UPDATE users SET language_set = 1');
   } catch { /* already exists */ }
   // Field trips used to be reimbursed on the honor system — any trip an employee logged
   // was final. Existing rows backfill to 'approved' so past reimbursements aren't
@@ -1193,6 +1203,13 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
     else if (user.onboardingSeenVersion === 0) onboardingKind = 'tour';
     else if (user.onboardingSeenVersion < ONBOARDING.CURRENT_VERSION) onboardingKind = 'whats-new';
   }
+  // The very first onboarding screen an employee who's never chosen a language
+  // sees is a language picker, not the welcome sheet — picking persists via the
+  // same /settings/language route the sidebar toggle uses, then the page reloads
+  // and the welcome sheet renders directly in that language. Gated on
+  // languageSet rather than the tour/replay distinction, so it shows exactly
+  // once ever, and a mid-tour reload or a later replay never asks again.
+  const showLanguagePicker = onboardingKind === 'tour' && !!user && !user.languageSet;
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
   const currentPath = `/${activeNav === 'calendar-company' ? 'calendar' : activeNav}?employee_id=${encodeURIComponent(employeeId)}`;
@@ -1334,7 +1351,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
       </div>
     </div>
     ${IOS_INSTALL_SHEET_HTML}
-    ${onboardingKind ? renderOnboardingOverlay(onboardingKind, lang, user) : ''}
+    ${onboardingKind ? renderOnboardingOverlay(onboardingKind, lang, user, employeeId, showLanguagePicker) : ''}
     </body></html>`;
 }
 
@@ -1344,7 +1361,29 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
 // that page (nav links, dashboard cards), so a step is skipped client-side
 // (ALL_STEPS.filter) if this employee's config doesn't render that element
 // (e.g. no punch button configured yet), instead of pointing at nothing.
-function renderOnboardingOverlay(kind, lang, user) {
+function renderOnboardingOverlay(kind, lang, user, employeeId, showLanguagePicker) {
+  if (kind === 'tour' && showLanguagePicker) {
+    // Bilingual by necessity — we don't yet know which language to render in.
+    // Submits through the same /settings/language route the sidebar toggle
+    // uses, so picking here is indistinguishable from picking there: it
+    // persists language_set = 1 and the page reloads straight into the
+    // welcome sheet, already in the chosen language.
+    const returnPath = `/dashboard?employee_id=${encodeURIComponent(employeeId)}`;
+    const langBtn = (value, label) => `
+      <form method="POST" action="/settings/language?return=${encodeURIComponent(returnPath)}" style="flex:1;">
+        <button type="submit" name="lang" value="${value}" style="width:100%;padding:16px 0;border-radius:10px;border:1px solid #D0D5DA;background:#fff;color:#1B2430;font-weight:700;font-size:15px;cursor:pointer;">${label}</button>
+      </form>`;
+    return `
+    <div id="onbLangPick" style="position:fixed;inset:0;z-index:200;background:rgba(15,20,25,0.45);display:flex;align-items:flex-end;">
+      <div style="width:100%;max-width:480px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;padding:26px 22px 24px;box-sizing:border-box;box-shadow:0 -10px 28px rgba(15,20,25,0.18);">
+        <div style="width:42px;height:42px;border-radius:11px;background:#E3F2FD;color:#1565C0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;margin-bottom:16px;">WV</div>
+        <h3 style="margin:0 0 4px;font-size:18px;">Choose your language</h3>
+        <h3 style="margin:0 0 8px;font-size:18px;">மொழியைத் தேர்ந்தெடுக்கவும்</h3>
+        <p style="margin:0 0 20px;font-size:13.5px;line-height:1.55;color:#4C5A68;">You can change this anytime from the menu. / இதை மெனுவிலிருந்து எப்போது வேண்டுமானாலும் மாற்றலாம்.</p>
+        <div style="display:flex;gap:10px;">${langBtn('en', 'English')}${langBtn('ta', 'தமிழ்')}</div>
+      </div>
+    </div>`;
+  }
   if (kind === 'tour') {
     const steps = ONBOARDING.ENTRIES
       .filter(e => e.tourStep)
@@ -3278,12 +3317,13 @@ async function getSessionUser(req) {
   if (!token) return null;
   const row = await db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
   if (!row) return null;
-  const userRow = await db.prepare('SELECT language, onboarding_seen_version FROM users WHERE id = ?').get(row.user_id);
+  const userRow = await db.prepare('SELECT language, onboarding_seen_version, language_set FROM users WHERE id = ?').get(row.user_id);
   const session = {
     userId: row.user_id, username: row.username, role: row.role, employeeId: row.employee_id,
     createdAt: row.created_at, lastActivityAt: row.last_activity_at,
     language: (userRow && userRow.language) || 'en',
     onboardingSeenVersion: (userRow && userRow.onboarding_seen_version) || 0,
+    languageSet: !!(userRow && userRow.language_set),
   };
   const now = Date.now();
   if (now - session.createdAt > SESSION_ABSOLUTE_TTL_MS || now - session.lastActivityAt > SESSION_IDLE_TTL_MS) {
@@ -3683,7 +3723,7 @@ async function handleRequest(req, res) {
     if (user.role === 'employee') {
       const form = await readFormBody(req);
       const lang = form.lang === 'ta' ? 'ta' : 'en';
-      await db.prepare('UPDATE users SET language = ? WHERE id = ?').run(lang, user.userId);
+      await db.prepare('UPDATE users SET language = ?, language_set = 1 WHERE id = ?').run(lang, user.userId);
     }
     res.writeHead(302, { Location: (parsed.searchParams.get('return')) || '/dashboard' });
     return res.end();
