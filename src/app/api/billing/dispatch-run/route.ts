@@ -76,7 +76,10 @@ export async function POST(request: NextRequest) {
       id, contract_number, billing_mode,
       lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
     `)
-    .in("status", ["active", "renewal_in_progress"])
+    // "renewed" parents (early renewal: child activated before the parent's
+    // own end_date) stay billable for their own remaining days — the
+    // end_date.gte gate below already excludes them once that date lapses.
+    .in("status", ["active", "renewal_in_progress", "renewed"])
     .lte("start_date", periodLast)
     .gte("end_date", periodFirst);
 
