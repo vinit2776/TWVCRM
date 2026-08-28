@@ -2384,7 +2384,7 @@ async function nextEmployeeId() {
   return `EMP-${String(maxN + 1).padStart(3, '0')}`;
 }
 
-async function renderEmployeeRegistration(user, error) {
+async function renderEmployeeRegistration(user, error, justCreated) {
   const existingEmployees = await allEmployees();
   const reportsToOptions = existingEmployees
     .map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`)
@@ -2396,11 +2396,49 @@ async function renderEmployeeRegistration(user, error) {
       <td>${escapeHtml(e.designation || '—')}</td>
       <td>${escapeHtml(e.branch || '—')}</td>
       <td>${escapeHtml(e.shift_start)}&ndash;${escapeHtml(e.shift_end)}</td>
-      <td><a href="/admin/employee/edit?employee_id=${encodeURIComponent(e.id)}" style="color:#1565C0;text-decoration:none;font-weight:600;">Edit</a></td>
+      <td style="white-space:nowrap;">
+        <a href="/admin/employee/edit?employee_id=${encodeURIComponent(e.id)}" style="color:#1565C0;text-decoration:none;font-weight:600;margin-right:12px;">Edit</a>
+        ${actionButton('/admin/employee/reset-password', { employee_id: e.id }, 'Reset password', '#B26A00')}
+      </td>
     </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No employees yet</td></tr>`;
+
+  // Shown once, right after a successful registration — password123 is not a
+  // per-employee secret (it is the fixed default for every new account, forced to
+  // change at first login), so there is nothing sensitive about surfacing it again
+  // here; this just saves the admin from remembering the convention to relay it.
+  const credentialsCard = justCreated ? `
+    <div class="card" style="border-color:#2E7D32;">
+      <div style="font-weight:700;margin-bottom:6px;">Sign-in details for ${escapeHtml(justCreated.name)} (${escapeHtml(justCreated.id)})</div>
+      <div style="color:#7C8896;font-size:0.85em;margin-bottom:10px;">Share these with the employee. They will be asked to set their own password the next time they log in.</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <code id="newEmpCreds" style="flex:1;min-width:220px;display:block;background:#F5F6F8;padding:10px;border-radius:6px;white-space:pre-line;">URL: ${escapeHtml(justCreated.loginUrl || '')}
+Username: ${escapeHtml(justCreated.id)}
+Password: password123</code>
+        <button type="button" id="copyNewEmpCreds" onclick="copyNewEmployeeCredentials()" style="padding:8px 14px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;color:#1565C0;font-weight:600;cursor:pointer;white-space:nowrap;">Copy login details</button>
+      </div>
+    </div>
+    <script>
+      function copyNewEmployeeCredentials() {
+        const text = document.getElementById('newEmpCreds').innerText;
+        const btn = document.getElementById('copyNewEmpCreds');
+        const done = (ok) => { btn.textContent = ok ? 'Copied' : 'Copy failed - select manually'; setTimeout(() => { btn.textContent = 'Copy login details'; }, 2000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => done(true)).catch(() => done(false));
+        } else {
+          // Fallback for browsers without the async Clipboard API (older mobile WebViews).
+          const ta = document.createElement('textarea');
+          ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta);
+          done(ok);
+        }
+      }
+    </script>` : '';
 
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
+    ${credentialsCard}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Employee Registration</div>
       <p style="color:#7C8896;font-size:0.9em;margin-top:0;">New employee will be enrolled as <strong>${escapeHtml(nextId)}</strong>.</p>
@@ -3868,7 +3906,16 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'GET') {
     if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
-    return sendHtml(res, await renderEmployeeRegistration(user));
+    const createdId = parsed.searchParams.get('created');
+    let justCreated = createdId ? await getEmployee(createdId) : null;
+    if (justCreated) {
+      // Derived from the request itself rather than a fixed constant — this app has no
+      // single canonical hostname (custom domain vs. the vercel.app one), so whichever
+      // host the admin is actually browsing on is the one the employee should be told.
+      const proto = req.headers['x-forwarded-proto'] || 'https';
+      justCreated = { ...justCreated, loginUrl: `${proto}://${req.headers.host}` };
+    }
+    return sendHtml(res, await renderEmployeeRegistration(user, null, justCreated));
   }
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'POST') {
@@ -3924,7 +3971,26 @@ async function handleRequest(req, res) {
     }
     await db.prepare('INSERT INTO users (username, password_hash, role, employee_id, must_change_password) VALUES (?, ?, ?, ?, 1)').run(id, hashPassword('password123'), 'employee', id);
     await logAdminAction(user.username, 'add_employee', 'employee', id, name);
-    res.writeHead(302, { Location: `/dashboard?employee_id=${encodeURIComponent(id)}` });
+    // Back to this form (not straight to the dashboard) so the admin sees the new
+    // login details immediately, in the one place they need to copy them from.
+    res.writeHead(302, { Location: `/admin/employee-registration?created=${encodeURIComponent(id)}` });
+    return res.end();
+  }
+
+  if (parsed.pathname === '/admin/employee/reset-password' && req.method === 'POST') {
+    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    const form = await readFormBody(req);
+    const employeeId = form.employee_id;
+    const employee = await getEmployee(employeeId);
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    // Same contract as a brand-new account: a known default, forced to change at next
+    // login. Also revokes any session the employee currently holds — if the reset was
+    // requested because the account is compromised or the phone was lost, leaving an
+    // old session alive would defeat the point.
+    await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE employee_id = ?').run(hashPassword('password123'), employeeId);
+    await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(employeeId);
+    await logAdminAction(user.username, 'reset_password', 'employee', employeeId, employee.name);
+    res.writeHead(302, { Location: `/admin/employee-registration?created=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
 
