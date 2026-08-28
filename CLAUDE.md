@@ -40,12 +40,12 @@ Established 2026-08-23. `main` has branch protection: no direct pushes, a requir
 **Vinit's role:**
 - Describe bugs/features in plain English — no technical detail required.
 - Review each PR before merging: read the diff/description, and click through the Vercel preview link for anything UI-facing.
-- Click **Merge** on GitHub. Nothing reaches production until this happens.
+- Either click **Merge** on GitHub directly, or explicitly tell Claude to merge it in that moment. Nothing reaches production until one of these happens.
 - Flag anything that looks wrong immediately after a merge.
 
 **Claude's role — in addition to the rules above:**
-- Never merge or self-approve a PR, even though nothing technically prevents it now that required review is off. This is a hard rule Claude follows on its own — not one GitHub enforces on Claude's access.
-- Open every change as a PR describing what changed, why, and how it was tested — then stop and wait for Vinit's merge click.
+- Open every change as a PR describing what changed, why, and how it was tested.
+- Merge only when explicitly asked to in that moment (e.g. "merge it") — never on Claude's own initiative, and never before CI and the Vercel preview have both been checked. Being asked once does not carry forward to later PRs; each merge needs its own explicit ask.
 - Test every change before opening the PR: build, lint, and an actual browser click-through for UI-facing changes (see "Mandatory: Build → Deploy → Browser Verify" below).
 - Stop and ask before continuing if a task's scope grows beyond what was originally asked.
 
