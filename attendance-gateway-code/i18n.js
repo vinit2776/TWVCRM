@@ -192,6 +192,26 @@ const EN = {
 
   'notifications.title': 'Notifications',
   'notifications.none': 'No notifications yet',
+
+  'onboarding.welcome_title': 'Welcome to Attendance Gateway, {{name}}',
+  'onboarding.welcome_body': "Here's a 60-second look before you start.",
+  'onboarding.welcome_cta': 'Take the tour',
+  'onboarding.welcome_skip': "Skip for now",
+  'onboarding.step_of': 'STEP {{n}} OF {{total}}',
+  'onboarding.next': 'Next →',
+  'onboarding.skip_tour': 'Skip tour',
+  'onboarding.finish_cta': "Done",
+  'onboarding.replay_tour': 'Replay tour',
+  'onboarding.whatsnew_title': "What's new",
+  'onboarding.whatsnew_subtitle': 'Since you last checked in',
+  'onboarding.whatsnew_dismiss': 'Got it',
+  'onboarding.whatsnew_tag': 'NEW',
+
+  'onboarding.step.hours': "This card tracks today's hours. Depending on what your admin has set up, you punch in here, on the office WiFi, or the biometric device does it for you automatically.",
+  'onboarding.step.leave': 'Your leave balance lives here. Tap "Apply / View history" to request leave.',
+  'onboarding.step.calendar': "Calendar shows every day's status — Present, Late, Half Day, On Leave — color coded, for the whole month.",
+  'onboarding.step.requests': 'Leave, Permission, Overtime and On-Site duty all live in this part of the menu. Submit a request here and your manager approves it from their own dashboard.',
+  'onboarding.step.notifications': 'Notifications tell you when a request is approved or rejected, and you can switch languages anytime from the toggle above your name.',
 };
 
 const TA = {
@@ -382,6 +402,26 @@ const TA = {
 
   'notifications.title': 'அறிவிப்புகள்',
   'notifications.none': 'இதுவரை அறிவிப்புகள் இல்லை',
+
+  'onboarding.welcome_title': 'வரவேற்கிறோம், {{name}}',
+  'onboarding.welcome_body': 'தொடங்குவதற்கு முன் ஒரு நிமிட அறிமுகம் இதோ.',
+  'onboarding.welcome_cta': 'வழிகாட்டியைப் பார்க்க',
+  'onboarding.welcome_skip': 'தற்போது வேண்டாம்',
+  'onboarding.step_of': '{{total}}-இல் படி {{n}}',
+  'onboarding.next': 'அடுத்து →',
+  'onboarding.skip_tour': 'வழிகாட்டியைத் தவிர்க்க',
+  'onboarding.finish_cta': 'முடிந்தது',
+  'onboarding.replay_tour': 'வழிகாட்டியை மீண்டும் காண',
+  'onboarding.whatsnew_title': 'புதியவை',
+  'onboarding.whatsnew_subtitle': 'நீங்கள் கடைசியாகப் பார்த்ததில் இருந்து',
+  'onboarding.whatsnew_dismiss': 'சரி',
+  'onboarding.whatsnew_tag': 'புதியது',
+
+  'onboarding.step.hours': 'இந்த அட்டை இன்றைய நேரத்தைக் கணக்கிடுகிறது. உங்கள் நிர்வாகி அமைத்தபடி, இங்கிருந்தோ, அலுவலக WiFi மூலமோ, அல்லது பயோமெட்ரிக் கருவி தானாகவோ பதிவு செய்யும்.',
+  'onboarding.step.leave': 'உங்கள் விடுப்பு இருப்பு இங்கே உள்ளது. விடுப்புக்கு விண்ணப்பிக்க "விண்ணப்பிக்க / வரலாறு காண" என்பதைத் தட்டவும்.',
+  'onboarding.step.calendar': 'ஒவ்வொரு நாளின் நிலையும் — ஆஜர், தாமதம், அரை நாள், விடுப்பு — நிற வேறுபாட்டுடன் இங்கே தெரியும்.',
+  'onboarding.step.requests': 'விடுப்பு, அனுமதி, கூடுதல் நேரம், இடத்தில் பணி ஆகியவை மெனுவின் இந்தப் பகுதியில் உள்ளன. இங்கு விண்ணப்பிக்கவும், உங்கள் மேலாளர் அவரது டாஷ்போர்டில் இருந்து அங்கீகரிப்பார்.',
+  'onboarding.step.notifications': 'உங்கள் விண்ணப்பம் அங்கீகரிக்கப்பட்டதா, நிராகரிக்கப்பட்டதா என்பதை அறிவிப்புகள் தெரிவிக்கும். உங்கள் பெயருக்கு மேல் உள்ள பொத்தானில் இருந்து எப்போது வேண்டுமானாலும் மொழியை மாற்றலாம்.',
 };
 
 const DICTS = { en: EN, ta: TA };

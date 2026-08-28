@@ -15,6 +15,7 @@ const {
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
+const ONBOARDING = require('./onboarding-content');
 
 // Two roles have full run of the app — 'admin' and 'manager' are deliberately
 // equivalent everywhere, including settings and password resets. The only
@@ -399,7 +400,8 @@ const SCHEMA_SQL = `
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL,
-    employee_id TEXT
+    employee_id TEXT,
+    onboarding_seen_version INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS permission_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -573,6 +575,14 @@ async function init() {
   // Employee-chosen UI language (English/Tamil) — admin accounts never set this away
   // from the default, since the toggle only renders for role 'employee'.
   try { await db.exec("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'"); } catch { /* already exists */ }
+  // Onboarding tour version this employee has already seen (0 = never onboarded).
+  // Every account that existed before this column shipped has, by definition,
+  // already learned the app some other way — backfill them straight to
+  // CURRENT_VERSION so the welcome tour only fires for accounts created after this.
+  try {
+    await db.exec('ALTER TABLE users ADD COLUMN onboarding_seen_version INTEGER NOT NULL DEFAULT 0');
+    await db.exec(`UPDATE users SET onboarding_seen_version = ${ONBOARDING.CURRENT_VERSION}`);
+  } catch { /* already exists */ }
   // Field trips used to be reimbursed on the honor system — any trip an employee logged
   // was final. Existing rows backfill to 'approved' so past reimbursements aren't
   // silently un-approved by this migration; only new trips start 'pending'. Each ALTER
@@ -1169,10 +1179,20 @@ async function employeeSwitcher(currentId, basePath) {
 
 const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
-async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
+async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
   const lang = langOf(user);
   const showSwitcher = isAdmin && !ADMIN_TABLE_VIEWS.includes(activeNav);
+  // Onboarding only ever shows on an employee's own dashboard — it anchors to
+  // elements (#onbHoursCard, #navCalendar, ...) that only that page guarantees.
+  // opts.forceOnboardingTour replays the tour on demand without touching the
+  // stored seen-version, so replaying never marks a real "what's new" as read.
+  let onboardingKind = null;
+  if (!isAdmin && user && activeNav === 'dashboard') {
+    if (opts.forceOnboardingTour) onboardingKind = 'tour';
+    else if (user.onboardingSeenVersion === 0) onboardingKind = 'tour';
+    else if (user.onboardingSeenVersion < ONBOARDING.CURRENT_VERSION) onboardingKind = 'whats-new';
+  }
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
   const currentPath = `/${activeNav === 'calendar-company' ? 'calendar' : activeNav}?employee_id=${encodeURIComponent(employeeId)}`;
@@ -1292,8 +1312,8 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
       <div class="brand">Attendance Gateway</div>
       <div class="links">
         <a href="/dashboard?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'dashboard' ? 'active' : ''}"><span class="ico">🏠</span> <span class="lbl">${t(lang, 'nav.dashboard')}</span></a>
-        <a href="/calendar?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'calendar' || activeNav === 'calendar-company' ? 'active' : ''}"><span class="ico">📅</span> <span class="lbl">${t(lang, 'nav.calendar')}</span></a>
-        <a href="/leave?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'leave' ? 'active' : ''}"><span class="ico">🌴</span> <span class="lbl">${t(lang, 'nav.leave')}</span></a>
+        <a id="navCalendar" href="/calendar?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'calendar' || activeNav === 'calendar-company' ? 'active' : ''}"><span class="ico">📅</span> <span class="lbl">${t(lang, 'nav.calendar')}</span></a>
+        <a id="navLeave" href="/leave?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'leave' ? 'active' : ''}"><span class="ico">🌴</span> <span class="lbl">${t(lang, 'nav.leave')}</span></a>
         <a href="/permission?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'permission' ? 'active' : ''}"><span class="ico">🕓</span> <span class="lbl">${t(lang, 'nav.permission')}</span></a>
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
         <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
@@ -1303,9 +1323,9 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
           ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${await unreadNotificationCountAll() ? ` (${await unreadNotificationCountAll()})` : ''}</span></a>`
-          : `<a href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${await unreadNotificationCount(employeeId) ? ` (${await unreadNotificationCount(employeeId)})` : ''}</span></a>`}
+          : `<a id="navNotifications" href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${await unreadNotificationCount(employeeId) ? ` (${await unreadNotificationCount(employeeId)})` : ''}</span></a>`}
       </div>
-      <div class="acct">${langToggle}${rightSide}</div>
+      <div class="acct">${langToggle}${(!isAdmin && user) ? `<a href="/dashboard?employee_id=${escapeHtml(employeeId)}&tour=1" style="color:#4C5A68;font-size:0.9em;text-decoration:none;">${t(lang, 'onboarding.replay_tour')}</a>` : ''}${rightSide}</div>
     </nav>
     <div class="main">
       <div class="wrap">
@@ -1314,7 +1334,111 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
       </div>
     </div>
     ${IOS_INSTALL_SHEET_HTML}
+    ${onboardingKind ? renderOnboardingOverlay(onboardingKind, lang, user) : ''}
     </body></html>`;
+}
+
+// The first-login guided tour and the "what's new" delta modal, both driven by
+// onboarding-content.js. Rendered as an overlay on top of the real dashboard
+// markup pageShell already produced — coachmarks anchor to elements already on
+// that page (nav links, dashboard cards), so a step is skipped client-side
+// (ALL_STEPS.filter) if this employee's config doesn't render that element
+// (e.g. no punch button configured yet), instead of pointing at nothing.
+function renderOnboardingOverlay(kind, lang, user) {
+  if (kind === 'tour') {
+    const steps = ONBOARDING.ENTRIES
+      .filter(e => e.tourStep)
+      .map(e => ({ anchor: e.tourStep.anchor, text: t(lang, e.tourStep.key) }));
+    return `
+    <div id="onbWelcome" style="position:fixed;inset:0;z-index:200;background:rgba(15,20,25,0.45);display:flex;align-items:flex-end;">
+      <div style="width:100%;max-width:480px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;padding:26px 22px 24px;box-sizing:border-box;box-shadow:0 -10px 28px rgba(15,20,25,0.18);">
+        <div style="width:42px;height:42px;border-radius:11px;background:#E3F2FD;color:#1565C0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;margin-bottom:16px;">WV</div>
+        <h3 style="margin:0 0 8px;font-size:18px;">${escapeHtml(t(lang, 'onboarding.welcome_title', { name: (user && user.username) || '' }))}</h3>
+        <p style="margin:0 0 20px;font-size:13.5px;line-height:1.55;color:#4C5A68;">${escapeHtml(t(lang, 'onboarding.welcome_body'))}</p>
+        <button onclick="onbStart()" style="width:100%;background:#1565C0;color:#fff;border:none;border-radius:9px;padding:13px 0;font-weight:700;font-size:14px;margin-bottom:10px;cursor:pointer;">${escapeHtml(t(lang, 'onboarding.welcome_cta'))}</button>
+        <div onclick="onbFinish()" style="text-align:center;font-size:12.5px;color:#7C8896;font-weight:600;cursor:pointer;">${escapeHtml(t(lang, 'onboarding.welcome_skip'))}</div>
+      </div>
+    </div>
+    <div id="onbSpot" style="display:none;position:fixed;border:2px solid #E2711D;border-radius:14px;box-shadow:0 0 0 4000px rgba(15,20,25,0.55);z-index:201;pointer-events:none;"></div>
+    <div id="onbCard" style="display:none;position:fixed;background:#1B2430;color:#fff;border-radius:12px;padding:14px 16px;width:250px;max-width:calc(100vw - 32px);box-shadow:0 10px 26px rgba(0,0,0,0.3);z-index:202;box-sizing:border-box;">
+      <div id="onbStepTag" style="font-size:10.5px;color:#E2711D;letter-spacing:0.05em;margin-bottom:6px;"></div>
+      <div id="onbStepText" style="font-size:12.5px;line-height:1.5;color:#DCE3EA;margin-bottom:12px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <button onclick="onbFinish()" style="background:none;border:none;color:#8A97A5;font-weight:700;font-size:11.5px;cursor:pointer;padding:0;">${escapeHtml(t(lang, 'onboarding.skip_tour'))}</button>
+        <button id="onbNextBtn" onclick="onbNext()" style="background:none;border:none;color:#E2711D;font-weight:700;font-size:11.5px;cursor:pointer;padding:0;"></button>
+      </div>
+    </div>
+    <script>
+      (function() {
+        var ALL_STEPS = ${JSON.stringify(steps)};
+        var NEXT_LABEL = ${JSON.stringify(t(lang, 'onboarding.next'))};
+        var FINISH_LABEL = ${JSON.stringify(t(lang, 'onboarding.finish_cta'))};
+        var STEP_LABEL = ${JSON.stringify(t(lang, 'onboarding.step_of'))};
+        var steps = [];
+        var idx = -1;
+        function place() {
+          var step = steps[idx];
+          var el = document.querySelector(step.anchor);
+          if (!el) { onbNext(); return; }
+          var r = el.getBoundingClientRect();
+          var pad = 6;
+          var spot = document.getElementById('onbSpot');
+          spot.style.display = 'block';
+          spot.style.top = (r.top - pad) + 'px';
+          spot.style.left = (r.left - pad) + 'px';
+          spot.style.width = (r.width + pad * 2) + 'px';
+          spot.style.height = (r.height + pad * 2) + 'px';
+          var card = document.getElementById('onbCard');
+          card.style.display = 'block';
+          document.getElementById('onbStepTag').textContent = STEP_LABEL.replace('{{n}}', idx + 1).replace('{{total}}', steps.length);
+          document.getElementById('onbStepText').textContent = step.text;
+          document.getElementById('onbNextBtn').textContent = (idx === steps.length - 1) ? FINISH_LABEL : NEXT_LABEL;
+          var spaceBelow = window.innerHeight - r.bottom;
+          var top = spaceBelow > 170 ? r.bottom + 14 : Math.max(14, r.top - 140);
+          var left = Math.min(Math.max(16, r.left), window.innerWidth - 266);
+          card.style.top = top + 'px';
+          card.style.left = left + 'px';
+        }
+        window.onbStart = function() {
+          document.getElementById('onbWelcome').style.display = 'none';
+          steps = ALL_STEPS.filter(function(s) { return document.querySelector(s.anchor); });
+          idx = -1;
+          window.onbNext();
+        };
+        window.onbNext = function() {
+          idx++;
+          if (idx >= steps.length) { window.onbFinish(); return; }
+          var el = document.querySelector(steps[idx].anchor);
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          setTimeout(place, 220);
+        };
+        window.onbFinish = function() {
+          var w = document.getElementById('onbWelcome'); if (w) w.style.display = 'none';
+          var s = document.getElementById('onbSpot'); if (s) s.style.display = 'none';
+          var c = document.getElementById('onbCard'); if (c) c.style.display = 'none';
+          fetch('/onboarding/ack', { method: 'POST' });
+        };
+      })();
+    </script>`;
+  }
+
+  // 'whats-new': only entries newer than what this employee has already seen —
+  // never the full history, and never the tour again.
+  const items = ONBOARDING.ENTRIES.filter(e => e.whatsNew && e.version > user.onboardingSeenVersion);
+  const rows = items.map(e => `
+      <div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid #EEF0F2;">
+        <span style="flex-shrink:0;font-family:monospace;font-size:9.5px;font-weight:700;color:#B26A00;background:#FFF3E0;padding:2px 6px;border-radius:5px;height:fit-content;margin-top:2px;">${escapeHtml(t(lang, 'onboarding.whatsnew_tag'))}</span>
+        <div style="font-size:12.5px;color:#333e48;line-height:1.5;">${escapeHtml(t(lang, e.whatsNew.key))}</div>
+      </div>`).join('');
+  return `
+    <div id="onbWhatsNew" style="position:fixed;inset:0;z-index:200;background:rgba(15,20,25,0.45);display:flex;align-items:center;justify-content:center;padding:22px;">
+      <div style="background:#fff;border-radius:16px;padding:22px;width:100%;max-width:380px;box-shadow:0 16px 40px rgba(0,0,0,0.25);box-sizing:border-box;">
+        <h3 style="margin:0 0 4px;font-size:16.5px;">${escapeHtml(t(lang, 'onboarding.whatsnew_title'))}</h3>
+        <div style="font-size:12px;color:#7C8896;margin-bottom:6px;">${escapeHtml(t(lang, 'onboarding.whatsnew_subtitle'))}</div>
+        <div>${rows}</div>
+        <button onclick="fetch('/onboarding/ack',{method:'POST'}).then(function(){document.getElementById('onbWhatsNew').remove();})" style="width:100%;background:#1565C0;color:#fff;border:none;border-radius:9px;padding:13px 0;font-weight:700;font-size:14px;cursor:pointer;margin-top:16px;">${escapeHtml(t(lang, 'onboarding.whatsnew_dismiss'))}</button>
+      </div>
+    </div>`;
 }
 
 function renderLogin(error) {
@@ -1366,7 +1490,7 @@ function renderChangePassword(error, username) {
     </div></body></html>`;
 }
 
-async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = []) {
+async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr());
   const onBreak = !!dayStatus.onBreak;
@@ -1453,7 +1577,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
         ${statusBadge(dayStatus.status, dayStatus.label, lang)}
       </div>
     </div>
-    <div class="card" style="background:#1565C0;color:#fff;">
+    <div id="onbHoursCard" class="card" style="background:#1565C0;color:#fff;">
       <div style="font-size:0.8em;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;">${t(lang, 'dashboard.working_hours')}</div>
       ${timerBlock}
       <div style="margin-top:12px;opacity:0.9;font-size:0.92em;">${t(lang, 'dashboard.shift', { start: escapeHtml(todayShift.start), end: escapeHtml(todayShift.end) })}</div>
@@ -1469,7 +1593,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
       <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'dashboard.todays_activity')}</div>
       <table><tr><th>${t(lang, 'dashboard.event')}</th><th>${t(lang, 'dashboard.time')}</th><th>${t(lang, 'dashboard.source')}</th></tr>${punchRows}</table>
     </div>
-    <div class="card">
+    <div id="onbLeaveCard" class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div style="font-weight:700;">${t(lang, 'dashboard.leave_balance')}</div>
         <a href="/leave?employee_id=${escapeHtml(employee.id)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">${t(lang, 'dashboard.apply_view_history')}</a>
@@ -1529,7 +1653,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
         });
       }
     </script>`;
-  return pageShell(t(lang, 'dashboard.title'), employee.id, 'dashboard', body, user);
+  return pageShell(t(lang, 'dashboard.title'), employee.id, 'dashboard', body, user, { forceOnboardingTour });
 }
 
 async function renderCalendar(employee, year, month, user) {
@@ -3154,11 +3278,12 @@ async function getSessionUser(req) {
   if (!token) return null;
   const row = await db.prepare('SELECT * FROM sessions WHERE token = ?').get(token);
   if (!row) return null;
-  const userRow = await db.prepare('SELECT language FROM users WHERE id = ?').get(row.user_id);
+  const userRow = await db.prepare('SELECT language, onboarding_seen_version FROM users WHERE id = ?').get(row.user_id);
   const session = {
     userId: row.user_id, username: row.username, role: row.role, employeeId: row.employee_id,
     createdAt: row.created_at, lastActivityAt: row.last_activity_at,
     language: (userRow && userRow.language) || 'en',
+    onboardingSeenVersion: (userRow && userRow.onboarding_seen_version) || 0,
   };
   const now = Date.now();
   if (now - session.createdAt > SESSION_ABSOLUTE_TTL_MS || now - session.lastActivityAt > SESSION_IDLE_TTL_MS) {
@@ -3592,7 +3717,16 @@ async function handleRequest(req, res) {
     const overtimeMinutes = await computeOvertimeMinutes(employee, todayStr());
     const overtimeAuthorized = await isOvertimeAuthorized(employeeId, todayStr());
     const leaveBalances = await getLeaveBalanceDisplay(employeeId);
-    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks));
+    const forceOnboardingTour = parsed.searchParams.get('tour') === '1';
+    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour));
+  }
+
+  // Marks the current onboarding content as seen — called when the tour finishes
+  // (or is skipped) or the "what's new" modal is dismissed. Not called by the
+  // ?tour=1 replay, so replaying never marks a real "what's new" as read.
+  if (parsed.pathname === '/onboarding/ack' && req.method === 'POST') {
+    await db.prepare('UPDATE users SET onboarding_seen_version = ? WHERE id = ?').run(ONBOARDING.CURRENT_VERSION, user.userId);
+    return sendJson(res, 200, { ok: true });
   }
 
   if (parsed.pathname === '/calendar' && req.method === 'GET') {
