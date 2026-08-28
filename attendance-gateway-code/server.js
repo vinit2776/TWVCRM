@@ -3894,10 +3894,31 @@ async function handleRequest(req, res) {
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown "reports to" employee.'));
     }
-    const id = await nextEmployeeId();
-    await db.prepare(
-      'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null);
+    // nextEmployeeId() reads the current max and is not atomic with the insert below —
+    // two admins registering at once (or one impatient double-tap) can both compute the
+    // same id and race to insert it. Rather than let the loser crash with an unhandled
+    // UNIQUE constraint error (which the global handler would show as a bare "Something
+    // went wrong"), retry with a freshly recomputed id a few times before giving up.
+    let id;
+    const MAX_ID_RACE_RETRIES = 5;
+    for (let attempt = 1; ; attempt++) {
+      id = await nextEmployeeId();
+      try {
+        await db.prepare(
+          'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null);
+        break;
+      } catch (err) {
+        const isIdCollision = /unique constraint/i.test(err && err.message || '') && /employees/i.test(err && err.message || '');
+        if (!isIdCollision || attempt >= MAX_ID_RACE_RETRIES) {
+          if (isIdCollision) {
+            return sendHtml(res, await renderEmployeeRegistration(user, 'Another registration just took this employee ID — please try again.'));
+          }
+          throw err;
+        }
+        // Loop again with a newly computed id; another INSERT has landed in the meantime.
+      }
+    }
     for (const type of BALANCE_POOL_LEAVE_TYPES) {
       await db.prepare('INSERT INTO leave_balances (employee_id, leave_type, balance) VALUES (?, ?, ?)').run(id, type, DEFAULT_LEAVE_BALANCE[type]);
     }
