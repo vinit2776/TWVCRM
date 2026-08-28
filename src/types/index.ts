@@ -2615,6 +2615,19 @@ export interface VendorBill {
     partial_reason: string | null;
     recorder: { id: string; full_name: string } | null;
   }>;
+  vendor_bill_documents?: VendorBillDocument[];
+}
+
+// A document attached to a vendor bill. Additions are always allowed;
+// editing/deleting an existing one is blocked once the bill is approved
+// (enforced both in the API route and via RLS — see migration 00533).
+export interface VendorBillDocument {
+  id: string;
+  file_url: string;
+  file_name: string;
+  doc_type: "invoice" | "supporting";
+  created_at: string;
+  uploader: { id: string; full_name: string } | null;
 }
 
 export type RecurringBillRuleStatus = "active" | "paused";
