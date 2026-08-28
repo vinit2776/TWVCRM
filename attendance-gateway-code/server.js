@@ -1325,6 +1325,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
   // once ever, and a mid-tour reload or a later replay never asks again.
   const showLanguagePicker = onboardingKind === 'tour' && !!user && !user.languageSet;
   const unreadCount = isAdmin ? await unreadNotificationCountAll() : (user ? await unreadNotificationCount(employeeId) : 0);
+  const pendingDocs = (!isAdmin && employeeId) ? await pendingDocumentCount(employeeId) : 0;
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
   const currentPath = `/${activeNav === 'calendar-company' ? 'calendar' : activeNav}?employee_id=${encodeURIComponent(employeeId)}`;
@@ -1450,7 +1451,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
         <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
         ${CONFIG.LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
-        ${!isAdmin ? `<a href="/documents?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'documents' ? 'active' : ''}"><span class="ico">📁</span> <span class="lbl">${t(lang, 'nav.documents')}</span></a>` : ''}
+        ${!isAdmin ? `<a href="/documents?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'documents' ? 'active' : ''}"><span class="ico">📁</span> <span class="lbl">${t(lang, 'nav.documents')}${pendingDocs ? ` (${pendingDocs})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
@@ -3448,6 +3449,14 @@ const DOCUMENT_TYPES = [
 ];
 const DOCUMENT_TYPE_KEYS = DOCUMENT_TYPES.map(d => d.key);
 const ALLOWED_DOCUMENT_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+// Count of document types this employee hasn't uploaded anything for yet — shown as
+// a badge on the "Documents" nav link, same pattern as the notifications count.
+async function pendingDocumentCount(employeeId) {
+  const rows = await db.prepare('SELECT DISTINCT doc_type FROM employee_documents WHERE employee_id = ?').all(employeeId);
+  const uploaded = new Set(rows.map(r => r.doc_type));
+  return DOCUMENT_TYPES.filter(t => !uploaded.has(t.key)).length;
+}
 
 // --- Sessions: persisted in the sessions table, so a restart (crash, NSSM
 // redeploy, power loss) doesn't silently log everyone out. ---
