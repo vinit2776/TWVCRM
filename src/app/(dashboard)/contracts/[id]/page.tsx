@@ -169,9 +169,6 @@ export default function ContractDetailPage({
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
-  // null = not yet confirmed by the prorata section's own billing-statement fetch;
-  // falls back to the (possibly stale) cached column until it reports in.
-  const [prorataSettled, setProrataSettled] = useState<boolean | null>(null);
   const [showOverride, setShowOverride] = useState(false);
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
@@ -186,10 +183,6 @@ export default function ContractDetailPage({
 
   const handleKycStatusChange = useCallback((allSatisfied: boolean, total: number, approved: number, deferred: number) => {
     setKycStatus({ allSatisfied, total, approved, deferred });
-  }, []);
-
-  const handleProrataStatusChange = useCallback((settled: boolean) => {
-    setProrataSettled(settled);
   }, []);
 
   const fetchContract = useCallback(async (showSpinner = true) => {
@@ -952,16 +945,11 @@ export default function ContractDetailPage({
             const depositPaid = isRenewal || !depositRequired
               || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            // Trust the ContractProrataSection's live billing-statement check over the
-            // cached column once it reports in — the cache only syncs via the Razorpay
-            // webhook or an activation attempt, so payments recorded via AR/Tally inbox
-            // can leave it stuck at "pending" while the statement is actually paid.
-            const prorataRequired = !!(
-              contract.is_renewal &&
-              contract.prorata_payment_status === "pending" &&
-              prorataSettled !== true
-            );
-            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataRequired;
+            // Renewals don't gate on pro-rata: it's a continuation, not a new
+            // occupancy, and the partial first month (when the new term starts
+            // mid-month) bills automatically like any contract's first month —
+            // see contracts/[id]/route.ts activation handler.
+            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete;
             const hasDeferred = kycStatus.deferred > 0;
 
             return canActivate ? (
@@ -992,7 +980,6 @@ export default function ContractDetailPage({
                           : "Security deposit collected"}
                       </p>
                     )}
-                    {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
                     )}
@@ -1099,7 +1086,6 @@ export default function ContractDetailPage({
               contract={contract}
               userRole={userRole}
               onSuccess={() => fetchContract(false)}
-              onProrataStatusChange={handleProrataStatusChange}
             />
           )}
 
