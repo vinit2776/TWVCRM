@@ -86,13 +86,38 @@ build step so a commit touching only one of them does not redeploy the other.
 The single cron (`/internal/auto-checkout`, 19:00 IST) is declared in this
 directory's own [vercel.json](vercel.json) and is protected by `CRON_SECRET`.
 
+## Configuration
+
+Operational settings live in the database, editable by an admin at
+**/admin/settings** — office public IPs, the biometric device serial, the device
+clock correction, the punch API key, the LocationIQ key, and address-search
+biasing. Each resolves in this order:
+
+1. the `app_settings` table (the admin UI)
+2. the environment variable of the same name (a deploy-time default)
+3. a built-in fallback
+
+Changes take effect within about 30 seconds, without a redeploy. The page shows
+which of the three each value is actually coming from, because the most confusing
+failure mode is a setting that looks right in the UI while an environment
+variable of the same name is what the app is really using.
+
+Three things stay environment-only by necessity: `TURSO_DATABASE_URL` and
+`TURSO_AUTH_TOKEN` (needed to read the settings table at all), `CRON_SECRET` (it
+guards a route with no logged-in admin to fix a mistake), and
+`ADMIN_BOOTSTRAP_PASSWORD` (used before any admin account exists).
+
+Secrets are never rendered back into the page. Saving with a secret field left
+blank keeps the stored value, so editing an unrelated setting cannot wipe a key;
+clearing one is an explicit checkbox.
+
 ## Security notes
 
 - `/iclock/*` is authenticated **only** by the device serial number in the query
-  string. `ZK_DEVICE_SN` must be set in production, or any device on the internet
-  can post punches.
-- `PUNCH_API_KEY` must be set, or a random key is generated per process and
-  changes on every cold start.
+  string, so it **fails closed**: while no serial is configured those routes reject
+  every push, rather than accepting any device on the internet.
+- `PUNCH_API_KEY` falls back to a random per-process key when unset, which changes
+  on every cold start — unusable by a device, but not guessable by anyone else.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.
 - Login is rate-limited on username **and** IP together, so nobody can lock a
   real user out from an arbitrary network.

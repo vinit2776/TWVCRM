@@ -157,51 +157,144 @@ self.addEventListener('fetch', (event) => {
 });
 `;
 
-// Shared secret the biometric device (or its middleware) must send on every /api/punch
-// call. Falls back to a random key so the app still runs for local testing, but that
-// key changes every restart — set PUNCH_API_KEY for any real deployment.
-const PUNCH_API_KEY = process.env.PUNCH_API_KEY || crypto.randomBytes(24).toString('hex');
-if (!process.env.PUNCH_API_KEY) {
-  console.warn(`WARNING: PUNCH_API_KEY not set. Generated a temporary key for this run only:\n  ${PUNCH_API_KEY}\nSet PUNCH_API_KEY as an environment variable for any real deployment — this one changes every restart.`);
+// --- Runtime settings -------------------------------------------------------
+//
+// Operational configuration that has to be changeable after the app is live, without
+// a redeploy: the office's public IP moves when the ISP reassigns it, the biometric
+// device's serial is not known until the device is installed, and API keys get
+// rotated. Each setting resolves in this order:
+//
+//   1. the app_settings table, edited by an admin at /admin/settings
+//   2. the matching environment variable, as a deploy-time default
+//   3. the built-in fallback below
+//
+// Env vars therefore still work exactly as before for anything never set in the UI,
+// which is what keeps a fresh deploy bootable before anyone has logged in.
+//
+// Deliberately NOT here: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN (needed to read this
+// table at all), CRON_SECRET (must be verifiable before any DB access, on a route
+// that has no admin to fix it), and ADMIN_BOOTSTRAP_PASSWORD (used before an admin
+// account exists). Those stay environment-only by necessity.
+const SETTING_DEFS = [
+  {
+    key: 'OFFICE_WIFI_IPS',
+    label: 'Office public IP addresses',
+    help: "Comma-separated. The self-service punch button only succeeds when the employee's public IP matches one of these — there is no browser API for reading the WiFi SSID, so this is how a web app can tell \"on the office network\". Leave empty to hide the punch button entirely rather than show one that can never succeed. Add every ISP if the office has more than one.",
+    fallback: '',
+    parse: (raw) => new Set(String(raw).split(',').map(x => x.trim()).filter(Boolean)),
+  },
+  {
+    key: 'OFFICE_WIFI_SSID',
+    label: 'Office WiFi name',
+    help: 'Shown under the punch button so an employee knows which network to join. Display only — it has no effect on whether a punch is accepted.',
+    fallback: 'Workvilla_LGF',
+  },
+  {
+    key: 'ZK_DEVICE_SN',
+    label: 'Biometric device serial number',
+    help: "The ZKTeco ADMS push protocol has no header authentication — the device is identified only by this serial, which makes it the sole credential on /iclock/*. While it is empty those endpoints reject every push, so leave it blank until the device is installed. Setting it to the wrong value silently drops real punches.",
+    fallback: '',
+  },
+  {
+    key: 'DEVICE_CLOCK_OFFSET_MINUTES',
+    label: 'Device clock correction (minutes)',
+    help: 'Subtracted from every timestamp the biometric device reports. The current K40 Pro auto-syncs its clock over the network with no way to disable it, and lands exactly 150 minutes ahead of IST (it applies GMT+8 instead of GMT+5:30). Set to 0 once the device keeps correct time.',
+    fallback: '150',
+    parse: (raw) => { const n = Number(raw); return Number.isFinite(n) ? n : 150; },
+  },
+  {
+    key: 'PUNCH_API_KEY',
+    label: 'Punch API key',
+    help: 'Shared secret the biometric device or its middleware sends as the X-API-Key header on /api/punch. While empty a random key is generated per server process, which changes on every restart — no device can authenticate against that, so it must be set before the device is connected.',
+    secret: true,
+    fallback: '',
+  },
+  {
+    key: 'LOCATIONIQ_API_KEY',
+    label: 'LocationIQ API key',
+    help: 'Powers the field-trip address type-ahead, road distance, and on-site reverse geocoding. While empty the Field Trips tab is hidden entirely. Nothing else depends on it.',
+    secret: true,
+    fallback: '',
+  },
+  {
+    key: 'LOCATIONIQ_BASE_URL',
+    label: 'LocationIQ base URL',
+    help: 'Only change this to point at a different LocationIQ region, or at a stub during testing.',
+    fallback: 'https://us1.locationiq.com/v1',
+  },
+  {
+    key: 'PLACES_COUNTRY',
+    label: 'Address search country code',
+    help: 'Two-letter code restricting address suggestions to one country. Empty searches worldwide.',
+    fallback: 'in',
+  },
+  {
+    key: 'PLACES_VIEWBOX',
+    label: 'Address search bounding box',
+    help: 'lon1,lat1,lon2,lat2 — biases address suggestions to one city so other cities do not clutter results. Default covers Chennai. Empty disables the restriction.',
+    fallback: '79.95,12.75,80.35,13.35',
+  },
+];
+const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d]));
+
+// Last-resort punch key. Regenerated per process when neither the database nor the
+// environment supplies one, so an unconfigured deployment is unusable by a device
+// rather than open to one — an attacker cannot guess it, and it changes every restart.
+const EPHEMERAL_PUNCH_API_KEY = crypto.randomBytes(24).toString('hex');
+
+// Resolved settings, refreshed once per request (see loadSettings). Seeded from env
+// and fallbacks so that any code path reached before the first refresh — a crash
+// during init, a log line at startup — still sees sane values rather than undefined.
+const CONFIG = {};
+function applySettings(overrides = {}) {
+  for (const def of SETTING_DEFS) {
+    const raw = overrides[def.key] !== undefined && overrides[def.key] !== null && overrides[def.key] !== ''
+      ? overrides[def.key]
+      : (process.env[def.key] || def.fallback);
+    CONFIG[def.key] = def.parse ? def.parse(raw) : raw;
+  }
+  if (!CONFIG.PUNCH_API_KEY) CONFIG.PUNCH_API_KEY = EPHEMERAL_PUNCH_API_KEY;
+}
+applySettings();
+
+// Re-read from the database at most this often. A serverless instance would otherwise
+// issue an extra query on every request; the cost of the cache is that a settings
+// change takes up to this long to reach instances other than the one that saved it.
+const SETTINGS_CACHE_TTL_MS = 30 * 1000;
+let _settingsLoadedAt = 0;
+async function loadSettings({ force = false } = {}) {
+  if (!force && Date.now() - _settingsLoadedAt < SETTINGS_CACHE_TTL_MS) return;
+  try {
+    const rows = await db.prepare('SELECT key, value FROM app_settings').all();
+    applySettings(Object.fromEntries(rows.map(r => [r.key, r.value])));
+    _settingsLoadedAt = Date.now();
+  } catch (err) {
+    // Never let a settings read take the whole app down: env values and fallbacks are
+    // already in CONFIG, so serving with those beats returning 500 to everyone. The
+    // timestamp is left alone so the next request retries rather than caching failure.
+    console.error('settings load failed, continuing with environment defaults:', err.message);
+  }
 }
 
-// ZKTeco's ADMS push protocol has no header-based auth of its own — the device just
-// POSTs to whatever Server URL it's configured with, identified only by its serial
-// number. That serial is therefore the *only* credential on /iclock/*, so an unset
-// ZK_DEVICE_SN disables those routes entirely rather than accepting any serial:
-// on a public URL, "accept anyone" would let a stranger write punches for any
-// employee whose device PIN they can guess. Set it when the K40 Pro is connected.
-const ZK_DEVICE_SN = process.env.ZK_DEVICE_SN || null;
-
-// LocationIQ powers the field-trip type-ahead + road distance and on-site reverse
-// geocoding. One key, kept server-side. Base URL is overridable so tests can point at
-// a stub. Results are biased to one country (default India).
-const LOCATIONIQ_API_KEY = process.env.LOCATIONIQ_API_KEY || '';
-const LOCATIONIQ_BASE_URL = process.env.LOCATIONIQ_BASE_URL || 'https://us1.locationiq.com/v1';
-const PLACES_COUNTRY = process.env.PLACES_COUNTRY || 'in';
-// Restrict address suggestions to a bounding box (default: Chennai — the office city), so
-// other cities don't clutter the results. Format: lon1,lat1,lon2,lat2. Empty disables it.
-const PLACES_VIEWBOX = process.env.PLACES_VIEWBOX || '79.95,12.75,80.35,13.35';
-if (!ZK_DEVICE_SN) {
-  console.warn('ZK_DEVICE_SN not set: the /iclock ADMS endpoints are disabled and will reject every push. Set it to the K40 Pro\'s serial number to enable biometric punches.');
+// Startup warnings, emitted once per process after settings first resolve rather than
+// at import time — at import time only the environment is known, so an operator who had
+// correctly configured everything in the admin UI would still be warned that nothing
+// was set.
+let _warnedAboutSettings = false;
+function warnAboutUnsetSettings() {
+  if (_warnedAboutSettings) return;
+  _warnedAboutSettings = true;
+  if (!process.env.PUNCH_API_KEY && CONFIG.PUNCH_API_KEY === EPHEMERAL_PUNCH_API_KEY) {
+    console.warn(`PUNCH_API_KEY is not configured. Generated a temporary key for this process only:\n  ${CONFIG.PUNCH_API_KEY}\nIt changes on every restart, so no device can authenticate. Set it at /admin/settings.`);
+  }
+  if (!CONFIG.ZK_DEVICE_SN) {
+    console.warn('ZK_DEVICE_SN is not configured: the /iclock ADMS endpoints are disabled and reject every push. Set the device serial at /admin/settings once the K40 Pro is installed.');
+  }
+  if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
+    console.warn('OFFICE_WIFI_IPS is not configured: the WiFi punch button stays hidden. Set the office public IP at /admin/settings.');
+  }
 }
 
-// The self-service "Punch In/Out" button on an employee's phone only succeeds while
-// their public IP matches the office's — there's no browser API to check WiFi SSID,
-// so this is the standard way a plain web app can tell "on the office network".
-// Comma-separated to allow more than one (dual ISP, a second office, etc). Empty
-// until configured — the dashboard hides the button entirely in that case rather
-// than showing one that can never succeed. Note: this assumes the office's public IP
-// is stable; if the ISP hands out a dynamic IP, this will need re-checking/updating
-// periodically.
-const OFFICE_WIFI_IPS = new Set((process.env.OFFICE_WIFI_IPS || '').split(',').map(s => s.trim()).filter(Boolean));
-if (OFFICE_WIFI_IPS.size === 0) {
-  console.warn('WARNING: OFFICE_WIFI_IPS not set. The WiFi punch-in button is hidden until this is configured.');
-}
-// Purely informational — shown under the punch button so an employee knows which
-// network to join. Verification itself is still IP-based (see OFFICE_WIFI_IPS above);
-// this has no effect on whether a punch succeeds.
-const OFFICE_WIFI_SSID = process.env.OFFICE_WIFI_SSID || 'Workvilla_LGF';
 // Vercel proxies every request — req.socket.remoteAddress there is Vercel's own edge
 // address, not the caller's. x-forwarded-for (client, proxy1, proxy2, ...) carries the
 // real IP first when present; falls back to the socket for local/non-proxied runs.
@@ -210,13 +303,6 @@ function getClientIp(req) {
   const ip = xff ? String(xff).split(',')[0].trim() : (req.socket.remoteAddress || '');
   return ip.replace(/^::ffff:/, '');
 }
-
-// TEMPORARY WORKAROUND: this specific K40 Pro auto-syncs its clock over the network
-// (no exposed setting to disable it or fix its timezone) and always lands exactly 2.5
-// hours ahead of real IST — consistent with the device applying a GMT+8 offset instead
-// of GMT+5:30. Correcting it here rather than on the device since there's no on-device
-// control for it. Remove this once IT/ZKTeco resolves the device's own clock behavior.
-const DEVICE_CLOCK_OFFSET_MINUTES = 150;
 
 function logSecurityEvent(type, details = {}) {
   console.warn(JSON.stringify({ ts: new Date().toISOString(), type, ...details }));
@@ -355,6 +441,14 @@ const SCHEMA_SQL = `
     distance_km  REAL NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_field_trips_emp ON field_trips(employee_id, id);
+  -- Admin-editable runtime configuration; see SETTING_DEFS. Only keys defined there
+  -- are ever read, so a stale row from a removed setting is inert rather than harmful.
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT ''
+  );
   CREATE TABLE IF NOT EXISTS breaks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_id TEXT NOT NULL,
@@ -534,11 +628,11 @@ function parseTimestamp(raw) {
   const [h, mi, s] = timePart.split(':').map(Number);
   return new Date(y, mo - 1, d, h, mi, s);
 }
-// See DEVICE_CLOCK_OFFSET_MINUTES above — shifts a device-reported "YYYY-MM-DD HH:MM:SS"
+// See the DEVICE_CLOCK_OFFSET_MINUTES setting — shifts a device-reported "YYYY-MM-DD HH:MM:SS"
 // timestamp back by that offset, correctly rolling over date/month/year boundaries.
 function correctDeviceTimestamp(raw) {
   const asDate = parseTimestamp(raw);
-  asDate.setMinutes(asDate.getMinutes() - DEVICE_CLOCK_OFFSET_MINUTES);
+  asDate.setMinutes(asDate.getMinutes() - CONFIG.DEVICE_CLOCK_OFFSET_MINUTES);
   return formatTimestamp(asDate);
 }
 async function lastPunch(employeeId) {
@@ -1043,7 +1137,7 @@ async function employeeSwitcher(currentId, basePath) {
   return `<select onchange="location.href='${basePath}?employee_id=' + this.value" style="font-size:0.95em;padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;">${options}</select>`;
 }
 
-const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company']; // table pages — no single-employee switcher here
+const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
   const isAdmin = user && user.role === 'admin';
@@ -1173,9 +1267,10 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user) {
         <a href="/permission?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'permission' ? 'active' : ''}"><span class="ico">🕓</span> <span class="lbl">${t(lang, 'nav.permission')}</span></a>
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
         <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
-        ${LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
+        ${CONFIG.LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
+        ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
           ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${await unreadNotificationCountAll() ? ` (${await unreadNotificationCountAll()})` : ''}</span></a>`
           : `<a href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${await unreadNotificationCount(employeeId) ? ` (${await unreadNotificationCount(employeeId)})` : ''}</span></a>`}
@@ -1304,11 +1399,11 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
   // No browser API exposes WiFi SSID, so "on the office network" is verified
   // server-side by IP — the button just stays hidden until that's configured,
   // same pattern as the Field Trips tab hiding until LOCATIONIQ_API_KEY is set.
-  const wifiPunchBlock = OFFICE_WIFI_IPS.size > 0 ? `
+  const wifiPunchBlock = CONFIG.OFFICE_WIFI_IPS.size > 0 ? `
       <div style="margin-top:14px;">
         <div id="wifiPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
         <button id="wifiPunchBtn" onclick="wifiPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
-        <div style="font-size:0.75em;opacity:0.75;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(OFFICE_WIFI_SSID) })}</div>
+        <div style="font-size:0.75em;opacity:0.75;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })}</div>
       </div>` : '';
 
   const autoCheckoutWarning = dayStatus.checkOutAuto ? `
@@ -2542,6 +2637,72 @@ async function renderDevicePins(user, error) {
   return pageShell('Device PINs', '', 'device-pins', body, user);
 }
 
+// Admin-only runtime configuration (see SETTING_DEFS). Shows where each value is
+// actually coming from — database, environment, or built-in default — because the
+// most confusing failure here is a setting that looks right in the UI while an
+// environment variable of the same name is what the app is really using.
+async function renderAdminSettings(user, opts = {}) {
+  const { error, notice, revealedKey, revealedValue } = opts;
+  const rows = await db.prepare('SELECT key, value, updated_at, updated_by FROM app_settings').all();
+  const stored = Object.fromEntries(rows.map(r => [r.key, r]));
+
+  const fields = SETTING_DEFS.map(def => {
+    const row = stored[def.key];
+    const inDb = !!(row && row.value !== '');
+    const inEnv = !!process.env[def.key];
+    const source = inDb ? 'Database' : (inEnv ? 'Environment variable' : 'Built-in default');
+    const sourceColor = inDb ? '#1565C0' : (inEnv ? '#B26A00' : '#7C8896');
+    const updated = row ? ` &middot; changed ${escapeHtml(row.updated_at)}${row.updated_by ? ` by ${escapeHtml(row.updated_by)}` : ''}` : '';
+
+    // Secrets are never rendered back into the page. A blank submission leaves the
+    // stored value alone, so an admin editing an unrelated field cannot wipe a key
+    // by simply not retyping it; clearing one is an explicit checkbox.
+    const input = def.secret
+      ? `<input type="password" name="${def.key}" value="" autocomplete="new-password" placeholder="${inDb ? 'Set — leave blank to keep unchanged' : 'Not set'}" style="width:100%;padding:8px;border-radius:6px;border:1px solid #D0D5DA;">
+         <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:0.82em;color:#7C8896;">
+           <input type="checkbox" name="__clear__${def.key}" value="1" style="width:auto;"> Clear this value
+         </label>`
+      : `<input type="text" name="${def.key}" value="${escapeHtml(inDb ? row.value : '')}" placeholder="${escapeHtml(String(process.env[def.key] || def.fallback || ''))}" style="width:100%;padding:8px;border-radius:6px;border:1px solid #D0D5DA;">`;
+
+    const generate = def.key === 'PUNCH_API_KEY'
+      ? `<div style="margin-top:8px;"><button type="submit" form="generateKeyForm" style="padding:6px 12px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;color:#1565C0;font-weight:600;cursor:pointer;font-size:0.85em;">Generate a new key</button></div>`
+      : '';
+
+    return `
+      <div style="padding:16px 0;border-bottom:1px solid #EEF1F3;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
+          <label style="font-weight:700;">${escapeHtml(def.label)}</label>
+          <span style="font-size:0.75em;color:${sourceColor};font-weight:600;">${source}${updated}</span>
+        </div>
+        <div style="color:#7C8896;font-size:0.85em;margin:6px 0 10px;">${escapeHtml(def.help)}</div>
+        ${input}
+        ${generate}
+      </div>`;
+  }).join('');
+
+  const body = `
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
+    ${notice ? `<div class="card" style="color:#1B5E20;background:#E8F5E9;border-color:#C8E6C9;">${escapeHtml(notice)}</div>` : ''}
+    ${revealedKey ? `<div class="card" style="border-color:#B26A00;">
+      <div style="font-weight:700;margin-bottom:6px;">New ${escapeHtml(revealedKey)}</div>
+      <div style="color:#7C8896;font-size:0.85em;margin-bottom:10px;">Copy it now and configure the device with it — it is shown once and cannot be retrieved again. It is already saved and in effect.</div>
+      <code style="display:block;word-break:break-all;background:#F5F6F8;padding:10px;border-radius:6px;">${escapeHtml(revealedValue)}</code>
+    </div>` : ''}
+    <div class="card" style="color:#7C8896;font-size:0.9em;">
+      These take effect within ${Math.round(SETTINGS_CACHE_TTL_MS / 1000)} seconds without a redeploy. A value saved here
+      overrides the environment variable of the same name; clear it to fall back to the
+      environment. The database connection, cron secret and bootstrap password are not
+      listed because they are needed before this page can be read.
+    </div>
+    <form method="POST" action="/admin/settings" class="card">
+      <div style="font-weight:700;margin-bottom:4px;">Settings</div>
+      ${fields}
+      <button type="submit" style="margin-top:18px;padding:9px 20px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Save settings</button>
+    </form>
+    <form method="POST" action="/admin/settings/generate-punch-key" id="generateKeyForm"></form>`;
+  return pageShell('Settings', '', 'settings', body, user);
+}
+
 // Shared by both Calendar sub-views (Company Calendar / Employees' Calendars) — a simple
 // two-link toggle at the top, carrying the current employee_id so the switcher/nav
 // keeps working underneath either view.
@@ -2771,7 +2932,7 @@ async function deleteSession(token) {
   await db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 function locationiqUrl(path) {
-  return new URL(LOCATIONIQ_BASE_URL.replace(/\/$/, '') + path);
+  return new URL(CONFIG.LOCATIONIQ_BASE_URL.replace(/\/$/, '') + path);
 }
 function formatDurationSeconds(sec) {
   if (sec == null) return '';
@@ -2792,14 +2953,14 @@ function parseAutocomplete(data) {
     .filter(x => x.description && x.lat != null && x.lon != null);
 }
 async function placesAutocomplete(input) {
-  if (!LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
+  if (!CONFIG.LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
   const url = locationiqUrl('/autocomplete');
-  url.searchParams.set('key', LOCATIONIQ_API_KEY);
+  url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('q', input);
   url.searchParams.set('limit', '10');
   url.searchParams.set('dedupe', '1');
-  if (PLACES_COUNTRY) url.searchParams.set('countrycodes', PLACES_COUNTRY);
-  if (PLACES_VIEWBOX) { url.searchParams.set('viewbox', PLACES_VIEWBOX); url.searchParams.set('bounded', '1'); }
+  if (CONFIG.PLACES_COUNTRY) url.searchParams.set('countrycodes', CONFIG.PLACES_COUNTRY);
+  if (CONFIG.PLACES_VIEWBOX) { url.searchParams.set('viewbox', CONFIG.PLACES_VIEWBOX); url.searchParams.set('bounded', '1'); }
   let data;
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -2819,14 +2980,14 @@ function parseForwardGeocode(data) {
   return { lat: r.lat, lon: r.lon, display: r.display_name || '' };
 }
 async function forwardGeocode(text) {
-  if (!LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
+  if (!CONFIG.LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
   const url = locationiqUrl('/search');
-  url.searchParams.set('key', LOCATIONIQ_API_KEY);
+  url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('q', text);
   url.searchParams.set('format', 'json');
   url.searchParams.set('limit', '1');
-  if (PLACES_COUNTRY) url.searchParams.set('countrycodes', PLACES_COUNTRY);
-  if (PLACES_VIEWBOX) { url.searchParams.set('viewbox', PLACES_VIEWBOX); url.searchParams.set('bounded', '1'); }
+  if (CONFIG.PLACES_COUNTRY) url.searchParams.set('countrycodes', CONFIG.PLACES_COUNTRY);
+  if (CONFIG.PLACES_VIEWBOX) { url.searchParams.set('viewbox', CONFIG.PLACES_VIEWBOX); url.searchParams.set('bounded', '1'); }
   let data;
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -2844,9 +3005,9 @@ function parseReverseGeocode(data) {
   return data.display_name || '';
 }
 async function reverseGeocode(lat, lon) {
-  if (!LOCATIONIQ_API_KEY) return '';
+  if (!CONFIG.LOCATIONIQ_API_KEY) return '';
   const url = locationiqUrl('/reverse');
-  url.searchParams.set('key', LOCATIONIQ_API_KEY);
+  url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('lat', lat);
   url.searchParams.set('lon', lon);
   url.searchParams.set('format', 'json');
@@ -2866,10 +3027,10 @@ function parseDirections(data) {
   return { distanceKm: Math.round((r.distance / 1000) * 100) / 100, durationText: formatDurationSeconds(r.duration) };
 }
 async function roadDistanceByCoords(fromLat, fromLon, toLat, toLon) {
-  if (!LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
+  if (!CONFIG.LOCATIONIQ_API_KEY) throw new Error('Maps API key is not configured on the server.');
   const coords = `${fromLon},${fromLat};${toLon},${toLat}`;
   const url = locationiqUrl('/directions/driving/' + coords);
-  url.searchParams.set('key', LOCATIONIQ_API_KEY);
+  url.searchParams.set('key', CONFIG.LOCATIONIQ_API_KEY);
   url.searchParams.set('overview', 'false');
   let data;
   try {
@@ -2930,7 +3091,7 @@ async function handleRequest(req, res) {
     // On-Site Duty and WiFi punch buttons) — session auth is restricted below to the
     // caller's own employee_id and source in ('on-site', 'wifi') only.
     const apiKey = req.headers['x-api-key'];
-    const authorizedViaApiKey = apiKey === PUNCH_API_KEY;
+    const authorizedViaApiKey = apiKey === CONFIG.PUNCH_API_KEY;
     const sessionUser = authorizedViaApiKey ? null : await getSessionUser(req);
     const authorizedViaSession = !authorizedViaApiKey && !!sessionUser && sessionUser.role === 'employee';
     if (!authorizedViaApiKey && !authorizedViaSession) {
@@ -2968,11 +3129,11 @@ async function handleRequest(req, res) {
     // WiFi punch: there's no browser API to check SSID, so "on the office network" is
     // verified by matching the caller's public IP against the configured office IP(s).
     if (source === 'wifi') {
-      if (OFFICE_WIFI_IPS.size === 0) {
+      if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
         return sendJson(res, 403, { error: 'WiFi punch-in is not configured yet. Ask your admin to set it up.' });
       }
       const clientIp = getClientIp(req);
-      if (!OFFICE_WIFI_IPS.has(clientIp)) {
+      if (!CONFIG.OFFICE_WIFI_IPS.has(clientIp)) {
         logSecurityEvent('wifi_punch_rejected', { employeeId: employee_id, ip: clientIp });
         return sendJson(res, 403, { error: 'You must be connected to the office WiFi to punch in.' });
       }
@@ -3092,8 +3253,8 @@ async function handleRequest(req, res) {
   if (parsed.pathname.startsWith('/iclock/')) {
     const sn = parsed.searchParams.get('SN') || '';
     // Fails closed: no configured serial means no device is connected yet, so every
-    // push is rejected. See ZK_DEVICE_SN above.
-    if (!ZK_DEVICE_SN || sn !== ZK_DEVICE_SN) {
+    // push is rejected. See the ZK_DEVICE_SN setting.
+    if (!CONFIG.ZK_DEVICE_SN || sn !== CONFIG.ZK_DEVICE_SN) {
       logSecurityEvent('adms_auth_failed', { ip: req.socket.remoteAddress, path: parsed.pathname, sn });
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       return res.end('unauthorized device');
@@ -3614,7 +3775,7 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/field-trip' && req.method === 'GET') {
-    if (!LOCATIONIQ_API_KEY) { res.writeHead(404); return res.end('Not found'); }
+    if (!CONFIG.LOCATIONIQ_API_KEY) { res.writeHead(404); return res.end('Not found'); }
     if (user.role === 'admin') {
       const trips = await db.prepare('SELECT * FROM field_trips ORDER BY id DESC LIMIT 200').all();
       return sendHtml(res, await renderAdminFieldTrips(trips, user));
@@ -3886,6 +4047,73 @@ async function handleRequest(req, res) {
     return sendCsv(res, `muster-report-${monthStr}.csv`, csv);
   }
 
+  if (parsed.pathname === '/admin/settings' && req.method === 'GET') {
+    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    return sendHtml(res, await renderAdminSettings(user));
+  }
+
+  if (parsed.pathname === '/admin/settings' && req.method === 'POST') {
+    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    const form = await readFormBody(req);
+    const changed = [];
+    for (const def of SETTING_DEFS) {
+      const submitted = form[def.key];
+      const clearing = form[`__clear__${def.key}`] === '1';
+      // A field absent from the submission entirely is left alone. The real form always
+      // posts every field, so an empty string still means "clear this"; but a partial or
+      // truncated POST must not silently wipe settings it never mentioned — clearing
+      // DEVICE_CLOCK_OFFSET_MINUTES that way would restore its 150-minute fallback and
+      // quietly shift every device punch by two and a half hours.
+      if (submitted === undefined && !clearing) continue;
+      // A blank secret means "leave it alone" (the field is never pre-filled, so an
+      // admin editing something else would otherwise erase every key on the page).
+      // Clearing a secret is the explicit checkbox instead.
+      if (def.secret && !clearing && submitted === '') continue;
+      const value = clearing ? '' : String(submitted === undefined ? '' : submitted).trim();
+      if (value === '') {
+        const existing = await db.prepare('SELECT key FROM app_settings WHERE key = ?').get(def.key);
+        if (!existing) continue;
+        await db.prepare('DELETE FROM app_settings WHERE key = ?').run(def.key);
+        changed.push(`${def.key} cleared`);
+        continue;
+      }
+      const existing = await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(def.key);
+      if (existing && existing.value === value) continue;
+      await db.prepare(
+        'INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by'
+      ).run(def.key, value, formatTimestamp(new Date()), user.username);
+      changed.push(`${def.key} updated`);
+    }
+    if (changed.length) {
+      // Deliberately records which settings changed, never the values — the audit log
+      // is readable in-app and two of these are credentials.
+      await logAdminAction(user.username, 'settings_updated', 'app_settings', 'settings', changed.join(', '));
+    }
+    await loadSettings({ force: true });
+    return sendHtml(res, await renderAdminSettings(user, {
+      notice: changed.length ? `Saved: ${changed.join(', ')}.` : 'No changes to save.',
+    }));
+  }
+
+  if (parsed.pathname === '/admin/settings/generate-punch-key' && req.method === 'POST') {
+    if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
+    const key = crypto.randomBytes(24).toString('hex');
+    await db.prepare(
+      'INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by'
+    ).run('PUNCH_API_KEY', key, formatTimestamp(new Date()), user.username);
+    await logAdminAction(user.username, 'punch_api_key_generated', 'app_settings', 'PUNCH_API_KEY', '');
+    await loadSettings({ force: true });
+    // Shown once, in the response to the request that created it — the stored value is
+    // never rendered again, so this is the only chance to copy it into the device.
+    return sendHtml(res, await renderAdminSettings(user, {
+      revealedKey: 'PUNCH_API_KEY',
+      revealedValue: key,
+      notice: 'A new punch API key is saved and in effect. Any device still sending the old key will now be rejected.',
+    }));
+  }
+
   if (parsed.pathname === '/admin/device-pins' && req.method === 'GET') {
     if (user.role !== 'admin') { res.writeHead(403); return res.end('Admin access only.'); }
     return sendHtml(res, await renderDevicePins(user));
@@ -3922,6 +4150,11 @@ async function serve(req, res) {
   // search result. Set once here rather than per-route: Node merges headers set this
   // way with any later writeHead(status, {...}), and no route sets X-Robots-Tag itself.
   res.setHeader('X-Robots-Tag', 'noindex, nofollow, nosnippet, noarchive, noimageindex');
+  // Refresh admin-editable settings before routing. Cached (SETTINGS_CACHE_TTL_MS) so
+  // this is not a query per request, and it swallows its own errors, so a settings
+  // outage degrades to environment defaults rather than failing the request.
+  await loadSettings();
+  warnAboutUnsetSettings();
   try {
     await handleRequest(req, res);
   } catch (err) {
