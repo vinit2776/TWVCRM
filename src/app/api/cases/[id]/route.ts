@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateCaseSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { caseEndDate } from "@/lib/case-workflow";
+import { generateDocumentChecklist } from "@/lib/compliance";
+import type { EntityType, VoPurpose } from "@/types";
 
 export async function GET(
   _request: NextRequest,
@@ -145,6 +147,42 @@ export async function PATCH(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // The KYC document checklist is only ever generated once, at case
+  // creation, from purpose + client_entity_type at that moment (see
+  // src/app/api/cases/route.ts). If either changes later, top up the
+  // checklist with whatever the new combination requires that isn't
+  // already present — additive only, so existing uploaded/approved
+  // documents (which may still be valid, e.g. a director's personal PAN)
+  // are never touched or removed.
+  const touchesChecklistInputs = "client_entity_type" in patch || "purpose" in patch;
+  if (touchesChecklistInputs && oldCase) {
+    const newEntityType = (patch.client_entity_type as EntityType | undefined) ?? oldCase.client_entity_type;
+    const newPurpose = (patch.purpose as VoPurpose | undefined) ?? oldCase.purpose;
+    const checklist = generateDocumentChecklist(newPurpose, newEntityType);
+
+    if (checklist.length > 0) {
+      const { data: existingDocs } = await supabase
+        .from("case_documents")
+        .select("document_type")
+        .eq("case_id", id);
+
+      const existingTypes = new Set((existingDocs || []).map((d) => d.document_type));
+      const missing = checklist.filter((doc) => !existingTypes.has(doc.type));
+
+      if (missing.length > 0) {
+        await supabase.from("case_documents").insert(
+          missing.map((doc) => ({
+            case_id: id,
+            document_type: doc.type,
+            label: doc.label,
+            is_required: doc.required,
+            status: "pending" as const,
+          }))
+        );
+      }
+    }
   }
 
   // Audit log
