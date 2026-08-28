@@ -3500,14 +3500,18 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/calendar' && req.method === 'GET') {
     const employeeId = await resolveEmployeeId();
-    const employee = await getEmployee(employeeId);
-    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const now = new Date();
     const year = Number(parsed.searchParams.get('year')) || now.getFullYear();
     const month = Number(parsed.searchParams.get('month')) || (now.getMonth() + 1);
+    // Company Calendar shows holidays, which have nothing to do with any one employee —
+    // it must render even before the first employee is ever registered, since setting up
+    // holidays ahead of hiring is a reasonable thing for a fresh admin to do first. Check
+    // this before the employee lookup below, which the personal calendar genuinely needs.
     if (parsed.searchParams.get('view') === 'company' && user.role === 'admin') {
       return sendHtml(res, await renderCompanyCalendar(year, month, employeeId, user));
     }
+    const employee = await getEmployee(employeeId);
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     return sendHtml(res, await renderCalendar(employee, year, month, user));
   }
 
