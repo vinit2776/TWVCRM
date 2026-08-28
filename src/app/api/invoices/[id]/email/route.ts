@@ -5,6 +5,7 @@ import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 
 export const maxDuration = 30;
 
@@ -56,9 +57,25 @@ export async function POST(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = invoice.lead as any;
-  const customerEmail = lead?.email || recipients[0];
-  const customerPhone = lead?.phone || lead?.mobile;
-  const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
+
+  // A case-raised invoice has no lead — the buyer comes from the case's
+  // billing route instead, so the greeting and the Razorpay customer name
+  // the party that actually owes it rather than falling back to "Client".
+  let caseParty: ReturnType<typeof invoiceParty> = null;
+  if (invoice.case_id) {
+    const { data: caseRow } = await supabase
+      .from("cases")
+      .select("client_name, client_company_name, client_email, client_phone, client_gst_number, aggregator_id, bill_to, aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)")
+      .eq("id", invoice.case_id)
+      .maybeSingle();
+    if (caseRow) caseParty = invoiceParty({ case: caseRow as unknown as InvoiceCaseLike });
+  }
+
+  const customerEmail = caseParty?.email || lead?.email || recipients[0];
+  const customerPhone = caseParty?.phone || lead?.phone || lead?.mobile;
+  const customerName =
+    caseParty?.name ||
+    (lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer");
 
   // ── Auto-create Razorpay payment link ────────────────────────────────────────
   let paymentLinkUrl: string | null = invoice.razorpay_link_url || null;
@@ -163,7 +180,7 @@ export async function POST(
             <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
           </div>
           <div style="padding:32px;">
-            <p style="color:#1a1b1e;font-size:15px;">Dear ${lead?.first_name || "Client"},</p>
+            <p style="color:#1a1b1e;font-size:15px;">Dear ${caseParty?.name || lead?.first_name || "Client"},</p>
             <p style="color:#333;font-size:14px;">Please find attached the invoice <strong>${invoice.invoice_number}</strong> for <strong>${invoice.title}</strong>.</p>
 
             <p style="color:#015E65;font-size:13px;font-weight:700;margin:20px 0 8px;letter-spacing:0.3px;">INVOICE SUMMARY</p>
@@ -258,6 +275,12 @@ export async function POST(
           invoice_id: id,
           contract_id: null,
           proposal_id: invoice.proposal_id ?? null,
+          // Carry the case through to the mirrored statement. This is what
+          // makes the Tally Inbox, receivables and the payment panel resolve
+          // the right buyer: they read the statement, and billing_statements
+          // already routes a case's buyer via voBillParty(). Without it a
+          // case-raised invoice would show a blank party downstream.
+          case_id: invoice.case_id ?? null,
           statement_type: "usage",
           created_via: "adhoc_invoice",
           status: "finalized",

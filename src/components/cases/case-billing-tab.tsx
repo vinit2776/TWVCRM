@@ -29,6 +29,7 @@ import { HANDOFF_STATE_LABELS, voBillParty, type HandoffState } from "@/lib/tall
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementPaymentPanel } from "@/components/billing/payment-collected-panel";
+import { CaseAdhocInvoices } from "@/components/cases/case-adhoc-invoices";
 import type { InboxPayment } from "@/lib/tally-handoff";
 
 interface CaseBillingTabProps {
@@ -865,6 +866,11 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Ad-hoc invoices raised against this case — the same INV- series and
+          the same table as the lead-side ad-hoc invoice, so unlisted charges
+          stay one book rather than two. */}
+      <CaseAdhocInvoices caseId={caseId} />
 
       {statement && showCreditNoteCancel && (
         <CreditNoteUploadDialog
