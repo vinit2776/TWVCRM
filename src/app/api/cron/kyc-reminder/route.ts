@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
+import { renewalRecipients, type RenewalRoutableCase } from "@/lib/renewal-recipients";
 
 export const maxDuration = 60;
 
@@ -51,6 +52,8 @@ interface ContractRow {
   customerName: string;
   company: string | null;
   email: string | null;
+  /** Who that address belongs to, when it is not the customer themselves. */
+  contactLabel: string;
   locationName: string | null;
   docs: OutstandingDoc[];
   /** Virtual Office cases carry KYC in case_documents, entirely separate from
@@ -151,6 +154,7 @@ export async function GET(request: NextRequest) {
         company: lead?.company || null,
         email: lead?.email || null,
         locationName: c.location?.name || null,
+        contactLabel: "Customer",
         docs: [],
         kind: "contract",
       });
@@ -183,6 +187,15 @@ export async function GET(request: NextRequest) {
         client_name,
         client_company_name,
         client_email,
+        client_phone,
+        aggregator_id,
+        bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey (
+          name,
+          billing_method,
+          primary_email,
+          primary_phone
+        ),
         location:locations!cases_location_id_fkey (
           name
         )
@@ -215,13 +228,25 @@ export async function GET(request: NextRequest) {
     const kId = k.id as string;
 
     if (!caseMap.has(kId)) {
+      // Chase whoever owns the relationship, not whoever the case names as
+      // the end client. 40 of 46 aggregator-sourced cases have no client
+      // email at all — the aggregator onboarded them and is the counterparty
+      // — so reading client_email leaves most of them with nobody to contact.
+      // Same resolver the renewal notices use, so KYC cannot chase one party
+      // while renewals chase another.
+      const routing = renewalRecipients(k as RenewalRoutableCase);
+      const contact = routing.billing;
+
       caseMap.set(kId, {
         contractId: kId,
         contractNumber: k.case_number,
         // Company name is primary on a case; the contact is the fallback.
         customerName: k.client_company_name || k.client_name || "Unknown",
         company: k.client_company_name || null,
-        email: k.client_email || null,
+        email: contact.email || k.client_email || null,
+        contactLabel: contact.kind === "aggregator"
+          ? `${contact.name} (aggregator)`
+          : "Customer",
         locationName: k.location?.name || null,
         docs: [],
         kind: "case",
@@ -362,11 +387,14 @@ function buildKycReminderHtml(dateLabel: string, rows: ContractRow[]): string {
         ${docsHtml}
       </table>
 
-      ${c.email ? `
+      ${!c.email ? `
+      <div style="background:#fffbeb;padding:8px 14px;border-top:1px solid #fde68a;">
+        <span style="font-size:11px;color:#92400e;">No email on record for this ${c.kind === "case" ? "case or its aggregator" : "customer"} — chase by phone.</span>
+      </div>` : `
       <div style="background:#f9fafb;padding:8px 14px;border-top:1px solid #f3f4f6;">
-        <span style="font-size:11px;color:#9ca3af;">Customer email: </span>
+        <span style="font-size:11px;color:#9ca3af;">${c.contactLabel === "Customer" ? "Customer email" : `Chase via ${c.contactLabel}`}: </span>
         <a href="mailto:${c.email}" style="font-size:11px;color:#015E65;">${c.email}</a>
-      </div>` : ""}
+      </div>`}
     </div>`;
   }).join("");
 
