@@ -3095,7 +3095,7 @@ async function handleRequest(req, res) {
     const sessionUser = authorizedViaApiKey ? null : await getSessionUser(req);
     const authorizedViaSession = !authorizedViaApiKey && !!sessionUser && sessionUser.role === 'employee';
     if (!authorizedViaApiKey && !authorizedViaSession) {
-      logSecurityEvent('punch_auth_failed', { ip: req.socket.remoteAddress, hadApiKeyHeader: !!apiKey, hadSession: !!sessionUser });
+      logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), hadApiKeyHeader: !!apiKey, hadSession: !!sessionUser });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
 
@@ -3111,7 +3111,7 @@ async function handleRequest(req, res) {
 
     if (authorizedViaSession) {
       if (employee_id !== sessionUser.employeeId) {
-        logSecurityEvent('punch_auth_failed', { ip: req.socket.remoteAddress, reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
+        logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
         return sendJson(res, 403, { error: 'You can only punch your own attendance.' });
       }
       if (!['on-site', 'wifi'].includes(source || 'on-site')) {
@@ -3255,7 +3255,7 @@ async function handleRequest(req, res) {
     // Fails closed: no configured serial means no device is connected yet, so every
     // push is rejected. See the ZK_DEVICE_SN setting.
     if (!CONFIG.ZK_DEVICE_SN || sn !== CONFIG.ZK_DEVICE_SN) {
-      logSecurityEvent('adms_auth_failed', { ip: req.socket.remoteAddress, path: parsed.pathname, sn });
+      logSecurityEvent('adms_auth_failed', { ip: getClientIp(req), path: parsed.pathname, sn });
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       return res.end('unauthorized device');
     }
@@ -3353,7 +3353,7 @@ async function handleRequest(req, res) {
     const expected = process.env.CRON_SECRET;
     const provided = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
     if (!expected || provided !== expected) {
-      logSecurityEvent('cron_auth_failed', { ip: req.socket && req.socket.remoteAddress });
+      logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
     await performAutoCheckout();
@@ -3390,7 +3390,12 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/login' && req.method === 'POST') {
     const { username, password } = await readFormBody(req);
-    const ip = req.socket.remoteAddress || 'unknown';
+    // Must be the caller's IP, not the socket's. On Vercel every request arrives from
+    // the platform's own proxy, so req.socket.remoteAddress is the same value for
+    // everyone — which silently inverts what the rate limit does: the username+IP key
+    // collapses to username alone, so anyone on the internet could lock a real user out
+    // with five bad attempts, the exact attack the key was chosen to prevent.
+    const ip = getClientIp(req) || 'unknown';
 
     if (await isLoginRateLimited(username || '', ip)) {
       logSecurityEvent('login_rate_limited', { username, ip });
@@ -4145,7 +4150,7 @@ async function handleRequest(req, res) {
 // Shared by the standalone HTTP server (local dev / Windows NSSM) and the Vercel
 // serverless function (see api/index.js).
 async function serve(req, res) {
-  console.log(`[inbound] ${req.method} ${req.url} from ${req.socket && req.socket.remoteAddress}`);
+  console.log(`[inbound] ${req.method} ${req.url} from ${getClientIp(req)}`);
   // Internal staff tool on a public hostname — nothing here should ever appear in a
   // search result. Set once here rather than per-route: Node merges headers set this
   // way with any later writeHead(status, {...}), and no route sets X-Robots-Tag itself.
