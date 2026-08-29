@@ -19,7 +19,6 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import {
   FileText,
   Send,
-  CheckCircle,
   PenTool,
   Loader2,
   ExternalLink,
@@ -258,27 +257,64 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
-  const handleAction = async (action: string) => {
-    if (!agreement) return;
-    setActing(true);
+  // ── Send to customer ───────────────────────────────────────────────────
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendPreviewLoading, setSendPreviewLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendCc, setSendCc] = useState("");
+  const [sendPreview, setSendPreview] = useState<{
+    to: string | null;
+    toName: string;
+    toKind: "aggregator" | "client";
+    onBehalfOf: string | null;
+    subject: string;
+    html: string;
+    blocked: string | null;
+    attachmentName: string | null;
+    isDraft: boolean;
+    hasPdf: boolean;
+  } | null>(null);
+
+  const openSendDialog = async () => {
+    setSendPreviewLoading(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, agreement_id: agreement.id }),
-      });
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`);
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Action failed");
+        toast.error(json?.error || "Could not build the preview");
+        return;
       }
-      toast.success(`Agreement ${action.replace(/_/g, " ")}`);
-      fetchAgreement();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Action failed");
+      setSendPreview(json.data);
+      setSendCc("");
+      setSendOpen(true);
     } finally {
-      setActing(false);
+      setSendPreviewLoading(false);
     }
   };
+
+  const handleSendToCustomer = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc: sendCc }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(json?.error || "Send failed");
+        return;
+      }
+      toast.success(`Agreement sent to ${json.data.to}`);
+      setSendOpen(false);
+      fetchAgreement();
+    } catch {
+      toast.error("Send failed");
+    } finally {
+      setSending(false);
+    }
+  };
+
 
   const handleInitiateSigning = async () => {
     setActing(true);
@@ -693,28 +729,20 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
           {/* Status Workflow Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
-            {agreement.status === "draft" && (
-              <Button size="sm" onClick={() => handleAction("approve_internally")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Approve Internally
+            {/* Send is available at any point before execution. The internal
+                and client approval steps were removed: they gated the send
+                behind two clicks that recorded nothing anyone acted on, and
+                left an agreement in sent_to_client with no way forward. */}
+            {agreement.status !== "executed" && (
+              <Button size="sm" onClick={openSendDialog} disabled={sendPreviewLoading}>
+                {sendPreviewLoading
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Send className="mr-2 h-4 w-4" />}
+                Send to Customer
               </Button>
             )}
 
-            {agreement.status === "internally_approved" && (
-              <Button size="sm" onClick={() => handleAction("send_to_client")} disabled={acting}>
-                <Send className="mr-2 h-4 w-4" />
-                Send to Client
-              </Button>
-            )}
-
-            {agreement.status === "sent_to_client" && (
-              <Button size="sm" onClick={() => handleAction("client_approved")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Mark Client Approved
-              </Button>
-            )}
-
-            {agreement.status === "client_approved" && (
+            {["client_approved", "sent_to_client", "internally_approved"].includes(agreement.status) && (
               <Button size="sm" onClick={handleInitiateSigning} disabled={acting}>
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Stamping & Signing
@@ -880,6 +908,97 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             <Button onClick={handleSaveEdit} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & Regenerate PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send to Customer — preview exactly what goes out */}
+      <Dialog open={sendOpen} onOpenChange={(v) => { if (!v) setSendOpen(false); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5" />
+              Send Agreement to Customer
+            </DialogTitle>
+          </DialogHeader>
+
+          {sendPreview && (
+            <div className="space-y-4">
+              {sendPreview.blocked && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {sendPreview.blocked}
+                </div>
+              )}
+
+              <div className="rounded-md border divide-y text-sm">
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">To</span>
+                  <span className="font-medium">
+                    {sendPreview.to ?? <span className="text-red-600">no address on record</span>}
+                    {sendPreview.to && (
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {sendPreview.toName}
+                        {sendPreview.toKind === "aggregator" && " · aggregator"}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {sendPreview.onBehalfOf && (
+                  <div className="flex gap-3 px-3 py-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">On behalf of</span>
+                    <span>{sendPreview.onBehalfOf}</span>
+                  </div>
+                )}
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Subject</span>
+                  <span className="font-medium">{sendPreview.subject}</span>
+                </div>
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Attached</span>
+                  <span>
+                    {sendPreview.attachmentName ?? <span className="text-red-600">no PDF generated</span>}
+                    {sendPreview.isDraft && (
+                      <span className="ml-2 text-xs text-amber-700">watermarked DRAFT</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="send-cc">CC (optional)</Label>
+                <Input
+                  id="send-cc"
+                  value={sendCc}
+                  onChange={(e) => setSendCc(e.target.value)}
+                  placeholder="someone@example.com, another@example.com"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Separate multiple addresses with commas.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Message preview</Label>
+                <div
+                  className="rounded-md border bg-muted/30 p-3 max-h-72 overflow-y-auto"
+                  dangerouslySetInnerHTML={{ __html: sendPreview.html }}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleSendToCustomer}
+              disabled={
+                sending || !sendPreview || !!sendPreview.blocked ||
+                !sendPreview.to || !sendPreview.hasPdf
+              }
+            >
+              {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              Send Now
             </Button>
           </DialogFooter>
         </DialogContent>
