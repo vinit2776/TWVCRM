@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { waiverColumnsPresent } from "@/lib/kyc-waiver";
 
 type Params = { params: Promise<{ id: string; docId: string }> };
 
@@ -26,6 +27,14 @@ export async function POST(request: NextRequest, { params }: Params) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser || !WAIVE_ROLES.includes(dbUser.role)) {
     return NextResponse.json({ error: "Only admins and managers can waive documents" }, { status: 403 });
+  }
+
+  // A stale client can still reach here between deploy and migration.
+  if (!(await waiverColumnsPresent())) {
+    return NextResponse.json(
+      { error: "Waivers are not enabled yet — migration 00535 has not been applied." },
+      { status: 503 },
+    );
   }
 
   const body = await request.json().catch(() => ({}));
@@ -104,6 +113,13 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser || !WAIVE_ROLES.includes(dbUser.role)) {
     return NextResponse.json({ error: "Only admins and managers can un-waive documents" }, { status: 403 });
+  }
+
+  if (!(await waiverColumnsPresent())) {
+    return NextResponse.json(
+      { error: "Waivers are not enabled yet — migration 00535 has not been applied." },
+      { status: 503 },
+    );
   }
 
   const { data: doc } = await supabase

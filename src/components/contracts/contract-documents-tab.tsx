@@ -109,9 +109,20 @@ export function ContractDocumentsTab({
   const [waiveAcknowledged, setWaiveAcknowledged] = useState(false);
   const [waiving, setWaiving] = useState(false);
   const [unwaivingId, setUnwaivingId] = useState<string | null>(null);
+  // Hidden until migration 00535 is applied — see /api/kyc/waiver-available.
+  const [waiverAvailable, setWaiverAvailable] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/kyc/waiver-available")
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (live && j?.data?.available) setWaiverAvailable(true); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const canDefer = userRole === "admin" || userRole === "manager";
-  const canWaive = canDefer;
+  const canWaive = canDefer && waiverAvailable;
 
   const fetchDocs = useCallback(async () => {
     setLoading(true);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +51,17 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
   const [waiveReason, setWaiveReason] = useState("");
   const [waiving, setWaiving] = useState(false);
   const [unwaiving, setUnwaiving] = useState<string | null>(null);
+  // Hidden until migration 00535 is applied — see /api/kyc/waiver-available.
+  const [waiverAvailable, setWaiverAvailable] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/kyc/waiver-available")
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (live && j?.data?.available) setWaiverAvailable(true); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const handleWaive = async () => {
     if (!waiveDocId || !waiveReason.trim()) return;
@@ -275,7 +286,7 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                         </Button>
                       </>
                     )}
-                    {doc.is_required && doc.status !== "approved" && doc.status !== "waived" && (
+                    {waiverAvailable && doc.is_required && doc.status !== "approved" && doc.status !== "waived" && (
                       <Button
                         size="sm"
                         variant="ghost"
