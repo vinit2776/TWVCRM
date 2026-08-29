@@ -221,14 +221,17 @@ export async function POST(
     console.error("[renew] failed to mark parent as renewal_in_progress:", err);
   }
 
-  // 8. Copy approved and deferred KYC documents.
+  // 8. Copy approved, deferred and waived KYC documents.
   // Deferred docs carry over with their deferral metadata so they remain
-  // visible as still-pending-collection on the renewal contract.
+  // visible as still-pending-collection on the renewal contract. Waived docs
+  // carry their waiver too — the decision was about the customer, not the
+  // contract term, and re-raising it every renewal is what turned deferral
+  // into a permanent-waiver workaround in the first place.
   const { data: kycDocs } = await admin
     .from("contract_documents")
-    .select("document_id, document_type, label, is_required, status, reviewed_by, reviewed_at, notes, deferred_by, deferred_at, deferred_reason, deferred_until")
+    .select("document_id, document_type, label, is_required, status, reviewed_by, reviewed_at, notes, deferred_by, deferred_at, deferred_reason, deferred_until, waived_by, waived_at, waived_reason")
     .eq("contract_id", id)
-    .in("status", ["approved", "deferred"]);
+    .in("status", ["approved", "deferred", "waived"]);
 
   if (kycDocs && kycDocs.length > 0) {
     const kycInserts = kycDocs.map((doc) => ({
@@ -247,6 +250,13 @@ export async function POST(
             deferred_at: doc.deferred_at,
             deferred_reason: doc.deferred_reason,
             deferred_until: doc.deferred_until,
+          }
+        : {}),
+      ...(doc.status === "waived"
+        ? {
+            waived_by: doc.waived_by,
+            waived_at: doc.waived_at,
+            waived_reason: doc.waived_reason,
           }
         : {}),
     }));

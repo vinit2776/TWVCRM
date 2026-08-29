@@ -1239,13 +1239,14 @@ export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: strin
 // ==========================================
 // Case Document Status Constants
 // ==========================================
-export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected"] as const;
+export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected", "waived"] as const;
 
 export const CASE_DOC_STATUS_LABELS: Record<string, string> = {
   pending: "Pending Upload",
   uploaded: "Uploaded",
   approved: "Approved",
   rejected: "Rejected",
+  waived: "Waived",
 };
 
 export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
@@ -1253,6 +1254,7 @@ export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
   uploaded: "bg-blue-100 text-blue-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  waived: "bg-slate-200 text-slate-700",
 };
 
 // ==========================================

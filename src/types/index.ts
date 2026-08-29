@@ -1887,7 +1887,9 @@ export type CaseStatus =
   | "invoiced" | "paid" | "active"
   | "renewal_due" | "grace_period" | "renewed" | "lapsed";
 
-export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred";
+/** `deferred` is a dated promise that resumes chasing when it lapses;
+ *  `waived` is a permanent decision never to collect the document. */
+export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred" | "waived";
 
 export type ComplianceCheckStatus = "pending" | "passed" | "failed" | "waived";
 
@@ -2010,6 +2012,11 @@ export interface CaseDocument {
   notes?: string;
   created_at: string;
   updated_at: string;
+  // waiver fields — set when the requirement will never be collected
+  waived_by?: string;
+  waiver?: { id: string; full_name: string };
+  waived_at?: string;
+  waived_reason?: string;
 }
 
 export interface ContractDocument {
@@ -2020,7 +2027,7 @@ export interface ContractDocument {
   document_type: string;
   label: string;
   is_required: boolean;
-  status: CaseDocStatus; // pending | uploaded | approved | rejected | deferred
+  status: CaseDocStatus;
   reviewed_by?: string;
   reviewer?: User;
   reviewed_at?: string;
@@ -2032,6 +2039,11 @@ export interface ContractDocument {
   deferred_at?: string;
   deferred_reason?: string;
   deferred_until?: string;
+  // waiver fields — set when the requirement will never be collected
+  waived_by?: string;
+  waiver?: { id: string; full_name: string };
+  waived_at?: string;
+  waived_reason?: string;
   created_at: string;
   updated_at: string;
 }
