@@ -527,8 +527,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
   const vars = (agreement.variables || {}) as Record<string, unknown>;
 
+  // Mirrors allowedStatuses in the manual-sign route — keep the two in step.
   const canUploadManualSign = agreement &&
-    ["client_approved", "signing", "internally_approved", "draft"].includes(agreement.status) &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"]
+      .includes(agreement.status) &&
     agreement.status !== "executed";
 
   return (
