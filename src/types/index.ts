@@ -466,8 +466,28 @@ export interface CrmDocument {
   parent_document_id?: string;
   uploaded_by?: string;
   uploader?: User;
+  reupload_reason?: AgreementReuploadReason | null;
+  reupload_notes?: string | null;
+  is_signed_sealed?: boolean | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AgreementReuploadReason = "name_change" | "law_change" | "other";
+
+export interface AgreementDocumentVersion {
+  id: string;
+  file_name: string;
+  file_path: string;
+  version: number;
+  reupload_reason: AgreementReuploadReason | null;
+  reupload_notes: string | null;
+  is_signed_sealed: boolean | null;
+  uploaded_by: string | null;
+  uploader: { id: string; full_name: string } | null;
+  created_at: string;
+  is_current: boolean;
+  view_url: string | null;
 }
 
 // ==========================================
@@ -1011,7 +1031,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded";
 export type AuditEntityType =
   | "lead"
   | "activity"
