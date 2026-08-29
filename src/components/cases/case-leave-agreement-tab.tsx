@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -126,7 +127,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleViewPdf = async () => {
     setViewing(true);
     try {
-      window.open(`/api/cases/${caseId}/leave-license/pdf`, "_blank");
+      window.open(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`, "_blank");
     } finally {
       setViewing(false);
     }
@@ -257,6 +258,35 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  // ── Draft watermark ────────────────────────────────────────────────────
+  // One decision governs View, Download and Send so the three cannot disagree.
+  // Whether it can be unticked is computed server-side from the billing route
+  // and whether the case has been paid — never chosen here.
+  const [watermarkOn, setWatermarkOn] = useState(true);
+  const [watermarkPolicy, setWatermarkPolicy] = useState<{
+    route: "prepaid" | "postpaid" | "direct";
+    forced: boolean;
+    settled: boolean;
+    reason: string;
+    aggregatorName: string | null;
+  } | null>(null);
+
+  const loadWatermarkPolicy = useCallback(async () => {
+    const res = await fetch(`/api/cases/${caseId}/leave-license/watermark-policy`);
+    if (!res.ok) return;
+    const json = await res.json().catch(() => null);
+    if (!json?.data) return;
+    setWatermarkPolicy(json.data);
+    // Always re-tick when the policy reloads: a lock that has just come into
+    // force must not leave a stale unticked box behind it.
+    if (json.data.forced) setWatermarkOn(true);
+  }, [caseId]);
+
+  useEffect(() => { loadWatermarkPolicy(); }, [loadWatermarkPolicy]);
+
+  /** Suffix for the PDF routes; the server still re-decides. */
+  const watermarkQuery = watermarkOn ? "" : "?watermark=0";
+
   // ── Send to customer ───────────────────────────────────────────────────
   const [sendOpen, setSendOpen] = useState(false);
   const [sendPreviewLoading, setSendPreviewLoading] = useState(false);
@@ -273,6 +303,12 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     attachmentName: string | null;
     isDraft: boolean;
     hasPdf: boolean;
+    watermark?: {
+      forced: boolean;
+      settled: boolean;
+      reason: string;
+      route: "prepaid" | "postpaid" | "direct";
+    };
   } | null>(null);
 
   const openSendDialog = async () => {
@@ -298,7 +334,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       const res = await fetch(`/api/cases/${caseId}/leave-license/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cc: sendCc }),
+        body: JSON.stringify({ cc: sendCc, watermark: watermarkOn }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
@@ -308,6 +344,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       toast.success(`Agreement sent to ${json.data.to}`);
       setSendOpen(false);
       fetchAgreement();
+      loadWatermarkPolicy();
     } catch {
       toast.error("Send failed");
     } finally {
@@ -387,7 +424,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf`);
+      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast.error(body.error || "PDF not found — regenerate the agreement first");
@@ -700,6 +737,46 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             </div>
           )}
 
+          {/* Draft watermark — hidden once executed, when nothing is marked */}
+          {watermarkPolicy && !watermarkPolicy.settled && (
+            <div
+              className={`flex items-start gap-3 rounded-md border p-3 ${
+                watermarkPolicy.forced
+                  ? "border-amber-200 bg-amber-50"
+                  : watermarkOn
+                    ? "border-muted bg-muted/40"
+                    : "border-red-200 bg-red-50"
+              }`}
+            >
+              <Checkbox
+                id="wm-toggle"
+                checked={watermarkOn}
+                disabled={watermarkPolicy.forced}
+                onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                className="mt-0.5"
+              />
+              <div className="min-w-0">
+                <Label htmlFor="wm-toggle" className="text-sm font-medium cursor-pointer">
+                  Draft watermark
+                </Label>
+                <p
+                  className={`text-xs ${
+                    watermarkPolicy.forced
+                      ? "text-amber-800"
+                      : watermarkOn
+                        ? "text-muted-foreground"
+                        : "text-red-700"
+                  }`}
+                >
+                  {watermarkPolicy.forced && "🔒 "}
+                  {watermarkOn
+                    ? watermarkPolicy.reason
+                    : "Clean, unexecuted copy. Who released it is recorded against the case."}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
             <Button size="sm" variant="outline" onClick={handleViewPdf} disabled={viewing}>
@@ -957,8 +1034,12 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
                 <div className="flex gap-3 px-3 py-2">
                   <span className="w-20 shrink-0 text-muted-foreground">Attached</span>
                   <span>
-                    {sendPreview.attachmentName ?? <span className="text-red-600">no PDF generated</span>}
-                    {sendPreview.isDraft && (
+                    {sendPreview.attachmentName
+                      ? (watermarkOn
+                          ? sendPreview.attachmentName
+                          : sendPreview.attachmentName.replace(/^DRAFT-/, ""))
+                      : <span className="text-red-600">no PDF generated</span>}
+                    {sendPreview.isDraft && watermarkOn && (
                       <span className="ml-2 text-xs text-amber-700">watermarked DRAFT</span>
                     )}
                   </span>
@@ -977,6 +1058,35 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
                   Separate multiple addresses with commas.
                 </p>
               </div>
+
+              {sendPreview.watermark && !sendPreview.watermark.settled && (
+                <div
+                  className={`flex items-start gap-3 rounded-md border p-3 ${
+                    sendPreview.watermark.forced
+                      ? "border-amber-200 bg-amber-50"
+                      : watermarkOn
+                        ? "border-muted bg-muted/40"
+                        : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <Checkbox
+                    id="wm-send"
+                    checked={watermarkOn}
+                    disabled={sendPreview.watermark.forced}
+                    onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <Label htmlFor="wm-send" className="text-sm font-medium cursor-pointer">
+                      Draft watermark
+                    </Label>
+                    <p className={`text-xs ${sendPreview.watermark.forced ? "text-amber-800" : "text-muted-foreground"}`}>
+                      {sendPreview.watermark.forced && "🔒 "}
+                      {sendPreview.watermark.reason}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <Label>Message preview</Label>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { applyDraftWatermark, isDraftAgreement } from "@/lib/draft-watermark";
+import { resolveWatermark } from "@/lib/agreement-watermark-server";
 import { buildAgreementEmail, parseCcList, type AgreementEmailCase } from "@/lib/case-agreement-email";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
@@ -14,6 +15,8 @@ const CASE_SELECT =
   "aggregator_id, bill_to, " +
   "aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone), " +
   "location:locations!cases_location_id_fkey(name)";
+
+type RouteCase = { aggregator_id?: string | null; aggregator?: { billing_method?: string | null } | null };
 
 const AGREEMENT_SELECT =
   "id, status, signed_document_id, stamp_reference, " +
@@ -66,6 +69,14 @@ export async function GET(_request: NextRequest, { params }: Params) {
   const doc = first(agreement.signed_document) ?? first(agreement.generated_document);
   const draft = isDraftAgreement(agreement);
 
+  const admin = await createAdminClient();
+  const policy = await resolveWatermark({
+    admin,
+    caseId,
+    caseRow: caseRow as RouteCase,
+    agreement,
+  });
+
   return NextResponse.json({
     data: {
       ...email,
@@ -75,6 +86,12 @@ export async function GET(_request: NextRequest, { params }: Params) {
         : null,
       isDraft: draft,
       hasPdf: !!doc?.file_path,
+      watermark: {
+        forced: policy.forced,
+        settled: policy.settled,
+        reason: policy.reason,
+        route: policy.route,
+      },
     },
   });
 }
@@ -92,7 +109,10 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Not authorized to send agreements" }, { status: 403 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { cc?: string | string[] };
+  const body = (await request.json().catch(() => ({}))) as {
+    cc?: string | string[];
+    watermark?: boolean;
+  };
   const { emails: cc, invalid } = parseCcList(body.cc);
   if (invalid.length) {
     return NextResponse.json(
@@ -135,8 +155,24 @@ export async function POST(request: NextRequest, { params }: Params) {
   // Same treatment as View PDF: the stored object stays clean, the watermark
   // is composited on the way out, so an unexecuted copy is never circulated
   // without being marked as one.
+  // watermark:false asks to send a clean copy; the server decides whether it
+  // may. A refusal is an error rather than a silent downgrade — sending a
+  // watermarked PDF to someone who was told it would be clean is worse than
+  // saying no.
+  const decision = await resolveWatermark({
+    admin,
+    caseId,
+    caseRow: caseRow as RouteCase,
+    agreement,
+    requestedClean: body.watermark === false,
+  });
+
+  if (decision.refused) {
+    return NextResponse.json({ error: decision.refused }, { status: 400 });
+  }
+
   const original = new Uint8Array(await file.arrayBuffer());
-  const draft = isDraftAgreement(agreement);
+  const draft = decision.applyWatermark;
   const bytes = draft ? await applyDraftWatermark(original) : original;
   const filename = draft ? `DRAFT-${doc.file_name}` : doc.file_name;
 
@@ -174,7 +210,10 @@ export async function POST(request: NextRequest, { params }: Params) {
     changes: {
       agreement_sent: {
         old: agreement.status,
-        new: `sent to ${email.toKind}: ${email.to}${cc.length ? ` (cc ${cc.join(", ")})` : ""}`,
+        new:
+          `sent to ${email.toKind}: ${email.to}` +
+          `${cc.length ? ` (cc ${cc.join(", ")})` : ""}` +
+          `${draft ? "" : " — CLEAN COPY, no watermark"}`,
       },
     },
   });
