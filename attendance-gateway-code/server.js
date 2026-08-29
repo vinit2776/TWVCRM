@@ -487,6 +487,24 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_permission_requests_emp_status ON permission_requests(employee_id, status);
   CREATE INDEX IF NOT EXISTS idx_overtime_requests_emp_status ON overtime_requests(employee_id, status);
   CREATE INDEX IF NOT EXISTS idx_login_attempts_lookup ON login_attempts(username, ip, attempted_at);
+  -- Optional employee paperwork (photo, ID proofs, resume, certificates). Multiple
+  -- rows per (employee_id, doc_type) are allowed on purpose — education_certificate
+  -- and other are naturally many-per-employee, and re-uploading a photo/ID keeps the
+  -- old row rather than overwriting it, so nothing already stored is silently lost.
+  -- The UI decides per type whether to show "latest only" (photo, aadhaar, pan,
+  -- resume) or "all of them" (education_certificate, other).
+  CREATE TABLE IF NOT EXISTS employee_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    doc_type TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_employee_documents_emp ON employee_documents(employee_id, doc_type);
 `;
 
 const {
@@ -1307,6 +1325,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
   // once ever, and a mid-tour reload or a later replay never asks again.
   const showLanguagePicker = onboardingKind === 'tour' && !!user && !user.languageSet;
   const unreadCount = isAdmin ? await unreadNotificationCountAll() : (user ? await unreadNotificationCount(employeeId) : 0);
+  const pendingDocs = (!isAdmin && employeeId) ? await pendingDocumentCount(employeeId) : 0;
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
   const currentPath = `/${activeNav === 'calendar-company' ? 'calendar' : activeNav}?employee_id=${encodeURIComponent(employeeId)}`;
@@ -1432,6 +1451,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
         <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
         ${CONFIG.LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
+        ${!isAdmin ? `<a href="/documents?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'documents' ? 'active' : ''}"><span class="ico">📁</span> <span class="lbl">${t(lang, 'nav.documents')}${pendingDocs ? ` (${pendingDocs})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
@@ -2862,8 +2882,161 @@ async function renderEditEmployee(employee, user, error) {
         <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Save Changes</button>
         <a href="/admin/employee-registration" style="padding:8px 16px;color:#7C8896;text-decoration:none;font-weight:600;">Cancel</a>
       </form>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #EEF1F3;">
+        <a href="/admin/employee/documents?employee_id=${escapeHtml(employee.id)}" style="color:#1565C0;text-decoration:none;font-weight:600;font-size:0.9em;">📁 View Documents &rarr;</a>
+      </div>
     </div>`;
   return pageShell('Edit Employee', '', 'employee-registration', body, user);
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Shared by both the employee self-service page and the management view — same
+// upload mechanism (base64 JSON POST, no multipart parser in this app) and same
+// per-type layout, just a different set of "who can see what's already uploaded"
+// rules layered on top by the two callers.
+const DOCUMENT_UPLOAD_SCRIPT = `
+<script>
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+// Photos only: downscale to a max edge of 1000px and re-encode as JPEG before
+// upload, since a phone camera photo can be several MB straight out of the
+// camera roll — well past the 2MB per-file cap the server enforces.
+function resizePhoto(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let width = img.naturalWidth, height = img.naturalHeight;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else { width = Math.round(width * maxDim / height); height = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Could not process image')); return; }
+        const reader = new FileReader();
+        reader.onload = () => resolve({ base64: reader.result.split(',')[1], contentType: 'image/jpeg' });
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => reject(new Error('Could not read image'));
+    img.src = url;
+  });
+}
+async function uploadDoc(employeeId, docType) {
+  const input = document.getElementById('file-' + docType);
+  const statusEl = document.getElementById('status-' + docType);
+  const file = input.files[0];
+  if (!file) { statusEl.textContent = 'Choose a file first.'; statusEl.style.color = '#C62828'; return; }
+  statusEl.textContent = 'Uploading…'; statusEl.style.color = '#7C8896';
+  try {
+    let base64, contentType;
+    if (docType === 'photo' && file.type.startsWith('image/')) {
+      const resized = await resizePhoto(file, 1000, 0.82);
+      base64 = resized.base64; contentType = resized.contentType;
+    } else {
+      base64 = await fileToBase64(file); contentType = file.type;
+    }
+    const res = await fetch('/api/employee-documents/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_id: employeeId, doc_type: docType, filename: file.name, content_type: contentType, data_base64: base64 }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || 'Upload failed.');
+    statusEl.textContent = 'Uploaded.'; statusEl.style.color = '#2E7D32';
+    input.value = '';
+    setTimeout(() => location.reload(), 700);
+  } catch (err) {
+    statusEl.textContent = err.message || 'Upload failed.'; statusEl.style.color = '#C62828';
+  }
+}
+</script>`;
+
+function documentUploadCard(type, employeeId, existingListHtml) {
+  const accept = type.key === 'photo' ? 'image/*' : 'image/jpeg,image/png,image/webp,application/pdf';
+  return `
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px;">${escapeHtml(type.label)}</div>
+      ${existingListHtml}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:${existingListHtml ? '10px' : '0'};">
+        <input type="file" id="file-${type.key}" accept="${accept}" style="flex:1;min-width:180px;">
+        <button type="button" onclick="uploadDoc('${escapeHtml(employeeId)}', '${type.key}')" style="padding:7px 14px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Upload</button>
+      </div>
+      <div id="status-${type.key}" style="font-size:0.82em;margin-top:6px;"></div>
+    </div>`;
+}
+
+async function renderEmployeeDocuments(employee, existing, user) {
+  const lang = langOf(user);
+  const byType = {};
+  for (const row of existing) {
+    (byType[row.doc_type] = byType[row.doc_type] || []).push(row);
+  }
+  const cards = DOCUMENT_TYPES.map(type => {
+    const rows = byType[type.key] || [];
+    const listHtml = rows.length
+      ? `<div style="display:flex;flex-direction:column;gap:4px;">
+          ${rows.map(r => `<div style="font-size:0.85em;color:#2E7D32;">✓ ${escapeHtml(r.filename)} <span style="color:#9AA5B1;">— uploaded ${escapeHtml(r.uploaded_at)}, visible to management</span></div>`).join('')}
+        </div>`
+      : `<div style="font-size:0.85em;color:#9AA5B1;">Not uploaded yet.</div>`;
+    return documentUploadCard(type, employee.id, listHtml);
+  }).join('');
+
+  const body = `
+    <div class="card">
+      <div style="font-weight:700;">My Documents</div>
+      <p style="color:#7C8896;font-size:0.85em;margin-bottom:0;">
+        Upload your photo and ID/education documents below (each up to 2MB). Once uploaded, these are visible to Admin/Manager only — you won't see a preview or download link here, just confirmation that a file is on file.
+      </p>
+    </div>
+    ${cards}
+    ${DOCUMENT_UPLOAD_SCRIPT}`;
+  return pageShell(t(lang, 'nav.documents'), employee.id, 'documents', body, user);
+}
+
+async function renderAdminEmployeeDocuments(employee, docs, user) {
+  const byType = {};
+  for (const doc of docs) {
+    (byType[doc.doc_type] = byType[doc.doc_type] || []).push(doc);
+  }
+  const cards = DOCUMENT_TYPES.map(type => {
+    const rows = byType[type.key] || [];
+    const listHtml = rows.length
+      ? `<div style="display:flex;flex-direction:column;gap:4px;">
+          ${rows.map(r => `
+            <div style="font-size:0.85em;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <a href="/admin/employee/documents/download?id=${r.id}" target="_blank" style="color:#1565C0;text-decoration:none;font-weight:600;">${escapeHtml(r.filename)}</a>
+              <span style="color:#9AA5B1;">${formatFileSize(r.size_bytes)} &middot; uploaded by ${escapeHtml(r.uploaded_by)} on ${escapeHtml(r.uploaded_at)}</span>
+            </div>`).join('')}
+        </div>`
+      : `<div style="font-size:0.85em;color:#9AA5B1;">Not uploaded yet.</div>`;
+    return documentUploadCard(type, employee.id, listHtml);
+  }).join('');
+
+  const body = `
+    <div class="card">
+      <div style="font-weight:700;">Documents &mdash; ${escapeHtml(employee.name)} (${escapeHtml(employee.id)})</div>
+      <a href="/admin/employee/edit?employee_id=${escapeHtml(employee.id)}" style="color:#7C8896;font-size:0.85em;text-decoration:none;">&larr; Back to Edit Employee</a>
+    </div>
+    ${cards}
+    ${DOCUMENT_UPLOAD_SCRIPT}`;
+  return pageShell('Employee Documents', '', 'employee-registration', body, user);
 }
 
 async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, muster, user) {
@@ -3251,6 +3424,38 @@ async function readFormBody(req) {
 // bigger allowance.
 async function readTextBody(req) {
   return bufferBody(req, MAX_ADMS_BODY_BYTES);
+}
+
+// Employee document uploads (photo, ID proofs, resume, certificates). There is no
+// multipart/form-data parser anywhere in this app and deliberately no new dependency
+// added for one — the browser base64-encodes the file and posts it as JSON instead,
+// which is why the body allowance has to cover both the file itself and base64's
+// ~37% size overhead, not just the raw file size.
+const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024; // 2MB per file, enforced on the decoded size
+const MAX_DOCUMENT_UPLOAD_BODY_BYTES = 3 * 1024 * 1024; // covers base64 overhead + JSON wrapper
+async function readDocumentUploadBody(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const raw = await bufferBody(req, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
+  return raw ? JSON.parse(raw) : {};
+}
+
+const DOCUMENT_TYPES = [
+  { key: 'photo', label: 'Photo', multiple: false },
+  { key: 'aadhaar', label: 'Aadhaar Card', multiple: false },
+  { key: 'pan', label: 'PAN Card', multiple: false },
+  { key: 'resume', label: 'Resume', multiple: false },
+  { key: 'education_certificate', label: 'Education Certificate', multiple: true },
+  { key: 'other', label: 'Other', multiple: true },
+];
+const DOCUMENT_TYPE_KEYS = DOCUMENT_TYPES.map(d => d.key);
+const ALLOWED_DOCUMENT_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+// Count of document types this employee hasn't uploaded anything for yet — shown as
+// a badge on the "Documents" nav link, same pattern as the notifications count.
+async function pendingDocumentCount(employeeId) {
+  const rows = await db.prepare('SELECT DISTINCT doc_type FROM employee_documents WHERE employee_id = ?').all(employeeId);
+  const uploaded = new Set(rows.map(r => r.doc_type));
+  return DOCUMENT_TYPES.filter(t => !uploaded.has(t.key)).length;
 }
 
 // --- Sessions: persisted in the sessions table, so a restart (crash, NSSM
@@ -4325,6 +4530,89 @@ async function handleRequest(req, res) {
     await logAdminAction(user.username, 'reset_password', 'employee', employeeId, employee.name);
     res.writeHead(302, { Location: `/admin/employee-registration?created=${encodeURIComponent(employeeId)}` });
     return res.end();
+  }
+
+  // Two trust levels, same shape as /api/punch: an employee's own logged-in session
+  // (restricted below to their own employee_id) or a management session (may specify
+  // any employee_id, to upload on someone's behalf). There is no device/API-key path
+  // here — this is not something the biometric device or any external system posts to.
+  if (parsed.pathname === '/api/employee-documents/upload' && req.method === 'POST') {
+    let body;
+    try {
+      body = await readDocumentUploadBody(req);
+    } catch (err) {
+      if (err && err.statusCode === 413) return sendJson(res, 413, { error: 'File is too large.' });
+      return sendJson(res, 400, { error: 'Invalid request body.' });
+    }
+    const { employee_id, doc_type, filename, content_type, data_base64 } = body;
+    if (!employee_id || !doc_type || !filename || !content_type || !data_base64) {
+      return sendJson(res, 400, { error: 'employee_id, doc_type, filename, content_type, and data_base64 are all required.' });
+    }
+    if (user.role === 'employee') {
+      if (employee_id !== user.employeeId) {
+        logSecurityEvent('document_upload_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: user.employeeId, requestedEmployeeId: employee_id });
+        return sendJson(res, 403, { error: 'You can only upload your own documents.' });
+      }
+    } else if (!isManagementRole(user)) {
+      return sendJson(res, 403, { error: 'Admin or manager access only.' });
+    }
+    if (!DOCUMENT_TYPE_KEYS.includes(doc_type)) {
+      return sendJson(res, 400, { error: 'Unknown document type.' });
+    }
+    if (!ALLOWED_DOCUMENT_CONTENT_TYPES.includes(content_type)) {
+      return sendJson(res, 400, { error: 'Only JPEG, PNG, WebP, or PDF files are accepted.' });
+    }
+    const employee = await getEmployee(employee_id);
+    if (!employee) { return sendJson(res, 404, { error: 'Unknown employee.' }); }
+    let data;
+    try {
+      data = Buffer.from(data_base64, 'base64');
+    } catch {
+      return sendJson(res, 400, { error: 'Could not decode the uploaded file.' });
+    }
+    // The 3MB body allowance above covers base64 overhead loosely — the real limit
+    // that matters is the decoded file size, checked here precisely.
+    if (data.length === 0 || data.length > MAX_DOCUMENT_BYTES) {
+      return sendJson(res, 413, { error: `File must be between 1 byte and ${Math.floor(MAX_DOCUMENT_BYTES / (1024 * 1024))}MB.` });
+    }
+    await db.prepare(
+      'INSERT INTO employee_documents (employee_id, doc_type, filename, content_type, size_bytes, data, uploaded_by, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employee_id, doc_type, String(filename).slice(0, 255), content_type, data.length, data, user.username, formatTimestamp(new Date()));
+    await logAdminAction(user.username, 'upload_document', 'employee', employee_id, `${DOCUMENT_TYPES.find(d => d.key === doc_type).label}: ${filename}`);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // Employee's own view — upload only, no view/download of what's already on file
+  // (that is deliberately management-only, see /admin/employee/documents below).
+  if (parsed.pathname === '/documents' && req.method === 'GET') {
+    if (user.role !== 'employee') { res.writeHead(403); return res.end("This page is for an employee's own documents."); }
+    const employee = await getEmployee(user.employeeId);
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    const existing = await db.prepare('SELECT doc_type, filename, uploaded_at FROM employee_documents WHERE employee_id = ? ORDER BY uploaded_at DESC').all(user.employeeId);
+    return sendHtml(res, await renderEmployeeDocuments(employee, existing, user));
+  }
+
+  // Management view — the only place any of these files can actually be seen again.
+  if (parsed.pathname === '/admin/employee/documents' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const employee = await getEmployee(parsed.searchParams.get('employee_id'));
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    const docs = await db.prepare('SELECT id, doc_type, filename, content_type, size_bytes, uploaded_by, uploaded_at FROM employee_documents WHERE employee_id = ? ORDER BY uploaded_at DESC').all(employee.id);
+    return sendHtml(res, await renderAdminEmployeeDocuments(employee, docs, user));
+  }
+
+  if (parsed.pathname === '/admin/employee/documents/download' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const doc = await db.prepare('SELECT * FROM employee_documents WHERE id = ?').get(parsed.searchParams.get('id'));
+    if (!doc) { res.writeHead(404); return res.end('Not found'); }
+    res.writeHead(200, {
+      'Content-Type': doc.content_type,
+      'Content-Length': doc.size_bytes,
+      // inline (not attachment) so an image/PDF opens in the browser tab rather than
+      // forcing a download dialog; the filename still comes along either way.
+      'Content-Disposition': `inline; filename="${String(doc.filename).replace(/"/g, '')}"`,
+    });
+    return res.end(Buffer.isBuffer(doc.data) ? doc.data : Buffer.from(doc.data));
   }
 
   if (parsed.pathname === '/admin/employee/edit' && req.method === 'GET') {
