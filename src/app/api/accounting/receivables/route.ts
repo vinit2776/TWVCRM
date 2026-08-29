@@ -267,7 +267,7 @@ export async function GET(_req: NextRequest) {
  * bound tightly to the billing_statements shape, and these carry different
  * fields (no GST, no proforma lifecycle, no partial payments).
  */
-async function fetchOtherReceivables(
+export async function fetchOtherReceivables(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<ReceivableRow[]> {
   const out: ReceivableRow[] = [];

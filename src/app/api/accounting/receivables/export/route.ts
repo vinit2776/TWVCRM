@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { fetchOtherReceivables } from "../route";
+import { RECEIVABLE_KIND_LABELS } from "@/lib/receivables";
 
 /**
  * GET /api/accounting/receivables/export
@@ -124,7 +126,33 @@ export async function GET(_req: NextRequest) {
   rows.push(["61-90 days overdue", String(Math.round(buckets["61-90"]))]);
   rows.push(["90+ days overdue", String(Math.round(buckets["90+"]))]);
   rows.push([]);
-  rows.push(["GRAND TOTAL", "", "", "", "", "", "", "", "", "", "", String(Math.round(grandTotal)), String(Math.round(grandPaid)), String(Math.round(grandBalance))]);
+  rows.push(["GRAND TOTAL (statements only)", "", "", "", "", "", "", "", "", "", "", String(Math.round(grandTotal)), String(Math.round(grandPaid)), String(Math.round(grandBalance))]);
+
+  // ── Deposits, top-ups and ad-hoc invoices — outside billing_statements,
+  // so absent from every row/total above. Appended as their own section
+  // rather than merged into the aging buckets (which are due_date-only and
+  // statement-shaped) so this export isn't silently undercounting them the
+  // way the AR page itself used to.
+  const otherReceivables = await fetchOtherReceivables(supabase);
+  let otherBalance = 0;
+  rows.push([]);
+  rows.push(["DEPOSITS & AD-HOC INVOICES"]);
+  rows.push(["Kind", "Reference", "Customer", "Due Date", "Days Overdue", "Balance"]);
+  for (const r of otherReceivables) {
+    otherBalance += r.balance_due;
+    rows.push([
+      RECEIVABLE_KIND_LABELS[r.kind],
+      r.reference,
+      r.party_name,
+      r.due_date || "",
+      r.days_overdue !== null ? String(r.days_overdue) : "",
+      String(Math.round(r.balance_due)),
+    ]);
+  }
+  rows.push([]);
+  rows.push(["Deposits & ad-hoc invoices subtotal", "", "", "", "", String(Math.round(otherBalance))]);
+  rows.push([]);
+  rows.push(["GRAND TOTAL (statements + deposits/ad-hoc)", "", "", "", "", "", "", "", "", "", "", String(Math.round(grandBalance + otherBalance))]);
   rows.push([]);
   rows.push([`Report run: ${new Date().toISOString()} (UTC) · ${todayIst} (IST)`]);
 
