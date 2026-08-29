@@ -37,6 +37,7 @@ import {
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
+import { WrittenOffStatementsPanel } from "@/components/billing/written-off-statements-panel";
 import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
@@ -222,7 +223,7 @@ interface Summary {
   oldest_days: number;
 }
 
-type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid";
+type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid" | "written_off";
 type ViewMode = "detail" | "ageing";
 
 /** One row in the Ageing view — aggregates all statements for a contract. */
@@ -248,6 +249,7 @@ const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "partial",    label: "Partially paid", hint: "Some money in, balance pending" },
   { key: "reported",   label: "Reported",       hint: "Payments reported by customers, not yet verified" },
   { key: "paid",       label: "Paid",           hint: "Finalized statements settled in full" },
+  { key: "written_off", label: "Written Off",   hint: "Uncollectible statements — excluded from active AR chasing" },
 ];
 
 function customerName(lead?: Lead): string {
@@ -677,7 +679,7 @@ export default function AccountsReceivablePage() {
               className="pl-8 w-72"
             />
           </div>
-          {filter !== "paid" && (
+          {filter !== "paid" && filter !== "written_off" && (
             <div className="flex items-center border rounded-md overflow-hidden">
               <button
                 onClick={() => setViewMode("detail")}
@@ -695,7 +697,7 @@ export default function AccountsReceivablePage() {
               </button>
             </div>
           )}
-          {filter !== "paid" && (
+          {filter !== "paid" && filter !== "written_off" && (
             <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
               <Download className="h-4 w-4 mr-1" /> Export CSV
             </Button>
@@ -707,6 +709,8 @@ export default function AccountsReceivablePage() {
         <CardContent className="p-0">
           {filter === "paid" ? (
             <PaidStatementsPanel search={search} onOpenHistory={openHistory} />
+          ) : filter === "written_off" ? (
+            <WrittenOffStatementsPanel search={search} onOpenHistory={openHistory} />
           ) : loading ? (
             <div className="p-8 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
           ) : filtered.length === 0 ? (
