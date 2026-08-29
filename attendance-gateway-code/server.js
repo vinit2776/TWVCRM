@@ -792,8 +792,8 @@ const OVERTIME_ROUND_MINUTES = 15; // ignore anything under a quarter-hour past 
 // Overtime is computed independently of await computeDayStatus() — it's a separate signal
 // (authorized/unauthorized hours worked beyond the shift), not an attendance status,
 // so it never overrides or interacts with Late/Half Day/Present.
-async function computeOvertimeMinutes(employee, dateStr) {
-  const punches = await getPunchesForDay(employee.id, dateStr);
+async function computeOvertimeMinutes(employee, dateStr, fetchPunches = getPunchesForDay) {
+  const punches = await fetchPunches(employee.id, dateStr);
   // Unresolved day (no punches, or an odd count — still "in progress" or a punch error):
   // no verified overtime until the day actually resolves to a real checkout.
   if (punches.length === 0 || punches.length % 2 !== 0) return 0;
@@ -902,28 +902,107 @@ function parseMonthParam(parsed) {
   return { year, month, monthStr: `${year}-${String(month).padStart(2, '0')}` };
 }
 
+// Batches everything computeDayStatus/computeOvertimeMinutes need for a date range
+// into a fixed handful of queries, instead of each employee x day independently
+// hitting the live (network-backed Turso) db for punches/breaks/holiday/leave/
+// permission. Reports and the admin dashboard used to do N employees x M days x
+// (2-4 queries) as live round trips — this fetches everything once and serves
+// computeDayStatus/computeOvertimeMinutes from an in-memory index instead.
+//
+// This intentionally does NOT touch attendance-logic.js: it hands createAttendanceLogic
+// a `db`-shaped object that resolves its exact known query shapes from pre-fetched maps,
+// so computeDayStatus's logic itself is byte-for-byte the same tested code, just backed
+// by memory instead of the network for this call. If attendance-logic.js's internal SQL
+// text ever changes shape, the `sql.includes(...)` routing below needs to change with it.
+async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
+  const [employees, punches, breaks, holidays, leaves, permissions] = await Promise.all([
+    allEmployees(),
+    db.prepare('SELECT * FROM punches WHERE timestamp LIKE ? ORDER BY timestamp ASC').all(`${likePrefix}%`),
+    db.prepare('SELECT * FROM breaks WHERE start_ts LIKE ? ORDER BY start_ts ASC').all(`${likePrefix}%`),
+    db.prepare('SELECT * FROM holidays WHERE date LIKE ?').all(`${likePrefix}%`),
+    db.prepare("SELECT * FROM leave_requests WHERE status = 'approved' AND start_date <= ? AND end_date >= ?").all(rangeEnd, rangeStart),
+    db.prepare("SELECT * FROM permission_requests WHERE status = 'approved' AND date LIKE ?").all(`${likePrefix}%`),
+  ]);
+
+  const employeeById = new Map(employees.map(e => [e.id, e]));
+  function groupByEmpDate(rows, dateOf) {
+    const m = new Map();
+    for (const r of rows) {
+      const key = `${r.employee_id}|${dateOf(r)}`;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    }
+    return m;
+  }
+  const punchesByKey = groupByEmpDate(punches, p => p.timestamp.slice(0, 10));
+  const breaksByKey = groupByEmpDate(breaks, b => b.start_ts.slice(0, 10));
+  const holidayByDate = new Map(holidays.map(h => [h.date, h]));
+  const permissionByKey = new Map(permissions.map(p => [`${p.employee_id}|${p.date}`, p]));
+  const leavesByEmployee = new Map();
+  for (const l of leaves) {
+    if (!leavesByEmployee.has(l.employee_id)) leavesByEmployee.set(l.employee_id, []);
+    leavesByEmployee.get(l.employee_id).push(l);
+  }
+
+  const snapshotDb = {
+    prepare(sql) {
+      if (sql.includes('FROM employees WHERE id')) {
+        return { get: (id) => employeeById.get(id) };
+      }
+      if (sql.includes('FROM punches WHERE employee_id')) {
+        return { all: (employeeId, likeArg) => punchesByKey.get(`${employeeId}|${likeArg.slice(0, 10)}`) || [] };
+      }
+      if (sql.includes('FROM breaks WHERE employee_id')) {
+        return { all: (employeeId, likeArg) => breaksByKey.get(`${employeeId}|${likeArg.slice(0, 10)}`) || [] };
+      }
+      if (sql.includes('FROM holidays WHERE date')) {
+        return { get: (dateStr) => holidayByDate.get(dateStr) };
+      }
+      if (sql.includes('FROM leave_requests')) {
+        return {
+          get: (employeeId, dateStr) => (leavesByEmployee.get(employeeId) || [])
+            .find(l => dateStr >= l.start_date && dateStr <= l.end_date),
+        };
+      }
+      if (sql.includes('FROM permission_requests')) {
+        return { get: (employeeId, dateStr) => permissionByKey.get(`${employeeId}|${dateStr}`) };
+      }
+      throw new Error(`createAttendanceSnapshot: unhandled query shape: ${sql}`);
+    },
+  };
+
+  const snapshotLogic = createAttendanceLogic(snapshotDb);
+  return {
+    employees,
+    computeDayStatus: snapshotLogic.computeDayStatus,
+    computeOvertimeMinutes: (employee, dateStr) => computeOvertimeMinutes(employee, dateStr, snapshotLogic.getPunchesForDay),
+  };
+}
+
 // Mirrors the day-by-day iteration computeMonthlyOvertimeSummary() already does —
 // same "skip future days" rule, so a report run mid-month doesn't count Upcoming
 // days as Absent.
-// Shared by all three day-level reports below (summary/grid/muster) — each used to
-// independently re-walk every employee x day itself (calling computeDayStatus 3x per
-// day, sequentially), which is what made the Reports page slow. computeDayStatus does
-// 2-4 of its own DB round-trips internally, so tripling it per day compounded fast.
-// This computes each employee x day status ONCE, and fires every employee's day-walk
-// concurrently instead of one employee after another.
+// Shared by all three day-level reports below (summary/grid/muster) — this computes
+// each employee x day status ONCE (not 3x independently), backed by a single
+// createAttendanceSnapshot() instead of live per-employee-per-day queries, which is
+// what made the Reports page slow (see createAttendanceSnapshot's comment above).
 async function computeMonthlyStatusGrid(year, month) {
   const monthStr = String(month).padStart(2, '0');
   const daysInMonth = new Date(year, month, 0).getDate();
   const today = todayStr();
-  const employees = await allEmployees();
   const dateStrs = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
     if (dateStr <= today) dateStrs.push(dateStr);
   }
-  const perEmployee = await Promise.all(employees.map(async employee => {
-    const statuses = await Promise.all(dateStrs.map(dateStr => computeDayStatus(employee.id, dateStr)));
-    const overtimeMinutesByDay = await Promise.all(dateStrs.map(dateStr => computeOvertimeMinutes(employee, dateStr)));
+  const snapshot = await createAttendanceSnapshot(
+    `${year}-${monthStr}-01`,
+    `${year}-${monthStr}-${String(daysInMonth).padStart(2, '0')}`,
+    `${year}-${monthStr}`,
+  );
+  const perEmployee = await Promise.all(snapshot.employees.map(async employee => {
+    const statuses = await Promise.all(dateStrs.map(dateStr => snapshot.computeDayStatus(employee.id, dateStr)));
+    const overtimeMinutesByDay = await Promise.all(dateStrs.map(dateStr => snapshot.computeOvertimeMinutes(employee, dateStr)));
     return { employee, statuses, overtimeMinutesByDay };
   }));
   return { daysInMonth, perEmployee };
@@ -3580,7 +3659,11 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/dashboard' && req.method === 'GET') {
     if (isManagementRole(user)) {
       const dateStr = parsed.searchParams.get('date') || todayStr();
-      const rows = await Promise.all((await allEmployees()).map(async employee => ({ employee, status: await computeDayStatus(employee.id, dateStr) })));
+      // Single-day snapshot instead of a live computeDayStatus() call per employee —
+      // same batching as computeMonthlyStatusGrid, just a one-day range. See
+      // createAttendanceSnapshot's comment for why this matters on a network-backed db.
+      const snapshot = await createAttendanceSnapshot(dateStr, dateStr, dateStr);
+      const rows = await Promise.all(snapshot.employees.map(async employee => ({ employee, status: await snapshot.computeDayStatus(employee.id, dateStr) })));
       return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true }));
     }
     const employeeId = await resolveEmployeeId();
