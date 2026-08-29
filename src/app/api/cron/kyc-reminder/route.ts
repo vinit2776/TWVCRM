@@ -125,12 +125,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Filter to only active/signed/pending_activation contracts
-  const ACTIVE_STATUSES = ["active", "signed", "pending_activation"];
+  // Contracts worth chasing: the customer is committed, so missing KYC is a
+  // live compliance gap rather than paperwork on a deal that may never happen.
+  //
+  // This list used to read ["active", "signed", "pending_activation"]. Neither
+  // "signed" nor "pending_activation" is a contract_status — the enum is
+  // draft | active | renewal_in_progress | renewed | expired | terminated |
+  // sent | accepted | rejected — so two of the three entries matched nothing
+  // and the digest silently covered `active` alone. The comparison happens in
+  // JS, so Postgres never rejected the impossible values and nothing failed
+  // loudly; 13 contracts mid-renewal and 9 accepted ones simply went unchased.
+  //
+  // Deliberately excluded: draft/sent (not yet agreed), renewed (superseded by
+  // the contract that replaced it), expired/terminated/rejected (over).
+  const CHASEABLE_CONTRACT_STATUSES = ["active", "renewal_in_progress", "accepted"];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filtered = (rows || []).filter((r: any) =>
-    r.contract && ACTIVE_STATUSES.includes(r.contract.status)
+    r.contract && CHASEABLE_CONTRACT_STATUSES.includes(r.contract.status)
   );
 
   // ── Group by contract ─────────────────────────────────────────────────────
