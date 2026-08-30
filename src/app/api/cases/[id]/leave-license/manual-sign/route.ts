@@ -71,7 +71,18 @@ export async function POST(
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
   }
 
-  const allowedStatuses = ["client_approved", "signing", "internally_approved", "draft"];
+  // sent_to_client belongs here: it is the state an agreement sits in from the
+  // moment it goes out until the client responds, which is exactly when a
+  // stamp-paper copy comes back signed. Leaving it out made uploading
+  // impossible on the mainstream path — and since uploading is what clears the
+  // DRAFT watermark, the agreement could never leave draft either.
+  const allowedStatuses = [
+    "draft",
+    "internally_approved",
+    "sent_to_client",
+    "client_approved",
+    "signing",
+  ];
   if (!allowedStatuses.includes(agreement.status)) {
     return NextResponse.json(
       { error: `Cannot upload a signed document when agreement is in '${agreement.status}' status` },

@@ -4,6 +4,7 @@ import { paymentCredit, balanceDue } from "@/lib/settlement";
 import {
   daysOverdue, isStale, depositIsChaseable, todayIst, type ReceivableRow,
 } from "@/lib/receivables";
+import { invoiceParty } from "@/lib/invoice-party";
 
 /**
  * Average payment days per customer — amount-weighted (payment_date −
@@ -267,7 +268,7 @@ export async function GET(_req: NextRequest) {
  * bound tightly to the billing_statements shape, and these carry different
  * fields (no GST, no proforma lifecycle, no partial payments).
  */
-async function fetchOtherReceivables(
+export async function fetchOtherReceivables(
   supabase: Awaited<ReturnType<typeof createClient>>
 ): Promise<ReceivableRow[]> {
   const out: ReceivableRow[] = [];
@@ -363,25 +364,38 @@ async function fetchOtherReceivables(
   }
 
   // ── Ad-hoc / proforma invoices ─────────────────────────────────────────
+  // Can be raised against a lead OR a Virtual Office case (migration 00532)
+  // — a case has no lead, so the buyer has to be resolved the same way
+  // POST /api/cases/[id]/adhoc-invoices does: via invoiceParty(), which
+  // reads the case's billing route (aggregator vs. direct client). Without
+  // this, a case-billed invoice showed up here as "(unnamed)".
   const { data: invoices } = await supabase
     .from("proforma_invoices")
     .select(`
-      id, invoice_number, title, total_amount, due_date, status,
+      id, invoice_number, title, total_amount, due_date, status, case_id,
       razorpay_link_url, followup_enabled, reminder_count, last_reminder_sent_at,
-      lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email)
+      lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email),
+      case:cases!proforma_invoices_case_id_fkey(
+        id, case_number, client_name, client_company_name, client_email, client_phone,
+        client_gst_number, aggregator_id, bill_to,
+        aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)
+      )
     `)
     .not("status", "in", "(paid,cancelled)");
 
   for (const inv of invoices || []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = inv.lead as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const caseRow = inv.case as any;
+    const party = !lead && caseRow ? invoiceParty({ case: caseRow }) : null;
     out.push(finish({
       id: inv.id,
       kind: "adhoc_invoice",
       reference: inv.invoice_number,
-      party_name: partyOf(lead),
+      party_name: lead ? partyOf(lead) : (party?.name || "(unnamed)"),
       lead_id: lead?.id ?? null,
-      lead_email: lead?.email ?? null,
+      lead_email: lead?.email ?? party?.email ?? null,
       total_amount: Number(inv.total_amount || 0),
       amount_paid: 0,
       due_date: inv.due_date,

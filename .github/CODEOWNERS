@@ -1,0 +1,3 @@
+# Every file requires approval from the code owner before a PR can merge into main.
+# This pairs with the "Mainprotect" branch ruleset's require_code_owner_review setting.
+* @vinit2776

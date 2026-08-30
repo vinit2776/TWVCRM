@@ -57,6 +57,7 @@ import { ContractAccessLogsSection } from "@/components/contracts/contract-acces
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   Dialog,
   DialogContent,
@@ -1450,6 +1451,17 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Agreement document history — old executed versions stay
+              visible/downloadable after a reupload (e.g. customer name
+              change or a change-of-law redocumentation). */}
+          <AgreementDocumentHistory
+            listUrl={`/api/contracts/${id}/agreement-versions`}
+            reuploadUrl={`/api/contracts/${id}/reupload-agreement`}
+            canManage={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            hasExistingDocument={!!contract.signed_document}
+            onChanged={fetchContract}
+          />
 
           {/* Terms & Conditions */}
           {contract.terms_and_conditions && (

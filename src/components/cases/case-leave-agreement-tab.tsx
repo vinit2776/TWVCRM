@@ -17,6 +17,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   FileText,
   Send,
@@ -600,8 +601,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
   const vars = (agreement.variables || {}) as Record<string, unknown>;
 
+  // Mirrors allowedStatuses in the manual-sign route — keep the two in step.
   const canUploadManualSign = agreement &&
-    ["client_approved", "signing", "internally_approved", "draft"].includes(agreement.status) &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"]
+      .includes(agreement.status) &&
     agreement.status !== "executed";
 
   return (
@@ -869,6 +872,25 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Agreement document history — old executed versions stay
+          visible/downloadable after a reupload (e.g. customer name change
+          or a change-of-law redocumentation). */}
+      <Card>
+        <CardContent className="pt-4">
+          <AgreementDocumentHistory
+            listUrl={`/api/cases/${caseId}/leave-license/agreement-versions`}
+            reuploadUrl={`/api/cases/${caseId}/leave-license/reupload-agreement`}
+            reuploadExtraFields={{ agreement_id: agreement.id }}
+            canManage={
+              agreement.status === "executed" &&
+              ["admin", "manager", "sales_rep", "office_admin"].includes(userRole ?? "")
+            }
+            hasExistingDocument={!!(agreement.signed_document_id || agreement.generated_document_id)}
+            onChanged={fetchAgreement}
+          />
         </CardContent>
       </Card>
 

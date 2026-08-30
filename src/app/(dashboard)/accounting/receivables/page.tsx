@@ -443,26 +443,59 @@ export default function AccountsReceivablePage() {
   }, [rows, filter, search, reportsForRow]);
 
   /**
+   * Deposits, top-ups and ad-hoc invoices, filtered the same way as the
+   * statements table above — so the "Deposits & ad-hoc invoices" card stays
+   * in sync with whichever filter tab / search is active instead of always
+   * showing its full unfiltered contents regardless of context.
+   */
+  const filteredOtherRows = useMemo(() => {
+    let r = otherRows;
+    if (filter === "due_soon")   r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= -7 && x.days_overdue < 0);
+    if (filter === "overdue")    r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= 0);
+    if (filter === "overdue_30") r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= 30);
+    if (filter === "reported")   r = r.filter((x) => reportsForOtherRow(x).length > 0);
+    // fetchOtherReceivables() already excludes paid/cancelled rows, and
+    // there's no partial-payment concept for these entity kinds yet — so
+    // neither "Partially paid" nor "Paid" has anything to show here.
+    if (filter === "partial" || filter === "paid") r = [];
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      r = r.filter((x) => x.reference.toLowerCase().includes(q) || x.party_name.toLowerCase().includes(q));
+    }
+    return r;
+  }, [otherRows, filter, search, reportsForOtherRow]);
+
+  /**
    * Needs-attention strip totals — always over the full unfiltered `rows` /
-   * `pendingReports`, not `filtered`, so clicking a card gives an accurate
-   * jump-filter regardless of which filter/search is currently active.
+   * `otherRows` / `pendingReports`, not `filtered`, so clicking a card gives
+   * an accurate jump-filter regardless of which filter/search is currently
+   * active. Deposits, top-ups and ad-hoc invoices are folded into the same
+   * overdue buckets as billing statements — they're real receivables too,
+   * and leaving them out of these headline numbers is exactly what made
+   * them invisible.
    */
   const kpis = useMemo(() => {
     const overdue30Rows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= 30);
     const overdueUnder30Rows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= 0 && r.days_overdue < 30);
     const dueSoonRows = rows.filter((r) => r.days_overdue !== null && r.days_overdue >= -7 && r.days_overdue < 0);
     const reportedClaims = pendingReports.filter((p) => p.status === "reported");
+
+    const otherOverdue30 = otherRows.filter((r) => r.days_overdue !== null && r.days_overdue >= 30);
+    const otherOverdueUnder30 = otherRows.filter((r) => r.days_overdue !== null && r.days_overdue >= 0 && r.days_overdue < 30);
+    const otherDueSoon = otherRows.filter((r) => r.days_overdue !== null && r.days_overdue >= -7 && r.days_overdue < 0);
+
     return {
-      overdue30Count: overdue30Rows.length,
-      overdue30Sum: overdue30Rows.reduce((s, r) => s + r.balance_due, 0),
-      overdueUnder30Count: overdueUnder30Rows.length,
-      overdueUnder30Sum: overdueUnder30Rows.reduce((s, r) => s + r.balance_due, 0),
-      dueSoonCount: dueSoonRows.length,
-      dueSoonSum: dueSoonRows.reduce((s, r) => s + r.balance_due, 0),
+      overdue30Count: overdue30Rows.length + otherOverdue30.length,
+      overdue30Sum: overdue30Rows.reduce((s, r) => s + r.balance_due, 0) + otherOverdue30.reduce((s, r) => s + r.balance_due, 0),
+      overdueUnder30Count: overdueUnder30Rows.length + otherOverdueUnder30.length,
+      overdueUnder30Sum: overdueUnder30Rows.reduce((s, r) => s + r.balance_due, 0) + otherOverdueUnder30.reduce((s, r) => s + r.balance_due, 0),
+      dueSoonCount: dueSoonRows.length + otherDueSoon.length,
+      dueSoonSum: dueSoonRows.reduce((s, r) => s + r.balance_due, 0) + otherDueSoon.reduce((s, r) => s + r.balance_due, 0),
       reportedCount: reportedClaims.length,
       reportedSum: reportedClaims.reduce((s, r) => s + r.amount, 0),
     };
-  }, [rows, pendingReports]);
+  }, [rows, otherRows, pendingReports]);
 
   // ── Detail view: group filtered statements by urgency bucket ─────────────
   const buckets = useMemo(() => {
@@ -649,7 +682,11 @@ export default function AccountsReceivablePage() {
           </Card>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total outstanding</CardTitle></CardHeader>
-            <CardContent><div className="text-lg font-bold text-teal-700">{summary.count} open · {formatCurrency(summary.total_outstanding)}</div></CardContent>
+            <CardContent>
+              <div className="text-lg font-bold text-teal-700">
+                {summary.count + (otherSummary?.count ?? 0)} open · {formatCurrency(summary.total_outstanding + (otherSummary?.total_outstanding ?? 0))}
+              </div>
+            </CardContent>
           </Card>
         </div>
       )}
@@ -673,7 +710,7 @@ export default function AccountsReceivablePage() {
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search contract, statement #, customer"
+              placeholder="Search contract, statement/invoice #, customer"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 w-72"
@@ -1015,8 +1052,8 @@ export default function AccountsReceivablePage() {
       </Card>
 
       <OtherReceivablesCard
-        rows={otherRows}
-        summary={otherSummary}
+        rows={filteredOtherRows}
+        totalCount={otherRows.length}
         canRecordPayment={canRecordPayment}
         onRecorded={load}
         onReportDeposit={setReportDepositRow}
@@ -1247,10 +1284,16 @@ interface OtherSummary {
  * rather than merged into the statement table — they have no GST invoice,
  * no proforma lifecycle and no partial payments, so most statement columns
  * would be empty for them.
+ *
+ * Open by default, and its header stats are computed from the (filter/search
+ * -aware) `rows` it's given rather than a separate unfiltered summary — this
+ * card used to start collapsed and never respond to the page's filter tabs
+ * or search box, which was as good as invisible to anyone not already
+ * looking for it.
  */
-function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onReportDeposit, reportsForRow }: {
+function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, reportsForRow }: {
   rows: OtherReceivableRow[];
-  summary: OtherSummary | null;
+  totalCount: number;
   canRecordPayment: boolean;
   onRecorded: () => void;
   onReportDeposit: (row: OtherReceivableRow) => void;
@@ -1259,7 +1302,13 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
   const [historyRow, setHistoryRow] = useState<OtherReceivableRow | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+
+  const totals = useMemo(() => ({
+    outstanding: rows.reduce((s, r) => s + r.balance_due, 0),
+    overdue: rows.filter((r) => r.days_overdue !== null && r.days_overdue >= 0).length,
+    stale: rows.filter((r) => r.is_stale).length,
+  }), [rows]);
 
   async function sendReminderNow(r: OtherReceivableRow) {
     setRemindingId(r.id);
@@ -1278,7 +1327,7 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
     }
   }
 
-  if (!summary || rows.length === 0) return null;
+  if (totalCount === 0) return null;
 
   return (
     <Card>
@@ -1290,8 +1339,8 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
         <div className="flex items-baseline gap-2 flex-wrap">
           <CardTitle className="text-base">Deposits &amp; ad-hoc invoices</CardTitle>
           <span className="text-sm text-muted-foreground">
-            — {rows.length} · {formatCurrency(summary.total_outstanding)} outstanding, {summary.overdue} overdue
-            {summary.stale > 0 && <>, {summary.stale} stale</>}
+            — {rows.length < totalCount ? `${rows.length} of ${totalCount}` : rows.length} · {formatCurrency(totals.outstanding)} outstanding, {totals.overdue} overdue
+            {totals.stale > 0 && <>, {totals.stale} stale</>}
           </span>
         </div>
         <span className="text-xs font-medium text-muted-foreground shrink-0">{open ? "▲ Hide" : "▼ Show"}</span>
@@ -1311,6 +1360,13 @@ function OtherReceivablesCard({ rows, summary, canRecordPayment, onRecorded, onR
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                    No deposits or ad-hoc invoices match this filter.
+                  </td>
+                </tr>
+              )}
               {rows.map((r) => {
                 const style = OTHER_KIND_STYLE[r.kind];
                 return (
