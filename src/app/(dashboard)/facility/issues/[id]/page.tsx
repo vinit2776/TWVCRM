@@ -283,6 +283,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       .catch(() => setAssignees([]));
   }, [assignOpen, collabOpen]);
 
+  const composerMentionRoster = useMemo(
+    () => mentionRoster.filter((u) => u.id !== currentUser?.id),
+    [mentionRoster, currentUser?.id]
+  );
+
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
 
   // Live-ticks the TAT banner's status (on_track/at_risk/overdue) so it
@@ -917,7 +922,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                 value={comment}
                 onChange={setComment}
                 onMentionedIdsChange={setCommentMentionIds}
-                roster={mentionRoster.filter((u) => u.id !== currentUser?.id)}
+                roster={composerMentionRoster}
                 rows={2}
                 placeholder="Write an update… (@ to tag anyone)"
                 maxLength={2000}

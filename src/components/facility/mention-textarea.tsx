@@ -57,6 +57,7 @@ export function MentionTextarea({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const lastReportedIdsRef = useRef<string>("");
 
   const matches = useMemo(() => {
     if (!trigger) return [];
@@ -68,9 +69,15 @@ export function MentionTextarea({
 
   useEffect(() => {
     if (!onMentionedIdsChange) return;
-    onMentionedIdsChange(roster.filter((u) => value.includes(`@${u.full_name}`)).map((u) => u.id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, roster]);
+    const ids = roster.filter((u) => value.includes(`@${u.full_name}`)).map((u) => u.id);
+    // Content-compare, not reference-compare: a caller passing an inline-filtered
+    // `roster` array (a new reference every render) must not retrigger this —
+    // that turns into setState-in-effect feeding back into a new render, forever.
+    const key = ids.join(",");
+    if (key === lastReportedIdsRef.current) return;
+    lastReportedIdsRef.current = key;
+    onMentionedIdsChange(ids);
+  }, [value, roster, onMentionedIdsChange]);
 
   const openMenuAtCaret = () => {
     const ta = taRef.current;
