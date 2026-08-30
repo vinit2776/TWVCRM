@@ -11,12 +11,23 @@ concurrency:
 jobs:
   bump-version:
     # Skip if this push was the bump PR merging — prevents an infinite loop.
-    # Matched via a marker in the commit message rather than a prefix, since
-    # the commit's first line depends on which merge method is used (squash
-    # keeps the PR title as-is; "create a merge commit" prepends "Merge pull
-    # request #N from ..." instead) — the marker survives either way because
-    # it's still present somewhere in the full message.
-    if: "!contains(github.event.head_commit.message, '[auto-bump]')"
+    # Checks only the FIRST LINE shape, not "does this text appear anywhere in
+    # the message" — a bare contains() on a marker string is fooled by any
+    # commit (including ones editing this very file) that quotes the marker
+    # in its own description, which is exactly what broke the first version
+    # of this guard on the PR that introduced it.
+    #   - squash merge: first line is the PR title verbatim, so it starts
+    #     with the fixed "chore: bump version to " prefix we always give it.
+    #   - "create a merge commit": first line is always the mechanical
+    #     "Merge pull request #N from OWNER/BRANCH" — checking BOTH that the
+    #     message starts with that exact phrase AND names our specific branch
+    #     means an unrelated commit would have to fake a real merge line to
+    #     false-positive, not just mention the branch name in prose.
+    if: >-
+      !(
+        startsWith(github.event.head_commit.message, 'chore: bump version to ') ||
+        (startsWith(github.event.head_commit.message, 'Merge pull request #') && contains(github.event.head_commit.message, '/chore/version-bump'))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -59,7 +70,7 @@ jobs:
             exit 0
           fi
 
-          TITLE="chore: bump version to ${NEW_VERSION} [auto-bump]"
+          TITLE="chore: bump version to ${NEW_VERSION}"
           BODY="Automated version bump. The Mainprotect ruleset requires a PR for every change to main, so this can no longer push directly — merge whenever convenient. This PR is kept up to date automatically; no need to close and reopen it."
 
           git commit --quiet -m "$TITLE"
