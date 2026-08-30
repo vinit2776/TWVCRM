@@ -46,6 +46,7 @@ import {
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
+import { MentionTextarea, type MentionUser } from "@/components/facility/mention-textarea";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
 } from "@/types";
@@ -100,6 +101,23 @@ const STATUS_ACTION_ICON: Record<string, typeof Wrench> = {
   reopened: RefreshCw,
 };
 
+/** Highlights the "@Full Name" substrings for users actually recorded as mentioned on this event. */
+function renderMessageWithMentions(text: string, mentionedUserIds: string[] | undefined, roster: MentionUser[]) {
+  const names = (mentionedUserIds ?? [])
+    .map((id) => roster.find((u) => u.id === id)?.full_name)
+    .filter((n): n is string => !!n)
+    .sort((a, b) => b.length - a.length); // longest first so "@Jay" can't swallow a match meant for "@Jayesh"
+  if (names.length === 0) return text;
+
+  const pattern = names.map((n) => `@${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "g"));
+  return parts.map((part, i) =>
+    names.some((n) => part === `@${n}`)
+      ? <span key={i} className="font-semibold text-primary bg-secondary rounded px-1">{part}</span>
+      : part
+  );
+}
+
 function useClaimCountdown(claimSlaTargetAt: string | null | undefined) {
   const [remaining, setRemaining] = useState<number | null>(null);
   useEffect(() => {
@@ -132,6 +150,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState("");
+  const [commentMentionIds, setCommentMentionIds] = useState<string[]>([]);
+  const [mentionRoster, setMentionRoster] = useState<MentionUser[]>([]);
   const [resolveOpen, setResolveOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignees, setAssignees] = useState<AssigneeOption[]>([]);
@@ -196,6 +216,16 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       .then((r) => r.json())
       .then((j) => setCurrentUser(j ?? null))
       .catch(() => null);
+    // Full user directory for @mention — deliberately not /api/facility/assignees,
+    // which is scoped to FMS/admin/manager. Anyone can be tagged into a comment.
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((j) => setMentionRoster(
+        ((j.data ?? []) as { id: string; full_name: string; role: string; is_active: boolean }[])
+          .filter((u) => u.is_active)
+          .map((u) => ({ id: u.id, full_name: u.full_name, role: u.role }))
+      ))
+      .catch(() => setMentionRoster([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -436,10 +466,11 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       const res = await fetch(`/api/facility/issues/${issue.id}/comment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: comment.trim() }),
+        body: JSON.stringify({ message: comment.trim(), mentionedUserIds: commentMentionIds }),
       });
       if (!res.ok) throw new Error("Failed to add comment");
       setComment("");
+      setCommentMentionIds([]);
       await fetchIssue();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
@@ -867,7 +898,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                     )}
                   >
                     <div className={highlighted ? "text-sm" : "text-xs text-muted-foreground"}>
-                      {e.message ?? e.event_type}
+                      {e.message
+                        ? renderMessageWithMentions(e.message, e.payload?.mentioned_user_ids as string[] | undefined, mentionRoster)
+                        : e.event_type}
                     </div>
                     <div className={cn("text-xs mt-0.5", highlighted ? "opacity-70" : "text-muted-foreground")}>
                       {e.actor?.full_name ?? e.actor_label ?? "System"} · {timeAgo(e.created_at)}
@@ -880,11 +913,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               )}
             </div>
             <div className="border-t p-3 space-y-2">
-              <Textarea
+              <MentionTextarea
                 value={comment}
-                onChange={(e) => setComment(e.target.value)}
+                onChange={setComment}
+                onMentionedIdsChange={setCommentMentionIds}
+                roster={mentionRoster.filter((u) => u.id !== currentUser?.id)}
                 rows={2}
-                placeholder="Write an update…"
+                placeholder="Write an update… (@ to tag anyone)"
                 maxLength={2000}
               />
               <div className="flex justify-end">
