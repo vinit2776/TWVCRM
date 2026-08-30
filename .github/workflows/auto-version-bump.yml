@@ -10,11 +10,17 @@ concurrency:
 
 jobs:
   bump-version:
-    # Skip if this push was the version bump itself — prevents infinite loop
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    # Skip if this push was the bump PR merging — prevents an infinite loop.
+    # Matched via a marker in the commit message rather than a prefix, since
+    # the commit's first line depends on which merge method is used (squash
+    # keeps the PR title as-is; "create a merge commit" prepends "Merge pull
+    # request #N from ..." instead) — the marker survives either way because
+    # it's still present somewhere in the full message.
+    if: "!contains(github.event.head_commit.message, '[auto-bump]')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,45 +32,43 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # A plain pull-then-push loses a race whenever a PR merges between the
-      # two — the ref has moved and GitHub rejects the push:
+      # The "Mainprotect" ruleset (added 2026-08-25) now requires every change
+      # to main go through a PR with a passing lint-and-build check and a
+      # code-owner review — a direct bot push (what this workflow did before)
+      # is rejected outright, not just raced. The Actions bot isn't eligible
+      # for the ruleset's bypass list on a personal-account repo (org-only
+      # feature), so there's no way to keep pushing straight to main here.
       #
-      #   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
-      #     is at 3f6e0886 but expected c00748bf)
-      #
-      # It self-healed (the next merge's bump caught up) but left a red X on
-      # main each time, and a workflow that fails routinely is one people stop
-      # reading.
-      #
-      # Each attempt resets to the *freshly fetched* main and recomputes the
-      # bump from there, so a retry can never push a version derived from the
-      # state we started with. That's why this re-runs the script rather than
-      # force-pushing the commit it already built.
-      - name: Bump version and push
+      # Instead this keeps ONE persistent branch/PR that stays rebased onto
+      # main's current tip on every run, rather than opening a fresh PR per
+      # push — otherwise every real merge would spawn another tiny bump PR
+      # before the last one was even reviewed.
+      - name: Compute bump and open/update PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for attempt in 1 2 3 4 5; do
-            git fetch --quiet origin main
-            git reset --quiet --hard origin/main
+          BRANCH="chore/version-bump"
+          git fetch --quiet origin main
+          git checkout -B "$BRANCH" origin/main
 
-            NEW_VERSION=$(node .github/scripts/bump-version.mjs)
-            git add package.json package-lock.json
+          NEW_VERSION=$(node .github/scripts/bump-version.mjs)
+          git add package.json package-lock.json
 
-            # Another run may already have bumped past us while we waited.
-            if git diff --cached --quiet; then
-              echo "Nothing to commit — main is already at ${NEW_VERSION}."
-              exit 0
-            fi
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — ${BRANCH} already matches main."
+            exit 0
+          fi
 
-            git commit --quiet -m "chore: bump version to ${NEW_VERSION}"
+          TITLE="chore: bump version to ${NEW_VERSION} [auto-bump]"
+          BODY="Automated version bump. The Mainprotect ruleset requires a PR for every change to main, so this can no longer push directly — merge whenever convenient. This PR is kept up to date automatically; no need to close and reopen it."
 
-            if git push --quiet origin main; then
-              echo "Pushed ${NEW_VERSION} on attempt ${attempt}."
-              exit 0
-            fi
+          git commit --quiet -m "$TITLE"
+          git push --quiet --force-with-lease origin "$BRANCH"
 
-            echo "Push rejected on attempt ${attempt} — main moved. Recomputing from the new tip."
-            sleep $(( attempt * 3 ))
-          done
-
-          echo "::error::Version bump could not be pushed after 5 attempts."
-          exit 1
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "$TITLE" --body "$BODY"
+            echo "Updated existing bump PR to ${NEW_VERSION}."
+          else
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
+            echo "Opened bump PR for ${NEW_VERSION}."
+          fi
