@@ -104,6 +104,35 @@ export async function PATCH(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
+  // Preserve document history when the signed document is swapped through
+  // this general-purpose route (e.g. the "Signed Contract → Replace" button)
+  // rather than the dedicated reupload-agreement flow — otherwise the
+  // previous executed document is silently discarded with no trace, which is
+  // exactly what reupload-agreement/route.ts exists to prevent. Chaining it
+  // here means every caller that changes signed_document_id gets history for
+  // free, not just the one dedicated route.
+  if (
+    allowedFields.signed_document_id &&
+    oldContract.signed_document_id &&
+    allowedFields.signed_document_id !== oldContract.signed_document_id
+  ) {
+    const adminSupabase = await createAdminClient();
+    const { data: oldDoc } = await adminSupabase
+      .from("documents")
+      .select("version")
+      .eq("id", oldContract.signed_document_id)
+      .single();
+    if (oldDoc) {
+      await adminSupabase
+        .from("documents")
+        .update({
+          version: (oldDoc.version || 1) + 1,
+          parent_document_id: oldContract.signed_document_id,
+        })
+        .eq("id", allowedFields.signed_document_id as string);
+    }
+  }
+
   // Department ID rules:
   //   - A contract must have a location to receive a department ID (printers
   //     are physical, tied to a building). Setting an ID on a location-less
