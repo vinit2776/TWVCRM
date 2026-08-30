@@ -28,6 +28,7 @@ import {
   CalendarPlus,
   Minus,
   Plus,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +75,7 @@ import {
   BILLING_CYCLE_LABELS,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
+  ACTIVATION_UNBLOCKING_PURPOSE,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
@@ -168,6 +170,18 @@ export default function ContractDetailPage({
   const userRole = user?.role ?? null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
+  // Ad-hoc invoices (proforma_invoices) attributed/attributable to this
+  // contract, plus the proposal's own pro-rata billing statement amount —
+  // both feed the activation-gate hint's "link an ad-hoc invoice instead"
+  // affordance below. Refreshed by the same onAttributionChanged hook the
+  // Ad-hoc Invoices card already calls, so linking from either place updates
+  // this too.
+  const [prorataAttribution, setProrataAttribution] = useState<{
+    attributed: Array<{ id: string; invoice_number: string; status: string; total_amount: number; attribution_purpose: string | null }>;
+    candidates: Array<{ id: string; invoice_number: string; status: string; total_amount: number }>;
+    expectedAmount: number | null;
+  }>({ attributed: [], candidates: [], expectedAmount: null });
+  const [linkingInvoiceId, setLinkingInvoiceId] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
@@ -197,12 +211,18 @@ export default function ContractDetailPage({
       const proposalId = json.data?.proposal_id;
       const hasRenewalDraft = ["renewal_in_progress", "renewed"].includes(json.data?.status);
 
-      const [proposalResult, renewalResult] = await Promise.allSettled([
+      const [proposalResult, renewalResult, attributionResult, prorataStatementResult] = await Promise.allSettled([
         proposalId
           ? fetch(`/api/proposals/${proposalId}`).then(r => r.json())
           : Promise.resolve(null),
         hasRenewalDraft
           ? fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/contracts/${id}/attributed-invoices`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`).then(r => r.json())
           : Promise.resolve(null),
       ]);
 
@@ -210,6 +230,18 @@ export default function ContractDetailPage({
         setLinkedProposal(
           proposalResult.status === "fulfilled" ? (proposalResult.value?.data || null) : null
         );
+
+        const attribution = attributionResult.status === "fulfilled" ? attributionResult.value?.data : null;
+        const prorataStatement = prorataStatementResult.status === "fulfilled"
+          ? (prorataStatementResult.value?.data || [])[0]
+          : null;
+        setProrataAttribution({
+          attributed: attribution?.attributed || [],
+          candidates: attribution?.candidates || [],
+          expectedAmount: prorataStatement?.total_amount ?? null,
+        });
+      } else {
+        setProrataAttribution({ attributed: [], candidates: [], expectedAmount: null });
       }
 
       if (hasRenewalDraft) {
@@ -225,6 +257,31 @@ export default function ContractDetailPage({
   useEffect(() => {
     fetchContract(true);
   }, [fetchContract]);
+
+  /** Links a candidate ad-hoc invoice as the pro-rata/first invoice from the
+   *  blocked-activation hint, mirroring the "Attribute an invoice" dialog
+   *  further down the page — same endpoint, same role gate (admin/accounts). */
+  const handleLinkProrataInvoice = async (invoiceId: string) => {
+    setLinkingInvoiceId(invoiceId);
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/attribution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: id, purpose: ACTIVATION_UNBLOCKING_PURPOSE }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Invoice linked as the pro-rata / first invoice");
+        await fetchContract(false);
+      } else {
+        toast.error(json?.error || "Failed to link invoice");
+      }
+    } catch {
+      toast.error("Failed to link invoice");
+    } finally {
+      setLinkingInvoiceId(null);
+    }
+  };
 
   /** Wraps activation to check space allocation first */
   const attemptActivation = (overrideReason?: string) => {
@@ -935,7 +992,19 @@ export default function ContractDetailPage({
             // not "nothing to check", it's a blocker.
             const isRenewal = !!contract.deposit_carried_from;
             const proposalMissing = !isRenewal && !contract.proposal_id;
-            const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
+            // A paid ad-hoc invoice attributed as the pro-rata/first invoice
+            // satisfies this the same way proposal.payment_status does — see
+            // the identical OR in /api/contracts/[id]'s PATCH handler. Without
+            // this, linking one from the "Ad-hoc Invoices" card below (or the
+            // hint here) would never actually unblock the Activate button.
+            const paidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status === "paid"
+            );
+            const linkedUnpaidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status !== "paid"
+            );
+            const proposalPaid = isRenewal
+              || (!!contract.proposal_id && (linkedProposal?.payment_status === "paid" || !!paidProrataInvoice));
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
             // A proposal's collected deposit belongs to whichever contract first
             // claims it at activation (see contracts/[id]/route.ts) — if a
@@ -952,6 +1021,17 @@ export default function ContractDetailPage({
             // see contracts/[id]/route.ts activation handler.
             const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete;
             const hasDeferred = kycStatus.deferred > 0;
+
+            // Closest-amount-first so the invoice that most plausibly *is* the
+            // pro-rata payment (just raised as an ad-hoc invoice instead of
+            // through the proposal) surfaces before unrelated charges.
+            const expectedAmount = prorataAttribution.expectedAmount;
+            const prorataCandidates = expectedAmount == null
+              ? prorataAttribution.candidates
+              : [...prorataAttribution.candidates].sort(
+                  (a, b) => Math.abs(a.total_amount - expectedAmount) - Math.abs(b.total_amount - expectedAmount)
+                );
+            const canLinkInvoice = ["admin", "accounts"].includes(userRole ?? "");
 
             return canActivate ? (
               <Button
@@ -973,7 +1053,52 @@ export default function ContractDetailPage({
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {proposalMissing && <p>• A proposal is linked to this contract</p>}
-                    {!proposalMissing && !proposalPaid && <p>• Proposal payment collected</p>}
+                    {!proposalMissing && !proposalPaid && (
+                      <div>
+                        <p>• Proposal payment collected</p>
+                        {linkedUnpaidProrataInvoice ? (
+                          <p className="mt-1 pl-3 text-amber-800">
+                            Linked ad-hoc invoice <span className="font-mono">{linkedUnpaidProrataInvoice.invoice_number}</span>
+                            {" "}({formatCurrency(linkedUnpaidProrataInvoice.total_amount)}) is <strong>{linkedUnpaidProrataInvoice.status}</strong> —
+                            {" "}will unlock activation once it&apos;s marked paid.
+                          </p>
+                        ) : canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <div className="mt-1.5 pl-3 space-y-1 border-l-2 border-amber-200">
+                            <p className="text-amber-800">Or link an ad-hoc invoice already raised for this customer:</p>
+                            {prorataCandidates.slice(0, 3).map((inv) => {
+                              const isLikelyMatch = expectedAmount != null && Math.abs(inv.total_amount - expectedAmount) < 1;
+                              return (
+                                <div key={inv.id} className="flex items-center gap-2">
+                                  <Link2 className="h-3 w-3 shrink-0 text-amber-600" />
+                                  <span className="font-mono">{inv.invoice_number}</span>
+                                  <span>{formatCurrency(inv.total_amount)}</span>
+                                  <Badge variant="outline" className="text-[10px] py-0">{inv.status}</Badge>
+                                  {isLikelyMatch && (
+                                    <Badge variant="outline" className="text-[10px] py-0 border-emerald-300 text-emerald-700 bg-emerald-50">
+                                      Likely match
+                                    </Badge>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-5 px-1.5 text-[11px] text-amber-800 hover:text-amber-900"
+                                    disabled={linkingInvoiceId === inv.id}
+                                    onClick={() => handleLinkProrataInvoice(inv.id)}
+                                  >
+                                    {linkingInvoiceId === inv.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link"}
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : !canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <p className="mt-1 pl-3 text-amber-700">
+                            {prorataCandidates.length} ad-hoc invoice{prorataCandidates.length === 1 ? "" : "s"} for this customer could cover this —
+                            {" "}ask an admin or accounts teammate to link one below.
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
                     {!proposalMissing && !depositPaid && (
                       <p>
                         • {depositClaimedByOther
