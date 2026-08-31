@@ -3,8 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
-import { getBillVoidBlocker, voidBill } from "@/lib/procurement/void-bill";
-import { reverseDeliveryReceipt } from "@/lib/procurement/reverse-delivery";
+import { resolveCancellationImpact } from "@/lib/procurement/cancellation-plan";
 
 const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mark_ordered") }),
@@ -191,28 +190,43 @@ export async function PATCH(
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
 
-      // Fail fast on the cheapest, most-likely-to-fail check before any write.
-      // NOTE (Phase 2 follow-up): this handler is not transactional — writes
-      // below happen sequentially, same as the existing partial_cancel case.
-      // If a later write fails, earlier ones (e.g. a voided bill) are not
-      // rolled back. Wrapping this in an RPC is deferred to Phase 2.
       const { data: poBills } = await supabase
         .from("vendor_bills")
         .select("id, bill_number, approval_status")
         .eq("po_id", id);
       const bills = poBills ?? [];
 
-      const blockedBills: { bill_number: string; reason: string }[] = [];
-      for (const b of bills) {
-        const blocker = await getBillVoidBlocker(supabase, b.id);
-        if (blocker) {
-          blockedBills.push({ bill_number: b.bill_number, reason: blocker });
-        }
-      }
+      const cancelReason = parsed.data.reason?.trim() || `PO ${po.po_number} cancelled`;
+
+      // Resolve the full impact up front (bills, delivery receipts, advance)
+      // — this is what gets handed to the single-writer RPC below. Its
+      // vendor-bill blockers reuse the exact same getBillVoidBlocker rules
+      // as before (money moved / TDS), so the blocked_bills 422 shape below
+      // is unchanged for callers.
+      const impact = await resolveCancellationImpact(supabase, {
+        rootType: "purchase_order",
+        rootId: id,
+        outcome: "cancelled",
+        reason: cancelReason,
+      });
+
+      const blockedBills = impact.blockers
+        .filter((b) => b.entity.startsWith("vendor_bill:"))
+        .map((b) => ({ bill_number: b.entity.slice("vendor_bill:".length), reason: b.reason }));
       if (blockedBills.length > 0) {
         return NextResponse.json({
           error: `This PO cannot be cancelled — ${blockedBills.length} bill${blockedBills.length > 1 ? "s" : ""} blocked: ${blockedBills.map((b) => `${b.bill_number} (${b.reason})`).join("; ")}`,
           blocked_bills: blockedBills,
+        }, { status: 422 });
+      }
+      // Any remaining blockers are non-bill (an AMC PO with logged service
+      // events that hasn't been terminated yet, or a processed advance that
+      // must be sorted out with Finance first) — new guards the shared
+      // resolver adds on top of the original bill-only check.
+      const otherBlockers = impact.blockers.filter((b) => !b.entity.startsWith("vendor_bill:"));
+      if (otherBlockers.length > 0) {
+        return NextResponse.json({
+          error: `This PO cannot be cancelled — ${otherBlockers.map((b) => b.reason).join("; ")}`,
         }, { status: 422 });
       }
 
@@ -227,36 +241,34 @@ export async function PATCH(
         }, { status: 403 });
       }
 
-      const cancelReason = parsed.data.reason?.trim() || `PO ${po.po_number} cancelled`;
-
       // If PO has received goods, require force flag. force:true no longer
-      // ignores the received stock — it reverses it (see below), same as
-      // rejecting each delivery would.
+      // ignores the received stock — it reverses it (via the RPC below,
+      // disposition "retain"), same as rejecting each delivery would.
       if (["partially_received", "received"].includes(po.status)) {
         const { data: receipts } = await supabase
           .from("po_delivery_receipts")
-          .select("id, dc_number, dc_date, po_delivery_receipt_items(po_item_id, qty_received)")
+          .select("id, dc_number, dc_date, po_delivery_receipt_items(po_item_id, qty_received), reversed_at")
           .eq("po_id", id);
-        const deliveryReceipts = receipts ?? [];
+        const liveReceipts = (receipts ?? []).filter((r) => r.reversed_at == null);
 
-        if (deliveryReceipts.length > 0 && !parsed.data.force) {
+        if (liveReceipts.length > 0 && !parsed.data.force) {
           return NextResponse.json({
             error: "This PO has received goods. Use force cancel to reverse the received stock, or reject deliveries first.",
             has_deliveries: true,
           }, { status: 422 });
         }
 
-        if (deliveryReceipts.length > 0 && parsed.data.force) {
+        if (liveReceipts.length > 0 && parsed.data.force) {
           // Snapshot what was physically received BEFORE reversing. The
-          // po_delivery_receipt(_items) rows themselves now SURVIVE
-          // cancellation (disposition: "retain" — stamped reversed_at /
-          // reversed_by / reversal_reason instead of deleted), but this
-          // snapshot is kept anyway: it records the exact state at the
-          // moment of cancellation directly on the audit_trail entry,
-          // independent of whatever the receipt rows look like later.
+          // po_delivery_receipt(_items) rows themselves SURVIVE cancellation
+          // (disposition: "retain" — stamped reversed_at / reversed_by /
+          // reversal_reason instead of deleted), but this snapshot is kept
+          // anyway: it records the exact state at the moment of cancellation
+          // directly on the audit_trail entry, independent of whatever the
+          // receipt rows look like later.
           extraAuditChanges.reversed_delivery_receipts = {
             old: null,
-            new: deliveryReceipts.map((r) => ({
+            new: liveReceipts.map((r) => ({
               receipt_id: r.id,
               dc_number: r.dc_number,
               dc_date: r.dc_date,
@@ -266,49 +278,50 @@ export async function PATCH(
               })),
             })),
           };
-
-          // NOTE (Phase 2 follow-up, same as the bill-voiding loop above):
-          // this handler is not transactional — each receipt is reversed
-          // sequentially. If one fails partway through, earlier reversals
-          // are not rolled back. Wrapping this in an RPC is deferred to
-          // Phase 2.
-          for (const receipt of deliveryReceipts) {
-            const reverseResult = await reverseDeliveryReceipt(supabase, {
-              receiptId: receipt.id,
-              poId: id,
-              disposition: "retain",
-              reversedBy: dbUser.id,
-              reason: cancelReason,
-            });
-            if (!reverseResult.ok) {
-              return NextResponse.json({
-                error: `Failed to reverse delivery receipt ${receipt.dc_number ?? receipt.id}: ${reverseResult.error}`,
-              }, { status: 500 });
-            }
-          }
         }
       }
 
       extraAuditChanges.cancel_reason = { old: null, new: cancelReason };
 
-      // All bills passed the blocker check above — void each one now, before
-      // flipping the PO's own status.
-      for (const b of bills) {
-        const voidResult = await voidBill(supabase, {
-          billId: b.id,
-          actorId: dbUser.id,
-          reason: cancelReason,
-        });
-        if (!voidResult.ok) {
-          // Should be rare given the pre-check above, but surfaces cleanly if
-          // state changed between the check and the write (no transaction —
-          // see Phase 2 note above).
-          return NextResponse.json({ error: `Failed to void bill ${b.bill_number}: ${voidResult.error}` }, { status: 500 });
-        }
+      // Single-writer RPC: cancels the PO, voids its bills, reverses live
+      // delivery receipts (disposition "retain") — all inside one
+      // transaction. Raises on any violation (e.g. state changed between the
+      // checks above and now).
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("apply_procurement_cancellation", {
+        p_plan: impact.plan,
+        p_actor: dbUser.id,
+      });
+      if (rpcError) {
+        return NextResponse.json({ error: rpcError.message }, { status: 500 });
       }
 
-      updatePayload = { status: "cancelled" };
-      break;
+      const { data: freshPo, error: refetchError } = await supabase
+        .from("purchase_orders")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (refetchError || !freshPo) {
+        return NextResponse.json({ error: refetchError?.message ?? "PO not found after cancellation" }, { status: 500 });
+      }
+
+      // Recalculate PR status after cancellation so remaining qty is freed —
+      // same call the generic tail below makes for every other action.
+      if (po.pr_id) {
+        await recalculatePrStatus(supabase, po.pr_id);
+      }
+
+      await logAudit(supabase, {
+        entityType: "purchase_order",
+        entityId: id,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: {
+          ...diffChanges(po as Record<string, unknown>, freshPo as Record<string, unknown>),
+          ...extraAuditChanges,
+        },
+      });
+
+      return NextResponse.json({ data: freshPo, effects: impact.effects, rpc_result: rpcResult });
     }
 
     case "partial_cancel": {
