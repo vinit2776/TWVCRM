@@ -5,7 +5,7 @@ import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
-import { setUserActive } from "@/lib/cosec";
+import { setUserActive, provisionMemberAccess } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 
@@ -449,6 +449,49 @@ export async function PATCH(
       console.error("[contract-activate] auto-generate statement failed:", err);
       // Non-fatal: activation still succeeds. Operator can use the
       // "Generate Missing Bills" button in /billing to retry.
+    }
+
+    // ── COSEC backfill for members added before activation ───────────
+    // Members added while the contract was still draft never went through
+    // the auto-provision step in POST /members (it's gated on the contract
+    // being operational at add-time). Catch them up here so activation
+    // always leaves every active member enrollable.
+    if (oldContract.location_id) {
+      (async () => {
+        try {
+          const admin = createAdminClient();
+          const { data: members } = await admin
+            .from("contract_members")
+            .select("id, name, phone")
+            .eq("contract_id", id)
+            .eq("is_active", true);
+
+          if (!members || members.length === 0) return;
+
+          const { data: existingAccess } = await admin
+            .from("cosec_access_users")
+            .select("entity_id")
+            .eq("user_type", "member")
+            .in("entity_id", members.map((m) => m.id));
+          const alreadyProvisioned = new Set((existingAccess ?? []).map((a) => a.entity_id));
+
+          const unprovisioned = members.filter((m) => !alreadyProvisioned.has(m.id));
+          if (unprovisioned.length === 0) return;
+
+          await Promise.allSettled(unprovisioned.map((m) =>
+            provisionMemberAccess(admin, {
+              memberId: m.id,
+              memberName: m.name,
+              memberPhone: m.phone,
+              locationId: oldContract.location_id,
+              contractEndDate: data.end_date,
+            })
+          ));
+          console.log(`[contract-activate] Backfilled COSEC access for ${unprovisioned.length} member(s) on ${data.contract_number}`);
+        } catch (err) {
+          console.error("[contract-activate] COSEC member backfill failed:", err);
+        }
+      })();
     }
 
     // ── UniFi API voucher issuance (Nungambakkam LGF only) ───────────

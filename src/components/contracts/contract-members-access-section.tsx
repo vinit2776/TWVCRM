@@ -640,6 +640,24 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
     }
   }
 
+  async function handleProvision(member: Member) {
+    setActionLoading(a => ({ ...a, [`provision_${member.id}`]: true }));
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/members/${member.id}/provision`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(`${member.name} provisioned on ${json.deviceCount} device${json.deviceCount === 1 ? "" : "s"} — enrollment PIN sent via SMS`);
+        await load();
+      } else {
+        toast.error(json.error ?? "Failed to provision access");
+      }
+    } finally {
+      setActionLoading(a => ({ ...a, [`provision_${member.id}`]: false }));
+    }
+  }
+
   async function handleBlock(member: Member) {
     setActionLoading(a => ({ ...a, [`block_${member.id}`]: true }));
     try {
@@ -818,6 +836,22 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* Provision access — member has no device enrollment yet at all.
+                        Happens when a member was added before the contract was activated. */}
+                    {status === "pending" && (
+                      <Button
+                        size="sm" variant="outline" className="text-xs h-7 gap-1"
+                        onClick={() => handleProvision(member)}
+                        disabled={actionLoading[`provision_${member.id}`]}
+                        title="Push this member onto the location's COSEC devices and send an enrollment PIN"
+                      >
+                        {actionLoading[`provision_${member.id}`]
+                          ? <Loader2 size={13} className="animate-spin" />
+                          : <ShieldCheck size={12} />
+                        }
+                        Provision Access
+                      </Button>
+                    )}
                     {/* Resend enrollment PIN — biometric devices only, during enrollment phase */}
                     {status === "provisioned" && wizardGroup?.supports_biometric !== false && (
                       <Button

@@ -8,6 +8,8 @@
  * API base: http://<device_ip>:<device_port>/device.cgi/<endpoint>?action=<action>&...
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 export interface CosecDevice {
   ip: string;
   port: number;
@@ -437,6 +439,102 @@ export function uuidToRefId(uuid: string, min: number, max: number): number {
 /** Generate a random 6-digit enrollment PIN */
 export function generatePin(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+// ─── Contract member provisioning ──────────────────────────────────────────────
+
+export interface ProvisionMemberAccessParams {
+  memberId: string;
+  memberName: string;
+  memberPhone: string;
+  locationId: string;
+  contractEndDate: string | null; // ISO date, or null for no expiry
+}
+
+export interface ProvisionMemberAccessResult {
+  provisionedDeviceCount: number;
+  pin: string | null;
+  skippedReason?: string;
+}
+
+/**
+ * Provision a contract member onto every enabled entry-point COSEC device at
+ * their contract's location, and SMS them the enrollment PIN.
+ *
+ * Shared by three call sites that all need the same idempotent behavior:
+ * member creation (immediately, if the contract is already operational),
+ * contract activation (backfill for members added while still in draft),
+ * and manual re-provision from the admin UI. Safe to call more than once —
+ * the device call and the `cosec_access_users` upsert key on
+ * (device_id, cosec_user_id).
+ */
+export async function provisionMemberAccess(
+  admin: SupabaseClient,
+  params: ProvisionMemberAccessParams
+): Promise<ProvisionMemberAccessResult> {
+  const { data: devices } = await admin
+    .from("cosec_devices")
+    .select("id, device_ip, device_port, device_password")
+    .eq("location_id", params.locationId)
+    .eq("is_enabled", true)
+    .eq("device_category", "entry_point"); // business_centre devices are booking-only
+
+  if (!devices || devices.length === 0) {
+    return { provisionedDeviceCount: 0, pin: null, skippedReason: "No enabled entry-point devices at this location" };
+  }
+
+  const cosecUserId = memberCosecId(params.memberId);
+  const cosecRefId = uuidToRefId(params.memberId, 1, 49999);
+  const pin = generatePin();
+  const validUntil = params.contractEndDate ? new Date(params.contractEndDate) : undefined;
+  const now = new Date().toISOString();
+
+  const results = await Promise.allSettled(devices.map(async (dev) => {
+    await provisionUser(
+      { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
+      {
+        cosecUserId,
+        cosecRefId,
+        name: params.memberName.slice(0, 15),
+        userActive: false, // stays inactive until biometric/card enrolled
+        validUntil,
+        pin,
+        selfEnrollmentEnable: true,
+      }
+    );
+    await admin.from("cosec_access_users").upsert({
+      device_id:         dev.id,
+      cosec_user_id:     cosecUserId,
+      cosec_ref_id:      cosecRefId,
+      user_type:         "member",
+      entity_id:         params.memberId,
+      enrollment_status: "provisioned",
+      access_pin:        pin,
+      valid_until:       params.contractEndDate,
+      provisioned_at:    now,
+      updated_at:        now,
+    }, { onConflict: "device_id,cosec_user_id" });
+  }));
+
+  let provisionedDeviceCount = 0;
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      provisionedDeviceCount++;
+    } else {
+      console.error(`[cosec] provisionMemberAccess failed on device ${devices[i].id}:`, r.reason);
+    }
+  });
+
+  if (provisionedDeviceCount > 0 && params.memberPhone) {
+    const { dltSms } = await import("@/lib/whatsapp");
+    dltSms.otp(params.memberPhone, pin, params.memberId).catch(() => null);
+  }
+
+  return {
+    provisionedDeviceCount,
+    pin: provisionedDeviceCount > 0 ? pin : null,
+    skippedReason: provisionedDeviceCount === 0 ? "Provisioning failed on all devices" : undefined,
+  };
 }
 
 // ─── Manual contract linking ───────────────────────────────────────────────────
