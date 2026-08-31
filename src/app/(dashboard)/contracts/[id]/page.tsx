@@ -1810,7 +1810,16 @@ export default function ContractDetailPage({
 
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
                 {/* Role gate: admin, manager, sales_rep can renew/decline/extend */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (() => {
+                  // Renewal window: only opens up within 45 days of expiry — an
+                  // "expired" contract is already past that window by definition.
+                  // Mirrors the hard gate in POST /api/contracts/[id]/renew.
+                  const daysUntilExpiry = contract.end_date
+                    ? Math.ceil((new Date(contract.end_date + "T00:00:00Z").getTime() - Date.now()) / 86_400_000)
+                    : null;
+                  const renewalWindowOpen = contract.status === "expired" || (daysUntilExpiry !== null && daysUntilExpiry <= 45);
+
+                  return (
                   <div className="space-y-1.5 pt-1">
                     <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <span>Not sure which to use?</span>
@@ -1819,10 +1828,18 @@ export default function ContractDetailPage({
                         side="top"
                       />
                     </div>
+                    {!renewalWindowOpen && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Renew unlocks 45 days before expiry
+                        {contract.end_date && ` (from ${formatDate(new Date(new Date(contract.end_date + "T00:00:00Z").getTime() - 45 * 86_400_000).toISOString().slice(0, 10))})`}.
+                      </p>
+                    )}
                     <div className="flex gap-2">
                       <Button
                         size="sm"
                         className="flex-1"
+                        disabled={!renewalWindowOpen}
+                        title={!renewalWindowOpen ? "Renewal opens 45 days before expiry" : undefined}
                         onClick={() => setRenewDialogOpen(true)}
                       >
                         <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -1850,7 +1867,8 @@ export default function ContractDetailPage({
                       </Button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {contract.status === "renewal_in_progress" && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">

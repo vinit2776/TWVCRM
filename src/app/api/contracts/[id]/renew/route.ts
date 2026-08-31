@@ -58,6 +58,20 @@ export async function POST(
     }, { status: 400 });
   }
 
+  // Renewal window: only open up within 45 days of expiry (an "expired"
+  // contract is already past that window by definition). Prevents
+  // accidental early clicks from locking the parent into
+  // "renewal_in_progress" years ahead of the actual renewal conversation.
+  if (source.status === "active") {
+    const endDate = new Date(source.end_date + "T00:00:00Z");
+    const daysUntilExpiry = Math.ceil((endDate.getTime() - Date.now()) / 86_400_000);
+    if (daysUntilExpiry > 45) {
+      return NextResponse.json({
+        error: `Renewal can only be started within 45 days of the contract's expiry (${source.end_date}). ${daysUntilExpiry} days remain.`,
+      }, { status: 400 });
+    }
+  }
+
   // 2. Check no existing renewal already exists
   const { data: existingRenewal } = await supabase
     .from("contracts")
