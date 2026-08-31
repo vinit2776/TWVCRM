@@ -282,6 +282,28 @@ function daysOverdueBadge(days: number | null) {
   return <Badge className="bg-red-100 text-red-800 border-red-300">{days}d overdue</Badge>;
 }
 
+/** Ageing view heat-shading: darker fill = closer to the worst value in that
+ *  bucket column on the page, so a customer's overdue concentration reads at
+ *  a glance instead of requiring five numbers to be compared by eye. Scaled
+ *  per column (not globally) since buckets differ wildly in typical size. */
+const AGEING_HEAT_TIERS = {
+  d1_15:   ["bg-yellow-50 text-yellow-800", "bg-yellow-100 text-yellow-900", "bg-yellow-200 text-yellow-900"],
+  d16_30:  ["bg-orange-50 text-orange-800", "bg-orange-100 text-orange-900", "bg-orange-200 text-orange-900"],
+  d31_45:  ["bg-red-50 text-red-800", "bg-red-100 text-red-900", "bg-red-200 text-red-900"],
+  d45plus: ["bg-red-100 text-red-900", "bg-red-200 text-red-900", "bg-red-300 text-red-900"],
+} as const;
+
+function ageingHeatCell(value: number, max: number, bucket: keyof typeof AGEING_HEAT_TIERS) {
+  if (value <= 0) return <span className="text-gray-300">—</span>;
+  const ratio = max > 0 ? value / max : 0;
+  const tier = ratio > 0.66 ? 2 : ratio > 0.33 ? 1 : 0;
+  return (
+    <span className={`inline-block rounded px-2 py-0.5 font-medium ${AGEING_HEAT_TIERS[bucket][tier]}`}>
+      {formatCurrency(value)}
+    </span>
+  );
+}
+
 export default function AccountsReceivablePage() {
   const [rows, setRows] = useState<ReceivableRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -547,6 +569,13 @@ export default function AccountsReceivablePage() {
     });
   }, [filtered]);
 
+  const agingMaxes = useMemo(() => ({
+    d1_15: Math.max(0, ...agingRows.map((r) => r.d1_15)),
+    d16_30: Math.max(0, ...agingRows.map((r) => r.d16_30)),
+    d31_45: Math.max(0, ...agingRows.map((r) => r.d31_45)),
+    d45plus: Math.max(0, ...agingRows.map((r) => r.d45plus)),
+  }), [agingRows]);
+
   const openPayDialog = (row: ReceivableRow) => setPayRow(row);
 
   const sendReminder = async (row: ReceivableRow) => {
@@ -796,16 +825,16 @@ export default function AccountsReceivablePage() {
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">{r.notDue > 0 ? formatCurrency(r.notDue) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
-                          {r.d1_15 > 0 ? <span className="font-medium text-yellow-700">{formatCurrency(r.d1_15)}</span> : <span className="text-gray-300">—</span>}
+                          {ageingHeatCell(r.d1_15, agingMaxes.d1_15, "d1_15")}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
-                          {r.d16_30 > 0 ? <span className="font-medium text-orange-700">{formatCurrency(r.d16_30)}</span> : <span className="text-gray-300">—</span>}
+                          {ageingHeatCell(r.d16_30, agingMaxes.d16_30, "d16_30")}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
-                          {r.d31_45 > 0 ? <span className="font-medium text-red-700">{formatCurrency(r.d31_45)}</span> : <span className="text-gray-300">—</span>}
+                          {ageingHeatCell(r.d31_45, agingMaxes.d31_45, "d31_45")}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
-                          {r.d45plus > 0 ? <span className="font-bold text-red-900">{formatCurrency(r.d45plus)}</span> : <span className="text-gray-300">—</span>}
+                          {ageingHeatCell(r.d45plus, agingMaxes.d45plus, "d45plus")}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.total)}</td>
                       </tr>
