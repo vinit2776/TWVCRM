@@ -235,10 +235,15 @@ export async function POST(
 
     console.log("Invoice email sent:", emailResult?.id, "to:", recipients);
 
+    // The AR reminder ladder (fetchDunnableReceivables) reads due_date off this
+    // row directly, not off the billing_statements mirror below — without this,
+    // an invoice sent without a due date at creation is permanently un-remindable.
+    const dueDate = (invoice.due_date as string | null) || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
     // Update status to "sent"
     await supabase
       .from("proforma_invoices")
-      .update({ status: "sent" })
+      .update({ status: "sent", ...(invoice.due_date ? {} : { due_date: dueDate }) })
       .eq("id", id);
 
     // ── Mirror into billing_statements so this flows through the same AR ────────
@@ -262,7 +267,6 @@ export async function POST(
         }
       } else {
         const todayYmd = new Date().toISOString().slice(0, 10);
-        const dueDate = (invoice.due_date as string | null) || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const lineItems = ((invoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
           description: item.description,
           qty: item.quantity,
