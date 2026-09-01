@@ -26,7 +26,7 @@ CREATE TYPE item_unit              AS ENUM ('kg', 'litre', 'packet', 'box', 'pie
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS procurement_vendors (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name          VARCHAR(255) NOT NULL,
   category      vendor_category NOT NULL DEFAULT 'general',
   contact_name  VARCHAR(255),
@@ -65,7 +65,7 @@ CREATE POLICY "Authenticated users can delete procurement_vendors"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS procurement_items (
-  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id             UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name           VARCHAR(255) NOT NULL,
   department     procurement_department NOT NULL,
   unit           item_unit NOT NULL,
@@ -100,7 +100,7 @@ CREATE POLICY "Authenticated users can delete procurement_items"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS purchase_requests (
-  id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                      UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   pr_number               VARCHAR(20) UNIQUE NOT NULL,
   department              procurement_department NOT NULL,
   location_id             UUID REFERENCES locations(id),
@@ -141,7 +141,7 @@ CREATE POLICY "Authenticated users can delete purchase_requests"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS purchase_request_items (
-  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id               UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   pr_id            UUID NOT NULL REFERENCES purchase_requests(id) ON DELETE CASCADE,
   item_id          UUID REFERENCES procurement_items(id),
   item_name        VARCHAR(255) NOT NULL,
@@ -171,7 +171,7 @@ CREATE POLICY "Authenticated users can delete purchase_request_items"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS purchase_orders (
-  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                    UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   po_number             VARCHAR(20) UNIQUE NOT NULL,
   pr_id                 UUID REFERENCES purchase_requests(id),
   vendor_id             UUID NOT NULL REFERENCES procurement_vendors(id),
@@ -212,7 +212,7 @@ CREATE POLICY "Authenticated users can delete purchase_orders"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS purchase_order_items (
-  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   po_id             UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
   pr_item_id        UUID REFERENCES purchase_request_items(id),
   item_id           UUID REFERENCES procurement_items(id),
@@ -244,7 +244,7 @@ CREATE POLICY "Authenticated users can delete purchase_order_items"
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS vendor_bills (
-  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   bill_number       VARCHAR(20) UNIQUE NOT NULL,
   po_id             UUID REFERENCES purchase_orders(id),
   vendor_id         UUID NOT NULL REFERENCES procurement_vendors(id),

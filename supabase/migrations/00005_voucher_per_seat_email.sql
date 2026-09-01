@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_voucher_issuances_active
 
 -- 5. OTP table for replacement authorization
 CREATE TABLE IF NOT EXISTS admin_otp (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   otp_code VARCHAR(6) NOT NULL,
   purpose VARCHAR(50) NOT NULL DEFAULT 'voucher_replacement',
   reference_id UUID NOT NULL,

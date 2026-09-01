@@ -6,7 +6,7 @@
 
 -- 1. Create locations table
 CREATE TABLE locations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   name VARCHAR(255) NOT NULL,
   code VARCHAR(10) UNIQUE NOT NULL,
   address TEXT,
