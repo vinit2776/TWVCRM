@@ -32,6 +32,10 @@ export async function GET(request: NextRequest) {
   }
 
   const searchParams = request.nextUrl.searchParams;
+  const companyId = searchParams.get("company_id");
+  if (!companyId) {
+    return NextResponse.json({ error: "company_id is required" }, { status: 400 });
+  }
   const year = parseInt(searchParams.get("year") ?? String(new Date().getFullYear()));
   const month = parseInt(searchParams.get("month") ?? String(new Date().getMonth() + 1));
 
@@ -43,18 +47,22 @@ export async function GET(request: NextRequest) {
   const currentFY = getCurrentFY();
   const { fyStart, fyEnd } = getFYWindow(currentFY);
 
-  // ── Fetch all budget config rows ─────────────────────────────────────────
+  // ── Fetch all budget config rows (this company only — budgets are not
+  // shared across companies) ───────────────────────────────────────────────
   const { data: budgets } = await supabase
     .from("department_budgets")
     .select("*, creator:users!department_budgets_created_by_fkey(id, full_name), updater:users!department_budgets_updated_by_fkey(id, full_name)")
+    .eq("company_id", companyId)
     .order("department");
 
   // ── Active centers (real locations, not the hidden replenishment hub) ────
   // Used to build the per-center budget breakdown for CENTER_SCOPED_DEPARTMENTS.
+  // Scoped to this company — Medworks has its own separate locations.
   const { data: locationRows } = await supabase
     .from("locations")
     .select("id, name, is_hub")
     .eq("is_active", true)
+    .eq("company_id", companyId)
     .order("name");
   const centers = ((locationRows ?? []) as Array<{ id: string; name: string; is_hub: boolean | null }>)
     .filter((l) => !l.is_hub);
@@ -66,6 +74,7 @@ export async function GET(request: NextRequest) {
   const { data: mrCommitted, error: mrCommittedError } = await supabase
     .from("purchase_requests")
     .select("department, location_id, total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
@@ -75,6 +84,7 @@ export async function GET(request: NextRequest) {
   const { data: mrProvisional } = await supabase
     .from("purchase_requests")
     .select("department, location_id, total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
@@ -85,6 +95,7 @@ export async function GET(request: NextRequest) {
   const { data: amcCommitted, error: amcCommittedError } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("expenditure_type", "amc")
     .gte("created_at", fyStart)
     .lte("created_at", fyEnd)
@@ -95,6 +106,7 @@ export async function GET(request: NextRequest) {
   const { data: amcProvisional } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("expenditure_type", "amc")
     .gte("created_at", fyStart)
     .lte("created_at", fyEnd)
@@ -214,12 +226,17 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
+  const companyId = body.company_id as string | undefined;
+  if (!companyId) {
+    return NextResponse.json({ error: "company_id is required" }, { status: 400 });
+  }
 
   // ── Save operational department budgets (global + optional per-center) ───
   if (Array.isArray(body.budgets)) {
     const { data: existing } = await supabase
       .from("department_budgets")
       .select("id, department, location_id")
+      .eq("company_id", companyId)
       .eq("budget_period", "monthly");
 
     const existingByDept: Record<string, string> = {};
@@ -258,6 +275,7 @@ export async function POST(request: NextRequest) {
         const { error } = await supabase
           .from("department_budgets")
           .insert({
+            company_id: companyId,
             department: b.department,
             location_id: null,
             monthly_budget: b.monthly_budget ?? 0,
@@ -286,6 +304,7 @@ export async function POST(request: NextRequest) {
           const { error } = await supabase
             .from("department_budgets")
             .insert({
+              company_id: companyId,
               department: b.department,
               location_id: c.location_id,
               monthly_budget: c.monthly_budget ?? 0,
@@ -319,6 +338,7 @@ export async function POST(request: NextRequest) {
     const { data: existingAmc } = await supabase
       .from("department_budgets")
       .select("id")
+      .eq("company_id", companyId)
       .eq("department", "amc")
       .eq("budget_period", "annual")
       .eq("financial_year", amc.financial_year)
@@ -340,6 +360,7 @@ export async function POST(request: NextRequest) {
       const { error } = await supabase
         .from("department_budgets")
         .insert({
+          company_id: companyId,
           department: "amc",
           location_id: null,
           monthly_budget: amc.annual_budget ?? 0,

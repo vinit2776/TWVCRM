@@ -222,9 +222,14 @@ function VendorBillsPageInner() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
-                      {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
-                    </Badge>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
+                        {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {bill.companies?.brand_name ?? "—"}
+                      </Badge>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
                     {formatCurrency(bill.total_amount)}

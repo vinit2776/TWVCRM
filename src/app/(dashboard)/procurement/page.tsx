@@ -13,6 +13,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -22,6 +23,7 @@ import {
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import type { Company } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -334,6 +336,8 @@ export default function ProcurementDashboard() {
   const userRole = user?.role ?? "";
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>(""); // "" = all companies (combined view)
   const [budgetRows, setBudgetRows] = useState<BudgetRow[] | null>(null);
   const [amcBudget, setAmcBudget] = useState<{
     financial_year: number;
@@ -351,18 +355,24 @@ export default function ProcurementDashboard() {
     total_this_month: number;
   } | null>(null);
 
-  const fetchData = () => {
+  const fetchData = (company: string) => {
     setLoading(true);
-    fetch("/api/procurement/dashboard")
+    const params = new URLSearchParams();
+    if (company) params.set("company_id", company);
+    fetch(`/api/procurement/dashboard?${params}`)
       .then((r) => r.json())
       .then((j) => { if (j.data) setData(j.data); })
       .finally(() => setLoading(false));
   };
 
-  const fetchBudgets = (role: string) => {
+  // Department + AMC budgets are entity-specific — /api/procurement/budget now
+  // requires a company_id, so there's no combined view for these two widgets
+  // when "All companies" is selected. They stay empty until one is picked.
+  const fetchBudgets = (role: string, company: string) => {
     if (!["admin", "manager"].includes(role)) return;
+    if (!company) { setBudgetRows(null); setAmcBudget(null); return; }
     setBudgetLoading(true);
-    fetch("/api/procurement/budget")
+    fetch(`/api/procurement/budget?company_id=${company}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.data) setBudgetRows(j.data);
@@ -374,15 +384,24 @@ export default function ProcurementDashboard() {
       .then((j) => { if (j.data) setReimbursementByCenter(j.data); });
   };
 
+  // Companies — default filter is "All companies" (combined view), so no
+  // auto-select here, unlike the budget page which requires exactly one.
   useEffect(() => {
-    fetchData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => setCompanies(j.data || []))
+      .catch(() => setCompanies([]));
   }, []);
 
   useEffect(() => {
-    if (userRole) fetchBudgets(userRole);
+    fetchData(companyId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRole]);
+  }, [companyId]);
+
+  useEffect(() => {
+    if (userRole) fetchBudgets(userRole, companyId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole, companyId]);
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
   const currentMonth = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
@@ -399,7 +418,20 @@ export default function ProcurementDashboard() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">{currentMonth} · Live overview</p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData}>Refresh</Button>
+        <div className="flex items-center gap-2">
+          <Select value={companyId || "__all__"} onValueChange={(v) => setCompanyId(v === "__all__" ? "" : v)}>
+            <SelectTrigger className="w-[180px] h-9 text-sm">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All companies</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => fetchData(companyId)}>Refresh</Button>
+        </div>
       </div>
 
       {/* KPI Row */}
@@ -521,6 +553,10 @@ export default function ProcurementDashboard() {
                   </p>
                 )}
               </>
+            ) : !companyId ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                Select a company above to see its department budget breakdown — budgets are company-specific.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">Unable to load budget data.</p>
             )}
@@ -633,6 +669,10 @@ export default function ProcurementDashboard() {
                   </div>
                 </div>
               </div>
+            ) : !companyId ? (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                Select a company above to see its AMC annual budget — AMC budgets are company-specific.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-2">
                 No AMC budget configured.{" "}

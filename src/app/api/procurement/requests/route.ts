@@ -14,6 +14,7 @@ const createPrItemSchema = z.object({
 });
 
 const createPrSchema = z.object({
+  company_id: z.string().uuid("Select which company this request is for"),
   department: z.enum(["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
@@ -54,14 +55,6 @@ const createPrSchema = z.object({
   }
 );
 
-function generatePrNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `PR-${yy}${mm}-${seq}`;
-}
-
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -74,6 +67,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const department = searchParams.get("department");
   const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
   const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
@@ -86,7 +80,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("purchase_requests")
     .select(
-      `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)`,
+      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false });
@@ -113,6 +107,7 @@ export async function GET(request: NextRequest) {
   }
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
+  if (companyId) query = query.eq("company_id", companyId);
   if (fromDate) query = query.gte("created_at", fromDate);
   if (toDate) query = query.lte("created_at", toDate);
   if (expenditureType) query = query.eq("expenditure_type", expenditureType);
@@ -165,19 +160,15 @@ export async function POST(request: NextRequest) {
     return sum;
   }, 0);
 
-  // Generate PR number within a transaction-safe approach
-  const { count: existingCount } = await supabase
-    .from("purchase_requests")
-    .select("*", { count: "exact", head: true });
-
-  const prNumber = generatePrNumber(existingCount ?? 0);
+  // pr_number is assigned by the generate_purchase_request_number() DB
+  // trigger, company-scoped via prData.company_id — see
+  // 00541_procurement_number_counters.sql.
   const status = submit ? "submitted" : "draft";
 
   const { data: pr, error: prError } = await supabase
     .from("purchase_requests")
     .insert({
       ...prData,
-      pr_number: prNumber,
       status,
       requested_by: dbUser.id,
       total_estimated_amount: totalEstimated,

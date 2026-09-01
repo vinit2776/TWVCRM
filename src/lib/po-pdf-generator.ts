@@ -9,23 +9,25 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import QRCode from "qrcode";
-import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
-import type { PurchaseOrder } from "@/types";
+import type { Company, PurchaseOrder } from "@/types";
 
 // ── TWV Brand Colors ──────────────────────────────────────────────────────────
 const BRAND_TEAL: [number, number, number] = [1, 94, 101];   // #015E65
 const BRAND_GREEN: [number, number, number] = [0, 174, 108]; // #00AE6C
 const BRAND_DARK: [number, number, number] = [26, 27, 30];   // #1A1B1E
 
-// ── Company Details ───────────────────────────────────────────────────────────
-const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PVT LTD";
-const COMPANY_ADDRESS = [
-  "Prakash Presidium, 110, Mahatma Gandhi Road,",
-  "Nungambakkam, Chennai - 600034",
-];
-const COMPANY_PHONE = "+91 97910 97900";
-const COMPANY_EMAIL = "contact@theworkvilla.com";
-const COMPANY_GST = "GST: 33AAACU4245J1ZF";
+// ── Company for PDF ──────────────────────────────────────────────────────────
+export type CompanyForPdf = Pick<
+  Company,
+  "name" | "brand_name" | "gstin" | "address" | "city" | "state" | "pincode" | "phone" | "email"
+> & {
+  logoBase64: string | null;
+  // Logo source aspect ratio varies by brand (Workvilla's is a wide wordmark,
+  // MedWorks Plus's is a square icon) — width/height must match or the image
+  // distorts. Defaults to Workvilla's existing 52x13 wordmark box.
+  logoWidth?: number;
+  logoHeight?: number;
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,30 +52,37 @@ function formatDatePDF(dateStr: string | null | undefined): string {
   });
 }
 
-/** Adds the TWV logo + company header. Returns the Y position after the header. */
-function addLogoToDoc(doc: jsPDF): number {
+/** Adds the company logo + header. Returns the Y position after the header. */
+function addLogoToDoc(doc: jsPDF, company: CompanyForPdf): number {
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Teal accent bar at the very top
   doc.setFillColor(...BRAND_TEAL);
   doc.rect(0, 0, pageWidth, 3, "F");
 
-  // Logo image (left side)
-  const logoW = 52;
-  const logoH = 13;
-  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
+  // Logo image (left side) — skip entirely if no logo is available for this company
+  if (company.logoBase64) {
+    const logoW = company.logoWidth ?? 52;
+    const logoH = company.logoHeight ?? 13;
+    doc.addImage(company.logoBase64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
+  }
 
   // Company details (right-aligned)
+  const cityStateLine = [company.city, [company.state, company.pincode].filter(Boolean).join(" - ")]
+    .filter(Boolean)
+    .join(", ");
+  const contactLine = [company.phone, company.email].filter(Boolean).join("  |  ");
+
   doc.setFontSize(7.5);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
-  doc.text(COMPANY_NAME, pageWidth - 14, 10, { align: "right" });
-  doc.text(COMPANY_ADDRESS[0], pageWidth - 14, 14, { align: "right" });
-  doc.text(COMPANY_ADDRESS[1], pageWidth - 14, 18, { align: "right" });
+  doc.text(company.name.toUpperCase(), pageWidth - 14, 10, { align: "right" });
+  if (company.address) doc.text(company.address, pageWidth - 14, 14, { align: "right" });
+  if (cityStateLine) doc.text(cityStateLine, pageWidth - 14, 18, { align: "right" });
   doc.setTextColor(...BRAND_TEAL);
-  doc.text(`${COMPANY_PHONE}  |  ${COMPANY_EMAIL}`, pageWidth - 14, 22, { align: "right" });
+  if (contactLine) doc.text(contactLine, pageWidth - 14, 22, { align: "right" });
   doc.setTextColor(100, 100, 100);
-  doc.text(COMPANY_GST, pageWidth - 14, 26, { align: "right" });
+  if (company.gstin) doc.text(`GST: ${company.gstin}`, pageWidth - 14, 26, { align: "right" });
 
   return 32;
 }
@@ -90,12 +99,12 @@ type PoForPDF = PurchaseOrder & {
 
 // ── Main Export ───────────────────────────────────────────────────────────────
 
-export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
+export async function generatePurchaseOrderPDF(po: PoForPDF, company: CompanyForPdf): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // ── Header ──
-  let y = addLogoToDoc(doc);
+  let y = addLogoToDoc(doc, company);
 
   // ── Divider ──
   doc.setDrawColor(...BRAND_TEAL);
