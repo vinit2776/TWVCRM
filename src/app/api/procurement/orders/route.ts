@@ -48,8 +48,11 @@ const createGoodsPoSchema = z.object({
 const createServicePoSchema = z.object({
   po_type: z.literal("service"),
   // When a service PO is created from an approved AMC MR, the MR id is carried
-  // through so the audit trail and PR-status recalc work the same as goods.
+  // through so the audit trail and PR-status recalc work the same as goods —
+  // company_id is inherited from that PR in that case. When there is no
+  // parent PR (a standalone service PO), company_id must be supplied directly.
   pr_id: z.string().uuid().nullish(),
+  company_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
   service_start_date: z.string().min(1, "Service start date is required"),
@@ -76,15 +79,10 @@ const createServicePoSchema = z.object({
   amc_escalation_phone: z.string().nullish(),
   amc_escalation2_name: z.string().nullish(),
   amc_escalation2_phone: z.string().nullish(),
-}).merge(advancePaymentSchema);
-
-function generatePoNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `PO-${yy}${mm}-${seq}`;
-}
+}).merge(advancePaymentSchema).refine(
+  (d) => !!d.pr_id || !!d.company_id,
+  { message: "Select which company this order is for", path: ["company_id"] }
+);
 
 // Helper: apply shared filters to any purchase_orders query
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,6 +93,7 @@ function applyPoFilters(
     status?: string | null;
     vendorId?: string | null;
     locationId?: string | null;
+    companyId?: string | null;
     prId?: string | null;
     advanceStatus?: string | null;
     search?: string;
@@ -104,10 +103,11 @@ function applyPoFilters(
   }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
-  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd } = opts;
+  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd, companyId } = opts;
   if (status) query = query.eq("status", status);
   if (vendorId) query = query.eq("vendor_id", vendorId);
   if (locationId) query = query.eq("location_id", locationId);
+  if (companyId) query = query.eq("company_id", companyId);
   if (prId) query = query.eq("pr_id", prId);
   if (advanceStatus) query = query.eq("advance_status", advanceStatus);
   // Department filter: pre-resolved to a list of PR IDs
@@ -139,6 +139,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const vendorId = searchParams.get("vendor_id");
   const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
   const prId = searchParams.get("pr_id");
   const advanceStatus = searchParams.get("advance_status");
   const department = searchParams.get("department");
@@ -180,13 +181,13 @@ export async function GET(request: NextRequest) {
     vendorIdsFromSearch = (matchingVendors ?? []).map((v: { id: string }) => v.id);
   }
 
-  const filterOpts = { status, vendorId, locationId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd };
+  const filterOpts = { status, vendorId, locationId, companyId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd };
 
   // ── Main paginated query ────────────────────────────────────────────────────
   let query = supabase
     .from("purchase_orders")
     .select(
-      `*, procurement_vendors(id, name), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department)`,
+      `*, procurement_vendors(id, name), locations(id, name), companies(id, name, brand_name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
@@ -233,12 +234,14 @@ export async function GET(request: NextRequest) {
     // Run PO totals + optional budget fetch in parallel
     const [{ data: allPos }, budgetRow] = await Promise.all([
       totalsQuery,
-      // Only fetch budget when department + month are both selected
-      (department && month)
+      // Only fetch budget when department + month + company are all selected —
+      // department_budgets is now scoped per company_id (00540_procurement_company_scoping.sql).
+      (department && month && companyId)
         ? supabase
             .from("department_budgets")
             .select("monthly_budget, is_active")
             .eq("department", department)
+            .eq("company_id", companyId)
             .is("location_id", null)
             .single()
         : Promise.resolve({ data: null }),
@@ -294,10 +297,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { count: existingCount } = await supabase
-      .from("purchase_orders")
-      .select("*", { count: "exact", head: true });
-    const poNumber = generatePoNumber(existingCount ?? 0);
+    // company_id is inherited from the parent PR when this service PO was
+    // created from one (e.g. an approved AMC MR); otherwise it's the
+    // standalone value supplied in the request — enforced by the schema
+    // refine() above. po_number is trigger-assigned, company-scoped.
+    let servicePoCompanyId = parsed.data.company_id ?? null;
+    if (parsed.data.pr_id) {
+      const { data: parentPr, error: parentPrError } = await supabase
+        .from("purchase_requests")
+        .select("company_id")
+        .eq("id", parsed.data.pr_id)
+        .single();
+      if (parentPrError || !parentPr) {
+        return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+      }
+      servicePoCompanyId = parentPr.company_id;
+    }
 
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
     const svcGstRate = parsed.data.gst_rate ?? 0;
@@ -336,6 +351,7 @@ export async function POST(request: NextRequest) {
       .from("purchase_orders")
       .insert({
         po_type: "service",
+        company_id: servicePoCompanyId,
         // Link back to the originating AMC MR if this PO was created from one
         pr_id: parsed.data.pr_id ?? null,
         vendor_id: parsed.data.vendor_id,
@@ -347,7 +363,6 @@ export async function POST(request: NextRequest) {
         notes: parsed.data.notes ?? null,
         payment_terms: parsed.data.payment_terms ?? null,
         terms_and_conditions: parsed.data.terms_and_conditions ?? null,
-        po_number: poNumber,
         ordered_by: dbUser.id,
         total_ordered_amount: totalAmount,
         total_gst_amount: svcGstAmount,
@@ -431,7 +446,7 @@ export async function POST(request: NextRequest) {
   // ── 1. Validate PR exists and is in an approvable state ──
   const { data: pr, error: prFetchError } = await supabase
     .from("purchase_requests")
-    .select("id, status, purchase_request_items(id, quantity, estimated_price)")
+    .select("id, status, company_id, purchase_request_items(id, quantity, estimated_price)")
     .eq("id", parsed.data.pr_id)
     .single();
 
@@ -490,11 +505,8 @@ export async function POST(request: NextRequest) {
     return sum + Math.round(base * (item.gst_rate ?? 0)) / 100;
   }, 0);
 
-  const { count: existingCount } = await supabase
-    .from("purchase_orders")
-    .select("*", { count: "exact", head: true });
-
-  const poNumber = generatePoNumber(existingCount ?? 0);
+  // po_number is trigger-assigned, company-scoped via pr.company_id below —
+  // see 00541_procurement_number_counters.sql.
 
   // ── 4. Validate advance amount ≤ PO total ──
   const goodsTotalWithGst = totalOrderedAmount + totalGstAmount;
@@ -510,6 +522,7 @@ export async function POST(request: NextRequest) {
     .from("purchase_orders")
     .insert({
       po_type: "goods",
+      company_id: pr.company_id,
       pr_id: poData.pr_id,
       vendor_id: poData.vendor_id,
       location_id: poData.location_id ?? null,
@@ -517,7 +530,6 @@ export async function POST(request: NextRequest) {
       notes: poData.notes ?? null,
       payment_terms: poData.payment_terms ?? null,
       terms_and_conditions: poData.terms_and_conditions ?? null,
-      po_number: poNumber,
       ordered_by: dbUser.id,
       total_ordered_amount: totalOrderedAmount,
       total_gst_amount: totalGstAmount,

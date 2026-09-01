@@ -30,6 +30,7 @@ import {
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
   CENTER_SCOPED_DEPARTMENTS,
 } from "@/lib/constants";
+import type { Company } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -828,6 +829,10 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  // Budgets are entity-specific — no combined view, so a company must always
+  // be selected. Defaults to the first company returned (Workvilla).
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>("");
   const [rows, setRows] = useState<BudgetRow[]>([]);
   const [amcSummary, setAmcSummary] = useState<AmcBudgetSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -852,9 +857,30 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const isAdmin = userRole === "admin";
   const currentFY = getCurrentFY();
 
+  // Companies — default to the first (Workvilla) once loaded, since this page
+  // has no combined view and always needs exactly one company selected.
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!companyId && all.length > 0) setCompanyId(all[0].id);
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const fetchBudgets = useCallback(async () => {
+    if (!companyId) return;
     setLoading(true);
-    const res = await fetch(`/api/procurement/budget?year=${year}&month=${month}`);
+    // Clear stale data up front so a company switch never shows the
+    // previous company's departments/centers/AMC while the new fetch is in flight.
+    setRows([]);
+    setEdits({});
+    setCenterEdits({});
+    setAmcSummary(null);
+    const res = await fetch(`/api/procurement/budget?company_id=${companyId}&year=${year}&month=${month}`);
     if (res.ok) {
       const json = await res.json();
       const safeRows: BudgetRow[] = Array.isArray(json.data) ? json.data : [];
@@ -892,7 +918,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
       }
     }
     setLoading(false);
-  }, [year, month]);
+  }, [companyId, year, month]);
 
   useEffect(() => { fetchBudgets(); }, [fetchBudgets]);
 
@@ -908,6 +934,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   // Save operational department budgets
   const handleSave = async () => {
+    if (!companyId) { toast.error("Select a company first"); return; }
     setSaving(true);
     const budgets = DEPARTMENTS.map((dept) => ({
       department: dept,
@@ -924,7 +951,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
     const res = await fetch("/api/procurement/budget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ budgets }),
+      body: JSON.stringify({ company_id: companyId, budgets }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -938,11 +965,13 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   // Save AMC annual budget
   const handleSaveAmc = async () => {
+    if (!companyId) { toast.error("Select a company first"); return; }
     setSavingAmc(true);
     const res = await fetch("/api/procurement/budget", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        company_id: companyId,
         amc: {
           financial_year: currentFY,
           annual_budget: amcEdit.annual_budget ? parseFloat(amcEdit.annual_budget) : null,
@@ -989,6 +1018,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Select value={companyId} onValueChange={setCompanyId}>
+            <SelectTrigger className="w-[150px] h-8 text-xs">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={String(month)} onValueChange={(v) => setMonth(parseInt(v))}>
             <SelectTrigger className="w-[120px] h-8 text-xs">
               <SelectValue />

@@ -13,6 +13,7 @@ import {
   type BillFilters, EMPTY_FILTERS, filtersToParams, parseBillFilters,
   countActiveFilters, describeFilterChips, CHIP_RESET_GROUPS, hasAnyFilter,
 } from "@/lib/bill-search";
+import type { Company } from "@/types";
 
 interface BillSearchBarProps {
   /**
@@ -84,6 +85,19 @@ export function BillSearchBar({
     [vendorOptions]
   );
 
+  // Company list for the Company filter — fetched once on mount (small, fixed list).
+  const [companies, setCompanies] = useState<Company[]>([]);
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => setCompanies(j.data || []))
+      .catch(() => { /* non-fatal — company filter just stays empty */ });
+  }, []);
+  const companyLookup = useMemo(
+    () => Object.fromEntries(companies.map((c) => [c.id, c.brand_name])),
+    [companies]
+  );
+
   // Debounce the search text for the always-on input.
   // 500ms gives comfortable buffer for moderate typists.
   // Functional update compares against latest state at fire time so we don't
@@ -138,8 +152,8 @@ export function BillSearchBar({
   }, []);
 
   const chips = useMemo(
-    () => describeFilterChips(filters, { vendors: vendorLookup }),
-    [filters, vendorLookup]
+    () => describeFilterChips(filters, { vendors: vendorLookup, companies: companyLookup }),
+    [filters, vendorLookup, companyLookup]
   );
   const activeCount = countActiveFilters(filters);
 
@@ -309,6 +323,23 @@ export function BillSearchBar({
                 />
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">Company</Label>
+              <Select
+                value={draft.company_id || "__any__"}
+                onValueChange={(v) => setDraft((p) => ({ ...p, company_id: v === "__any__" ? "" : v }))}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Any" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__any__">Any</SelectItem>
+                  {companies.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1">
               <Label className="text-xs">Has IRN</Label>
               <Select

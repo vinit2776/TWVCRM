@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -11,6 +11,11 @@ export async function GET() {
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
+
+  // Optional — omitted shows a combined view across all companies.
+  const companyId = request.nextUrl.searchParams.get("company_id");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scoped = (q: any) => (companyId ? q.eq("company_id", companyId) : q);
 
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
@@ -36,51 +41,51 @@ export async function GET() {
     topVendorsRes,
   ] = await Promise.all([
     // MRs pending approval count
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("id", { count: "exact", head: true })
-      .eq("status", "submitted"),
+      .eq("status", "submitted")),
 
     // MRs approved but not yet fully ordered
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("id, total_estimated_amount", { count: "exact" })
-      .in("status", ["approved", "partially_ordered"]),
+      .in("status", ["approved", "partially_ordered"])),
 
     // MRs created this month by department
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("department")
-      .gte("created_at", monthStart),
+      .gte("created_at", monthStart)),
 
     // Total MRs this month
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", monthStart),
+      .gte("created_at", monthStart)),
 
     // Open POs
-    supabase
+    scoped(supabase
       .from("purchase_orders")
       .select("id, total_ordered_amount", { count: "exact" })
-      .in("status", ["pending", "ordered"]),
+      .in("status", ["pending", "ordered"])),
 
     // MRs approved this month → "Spent This Month"
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("total_estimated_amount")
       .in("status", ["approved", "partially_ordered", "po_created"])
-      .gte("approved_at", monthStart),
+      .gte("approved_at", monthStart)),
 
     // POs by status
-    supabase
+    scoped(supabase
       .from("purchase_orders")
       .select("status")
-      .not("status", "eq", "cancelled"),
+      .not("status", "eq", "cancelled")),
 
     // Payment pipeline: approved bills that are unpaid or partially paid
     // Ordered by due_date ascending so most urgent appear first
-    supabase
+    scoped(supabase
       .from("vendor_bills")
       .select(`
         id, bill_number, total_amount, amount_paid, due_date, payment_status,
@@ -90,10 +95,10 @@ export async function GET() {
       `)
       .eq("approval_status", "approved")
       .in("payment_status", ["unpaid", "partially_paid"])
-      .order("due_date", { ascending: true, nullsFirst: false }),
+      .order("due_date", { ascending: true, nullsFirst: false })),
 
     // Awaiting approval: bills submitted but not yet approved/rejected
-    supabase
+    scoped(supabase
       .from("vendor_bills")
       .select(`
         id, bill_number, total_amount, amount_paid, due_date, invoice_date, created_at,
@@ -101,10 +106,10 @@ export async function GET() {
         purchase_orders(id, po_number)
       `)
       .eq("approval_status", "pending")
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })),
 
     // MR approval pipeline: submitted MRs with detail, oldest first (most urgent)
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select(`
         id, pr_number, department, total_estimated_amount, created_at, notes,
@@ -112,28 +117,28 @@ export async function GET() {
         purchase_request_items(id, item_name, quantity, unit, estimated_price)
       `)
       .eq("status", "submitted")
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })),
 
     // Recent 5 MRs
-    supabase
+    scoped(supabase
       .from("purchase_requests")
       .select("id, pr_number, department, status, total_estimated_amount, created_at, requester:users!purchase_requests_requested_by_fkey(full_name)")
       .order("created_at", { ascending: false })
-      .limit(5),
+      .limit(5)),
 
     // Recent 5 POs
-    supabase
+    scoped(supabase
       .from("purchase_orders")
       .select("id, po_number, status, total_ordered_amount, created_at, procurement_vendors(name)")
       .order("created_at", { ascending: false })
-      .limit(5),
+      .limit(5)),
 
     // Top 5 vendors by PO value this month
-    supabase
+    scoped(supabase
       .from("purchase_orders")
       .select("vendor_id, total_ordered_amount, procurement_vendors(name)")
       .gte("created_at", monthStart)
-      .not("status", "eq", "cancelled"),
+      .not("status", "eq", "cancelled")),
   ]);
 
   // ── Compute aggregates ────────────────────────────────────────────────────

@@ -31,9 +31,10 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const amcStatus   = searchParams.get("amc_status");
   const locationId  = searchParams.get("location_id");
+  const companyId   = searchParams.get("company_id");
 
   // ── Fetch AMC service POs with vendor bill payment info ──────────────────
-  const query = supabase
+  let query = supabase
     .from("purchase_orders")
     .select(`
       id, po_number, po_type, status, amc_status,
@@ -45,12 +46,15 @@ export async function GET(request: NextRequest) {
       total_ordered_amount, created_at,
       procurement_vendors(id, name),
       locations(id, name),
+      companies(id, name, brand_name),
       purchase_requests(id, pr_number, department, expenditure_type),
       purchase_order_items(id, item_name, unit),
       vendor_bills(id, payment_status, approval_status),
       linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code)
     `)
     .order("created_at", { ascending: false });
+
+  if (companyId) query = query.eq("company_id", companyId);
 
   const { data: rows, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -100,7 +104,9 @@ export async function GET(request: NextRequest) {
   }
 
   // ── AMC annual budget summary (for budget banner on the page) ────────────
-  const canSeeBudget = ["admin", "manager"].includes(dbUser.role);
+  // Budget is company-scoped — only computed when a single company is selected,
+  // since a combined AMC budget across two separate legal entities is meaningless.
+  const canSeeBudget = ["admin", "manager"].includes(dbUser.role) && !!companyId;
   let budgetSummary = null;
 
   if (canSeeBudget) {
@@ -111,15 +117,17 @@ export async function GET(request: NextRequest) {
       supabase
         .from("department_budgets")
         .select("monthly_budget, is_active, notes")
+        .eq("company_id", companyId!)
         .eq("department", "amc")
         .eq("budget_period", "annual")
         .eq("financial_year", currentFY)
         .is("location_id", null)
         .maybeSingle(),
-      computeAmcCommitted(supabase, fyStart, fyEnd),
+      computeAmcCommitted(supabase, fyStart, fyEnd, companyId!),
       supabase
         .from("purchase_requests")
         .select("total_estimated_amount")
+        .eq("company_id", companyId!)
         .eq("expenditure_type", "amc")
         .gte("created_at", fyStart)
         .lte("created_at", fyEnd)

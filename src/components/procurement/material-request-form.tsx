@@ -29,7 +29,7 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
+import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface LineItem {
@@ -104,6 +104,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     return PROCUREMENT_DEPARTMENTS.includes(initial) ? initial : "pantry";
   });
   const [locationId, setLocationId] = useState<string>(pr?.location_id ?? "");
+  const [companyId, setCompanyId] = useState<string>(pr?.company_id ?? "");
+  const [companies, setCompanies] = useState<Company[]>([]);
   const isCenterScoped = (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department);
 
   // ── AMC fields (used when department === "amc") ─────────────────────────────
@@ -179,12 +181,27 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
   // Fetch AMC annual budget preview whenever AMC department is selected
   useEffect(() => {
-    if (department !== "amc") { setAmcBudgetCheck(null); return; }
-    fetch("/api/procurement/budget/check?department=amc&expenditure_type=amc&amount=0")
+    if (department !== "amc" || !companyId) { setAmcBudgetCheck(null); return; }
+    fetch(`/api/procurement/budget/check?department=amc&expenditure_type=amc&amount=0&company_id=${companyId}`)
       .then((r) => r.json())
       .then((j) => setAmcBudgetCheck(j))
       .catch(() => setAmcBudgetCheck(null));
-  }, [department]);
+  }, [department, companyId]);
+
+  // Companies — for new MRs, default to the first (Workvilla) once loaded.
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!isEdit && !companyId && all.length > 0) {
+          setCompanyId(all[0].id);
+        }
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch facility assets for the AMC asset-picker (only when AMC is selected)
   useEffect(() => {
@@ -264,8 +281,17 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const [locations, setLocations] = useState<Location[]>([]);
 
   useEffect(() => {
-    fetch("/api/locations").then((r) => r.json()).then((j) => setLocations(j.data || []));
-  }, []);
+    if (!companyId) { setLocations([]); return; }
+    fetch(`/api/locations?company_id=${companyId}`).then((r) => r.json()).then((j) => setLocations(j.data || []));
+  }, [companyId]);
+
+  // Changing the company invalidates the previously selected location — the
+  // two companies have entirely separate location lists (create mode only;
+  // an existing MR's company is locked, see the selector below).
+  const handleCompanyChange = (v: string) => {
+    setCompanyId(v);
+    if (!isEdit) setLocationId("");
+  };
 
   // Fetch catalog items when department changes or catalog opens
   useEffect(() => {
@@ -366,6 +392,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
     return {
       department,
+      company_id: companyId,
       location_id: locationId || null,
       expenditure_type: expenditureType,
       notes: notes.trim() || undefined,
@@ -471,6 +498,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   };
 
   const validate = (): string | null => {
+    if (!companyId) return "Select which company this request is for";
     if (isEdit && department !== pr!.department && !canCrossReimbursementBoundary) {
       if (department === "reimbursement" || pr!.department === "reimbursement") {
         return "Only an admin can move a material request into or out of Reimbursement";
@@ -729,6 +757,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           <CardTitle className="text-base">Request Details</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="company">Company <span className="text-red-500">*</span></Label>
+            <Select value={companyId} onValueChange={handleCompanyChange} disabled={isEdit}>
+              <SelectTrigger id="company">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {isEdit && (
+              <p className="text-xs text-muted-foreground flex items-start gap-1">
+                <Lock className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                Company can&apos;t be changed after a request is created
+              </p>
+            )}
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="department">Department <span className="text-red-500">*</span></Label>
             <Select

@@ -25,7 +25,8 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 // Type-only import — compiles away, no runtime cost. Keeps Parameters<typeof ...> working.
-import type { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
+import type { generatePurchaseOrderPDF, CompanyForPdf } from "@/lib/po-pdf-generator";
+import { TWV_LOGO_BASE64, MEDWORKS_LOGO_BASE64 } from "@/lib/logo-data";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
@@ -204,6 +205,31 @@ function validateFile(file: File): string | null {
     return "File size must be under 10 MB";
   }
   return null;
+}
+
+// ─── PO PDF company helper ─────────────────────────────────────────────────────
+// po.companies is joined server-side by GET /api/procurement/orders/[id] and is NOT NULL
+// in the DB, but the type allows null — guard defensively rather than crash on a stale/bad fetch.
+function getCompanyForPdf(po: PurchaseOrder): CompanyForPdf | null {
+  const company = po.companies;
+  if (!company) return null;
+  const isWorkvilla = company.brand_name === "Workvilla";
+  return {
+    name: company.name,
+    brand_name: company.brand_name,
+    gstin: company.gstin ?? null,
+    address: company.address ?? null,
+    city: company.city ?? null,
+    state: company.state ?? null,
+    pincode: company.pincode ?? null,
+    phone: company.phone ?? null,
+    email: company.email ?? null,
+    logoBase64: isWorkvilla ? TWV_LOGO_BASE64 : MEDWORKS_LOGO_BASE64,
+    // Workvilla's source is a wide wordmark (52x13 default in the generator);
+    // MedWorks Plus's is a square icon lockup — render it as a square so it
+    // doesn't stretch.
+    ...(isWorkvilla ? {} : { logoWidth: 13, logoHeight: 13 }),
+  };
 }
 
 // ─── File upload helper ───────────────────────────────────────────────────────
@@ -935,8 +961,13 @@ export default function PurchaseOrderDetailPage() {
               variant="outline"
               size="sm"
               onClick={async () => {
+                const company = getCompanyForPdf(po);
+                if (!company) {
+                  toast.error("Missing company details for this purchase order");
+                  return;
+                }
                 const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
-                const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0], company);
                 pdf.save(`${po.po_number}.pdf`);
               }}
             >
@@ -2897,10 +2928,15 @@ export default function PurchaseOrderDetailPage() {
                   toast.error("Please enter a valid email address");
                   return;
                 }
+                const company = getCompanyForPdf(po);
+                if (!company) {
+                  toast.error("Missing company details for this purchase order");
+                  return;
+                }
                 setEmailSending(true);
                 try {
                   const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
-                  const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                  const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0], company);
                   const pdfBlob = pdf.output("blob");
                   const formData = new FormData();
                   formData.append("recipients", JSON.stringify([email]));

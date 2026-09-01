@@ -2,6 +2,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 
 export interface CreateVendorBillInput {
+  company_id: string;
   vendor_id: string;
   invoice_number?: string | null;
   invoice_date: string;
@@ -36,6 +37,7 @@ export async function createVendorBill(
   const { data: bill, error: billError } = await supabase
     .from("vendor_bills")
     .insert({
+      company_id: input.company_id,
       po_id: input.po_id ?? null,
       vendor_id: input.vendor_id,
       invoice_number: input.invoice_number ?? null,

@@ -20,7 +20,7 @@ import {
 } from "@/lib/constants";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
-import type { ProcurementVendor, FacilityAsset } from "@/types";
+import type { ProcurementVendor, FacilityAsset, Company } from "@/types";
 
 function addMonths(dateStr: string, months: number): string {
   const d = new Date(dateStr);
@@ -48,6 +48,12 @@ function NewServicePOForm() {
   const [customName, setCustomName] = useState("");
   const [locationId, setLocationId] = useState("");
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+
+  // Company — inherited (read-only) from the linked MR when created from one;
+  // otherwise a required selector for this standalone service PO.
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState("");
+  const [inheritedCompany, setInheritedCompany] = useState<Pick<Company, "id" | "name" | "brand_name"> | null>(null);
   const [serviceStartDate, setServiceStartDate] = useState(new Date().toISOString().split("T")[0]);
   const [billingCycle, setBillingCycle] = useState<string>("monthly");
   const [cycleCount, setCycleCount] = useState("12");
@@ -132,6 +138,22 @@ function NewServicePOForm() {
     fetchAssets();
   }, [fetchVendors, fetchLocations, fetchAssets]);
 
+  // Companies — only relevant for a standalone service PO (no source MR). When
+  // created from an MR, the company is inherited and not selectable here; see
+  // the from-MR pre-fill effect below, which sets `inheritedCompany` instead.
+  useEffect(() => {
+    if (fromMrId) return;
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!companyId && all.length > 0) setCompanyId(all[0].id);
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromMrId]);
+
   // Redirect legacy direct entry → unified MR flow. Allow the route only when
   // we're creating a PO from an approved MR (?from_mr=<id>) so the converter
   // page keeps working.
@@ -150,6 +172,7 @@ function NewServicePOForm() {
         const pr = j.data;
         if (!pr) return;
         setSourceMrNumber(pr.pr_number ?? null);
+        if (pr.companies) setInheritedCompany(pr.companies);
         // Service identity
         if (pr.service_item_name) setCustomName(pr.service_item_name);
         else if (pr.purchase_request_items?.[0]?.item_name) setCustomName(pr.purchase_request_items[0].item_name);
@@ -226,6 +249,7 @@ function NewServicePOForm() {
     e.preventDefault();
     if (!vendorId) { toast.error("Vendor is required"); return; }
     if (!serviceItemName.trim()) { toast.error("Service description is required"); return; }
+    if (!fromMrId && !companyId) { toast.error("Select which company this order is for"); return; }
 
     if (isAmc) {
       if (!linkedAssetId) { toast.error("Select the asset this AMC covers"); return; }
@@ -257,7 +281,7 @@ function NewServicePOForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           po_type: "service",
-          ...(fromMrId ? { pr_id: fromMrId } : {}),
+          ...(fromMrId ? { pr_id: fromMrId } : { company_id: companyId }),
           vendor_id: vendorId,
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
@@ -321,10 +345,40 @@ function NewServicePOForm() {
       {fromMrId && sourceMrNumber && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
           Creating PO from <span className="font-semibold">{sourceMrNumber}</span>. Asset, dates, contacts and advance are pre-filled from the MR. Select the vendor below to proceed.
+          {inheritedCompany && (
+            <div className="mt-1 text-xs text-blue-700">
+              Company: <span className="font-medium">{inheritedCompany.brand_name}</span>
+            </div>
+          )}
         </div>
       )}
 
       <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
+
+        {/* Company — only selectable for a standalone service PO. When created
+            from an MR, the company is inherited (shown read-only above). */}
+        {!fromMrId && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Company</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5">
+                <Label htmlFor="company">Company <span className="text-red-500">*</span></Label>
+                <Select value={companyId} onValueChange={setCompanyId}>
+                  <SelectTrigger id="company">
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {companies.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── Mode switcher — declare intent first ── */}
         <div className="grid grid-cols-2 gap-3">

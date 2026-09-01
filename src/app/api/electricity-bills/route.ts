@@ -157,6 +157,13 @@ export async function POST(request: NextRequest) {
   if (!config) {
     return NextResponse.json({ error: "Electricity config not found for this location. Configure it first under Location → Electricity tab." }, { status: 422 });
   }
+
+  // Landlord vendor bill (below) inherits its company from this location.
+  const { data: locationRow } = await supabase
+    .from("locations")
+    .select("company_id")
+    .eq("id", location_id)
+    .single();
   if (!config.enabled) {
     return NextResponse.json({ error: "Electricity billing is not enabled for this location." }, { status: 422 });
   }
@@ -268,6 +275,7 @@ export async function POST(request: NextRequest) {
       const dueDate = new Date(bill_year, bill_month - 1, dueDay).toISOString().split("T")[0];
 
       const vb = await createVendorBill(supabase, {
+        company_id: locationRow!.company_id,
         vendor_id: config.landlord_vendor_id,
         invoice_number: landlord_bill_number ?? null,
         invoice_date: landlord_bill_date ?? today,
