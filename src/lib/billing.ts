@@ -27,6 +27,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { logAudit } from "@/lib/audit";
 import { computePhaseBoundaries, daysBetweenInclusiveYmd, addDaysToYmd, formatDateRange, type PhaseBoundary } from "@/lib/rate-phase-dates";
+import { BILLING_CYCLE_MONTHS } from "@/lib/constants";
 
 export interface GenerateOptions {
   /** Target month (1-12). Defaults to current month in IST. */
@@ -76,8 +77,15 @@ export interface GenerateResult {
   statementIds: string[];
   /** Contract numbers skipped because lead has no email AND no phone/mobile. */
   noContact: string[];
-  /** Contract numbers skipped by the quarterly billing gate (expected, not errors). */
-  quarterlySkipped: string[];
+  /** Contract numbers whose statement was raised and finalized but never
+   *  reached the client (dispatch failed for a reason other than no-contact).
+   *  These need a manual resend — the idempotency partition treats a finalized
+   *  statement as already-sent, so no later run picks them back up. */
+  notDelivered: string[];
+  /** Contract numbers skipped by the advance-cycle billing gate — quarterly /
+   *  half-yearly / yearly contracts whose next_billing_date doesn't fall in the
+   *  prepaid month (expected, not errors). */
+  cycleSkipped: string[];
   /** Statement numbers of legacy combined drafts that were voided so a fresh
    *  rent + usage split could replace them. Cutover housekeeping — surfaced in
    *  the operator confirmation so they know what's being replaced. */
@@ -350,7 +358,7 @@ type RenewalSplitResult = {
  * implies days nobody is contractually billable for) is left unbilled rather
  * than fabricated.
  */
-function computeRenewalSplitRentSegments(
+export function computeRenewalSplitRentSegments(
   cid: string,
   ownStartYmd: string,
   ownEndYmd: string,
@@ -567,6 +575,67 @@ function nextMonth(month: number, year: number): { month: number; year: number }
   return month === 12 ? { month: 1, year: year + 1 } : { month: month + 1, year };
 }
 
+/** Longest supported advance cycle (yearly), in months. */
+const MAX_BILLING_CYCLE_MONTHS = Math.max(...Object.values(BILLING_CYCLE_MONTHS));
+
+/**
+ * A contract's opening billing anchor: the first day of the first month it
+ * should be billed for.
+ *
+ * Start mid-month and the proposal's pro-rata invoice covers that partial
+ * month, so contract billing opens the following month. Start on the 1st and
+ * the start month itself is the first billed month.
+ *
+ * Always the 1st of a month, never the contract's start day. Billing periods
+ * are whole calendar months and the advance-cycle gate only reads which MONTH
+ * the anchor falls in — a day-of-month here is noise that reads as if it means
+ * something. It also must never be start + cycleMonths: that points at the
+ * SECOND cycle and silently skips billing the first one entirely.
+ */
+export function firstBillingAnchor(startYmd: string): string {
+  const [y, m, d] = startYmd.split("-").map(Number);
+  if (d === 1) return `${y}-${String(m).padStart(2, "0")}-01`;
+  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+}
+
+/** One calendar month's billing window — the unit rent is always priced in. */
+export interface MonthWindow {
+  month: number;
+  year: number;
+  /** YYYY-MM-01 */
+  first: string;
+  /** YYYY-MM-<last day> */
+  last: string;
+  /** Days in this calendar month — the proration denominator. */
+  days: number;
+}
+
+/**
+ * The calendar months one statement covers, starting at (month, year).
+ * `count` is the contract's billing-cycle length: 1 for monthly, 3 for
+ * quarterly, 6 half-yearly, 12 yearly. Rent for an advance-billed cycle is
+ * priced one calendar month at a time (never cycleMonths × a flat rate) so
+ * rate-phase transitions, renewal splits and a contract ending mid-cycle all
+ * keep working exactly as they do for a monthly contract.
+ */
+export function cycleMonthWindows(month: number, year: number, count: number): MonthWindow[] {
+  const windows: MonthWindow[] = [];
+  for (let i = 0; i < count; i++) {
+    const absMonth = month - 1 + i;
+    const y = year + Math.floor(absMonth / 12);
+    const m = (absMonth % 12) + 1;
+    const days = new Date(y, m, 0).getDate();
+    windows.push({
+      month: m,
+      year: y,
+      first: `${y}-${String(m).padStart(2, "0")}-01`,
+      last: `${y}-${String(m).padStart(2, "0")}-${days}`,
+      days,
+    });
+  }
+  return windows;
+}
+
 /**
  * Build a human-readable description for a service_usage_records line item.
  * Printer services use their printer_column to produce specific labels.
@@ -657,7 +726,7 @@ export async function generateMonthlyStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [], statementIds: [],
-    noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
+    noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   if (!contracts || contracts.length === 0) return result;
@@ -1123,7 +1192,7 @@ export async function generateRentProformas(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts: include any contract that starts before/during the prepaid month
@@ -1205,12 +1274,18 @@ export async function generateRentProformas(
   // Pre-fetch ALL contract_addons for the full billing run in one query, then
   // index by contract_id in a Map — eliminates the N+1 per-contract query that
   // was firing inside the loop below (one DB round-trip per active contract).
+  // The window spans the longest possible billing cycle (yearly = 12 months
+  // from the prepaid month), not just the prepaid month, because an advance
+  // cycle prices every month it covers. Add-ons that aren't live in a given
+  // month of the cycle price to zero for that month and are dropped there.
+  const longestCycleWindows = cycleMonthWindows(prepaid.month, prepaid.year, MAX_BILLING_CYCLE_MONTHS);
+  const cycleWindowLastYmd = longestCycleWindows[longestCycleWindows.length - 1].last;
   const { data: allAddonsRaw } = await adminSupabase
     .from("contract_addons")
     .select("id,description,amount,effective_from,effective_until,contract_id")
     .in("contract_id", contractIds)
     .eq("is_active", true)
-    .lte("effective_from", prepaidLastOfMonth)
+    .lte("effective_from", cycleWindowLastYmd)
     .or(`effective_until.is.null,effective_until.gte.${prepaidFirstOfMonth}`);
 
   type AddonRow = { id: string; description: string; amount: number; effective_from: string; effective_until: string | null; contract_id: string };
@@ -1253,11 +1328,16 @@ export async function generateRentProformas(
     const renewalDraft = contract.status === "renewal_in_progress" ? renewalDraftByParentId.get(cid) : undefined;
 
     try {
-      // ── 1. Quarterly gate ───────────────────────────────────────────────
-      if (contract.billing_cycle === "quarterly") {
+      // ── 1. Advance-cycle gate ───────────────────────────────────────────
+      // Monthly contracts bill every run. Quarterly / half-yearly / yearly
+      // contracts bill the WHOLE cycle up front, but only in the run whose
+      // prepaid month contains their next_billing_date anchor — every other
+      // run skips them (expected, surfaced as cycleSkipped, not an error).
+      const cycleMonths = BILLING_CYCLE_MONTHS[String(contract.billing_cycle ?? "monthly")] ?? 1;
+      if (cycleMonths > 1) {
         const nbd = contract.next_billing_date as string | null;
         if (!nbd || nbd < prepaidFirstOfMonth || nbd > prepaidLastOfMonth) {
-          result.quarterlySkipped.push(contractNumber);
+          result.cycleSkipped.push(contractNumber);
           result.skipped++;
           continue;
         }
@@ -1274,113 +1354,162 @@ export async function generateRentProformas(
       }
       const toSupersede = supersedable.get(cid); // may be undefined
 
-      // ── 3. Proration — own terms, split against the renewal draft's terms
-      // for any days after the parent's own end_date (see helper doc) ──────
-      const pFirst = new Date(prepaidFirstOfMonth + "T00:00:00Z");
-      const pLast  = new Date(prepaidLastOfMonth  + "T00:00:00Z");
-
-      const split = computeRenewalSplitRentSegments(
-        cid,
-        contract.start_date as string,
-        contract.end_date as string,
-        contract.subtotal as number | null,
-        contract.total_amount as number,
-        contract.phase_start_date as string | null,
-        contract.tax_percentage as number | null,
-        renewalDraft,
-        ratePhasesByContract,
-        prepaidFirstOfMonth,
-        prepaidLastOfMonth,
-        prepaidDaysInMonth
-      );
-      const rentSegments = split.segments;
-      const prepaidRentAmount = split.amount;
+      // ── 3. Price the cycle, one calendar month at a time ─────────────────
+      // A monthly contract has exactly one window (today's behaviour, byte for
+      // byte). An advance-billed contract has cycleMonths windows, each priced
+      // on its own days-in-month denominator so rate-phase transitions, renewal
+      // splits and a contract ending mid-cycle stay correct per month. Months
+      // the contract isn't billable for (it ended earlier in the cycle) price
+      // to zero and contribute nothing.
+      const windows = cycleMonthWindows(prepaid.month, prepaid.year, cycleMonths);
       const ownSeatQty = Number(contract.seats) || 1;
       const draftSeatQty = renewalDraft ? (Number(renewalDraft.seats) || 1) : ownSeatQty;
-      const buildCombinedRentItems = () => [
-        ...(split.ownSegments.length > 0
-          ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
-          : []),
-        ...(split.draftSegments.length > 0
-          ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, spaceAllocationsByContract.get(cid) ?? [], locationNamesByContract.get(cid) ?? null, monthLabelShort(prepaid.month, prepaid.year), prepaidDaysInMonth, split.isRenewalSplit)
-          : []),
-      ];
+      const allocations = spaceAllocationsByContract.get(cid) ?? [];
+      const contractLocationName = locationNamesByContract.get(cid) ?? null;
+      const addons = addonsByContractId.get(cid) ?? null;
+
+      const rentLineItems: ReturnType<typeof buildSegmentedRentLineItems> = [];
+      const addonLineItems: {
+        description: string; amount: number; note?: string;
+        monthly_rate?: number; days_used?: number; days_in_month?: number;
+      }[] = [];
+      const billedWindows: MonthWindow[] = [];
+      let prepaidRentAmount = 0;
+      let addonsSubtotal = 0;
+      let taxPercentage = Number(contract.tax_percentage || 18);
+      let taxPercentageResolved = false;
+      let isSplitMonth = false;
+      let isProratedOrSplit = false;
+      let hasRenewalSplit = false;
+      let maxSegmentsInAMonth = 0;
+
+      for (const w of windows) {
+        const split = computeRenewalSplitRentSegments(
+          cid,
+          contract.start_date as string,
+          contract.end_date as string,
+          contract.subtotal as number | null,
+          contract.total_amount as number,
+          contract.phase_start_date as string | null,
+          contract.tax_percentage as number | null,
+          renewalDraft,
+          ratePhasesByContract,
+          w.first,
+          w.last,
+          w.days
+        );
+
+        if (split.amount <= 0) continue;
+
+        // The first month that actually prices sets the statement's GST rate —
+        // one rate per invoice, same as a single-month statement.
+        if (!taxPercentageResolved) {
+          taxPercentage = split.taxPercentage;
+          taxPercentageResolved = true;
+        }
+
+        const monthShort = monthLabelShort(w.month, w.year);
+        rentLineItems.push(
+          ...(split.ownSegments.length > 0
+            ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit)
+            : []),
+          ...(split.draftSegments.length > 0
+            ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit)
+            : []),
+        );
+
+        prepaidRentAmount += split.amount;
+        billedWindows.push(w);
+        if (split.segments.length > 1) isSplitMonth = true;
+        if (split.segments.length > 1 || split.segments[0].days < w.days) isProratedOrSplit = true;
+        if (split.isRenewalSplit) hasRenewalSplit = true;
+        maxSegmentsInAMonth = Math.max(maxSegmentsInAMonth, split.segments.length);
+
+        // ── 4. Recurring add-ons, prorated within this month ───────────────
+        // addons are pre-fetched in bulk before the loop — no per-contract DB query needed
+        const wFirst = new Date(w.first + "T00:00:00Z");
+        const wLast  = new Date(w.last  + "T00:00:00Z");
+        for (const addon of (addons ?? [])) {
+          const aFrom = new Date(addon.effective_from + "T00:00:00Z");
+          const aUntil = addon.effective_until ? new Date(addon.effective_until + "T00:00:00Z") : null;
+          const billStart = aFrom > wFirst ? aFrom : wFirst;
+          const billEnd   = (aUntil && aUntil < wLast) ? aUntil : wLast;
+          const billDays  = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
+          // Add-on not live at all during this month of the cycle.
+          if (billDays <= 0) continue;
+          const isProrated = billDays < w.days;
+          const addonAmt  = isProrated
+            ? Math.round((addon.amount / w.days) * billDays * 100) / 100
+            : addon.amount;
+          addonLineItems.push({
+            // Single-month statements keep the bare description they've always
+            // had; a multi-month cycle needs the month or the invoice reads as
+            // the same add-on charged N times for no stated reason.
+            description: cycleMonths > 1 ? `${addon.description} | ${monthShort}` : addon.description,
+            amount: addonAmt,
+            ...(isProrated ? {
+              note: `Pro-rated ${billDays}/${w.days} days`,
+              monthly_rate: addon.amount,
+              days_used: billDays,
+              days_in_month: w.days,
+            } : {}),
+          });
+          addonsSubtotal += addonAmt;
+        }
+      }
 
       if (prepaidRentAmount <= 0) {
         result.skipped++;
         continue;
       }
 
-      // ── 4. Recurring add-ons for the prepaid month ─────────────────────
-      // addons are pre-fetched in bulk before the loop — no per-contract DB query needed
-      const taxPercentage = split.taxPercentage;
-      const addons = addonsByContractId.get(cid) ?? null;
-
-      let addonsSubtotal = 0;
-      const addonLineItems: {
-        description: string; amount: number; note?: string;
-        monthly_rate?: number; days_used?: number; days_in_month?: number;
-      }[] = [];
-      for (const addon of (addons ?? [])) {
-        const aFrom = new Date(addon.effective_from + "T00:00:00Z");
-        const aUntil = addon.effective_until ? new Date(addon.effective_until + "T00:00:00Z") : null;
-        const billStart = aFrom > pFirst ? aFrom : pFirst;
-        const billEnd   = (aUntil && aUntil < pLast) ? aUntil : pLast;
-        const billDays  = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
-        const isProrated = billDays < prepaidDaysInMonth;
-        const addonAmt  = isProrated
-          ? Math.round((addon.amount / prepaidDaysInMonth) * billDays * 100) / 100
-          : addon.amount;
-        addonLineItems.push({
-          description: addon.description,
-          amount: addonAmt,
-          ...(isProrated ? {
-            note: `Pro-rated ${billDays}/${prepaidDaysInMonth} days`,
-            monthly_rate: addon.amount,
-            days_used: billDays,
-            days_in_month: prepaidDaysInMonth,
-          } : {}),
-        });
-        addonsSubtotal += addonAmt;
-      }
+      // Period spans the first billed month through the last one actually
+      // priced — a contract ending mid-cycle never claims a period past its term.
+      const cycleFirstYmd = billedWindows[0].first;
+      const cycleLastYmd  = billedWindows[billedWindows.length - 1].last;
+      const cyclePeriodLabel = billedWindows.length > 1
+        ? `${monthLabel(billedWindows[0].month, billedWindows[0].year)} – ${monthLabel(billedWindows[billedWindows.length - 1].month, billedWindows[billedWindows.length - 1].year)}`
+        : monthLabel(billedWindows[0].month, billedWindows[0].year);
 
       const totalPrepaidSubtotal = prepaidRentAmount + addonsSubtotal;
       const { cgst: combinedCgst, sgst: combinedSgst, taxAmount: combinedTax, totalAmount: combinedTotal } = computeGstAndRounding(totalPrepaidSubtotal, taxPercentage);
-
-      const isSplitMonth = rentSegments.length > 1;
-      const isProratedOrSplit = isSplitMonth || (rentSegments[0] && rentSegments[0].days < prepaidDaysInMonth);
 
       // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
-        const previewRentItems = buildCombinedRentItems();
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
           monthly_rate?: number; days_used?: number; days_in_month?: number;
         }[] = [
-          ...previewRentItems.map((it) => ({ ...it })),
+          ...rentLineItems.map((it) => ({ ...it })),
           ...addonLineItems,
         ];
+        // Operators approve this preview before a live run, so an advance cycle
+        // must announce itself — "3 months in advance" is the whole point of the
+        // number they're about to sign off on.
+        const cyclePrefix = billedWindows.length > 1
+          ? `${billedWindows.length} months in advance · `
+          : "";
         result.preview.push({
           contract_number: contractNumber,
           customer_name: customerName,
           type: "rent",
-          period_label: monthLabel(prepaid.month, prepaid.year),
+          period_label: cyclePeriodLabel,
           subtotal: totalPrepaidSubtotal,
           tax_amount: combinedTax,
           cgst_amount: combinedCgst,
           sgst_amount: combinedSgst,
           total_amount: combinedTotal,
           line_items: previewLineItems,
-          note: split.isRenewalSplit
-            ? `Split: pre-renewal rate + escalated renewal rate · CGST+SGST${addonNote}`
+          note: hasRenewalSplit
+            ? `${cyclePrefix}Split: pre-renewal rate + escalated renewal rate · CGST+SGST${addonNote}`
             : isSplitMonth
-              ? `Split across ${rentSegments.length} rate phases · CGST+SGST${addonNote}`
+              ? `${cyclePrefix}Split across ${maxSegmentsInAMonth} rate phases · CGST+SGST${addonNote}`
               : isProratedOrSplit
-                ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
-                : `Full month · CGST+SGST${addonNote}`,
+                ? `${cyclePrefix}Prorated (contract ends mid-cycle) · CGST+SGST${addonNote}`
+                : `${cyclePrefix}Full month · CGST+SGST${addonNote}`,
           supersedes: toSupersede?.statement_number,
         });
         result.generated++;
@@ -1415,11 +1544,10 @@ export async function generateRentProformas(
       // Persisted per-item (not recomputed at display time) so the PDF breakdown
       // always reflects the rate actually charged, even if the contract's rate
       // later changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
-      const liveRentItems = buildCombinedRentItems();
       const lineItems = [{
         type: "prepaid_rent" as const,
-        label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
-        items: [...liveRentItems, ...addonLineItems],
+        label: `Prepaid Rent — ${cyclePeriodLabel}`,
+        items: [...rentLineItems, ...addonLineItems],
         subtotal: totalPrepaidSubtotal,
       }];
 
@@ -1429,8 +1557,8 @@ export async function generateRentProformas(
         .insert({
           contract_id:         cid,
           lead_id:             contract.lead_id,
-          period_start:        prepaidFirstOfMonth,
-          period_end:          prepaidLastOfMonth,
+          period_start:        cycleFirstYmd,
+          period_end:          cycleLastYmd,
           due_date:            dueDateFromSendDate(),
           statement_type:      "rent",
           fixed_amount:        totalPrepaidSubtotal,
@@ -1475,7 +1603,7 @@ export async function generateRentProformas(
       const isGstDirect = (contract.billing_mode as string | null) === "gst_direct";
       // For GST Direct, update the due_date to period_start + 7 before dispatch
       if (isGstDirect) {
-        const [py, pm, pd] = prepaidFirstOfMonth.split("-").map(Number);
+        const [py, pm, pd] = cycleFirstYmd.split("-").map(Number);
         const gstDueDate = new Date(Date.UTC(py, pm - 1, pd + 7)).toISOString().slice(0, 10);
         await adminSupabase.from("billing_statements").update({ due_date: gstDueDate }).eq("id", stmtId);
       }
@@ -1501,31 +1629,48 @@ export async function generateRentProformas(
         result.noContact.push(contractNumber);
       }
 
-      // Was the proforma actually delivered? Only true when a channel produced
-      // something the client can act on (email sent OR a payment link exists).
-      // A no-contact or failed dispatch must NOT count as delivered — otherwise
-      // the quarterly anchor advances and the unbilled quarter is skipped forever.
-      const delivered =
-        dispatchResult.success &&
-        !dispatchResult.noContact &&
-        (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
+      // Was the statement actually handed off? Only then may the cycle anchor
+      // move — advancing past a cycle nobody was told about skips it forever.
+      //
+      // Two shapes of "handed off", one per billing mode:
+      //   • Tally handoff v2 + gst_direct — the CRM deliberately sends nothing;
+      //     routing the statement to /accounting/inbox for accounts to issue in
+      //     Tally IS the delivery. The stubbed dispatchResult carries no email
+      //     and no payment link, so the channel test below would read it as a
+      //     failed send and pin the anchor forever — an advance-billed
+      //     gst_direct contract would bill one cycle and then silently stop.
+      //   • Everything else — a channel must have produced something the client
+      //     can act on (an email went out, or a payment link exists).
+      const delivered = handoff.skipLegacyDispatch
+        ? true
+        : dispatchResult.success &&
+          !dispatchResult.noContact &&
+          (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
 
-      // ── 8. Advance quarterly next_billing_date (only on confirmed delivery) ──
-      // Anchor on year+month and clamp the day to the target month's length so a
-      // 30th/31st billing day never drifts via JS Date month-overflow (e.g. Nov 30
-      // + 3 months would otherwise roll into March). Clamping keeps the anchor stable.
-      if (contract.billing_cycle === "quarterly" && delivered) {
-        const nbd = new Date(String(contract.next_billing_date) + "T00:00:00Z");
-        const origDay = nbd.getUTCDate();
-        const absMonth = nbd.getUTCMonth() + 3;
-        const targetYear = nbd.getUTCFullYear() + Math.floor(absMonth / 12);
-        const targetMonth = ((absMonth % 12) + 12) % 12;
-        const daysInTarget = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-        const clampedDay = Math.min(origDay, daysInTarget);
-        const advanced = new Date(Date.UTC(targetYear, targetMonth, clampedDay));
+      // Raised but never reached the client (dispatch threw, Razorpay refused,
+      // email bounced at send time). The statement IS finalized, so the
+      // idempotency partition will treat it as already-sent and no later run
+      // will retry it — that needs to be visible, not swallowed by a success
+      // count. noContact is reported separately; this covers every other cause.
+      if (!delivered && !dispatchResult.noContact) {
+        result.notDelivered.push(contractNumber);
+      }
+
+      // ── 8. Move next_billing_date past what we just billed ──────────────
+      // Derived from the period actually billed, not incremented from the old
+      // value: the anchor becomes the first day of the first month NOT yet
+      // billed. That makes it self-correcting — a wrong or stale anchor is
+      // fixed by the next successful run instead of drifting further — and it
+      // can't double-advance if a run is repeated. This generator is the ONLY
+      // writer of next_billing_date; nothing downstream (statement confirm,
+      // GST invoice generation) may touch it, or the anchor drifts by a month
+      // per action and the advance-cycle gate starts pointing at the wrong
+      // quarter. Only on confirmed delivery — a no-contact or failed dispatch
+      // must not move the anchor past an unbilled cycle.
+      if (delivered) {
         await adminSupabase
           .from("contracts")
-          .update({ next_billing_date: advanced.toISOString().slice(0, 10) })
+          .update({ next_billing_date: addDaysToYmd(cycleLastYmd, 1) })
           .eq("id", cid);
       }
 
@@ -1575,7 +1720,7 @@ export async function generateUsageStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts

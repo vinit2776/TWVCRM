@@ -302,15 +302,10 @@ export async function POST(
     })
     .eq("id", id);
 
-  // Update contract.next_billing_date if not already updated
-  if (contract.next_billing_date) {
-    const nextDate = new Date(contract.next_billing_date + "T00:00:00Z");
-    nextDate.setMonth(nextDate.getMonth() + 1);
-    await adminSupabase
-      .from("contracts")
-      .update({ next_billing_date: nextDate.toISOString().slice(0, 10) })
-      .eq("id", contract.id);
-  }
+  // next_billing_date is deliberately NOT touched here — see the same note in
+  // the statement confirm route. The rent generator owns the anchor and derives
+  // it from the period it billed; a cycle-blind +1 month here drifted quarterly
+  // and half-yearly contracts onto the wrong cycle.
 
   if (dbUserId) {
     logAudit(adminSupabase, {

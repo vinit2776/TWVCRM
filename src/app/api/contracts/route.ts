@@ -4,6 +4,7 @@ import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { getProrataPaidDate } from "@/lib/proposals";
+import { firstBillingAnchor } from "@/lib/billing";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -174,14 +175,12 @@ export async function POST(request: NextRequest) {
     endDateStr = endDate.toISOString().split("T")[0];
   }
 
-  // Calculate next_billing_date based on billing_cycle
-  const nextBillingDate = new Date(startDate);
-  switch (d.billing_cycle) {
-    case "monthly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 1); break;
-    case "quarterly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 3); break;
-    case "half_yearly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 6); break;
-    case "yearly": nextBillingDate.setMonth(nextBillingDate.getMonth() + 12); break;
-  }
+  // Opening billing anchor — the first month this contract is billed for.
+  // Previously this was start_date + one whole billing cycle, which for an
+  // advance-billed contract pointed at the SECOND cycle and skipped billing the
+  // first one outright (a quarterly contract starting 19 May anchored to 19 Aug,
+  // so June and July were never billed).
+  const nextBillingDateYmd = firstBillingAnchor(resolvedStartDateStr);
 
   const { data, error } = await supabase
     .from("contracts")
@@ -208,7 +207,7 @@ export async function POST(request: NextRequest) {
       // supabase/migrations/00503_contract_start_date_confirmation.sql.
       start_date_confirmed: proRataAlreadyPaid,
       start_date_locked_at: proRataAlreadyPaid ? new Date().toISOString() : null,
-      next_billing_date: nextBillingDate.toISOString().split("T")[0],
+      next_billing_date: nextBillingDateYmd,
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,
       notes: d.notes,

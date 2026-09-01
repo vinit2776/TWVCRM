@@ -14,7 +14,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle } from "lucide-react";
+import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle, CalendarPlus } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
@@ -90,7 +90,29 @@ interface ContractInvoicesSectionProps {
   proposalNumber?: string;
   prorataPaymentStatus?: string;
   prorataPaymentReceivedAt?: string;
+  billingCycle?: string | null;
+  nextBillingDate?: string | null;
 }
+
+/** One rent line the upcoming-cycle preview would bill. */
+interface CyclePreviewLine {
+  description: string;
+  amount: number;
+  qty?: number;
+  unit_price?: number;
+  note?: string;
+}
+
+interface CyclePreview {
+  period_label: string;
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  line_items?: CyclePreviewLine[];
+  note?: string;
+}
+
+const BILLING_ROLES = ["admin", "manager", "accounts"];
 
 export function ContractInvoicesSection({
   contractId,
@@ -100,6 +122,8 @@ export function ContractInvoicesSection({
   proposalNumber,
   prorataPaymentStatus,
   prorataPaymentReceivedAt,
+  billingCycle,
+  nextBillingDate,
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,6 +136,11 @@ export function ContractInvoicesSection({
   );
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [prorataStatement, setProrataStatement] = useState<Statement | null>(null);
+  const [cycleDialogOpen, setCycleDialogOpen] = useState(false);
+  const [cyclePreviewing, setCyclePreviewing] = useState(false);
+  const [cyclePreview, setCyclePreview] = useState<CyclePreview | null>(null);
+  const [cycleBlockedReason, setCycleBlockedReason] = useState<string | null>(null);
+  const [cycleSending, setCycleSending] = useState(false);
 
   useEffect(() => {
     setCurrentMode(billingMode || 'proforma_first');
@@ -215,8 +244,108 @@ export function ContractInvoicesSection({
     }
   };
 
+  // A rent run bills the month AFTER the month it targets, so to bill the cycle
+  // this contract is actually due for, target the month before its billing
+  // anchor. Without this the button only works during the one calendar month
+  // the anchor happens to fall due in — an advance-billed contract asking for
+  // its next quarter early, or one whose dispatch failed and left the anchor
+  // behind, could never be billed from here.
+  // Monthly contracts are excluded: nothing advances their next_billing_date,
+  // so the stored value is stale by design — they bill from the current month.
+  const cycleTarget = useMemo(() => {
+    if (!nextBillingDate || !billingCycle || billingCycle === "monthly") return null;
+    const [y, m] = nextBillingDate.split("-").map(Number);
+    if (!y || !m) return null;
+    return m === 1 ? { month: 12, year: y - 1 } : { month: m - 1, year: y };
+  }, [nextBillingDate, billingCycle]);
+
+  // Bill this one contract's upcoming rent cycle without running the whole
+  // month's batch. Same generator the batch uses (so proration, rate phases,
+  // GST and the advance-cycle length all behave identically) — just scoped to
+  // one contract_id. Previews first: this dispatches to the client for real.
+  const openCycleDialog = async () => {
+    setCycleDialogOpen(true);
+    setCyclePreview(null);
+    setCycleBlockedReason(null);
+    setCyclePreviewing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true, mode: "rent", contract_id: contractId, ...(cycleTarget ?? {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setCycleBlockedReason(json.error || "Preview failed");
+        return;
+      }
+      const rent = json.rent_proformas ?? {};
+      const item = (rent.preview ?? [])[0] as CyclePreview | undefined;
+      if (item) {
+        setCyclePreview(item);
+      } else if ((rent.already_sent ?? []).length > 0) {
+        setCycleBlockedReason("This cycle's rent proforma has already been sent to the client.");
+      } else if ((rent.cycle_skipped ?? []).length > 0) {
+        setCycleBlockedReason(
+          "Not due yet — this contract bills in advance, and its next billing date falls outside the upcoming month. Nothing to raise until then."
+        );
+      } else {
+        setCycleBlockedReason("Nothing to bill for the upcoming period.");
+      }
+    } catch {
+      setCycleBlockedReason("Preview failed");
+    } finally {
+      setCyclePreviewing(false);
+    }
+  };
+
+  const runCycleBilling = async () => {
+    setCycleSending(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "rent", contract_id: contractId, ...(cycleTarget ?? {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to generate the proforma");
+        return;
+      }
+      const noContact: string[] = json.rent_proformas?.no_contact ?? [];
+      const notDelivered: string[] = json.rent_proformas?.not_delivered ?? [];
+      const errors: string[] = json.errors ?? [];
+      if (errors.length > 0) {
+        toast.error(errors[0]);
+      } else if (noContact.length > 0) {
+        toast.error("Proforma raised but not sent — no email or phone on file for this client.");
+      } else if (notDelivered.length > 0) {
+        // Never report this as sent: the statement is finalized, so no billing
+        // run will retry it. It needs a manual resend from the statement itself.
+        toast.error("Proforma raised but the send failed — resend it from the statement below.", {
+          duration: 10000,
+        });
+      } else if ((json.rent_proformas?.generated ?? 0) > 0) {
+        toast.success("Proforma raised and sent to the client");
+      } else {
+        toast.info("Nothing was generated for this period");
+      }
+      setCycleDialogOpen(false);
+      await refreshStatements();
+    } catch {
+      toast.error("Failed to generate the proforma");
+    } finally {
+      setCycleSending(false);
+    }
+  };
+
   // Show toggle for active/live contracts — locked for terminated/expired/completed/renewed
   const canEditMode = !contractStatus || ["active", "renewal_in_progress", "draft", "sent", "accepted"].includes(contractStatus);
+  const canBillCycle =
+    !!userRole &&
+    BILLING_ROLES.includes(userRole) &&
+    !!contractStatus &&
+    ["active", "renewal_in_progress"].includes(contractStatus);
 
   return (
     <Card>
@@ -225,12 +354,20 @@ export function ContractInvoicesSection({
           <Receipt className="h-4 w-4 text-muted-foreground" />
           Monthly Invoices
         </CardTitle>
-        <Link href={`/billing?contract_id=${contractId}`}>
-          <Button variant="ghost" size="sm">
-            <ExternalLink className="h-3.5 w-3.5 mr-1" />
-            Billing
-          </Button>
-        </Link>
+        <div className="flex items-center gap-1">
+          {canBillCycle && (
+            <Button variant="outline" size="sm" onClick={openCycleDialog}>
+              <CalendarPlus className="h-3.5 w-3.5 mr-1" />
+              Bill next cycle
+            </Button>
+          )}
+          <Link href={`/billing?contract_id=${contractId}`}>
+            <Button variant="ghost" size="sm">
+              <ExternalLink className="h-3.5 w-3.5 mr-1" />
+              Billing
+            </Button>
+          </Link>
+        </div>
       </CardHeader>
 
       {/* Pro-rata invoice — collected via the proposal before the contract
@@ -432,6 +569,93 @@ export function ContractInvoicesSection({
           </div>
         )}
       </CardContent>
+
+      <Dialog open={cycleDialogOpen} onOpenChange={setCycleDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarPlus className="h-4 w-4 shrink-0" />
+              Bill the upcoming cycle
+            </DialogTitle>
+            <DialogDescription>
+              Raises this contract&apos;s next rent proforma on its own, without running the
+              month&apos;s batch. Sending it creates the payment link and emails the client.
+            </DialogDescription>
+          </DialogHeader>
+
+          {cyclePreviewing ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Working out what&apos;s due…
+            </div>
+          ) : cycleBlockedReason ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {cycleBlockedReason}
+            </div>
+          ) : cyclePreview ? (
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm text-muted-foreground">Period</span>
+                <span className="text-sm font-medium">{cyclePreview.period_label}</span>
+              </div>
+              <div className="border rounded-md max-h-64 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40 text-xs text-muted-foreground sticky top-0">
+                    <tr>
+                      <th className="text-left font-medium py-2 px-3">Description</th>
+                      <th className="text-right font-medium py-2 px-3">Qty</th>
+                      <th className="text-right font-medium py-2 px-3">Rate</th>
+                      <th className="text-right font-medium py-2 px-3">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {(cyclePreview.line_items ?? []).map((li, i) => (
+                      <tr key={i}>
+                        <td className="py-2 px-3">
+                          {li.description}
+                          {li.note && <span className="block text-xs text-muted-foreground">{li.note}</span>}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{li.qty ?? "—"}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {li.unit_price != null ? formatCurrency(li.unit_price) : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(li.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>GST</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.tax_amount)}</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatCurrency(cyclePreview.total_amount)}</span>
+                </div>
+              </div>
+              {cyclePreview.note && (
+                <p className="text-xs text-muted-foreground">{cyclePreview.note}</p>
+              )}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCycleDialogOpen(false)} disabled={cycleSending}>
+              Cancel
+            </Button>
+            <Button onClick={runCycleBilling} disabled={!cyclePreview || cycleSending}>
+              {cycleSending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Raise &amp; send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={pendingModeDialogOpen} onOpenChange={setPendingModeDialogOpen}>
         <DialogContent className="max-w-2xl">
