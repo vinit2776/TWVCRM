@@ -213,6 +213,8 @@ const EN = {
   'onboarding.step.calendar': "Calendar shows every day's status — Present, Late, Half Day, On Leave — color coded, for the whole month.",
   'onboarding.step.requests': 'Leave, Permission, Overtime and On-Site duty all live in this part of the menu. Submit a request here and your manager approves it from their own dashboard.',
   'onboarding.step.notifications': 'Notifications tell you when a request is approved or rejected, and you can switch languages anytime from the toggle above your name.',
+  'onboarding.step.documents': 'Upload your photo and ID documents here — visible to management only, never to other employees.',
+  'onboarding.whatsnew.documents': 'Documents — upload your photo, Aadhaar, PAN, resume, and education certificates from the new Documents page.',
 };
 
 const TA = {
@@ -424,6 +426,8 @@ const TA = {
   'onboarding.step.calendar': 'ஒவ்வொரு நாளின் நிலையும் — ஆஜர், தாமதம், அரை நாள், விடுப்பு — நிற வேறுபாட்டுடன் இங்கே தெரியும்.',
   'onboarding.step.requests': 'விடுப்பு, அனுமதி, கூடுதல் நேரம், இடத்தில் பணி ஆகியவை மெனுவின் இந்தப் பகுதியில் உள்ளன. இங்கு விண்ணப்பிக்கவும், உங்கள் மேலாளர் அவரது டாஷ்போர்டில் இருந்து அங்கீகரிப்பார்.',
   'onboarding.step.notifications': 'உங்கள் விண்ணப்பம் அங்கீகரிக்கப்பட்டதா, நிராகரிக்கப்பட்டதா என்பதை அறிவிப்புகள் தெரிவிக்கும். உங்கள் பெயருக்கு மேல் உள்ள பொத்தானில் இருந்து எப்போது வேண்டுமானாலும் மொழியை மாற்றலாம்.',
+  'onboarding.step.documents': 'உங்கள் புகைப்படம் மற்றும் அடையாள ஆவணங்களை இங்கே பதிவேற்றவும் — இது நிர்வாகத்திற்கு மட்டுமே தெரியும், மற்ற ஊழியர்களுக்குக் காட்டப்படாது.',
+  'onboarding.whatsnew.documents': 'ஆவணங்கள் — உங்கள் புகைப்படம், ஆதார், பான், ரெஸியூம், கல்விச் சான்றிதழ்களைப் புதிய Documents பக்கத்தில் இருந்து பதிவேற்றலாம்.',
 };
 
 const DICTS = { en: EN, ta: TA };
