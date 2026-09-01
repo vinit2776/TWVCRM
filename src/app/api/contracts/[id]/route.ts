@@ -95,6 +95,13 @@ export async function PATCH(
     allowedFields.department_id = trimmed;
   }
 
+  // Customer PO number — the annual purchase order the customer's own
+  // invoice processing requires on every statement for this contract.
+  if (body.po_number !== undefined) {
+    const trimmed = (typeof body.po_number === "string" ? body.po_number.trim() : body.po_number) || null;
+    allowedFields.po_number = trimmed;
+  }
+
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }

@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
     .from("billing_statements")
     .select(`
       id, statement_number, period_start, period_end,
-      total_amount, payment_status, handoff_state, updated_at,
+      total_amount, payment_status, handoff_state, updated_at, po_number,
       created_at, proforma_sent_at, tally_delivered_at,
       voided_at, void_reason, pi_cancelled_at,
       lifecycle_stage, tally_credit_note_number,
@@ -158,6 +158,7 @@ export async function GET(req: NextRequest) {
     payment_status: string;
     handoff_state: HandoffState;
     updated_at: string;
+    po_number: string | null;
     statement_type: "rent" | "usage" | "combined" | null;
     fixed_amount: number | null;
     usage_amount: number | null;
@@ -583,6 +584,7 @@ export async function GET(req: NextRequest) {
       statement_id: s.id,
       statement_number: s.statement_number,
       statement_total_amount: Math.round(Number(s.total_amount)),
+      po_number: s.po_number,
       period_start: s.period_start,
       period_end: s.period_end,
       payment_status: s.payment_status,
