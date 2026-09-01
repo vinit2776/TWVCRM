@@ -21,12 +21,8 @@ ALTER TABLE proposals
   ADD COLUMN IF NOT EXISTS deposit_settlement_id TEXT;
 
 -- ── Deposit top-ups ──────────────────────────────────────────────────────
-ALTER TABLE deposit_topups
-  ADD COLUMN IF NOT EXISTS due_date DATE,
-  ADD COLUMN IF NOT EXISTS reminder_count INTEGER NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS settlement_id TEXT;
+-- Moved to 00368_deposit_topups.sql, appended after that file's CREATE TABLE —
+-- deposit_topups doesn't exist yet at this point in a from-scratch migration run.
 
 -- ── Ad-hoc proforma invoices ─────────────────────────────────────────────
 -- followup_enabled defaults TRUE so every PI raised from here on joins the
@@ -104,7 +100,6 @@ CREATE POLICY "Authenticated users can read receivable_reminder_sends"
 
 CREATE INDEX IF NOT EXISTS idx_proposals_deposit_due
   ON proposals(deposit_due_date) WHERE deposit_payment_status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_deposit_topups_due
-  ON deposit_topups(due_date) WHERE status = 'pending';
+-- idx_deposit_topups_due moved to 00368_deposit_topups.sql (see note above)
 CREATE INDEX IF NOT EXISTS idx_proforma_invoices_due
   ON proforma_invoices(due_date);
