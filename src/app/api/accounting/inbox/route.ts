@@ -84,9 +84,10 @@ export async function GET(req: NextRequest) {
     .from("billing_statements")
     .select(`
       id, statement_number, period_start, period_end,
-      total_amount, payment_status, handoff_state, updated_at,
+      total_amount, payment_status, handoff_state, updated_at, po_number,
       created_at, proforma_sent_at, tally_delivered_at,
       voided_at, void_reason, pi_cancelled_at,
+      held_at, hold_reason,
       lifecycle_stage, tally_credit_note_number,
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
@@ -158,6 +159,7 @@ export async function GET(req: NextRequest) {
     payment_status: string;
     handoff_state: HandoffState;
     updated_at: string;
+    po_number: string | null;
     statement_type: "rent" | "usage" | "combined" | null;
     fixed_amount: number | null;
     usage_amount: number | null;
@@ -192,6 +194,8 @@ export async function GET(req: NextRequest) {
     tally_delivered_at: string | null;
     voided_at: string | null;
     void_reason: string | null;
+    held_at: string | null;
+    hold_reason: string | null;
     pi_cancelled_at: string | null;
     lifecycle_stage: string | null;
     tally_credit_note_number: string | null;
@@ -583,6 +587,7 @@ export async function GET(req: NextRequest) {
       statement_id: s.id,
       statement_number: s.statement_number,
       statement_total_amount: Math.round(Number(s.total_amount)),
+      po_number: s.po_number,
       period_start: s.period_start,
       period_end: s.period_end,
       payment_status: s.payment_status,
@@ -593,6 +598,8 @@ export async function GET(req: NextRequest) {
       is_voided: isVoided,
       voided_at: s.voided_at,
       void_reason: s.void_reason,
+      is_held: !!s.held_at,
+      hold_reason: s.hold_reason,
       pi_was_cancelled: !!s.pi_cancelled_at,
       lifecycle_stage: s.lifecycle_stage,
       tally_credit_note_number: s.tally_credit_note_number,

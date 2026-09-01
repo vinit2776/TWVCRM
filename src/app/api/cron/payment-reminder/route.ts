@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { pingCronHealth } from "@/lib/cron-ping";
 import {
   STAGES, pickStageIndex, daysOverdueFromDueDate,
-  sendOneReminder, fetchCcPools,
+  sendOneReminder, fetchCcPools, hasReachedCustomer,
 } from "@/lib/payment-reminder";
 import {
   pickStageForKind, shouldFire, sendReceivableReminder,
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
       id, statement_number, period_start, period_end, due_date, total_amount,
       payment_status, razorpay_payment_link_id, razorpay_payment_link_url,
       reminder_count, last_reminder_sent_at, voided_at,
-      issuance_channel, tally_delivered_at,
+      issuance_channel, tally_delivered_at, proforma_sent_at, emailed_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
@@ -77,6 +77,9 @@ export async function GET(request: NextRequest) {
 
   const ccPools = await fetchCcPools(admin);
   let sent = 0, skipped = 0, errors = 0;
+  // Statements held back because there's no evidence the customer ever received
+  // them. Reported, never silent — each one needs a human to resend it.
+  const undelivered: string[] = [];
   const summary: { id: string; stmt: string; stage: number; tone: string; channel: string; status: string; reason?: string }[] = [];
 
   for (const s of statements || []) {
@@ -93,12 +96,22 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
-    // OV1: never dun a Tally-issued invoice the customer hasn't received yet.
-    // tally_delivered_at is set by dispatchTallyInvoice once the PDF + payment
-    // link have actually gone out. CRM-issued statements (issuance_channel='crm')
-    // are unaffected — they were delivered at the moment due_date was stamped.
-    if (s.issuance_channel === "tally" && !s.tally_delivered_at) {
-      skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "tally not delivered" });
+    // Never dun an invoice the customer hasn't actually received.
+    //
+    // This used to guard Tally-issued statements only, on the assumption that
+    // a CRM-issued one "was delivered at the moment due_date was stamped".
+    // That assumption is false: a statement is finalized and due-dated BEFORE
+    // dispatch, so any failed send leaves a perfectly normal-looking receivable
+    // that nobody has ever seen. The ladder would then chase the customer —
+    // escalating tone and all — for an invoice that never left the building.
+    //
+    // hasReachedCustomer() checks the per-path delivery stamps instead. A
+    // statement with none of them is NOT dropped quietly: it is counted and
+    // named in the response so accounts can resend it (or dun it by hand from
+    // /accounting/receivables, which stays available for exactly this case).
+    if (!hasReachedCustomer(s)) {
+      skipped++; undelivered.push(s.statement_number as string);
+      summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "never delivered to customer — needs a resend" });
       continue;
     }
 
@@ -168,11 +181,20 @@ export async function GET(request: NextRequest) {
   sent += other.sent; skipped += other.skipped; errors += other.errors;
 
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", { sent, skipped, errors });
+  await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", {
+    sent, skipped, errors,
+    undelivered: undelivered.length,
+    ...(undelivered.length > 0 ? { undelivered_statements: undelivered.join(", ") } : {}),
+  });
   return NextResponse.json({
     date: todayIst, dry,
     considered: (statements || []).length + other.considered,
     sent, skipped, errors,
+    // Open receivables that were never delivered — excluded from dunning and
+    // waiting on a resend. Surfaced at the top level so it can't hide inside
+    // a long per-statement summary.
+    undelivered_count: undelivered.length,
+    undelivered_statements: undelivered,
     summary, other_summary: other.summary,
   });
 }

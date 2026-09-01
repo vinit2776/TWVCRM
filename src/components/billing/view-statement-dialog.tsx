@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail, FileMinus2 } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail, FileMinus2, PauseCircle, PlayCircle } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
@@ -122,6 +122,10 @@ interface Statement {
   voided_at?: string | null;
   /** Set when this draft was created by voiding an earlier statement. */
   voided_statement_id?: string | null;
+  /** Hold — blocks send/GST-issuance only; held_at set = currently on hold. */
+  held_at?: string | null;
+  hold_reason?: string | null;
+  held_by_user?: { full_name: string } | null;
   /** Bad-debt write-off — CRM-only, leaves the GST invoice/Tally record untouched. */
   written_off_at?: string | null;
   write_off_reason?: string | null;
@@ -220,6 +224,12 @@ export function ViewStatementDialog({
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [discardReason, setDiscardReason] = useState("");
   const [discardSubmitting, setDiscardSubmitting] = useState(false);
+
+  // Hold state — pauses send/GST-issuance only, draft stays editable
+  const [showHoldConfirm, setShowHoldConfirm] = useState(false);
+  const [holdReason, setHoldReason] = useState("");
+  const [holdSubmitting, setHoldSubmitting] = useState(false);
+  const [releaseHoldSubmitting, setReleaseHoldSubmitting] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -600,6 +610,73 @@ export function ViewStatementDialog({
       toast.error("Something went wrong");
     } finally {
       setDiscardSubmitting(false);
+    }
+  };
+
+  // Hold — pauses send/GST-issuance while something is being clarified or
+  // corrected, without freezing the draft itself. Not destructive like
+  // Void/Discard, so it isn't red and release needs no reason text.
+  const canPlaceHold =
+    !!statement &&
+    ["draft", "finalized"].includes(statement.status) &&
+    !statement.held_at &&
+    canRecordPayments(userRole);
+
+  const canReleaseHold = !!statement && !!statement.held_at && canRecordPayments(userRole);
+
+  const handlePlaceHold = async () => {
+    if (!statementId || !holdReason.trim()) return;
+    setHoldSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/hold`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold_reason: holdReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Statement is now on hold");
+        setShowHoldConfirm(false);
+        setHoldReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to place hold");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setHoldSubmitting(false);
+    }
+  };
+
+  const handleReleaseHold = async () => {
+    if (!statementId) return;
+    setReleaseHoldSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/release-hold`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Hold released");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to release hold");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setReleaseHoldSubmitting(false);
     }
   };
 
@@ -1383,7 +1460,8 @@ export function ViewStatementDialog({
                   handleSendProforma();
                 }
               }}
-              disabled={sendingProforma || reissuingLink}
+              disabled={sendingProforma || reissuingLink || !!statement?.held_at}
+              title={statement?.held_at ? `On hold: ${statement.hold_reason}` : undefined}
               variant={statement?.proforma_sent_at ? "outline" : "default"}
             >
               {(sendingProforma || reissuingLink) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
@@ -1471,8 +1549,14 @@ export function ViewStatementDialog({
           {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && (statement?.payment_status === "paid" || statement?.payment_status === "partially_paid") && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
             <Button
               onClick={handleGenerateGstInvoice}
-              disabled={generatingGst || gstModeReady === false}
-              title={gstModeReady === false ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync" : undefined}
+              disabled={generatingGst || gstModeReady === false || !!statement?.held_at}
+              title={
+                statement?.held_at
+                  ? `On hold: ${statement.hold_reason}`
+                  : gstModeReady === false
+                    ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync"
+                    : undefined
+              }
               className="bg-green-700 hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generatingGst ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
@@ -1596,6 +1680,81 @@ export function ViewStatementDialog({
               </div>
             );
           })()}
+          {/* Hold — pauses send/GST-issuance while something is being
+              clarified/corrected. Not destructive: shown to anyone viewing
+              the statement, but only accounts/admin get the buttons. */}
+          {statement?.held_at && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800">
+                On hold{statement.held_by_user?.full_name ? ` — placed by ${statement.held_by_user.full_name}` : ""}
+              </p>
+              <p className="text-xs text-amber-700">{statement.hold_reason}</p>
+              {canReleaseHold && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-fit border-amber-300 text-amber-800 hover:bg-amber-100"
+                  onClick={handleReleaseHold}
+                  disabled={releaseHoldSubmitting}
+                >
+                  {releaseHoldSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PlayCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Release Hold
+                </Button>
+              )}
+            </div>
+          )}
+          {canPlaceHold && !showHoldConfirm && (
+            <Button
+              variant="outline"
+              className="border-amber-300 text-amber-800 hover:bg-amber-50"
+              onClick={() => setShowHoldConfirm(true)}
+            >
+              <PauseCircle className="mr-2 h-4 w-4" />
+              Place Hold
+            </Button>
+          )}
+          {canPlaceHold && showHoldConfirm && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800">
+                This blocks Send / GST-invoice generation only — the draft stays fully editable.
+              </p>
+              <Textarea
+                placeholder="Reason for hold — what needs clarifying or correcting (required)"
+                value={holdReason}
+                onChange={(e) => setHoldReason(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => { setShowHoldConfirm(false); setHoldReason(""); }}
+                  disabled={holdSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={handlePlaceHold}
+                  disabled={holdSubmitting || !holdReason.trim()}
+                >
+                  {holdSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PauseCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Place Hold
+                </Button>
+              </div>
+            </div>
+          )}
           {/* Void / Cancel — admin only, finalized or exported statements */}
           {canVoid && !showVoidConfirm && (
             <Button

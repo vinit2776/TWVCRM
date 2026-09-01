@@ -111,6 +111,12 @@ export async function dispatchProforma(
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
   }
 
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -346,6 +352,7 @@ export async function dispatchProforma(
     periodEnd: statement.period_end as string,
     dueDate: (statement.due_date as string | null) || undefined,
     contractNumber: partyRef,
+    poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
     cgst,
@@ -586,6 +593,12 @@ export async function dispatchGstDirect(
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
   }
 
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -779,6 +792,7 @@ export async function dispatchGstDirect(
     periodEnd: statement.period_end as string,
     dueDate,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
     cgst,

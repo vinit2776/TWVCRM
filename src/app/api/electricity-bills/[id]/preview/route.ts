@@ -76,7 +76,7 @@ export async function GET(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state)")
+    .select("contract_number, billing_mode, po_number, lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state)")
     .eq("id", bill.contract_id)
     .single();
 
@@ -136,6 +136,7 @@ export async function GET(
     periodEnd,
     dueDate: !isGstDirect ? dueDate : undefined,
     contractNumber: (contract as { contract_number: string }).contract_number,
+    poNumber: (contract as { po_number?: string | null }).po_number,
     lineItems,
     subtotal: Number(bill.customer_subtotal ?? 0),
     cgst: Number(bill.customer_cgst ?? 0),

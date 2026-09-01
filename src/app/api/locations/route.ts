@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 // Two named FKs let PostgREST disambiguate which slot each user fills.
 const LOCATION_SELECT = `
   *,
+  companies(id, name, brand_name),
   incharge_1:users!locations_incharge_user_id_1_fkey(id, full_name, email, role),
   incharge_2:users!locations_incharge_user_id_2_fkey(id, full_name, email, role)
 `;
@@ -16,6 +17,7 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const isActive = request.nextUrl.searchParams.get("is_active");
+  const companyId = request.nextUrl.searchParams.get("company_id");
   // Central hubs (HQ stock store) are hidden from every normal location
   // picker. Procurement contexts that genuinely need the hub (transfer
   // source, reorder settings, replenishment, MR/PO) opt in explicitly.
@@ -31,6 +33,10 @@ export async function GET(request: NextRequest) {
     query = query.eq("is_active", true);
   } else if (isActive === "false") {
     query = query.eq("is_active", false);
+  }
+
+  if (companyId) {
+    query = query.eq("company_id", companyId);
   }
 
   if (hubsOnly) {
@@ -64,11 +70,12 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const {
-    name, code, address, city, state, capacity_config, requires_headcount,
+    name, code, company_id, address, city, state, capacity_config, requires_headcount,
     latitude, longitude, incharge_user_id_1, incharge_user_id_2,
   } = body as {
     name: string;
     code: string;
+    company_id: string;
     address?: string;
     city?: string;
     state?: string;
@@ -82,6 +89,9 @@ export async function POST(request: NextRequest) {
 
   if (!name || !code) {
     return NextResponse.json({ error: "Name and code are required" }, { status: 400 });
+  }
+  if (!company_id) {
+    return NextResponse.json({ error: "Company is required" }, { status: 400 });
   }
 
   // The DB CHECK constraint already prevents the same user in both slots,
@@ -102,6 +112,7 @@ export async function POST(request: NextRequest) {
     .insert({
       name,
       code: code.toUpperCase(),
+      company_id,
       address: address || null,
       city: city || null,
       state: state || null,

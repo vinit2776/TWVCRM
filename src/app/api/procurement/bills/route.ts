@@ -8,6 +8,11 @@ import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-serve
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
+  // Required when there's no po_id — a bill can be created standalone (just
+  // vendor_id + invoice_date + total_amount), so company can't always be
+  // inherited via po_id -> purchase_orders.company_id. When po_id IS present,
+  // this is cross-checked against the PO's own company_id below.
+  company_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   invoice_number: z.string().nullish(),
   invoice_date: z.string().min(1, "Invoice date is required"),
@@ -33,6 +38,9 @@ const createBillSchema = z.object({
     message: "Invoice date cannot be in the past. Only today or a future date is allowed.",
     path: ["invoice_date"],
   },
+).refine(
+  (d) => !!d.po_id || !!d.company_id,
+  { message: "Select which company this bill is for", path: ["company_id"] }
 );
 
 
@@ -58,6 +66,7 @@ export async function GET(request: NextRequest) {
     .select(
       `*, procurement_vendors(id, name, contact_email, gstin),
        purchase_orders(id, po_number, po_type, expected_delivery_date, purchase_requests(department, expenditure_type)),
+       companies(id, name, brand_name),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, payment_reference)`,
       { count: "exact" }
@@ -125,10 +134,14 @@ export async function POST(request: NextRequest) {
   // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
   let poAdvanceCredit = 0;
+  // Company: inherited from the PO when one is linked (cross-checked against
+  // any company_id the client also sent), otherwise taken directly from the
+  // request — enforced by the schema refine() above.
+  let billCompanyId = parsed.data.company_id ?? null;
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
-      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle, cycle_count, advance_status, advance_amount")
+      .select("id, company_id, po_type, total_ordered_amount, status, unit_cost_per_cycle, cycle_count, advance_status, advance_amount")
       .eq("id", parsed.data.po_id)
       .single();
 
@@ -138,6 +151,10 @@ export async function POST(request: NextRequest) {
     if (["cancelled"].includes(po.status)) {
       return NextResponse.json({ error: "Cannot create an invoice for a cancelled purchase order" }, { status: 422 });
     }
+    if (parsed.data.company_id && parsed.data.company_id !== po.company_id) {
+      return NextResponse.json({ error: "Company does not match the linked purchase order" }, { status: 422 });
+    }
+    billCompanyId = po.company_id;
 
     poTotalAmount = Number(po.total_ordered_amount);
 
@@ -271,6 +288,7 @@ export async function POST(request: NextRequest) {
   let bill: { id: string; bill_number: string };
   try {
     bill = await createVendorBill(supabase, {
+      company_id: billCompanyId!,
       po_id: parsed.data.po_id ?? null,
       vendor_id: parsed.data.vendor_id,
       invoice_number: parsed.data.invoice_number ?? null,

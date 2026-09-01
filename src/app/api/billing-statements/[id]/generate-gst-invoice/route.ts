@@ -74,6 +74,21 @@ export async function POST(
   if (statement.status === "voided") {
     return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
   }
+  // On hold — something on this statement is being clarified/corrected.
+  // Payment (if any) is already recorded by the time this endpoint runs — the
+  // Razorpay webhook sets payment_status="paid" before firing this call — so
+  // holding invoice issuance here never blocks payment recording. Responds
+  // like the "standby" gate below rather than an error: the webhook's call is
+  // fire-and-forget and only logs failures, and a manual click should read as
+  // "deferred", not "broken".
+  if (statement.held_at) {
+    return NextResponse.json({
+      success: true,
+      held: true,
+      invoiceNumber: null,
+      message: `GST invoice generation is on hold: ${statement.hold_reason}. Release the hold to issue it.`,
+    });
+  }
   // Payment must be fully received before a tax invoice can be issued.
   // (The Razorpay webhook always sets payment_status = "paid" before calling
   //  this endpoint, so the webhook path is unaffected by this check.)
@@ -199,6 +214,7 @@ export async function POST(
     periodStart: statement.period_start,
     periodEnd: statement.period_end,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number,
     lineItems,
     subtotal,
     cgst,
@@ -301,15 +317,10 @@ export async function POST(
     })
     .eq("id", id);
 
-  // Update contract.next_billing_date if not already updated
-  if (contract.next_billing_date) {
-    const nextDate = new Date(contract.next_billing_date + "T00:00:00Z");
-    nextDate.setMonth(nextDate.getMonth() + 1);
-    await adminSupabase
-      .from("contracts")
-      .update({ next_billing_date: nextDate.toISOString().slice(0, 10) })
-      .eq("id", contract.id);
-  }
+  // next_billing_date is deliberately NOT touched here — see the same note in
+  // the statement confirm route. The rent generator owns the anchor and derives
+  // it from the period it billed; a cycle-blind +1 month here drifted quarterly
+  // and half-yearly contracts onto the wrong cycle.
 
   if (dbUserId) {
     logAudit(adminSupabase, {

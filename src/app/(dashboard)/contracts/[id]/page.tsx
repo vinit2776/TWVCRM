@@ -82,6 +82,7 @@ import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
+  CancelRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
@@ -107,6 +108,9 @@ export default function ContractDetailPage({
   const router = useRouter();
   const [contract, setContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editingPoNumber, setEditingPoNumber] = useState(false);
+  const [poNumberValue, setPoNumberValue] = useState("");
+  const [savingPoNumber, setSavingPoNumber] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
@@ -155,6 +159,7 @@ export default function ContractDetailPage({
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [cancelRenewalDialogOpen, setCancelRenewalDialogOpen] = useState(false);
   const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [renewalDraft, setRenewalDraft] = useState<any>(null);
@@ -346,6 +351,24 @@ export default function ContractDetailPage({
       toast.error(err?.error || "Failed to terminate contract");
     }
     setTerminating(false);
+  };
+
+  const handleSavePoNumber = async () => {
+    setSavingPoNumber(true);
+    const res = await fetch(`/api/contracts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ po_number: poNumberValue.trim() || null }),
+    });
+    setSavingPoNumber(false);
+    if (res.ok) {
+      toast.success(poNumberValue.trim() ? "Customer PO number saved" : "Customer PO number cleared");
+      setEditingPoNumber(false);
+      fetchContract(false);
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to save");
+    }
   };
 
   const handleDownloadPDF = async () => {
@@ -1453,6 +1476,11 @@ export default function ContractDetailPage({
             proposalNumber={contract.proposal?.proposal_number}
             prorataPaymentStatus={contract.proposal?.payment_status}
             prorataPaymentReceivedAt={contract.proposal?.payment_received_at}
+            billingCycle={contract.billing_cycle}
+            nextBillingDate={contract.next_billing_date}
+            startDate={contract.start_date}
+            endDate={contract.end_date}
+            createdAt={contract.created_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}
@@ -1870,6 +1898,25 @@ export default function ContractDetailPage({
                   );
                 })()}
 
+                {/* The renewal's term has started but the contract isn't live.
+                    Until it is activated the run cannot bill it, so this
+                    (ended) contract gets charged for the new term instead —
+                    right customer and amount, wrong contract. */}
+                {contract.status === "renewal_in_progress" && renewalDraft?.start_date &&
+                  renewalDraft.status !== "active" &&
+                  renewalDraft.start_date <= new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10) && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                    <p className="font-semibold">
+                      ⚠️ {renewalDraft.contract_number} started {formatDate(renewalDraft.start_date)} but isn&apos;t active
+                    </p>
+                    <p>
+                      Until it&apos;s activated, month-end billing charges <strong>this</strong> contract
+                      for the renewal period — even though its term ended {formatDate(contract.end_date)}.
+                      Activate the renewal before the next billing run.
+                    </p>
+                  </div>
+                )}
+
                 {contract.status === "renewal_in_progress" && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
                     <p className="font-semibold">⏳ Renewal in Progress</p>
@@ -1883,6 +1930,17 @@ export default function ContractDetailPage({
                         Open Renewal Draft — {renewalDraft.contract_number}
                         <span className="text-amber-600">→</span>
                       </Link>
+                    )}
+                    {renewalDraft?.status === "draft" && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setCancelRenewalDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Cancel Renewal
+                      </Button>
                     )}
                   </div>
                 )}
@@ -1972,6 +2030,49 @@ export default function ContractDetailPage({
                   </div>
                 </>
               )}
+              <Separator />
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-muted-foreground shrink-0">Customer PO Number</span>
+                {editingPoNumber ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={poNumberValue}
+                      onChange={(e) => setPoNumberValue(e.target.value)}
+                      placeholder="e.g. 4500218763"
+                      className="h-7 text-sm w-32"
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePoNumber()}
+                    />
+                    <Button size="sm" className="h-7 text-xs px-2" onClick={handleSavePoNumber} disabled={savingPoNumber}>
+                      {savingPoNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2"
+                      onClick={() => setEditingPoNumber(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    {contract.po_number ? (
+                      <Badge variant="secondary" className="font-mono">{contract.po_number}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Not set</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-1.5"
+                      onClick={() => { setPoNumberValue(contract.po_number || ""); setEditingPoNumber(true); }}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  </span>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -2693,6 +2794,15 @@ export default function ContractDetailPage({
         open={declineDialogOpen}
         onOpenChange={setDeclineDialogOpen}
         contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Cancel Renewal Dialog */}
+      <CancelRenewalDialog
+        open={cancelRenewalDialogOpen}
+        onOpenChange={setCancelRenewalDialogOpen}
+        contract={contract}
+        renewalDraft={renewalDraft}
         onSuccess={() => fetchContract(false)}
       />
 

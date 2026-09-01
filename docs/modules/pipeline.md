@@ -464,7 +464,7 @@ The Pipeline status machine is updated from four call sites:
 
 3. **Contract activated** (`PATCH /api/contracts/[id]` with `status=active`):
    - → `won` + sets `converted_at`
-   - Also triggers `generateMonthlyStatements` for immediate billing
+   - Raises no invoice. The proposal already collected the deposit and pro-rata; contract billing starts at the first full month, which the month-end rent run covers. Activation only records any months already past their billing run with no rent statement (`unbilledMonths`).
 
 4. **Manual drag on Pipeline board**:
    - `PATCH /api/leads/[id]` with `{ status: targetStatus }`

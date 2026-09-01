@@ -154,6 +154,15 @@ function NewPurchaseOrderFormWithPr({
     });
   }, [setVendors, setLocations]);
 
+  // Once the PR (and its company) has loaded, narrow the location list down to
+  // that company's locations — the two companies have separate location lists.
+  useEffect(() => {
+    if (!prData?.company_id) return;
+    fetch(`/api/locations?company_id=${prData.company_id}`)
+      .then((r) => r.json())
+      .then((l) => setLocations(l.data || []));
+  }, [prData?.company_id, setLocations]);
+
   // Pre-populate from PR
   useEffect(() => {
     setLoadingPr(true);
@@ -443,6 +452,11 @@ function NewPurchaseOrderFormWithPr({
           Items pre-populated from <strong>{prData.pr_number}</strong>. Quantities and prices cannot exceed approved values.
           {prData.approval_code && (
             <span className="ml-2 font-mono text-xs">Approval: {prData.approval_code}</span>
+          )}
+          {prData.companies && (
+            <div className="mt-1 text-xs text-blue-700">
+              Company: <span className="font-medium">{prData.companies.brand_name}</span>
+            </div>
           )}
         </div>
       )}

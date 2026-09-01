@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
+import { firstBillingAnchor } from "@/lib/billing-months";
 
 /**
  * POST /api/contracts/[id]/renew
@@ -112,18 +113,11 @@ export async function POST(
   // If the renewal starts mid-month (not the 1st), snap to the 1st of the
   // following month so the partial first month is billed as pro-rata and
   // subsequent cycles align to clean calendar months.
-  const nextBillingDate = new Date(startDate);
-  if (startDate.getUTCDate() !== 1) {
-    nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1);
-    nextBillingDate.setUTCDate(1);
-  } else {
-    switch (billingCycle) {
-      case "monthly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1); break;
-      case "quarterly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 3); break;
-      case "half_yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 6); break;
-      case "yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 12); break;
-    }
-  }
+  // Mid-month renewals already opened on the 1st of the following month; a
+  // renewal starting ON the 1st used to jump a whole cycle ahead, which for an
+  // advance-billed contract skipped billing its first cycle. Both cases now go
+  // through the same helper.
+  const nextBillingDateYmd = firstBillingAnchor(startDate.toISOString().slice(0, 10));
 
   // 4. Apply escalation to items
   // Allow custom escalation % override — negotiation may result in a different rate
@@ -184,7 +178,7 @@ export async function POST(
       tenure_months: tenureMonths,
       start_date: startDateStr,
       end_date: endDateStr,
-      next_billing_date: nextBillingDate.toISOString().slice(0, 10),
+      next_billing_date: nextBillingDateYmd,
       seats,
       terms_and_conditions: source.terms_and_conditions,
       notes: `Renewal of ${source.contract_number} (V${renewalSequence})`,
@@ -530,18 +524,7 @@ export async function PATCH(
     endDate.setUTCDate(endDate.getUTCDate() - 1);
     const endDateStr = endDate.toISOString().slice(0, 10);
 
-    const nextBillingDate = new Date(startDate);
-    if (startDate.getUTCDate() !== 1) {
-      nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1);
-      nextBillingDate.setUTCDate(1);
-    } else {
-      switch (billingCycle) {
-        case "monthly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1); break;
-        case "quarterly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 3); break;
-        case "half_yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 6); break;
-        case "yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 12); break;
-      }
-    }
+    const nextBillingDateYmd = firstBillingAnchor(startDate.toISOString().slice(0, 10));
 
     const items = newItems || ((contract.items || []) as Item[]);
     const subtotal = items.reduce((sum, i) => sum + i.total, 0);
@@ -566,7 +549,7 @@ export async function PATCH(
       escalation_percentage: escalationPct,
       start_date: startDateStr,
       end_date: endDateStr,
-      next_billing_date: nextBillingDate.toISOString().slice(0, 10),
+      next_billing_date: nextBillingDateYmd,
       items,
       subtotal,
       tax_amount: taxAmount,

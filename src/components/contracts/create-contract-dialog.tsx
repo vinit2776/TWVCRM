@@ -91,6 +91,8 @@ export function CreateContractDialog({
 
   // Notes
   const [notes, setNotes] = useState("");
+  // Customer's own PO number, when they require one on every invoice for this contract
+  const [poNumber, setPoNumber] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   // Space allocation
@@ -400,6 +402,7 @@ export function CreateContractDialog({
       agreement_date: agreementDate,
       notes: notes.trim() || undefined,
       pan_number: panNumber.trim() || undefined,
+      po_number: poNumber.trim() || undefined,
     };
 
     const res = await fetch("/api/contracts", {
@@ -951,6 +954,18 @@ export function CreateContractDialog({
           </div>
 
           {/* Section 6: Notes */}
+          <div className="space-y-2">
+            <Label>Customer PO Number</Label>
+            <Input
+              value={poNumber}
+              onChange={(e) => setPoNumber(e.target.value)}
+              placeholder="Ask the customer if they issue an annual PO — leave blank if not"
+            />
+            <p className="text-xs text-muted-foreground">
+              Printed on every Proforma and GST invoice for this contract. Optional — only some customers require this.
+            </p>
+          </div>
+
           <div className="space-y-2">
             <Label>Internal Notes</Label>
             <Textarea

@@ -358,6 +358,10 @@ export interface InboxRow {
   statement_id: string;
   statement_number: string | null;
   statement_total_amount: number;
+  /** Customer's own PO number, snapshotted from the contract at statement generation
+   *  time. When set, accounts must put it on the Tally invoice — some customers
+   *  require it for their own invoice processing. */
+  po_number: string | null;
   period_start: string | null;
   period_end: string | null;
   payment_status: string;
@@ -368,6 +372,10 @@ export interface InboxRow {
   is_voided: boolean;
   voided_at: string | null;
   void_reason: string | null;
+  /** Hold — blocks send/GST-issuance only, draft stays editable. Distinct
+   *  from is_voided: a held statement is still live, just paused. */
+  is_held: boolean;
+  hold_reason: string | null;
   /** True when the proforma was cancelled via the early-GST override. Distinguishes
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
@@ -540,4 +548,8 @@ export interface ExtractResponse {
   raw_text_snippet: string | null;
   /** True iff a tally_voucher_snapshots row matched the extracted number. */
   bridge_match: boolean;
+  /** Whether the statement's Customer PO Number appears in the uploaded PDF's
+   *  extracted text. Null when the statement has no PO number to check, or the
+   *  PDF's text couldn't be parsed at all (e.g. a scanned image). */
+  po_number_found: boolean | null;
 }
