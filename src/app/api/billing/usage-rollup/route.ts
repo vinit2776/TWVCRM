@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
   // ── 1. Existing usage statements for the month ─────────────────────────
   const { data: stmts } = await admin
     .from("billing_statements")
-    .select("id, statement_number, contract_id, status, payment_status, proforma_sent_at, total_amount, due_date")
+    .select("id, statement_number, contract_id, status, payment_status, proforma_sent_at, total_amount, due_date, held_at, hold_reason")
     .eq("statement_type", "usage")
     .gte("period_start", monthStart)
     .lte("period_start", monthEnd)
@@ -284,6 +284,8 @@ export async function GET(req: NextRequest) {
             proforma_sent_at: stmt.proforma_sent_at,
             total_amount: Math.round(Number(stmt.total_amount || 0)),
             due_date: stmt.due_date,
+            held_at: stmt.held_at,
+            hold_reason: stmt.hold_reason,
           }
         : null,
     };

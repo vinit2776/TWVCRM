@@ -48,6 +48,7 @@ interface RentStmt {
   total_amount: number; payment_status: string | null;
   proforma_sent_at: string | null; razorpay_payment_link_url: string | null;
   voided_at: string | null;
+  held_at?: string | null; hold_reason?: string | null;
   reminder_count?: number | null;
   // GST direct fields — set when the invoice was issued via gst_direct path
   gst_invoice_number?: string | null;
@@ -83,6 +84,8 @@ interface UsageRow {
     proforma_sent_at: string | null;
     total_amount: number;
     due_date: string | null;
+    held_at?: string | null;
+    hold_reason?: string | null;
   } | null;
 }
 
@@ -468,10 +471,10 @@ function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { ro
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={sendingId === s.id}
+                            disabled={sendingId === s.id || !!s.held_at}
                             onClick={() => retrySend(s.id)}
                             className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50"
-                            title="Proforma was finalized but never sent — click to dispatch now"
+                            title={s.held_at ? `On hold: ${s.hold_reason}` : "Proforma was finalized but never sent — click to dispatch now"}
                           >
                             {sendingId === s.id
                               ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
@@ -569,11 +572,13 @@ function UsageTable(props: {
                 const isSent = !!stmt?.proforma_sent_at;
                 const isPaid = stmt?.payment_status === "paid";
                 const isPartialUsage = stmt?.payment_status === "partially_paid";
-                const status = isPaid ? "PAID" : isPartialUsage ? "PARTIAL" : isSent ? "SENT" : (stmt?.status === "draft" ? "DRAFT" : "PENDING");
+                const isHeld = !!stmt?.held_at;
+                const status = isPaid ? "PAID" : isPartialUsage ? "PARTIAL" : isSent ? "SENT" : isHeld ? "HELD" : (stmt?.status === "draft" ? "DRAFT" : "PENDING");
                 const statusClass =
                   status === "PAID"    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
                 : status === "PARTIAL" ? "bg-orange-100  text-orange-800  border-orange-300"
                 : status === "SENT"    ? "bg-blue-100    text-blue-800    border-blue-300"
+                : status === "HELD"    ? "bg-amber-200   text-amber-900   border-amber-400"
                 : status === "DRAFT"   ? "bg-amber-100   text-amber-800   border-amber-300"
                 :                        "bg-orange-100  text-orange-800  border-orange-300";
                 const rowBg = status === "PENDING" ? "bg-amber-50" : !isSent ? "bg-amber-50/30" : "";
@@ -595,7 +600,7 @@ function UsageTable(props: {
                       <td className="px-4 py-3 text-center font-medium">{r.paid_count > 0 ? r.paid_count : "—"}</td>
                       <td className="px-4 py-3 text-right font-semibold">{formatCurrency(stmt?.total_amount || r.paid_total)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <Badge className={`${statusClass} text-[10px]`}>{status}</Badge>
+                        <Badge className={`${statusClass} text-[10px]`} title={isHeld ? `On hold: ${stmt?.hold_reason}` : undefined}>{status}</Badge>
                         {stmt?.statement_number && (
                           <Link href={`/api/billing-statements/${stmt.id}/proforma-pdf`} target="_blank" className="block text-[10px] text-teal-700 hover:underline font-mono mt-1">
                             {stmt.statement_number}
@@ -617,7 +622,7 @@ function UsageTable(props: {
                                 className={status === "PENDING" && r.paid_total > 0
                                   ? "bg-amber-600 hover:bg-amber-700 text-white"
                                   : "bg-teal-700 hover:bg-teal-800"}
-                                title={r.paid_total <= 0 ? "No charges yet — open to add charges" : undefined}
+                                title={isHeld ? `On hold: ${stmt?.hold_reason} — you can still review/edit, sending is blocked until released` : r.paid_total <= 0 ? "No charges yet — open to add charges" : undefined}
                               >
                                 <Send className="h-3.5 w-3.5 mr-1" />
                                 {r.paid_total > 0 ? <>Verify &amp; Send</> : <>Review &amp; Add</>}

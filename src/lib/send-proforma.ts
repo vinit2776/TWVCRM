@@ -111,6 +111,12 @@ export async function dispatchProforma(
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
   }
 
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -585,6 +591,12 @@ export async function dispatchGstDirect(
 
   if (fetchErr || !statement) {
     return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "Statement not found" };
+  }
+
+  // On hold — something on this statement is being clarified/corrected.
+  // Blocks send only; the draft itself stays editable elsewhere.
+  if (statement.held_at) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: `Statement is on hold: ${statement.hold_reason}` };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

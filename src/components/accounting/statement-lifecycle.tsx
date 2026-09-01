@@ -107,6 +107,7 @@ function useLifecycle(statementId: string | null, presetRow?: InboxRow | null) {
 function badgeClass(row: InboxRow | null | undefined): string {
   if (!row) return "bg-muted text-muted-foreground border-border";
   if (row.is_voided) return "bg-red-50 text-red-900 border-red-200";
+  if (row.is_held) return "bg-amber-50 text-amber-900 border-amber-200";
   if (row.has_discrepancy) return "bg-red-50 text-red-900 border-red-200";
   if (row.handoff_state === "complete") return "bg-green-50 text-green-900 border-green-200";
   switch (row.bucket) {
@@ -125,6 +126,7 @@ function badgeClass(row: InboxRow | null | undefined): string {
 
 function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
   if (row?.is_voided) return "Voided";
+  if (row?.is_held) return "On Hold";
   if (row?.has_discrepancy) return "Discrepancy";
   // When there's no handoff_state (PI First statements never get one until
   // payment is captured), fall back to the statement's own status field.
@@ -172,7 +174,7 @@ export function StatementLifecycleBadge({
   return (
     <span
       className={`inline-block ${compact ? "text-[11px] px-1.5 py-0.5" : "text-xs px-2 py-0.5"} rounded-full border ${badgeClass(row)} ${className}`}
-      title={row?.void_reason ?? row?.discrepancy_reason ?? badgeLabel(row, fallbackStatus)}
+      title={row?.void_reason ?? row?.hold_reason ?? row?.discrepancy_reason ?? badgeLabel(row, fallbackStatus)}
     >
       {badgeLabel(row, fallbackStatus)}
     </span>
