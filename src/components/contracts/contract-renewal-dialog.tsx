@@ -513,6 +513,114 @@ export function DeclineRenewalDialog({
   );
 }
 
+// ─── Cancel Renewal Dialog (for a renewal already in progress) ─────────────
+
+interface CancelRenewalDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  contract: Contract;
+  renewalDraft: { id: string; contract_number: string } | null;
+  onSuccess: () => void;
+}
+
+export function CancelRenewalDialog({
+  open,
+  onOpenChange,
+  contract,
+  renewalDraft,
+  onSuccess,
+}: CancelRenewalDialogProps) {
+  const [cancelling, setCancelling] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const handleCancel = async () => {
+    if (!reason.trim()) {
+      toast.error("Please provide a reason for cancelling");
+      return;
+    }
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/contracts/${contract.id}/cancel-renewal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success(json?.message || "Renewal cancelled");
+        setReason("");
+        onOpenChange(false);
+        onSuccess();
+      } else {
+        toast.error(json?.error || "Failed to cancel renewal");
+      }
+    } catch {
+      toast.error("Network error — please try again");
+    }
+    setCancelling(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-destructive">
+            <XCircle className="h-4 w-4" />
+            Cancel Renewal
+          </DialogTitle>
+          <DialogDescription>
+            {renewalDraft
+              ? <>This deletes the renewal draft <strong>{renewalDraft.contract_number}</strong> and any escalation
+                  approval pending on it. {contract.contract_number} will not continue past its current term.</>
+              : <>This cancels the renewal in progress on {contract.contract_number}.</>}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2">
+          <Label htmlFor="cancel-renewal-reason">
+            Reason <span className="text-destructive">*</span>
+          </Label>
+          <Textarea
+            id="cancel-renewal-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g., Customer confirmed they are not renewing..."
+            rows={3}
+          />
+        </div>
+
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p>
+            <strong>Note:</strong> Only a still-draft renewal can be cancelled this way. If it has
+            already been sent to the customer, reject it from the renewal draft itself instead.
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Back
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleCancel}
+            disabled={cancelling || !reason.trim()}
+          >
+            {cancelling ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Cancelling...
+              </>
+            ) : (
+              "Cancel Renewal"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Escalation Waiver Section (inline, for admin on renewal drafts) ────────
 
 interface EscalationWaiverProps {
