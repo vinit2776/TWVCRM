@@ -41,7 +41,10 @@ export async function GET(
 
   const { data: invoices, error: listError } = await adminSupabase
     .from("proforma_invoices")
-    .select("id, invoice_number, title, status, subtotal, total_amount, created_at")
+    .select(
+      "id, invoice_number, title, status, items, subtotal, tax_percentage, tax_amount, " +
+      "discount_percentage, discount_amount, total_amount, due_date, notes, razorpay_link_url, created_at"
+    )
     .eq("case_id", caseId)
     .order("created_at", { ascending: false });
 
@@ -62,7 +65,13 @@ export async function GET(
     data: {
       invoices: invoices ?? [],
       billsTo: party && !party.blocked
-        ? { kind: party.source === "case-aggregator" ? "aggregator" : "client", name: party.name, gstin: party.gstin }
+        ? {
+            kind: party.source === "case-aggregator" ? "aggregator" : "client",
+            name: party.name,
+            gstin: party.gstin,
+            email: party.email,
+            phone: party.phone,
+          }
         : null,
       endClientName:
         (caseRaw as { client_company_name?: string; client_name?: string }).client_company_name ||
@@ -82,6 +91,7 @@ export async function POST(
     amount?: number;
     notes?: string;
     bill_to_override?: "client" | null;
+    due_date?: string;
   };
 
   const supabase = await createClient();
@@ -101,6 +111,10 @@ export async function POST(
   }
   if (!Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json({ error: "Amount must be greater than zero." }, { status: 400 });
+  }
+  const dueDate = body.due_date?.trim() || null;
+  if (dueDate && Number.isNaN(new Date(dueDate).getTime())) {
+    return NextResponse.json({ error: "Invalid due date." }, { status: 400 });
   }
 
   const adminSupabase = await createAdminClient();
@@ -141,13 +155,18 @@ export async function POST(
       title: description,
       status: "draft",
       primary_head: "other_income",
-      items: [{ description: lineDescription, quantity: 1, rate: subtotal, amount: subtotal }],
+      // unit_price/total, not rate/amount — proforma_invoices.items follows the
+      // LineItem shape every downstream reader (PDF generation, the
+      // billing_statements mirror in /api/invoices/[id]/email and
+      // /api/invoices/[id]/payment) expects.
+      items: [{ description: lineDescription, quantity: 1, unit_price: subtotal, total: subtotal }],
       subtotal,
       tax_percentage: taxPercentage,
       tax_amount: taxAmount,
       discount_percentage: 0,
       discount_amount: 0,
       total_amount: total,
+      due_date: dueDate,
       notes: body.notes?.trim() || null,
       created_by: dbUser.id,
     })
