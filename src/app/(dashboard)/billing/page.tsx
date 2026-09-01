@@ -61,7 +61,7 @@ import { ContractAccountingRow } from "@/components/accounting/contract-accounti
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
-import { MonthlyBillingTabs } from "@/components/billing/monthly-billing-tabs";
+import { UnbilledBilledTabs } from "@/components/billing/unbilled-billed-tabs";
 // Per-tab components are dynamic-imported so the JS for tabs the user
 // never opens isn't downloaded. Each loader shows a small skeleton block.
 // SSR off because all four are client-state-driven (filters, dialogs).
@@ -1177,12 +1177,15 @@ export default function BillingPage() {
 
         {/* ── Billing Statements (Merged view: contract accordions + booking-only statements) ── */}
         <TabsContent value="statements" className="space-y-6 mt-4">
-          {/* ── NEW: Monthly Billing Tabs (Rent | Usage) with month picker ────
-              Focused two-tab workflow per ops feedback. Replaces the stacked
-              rent+usage cards below for the common case. The legacy
-              "Active Contract Billing" view further down is preserved for
-              cross-month / legacy combined statement management. */}
-          <MonthlyBillingTabs year={year} month={month} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+          {/* ── Unbilled | Billed — persistent, cross-month view. Replaces the
+              old month-toggled Rent/Usage tabs: anything from a month you
+              weren't looking at used to stay invisible. Not scoped to the
+              page-level MonthPicker above (that still drives the other tabs
+              on this page) — Unbilled computes its own "now", Billed is
+              unscoped. The legacy "Active Contract Billing" view further
+              down is preserved for cross-month / legacy combined statement
+              management. */}
+          <UnbilledBilledTabs userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
 
         </TabsContent>
       </Tabs>
