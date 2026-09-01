@@ -16,7 +16,7 @@
 //               entry that's only worth teaching a brand-new hire, not announcing to
 //               someone who's already using the app.
 
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 
 const ENTRIES = [
   { id: 'hours-punch', version: 1, tourStep: { anchor: '#onbHoursCard', key: 'onboarding.step.hours' } },
@@ -24,6 +24,15 @@ const ENTRIES = [
   { id: 'nav-calendar', version: 1, tourStep: { anchor: '#navCalendar', key: 'onboarding.step.calendar' } },
   { id: 'nav-requests', version: 1, tourStep: { anchor: '#navLeave', key: 'onboarding.step.requests' } },
   { id: 'lang-notifications', version: 1, tourStep: { anchor: '#navNotifications', key: 'onboarding.step.notifications' } },
+  // Employee document uploads (PR #599) — shipped after v1, so it needs both a
+  // tour step (for new hires) and a whatsNew entry (for the employees who were
+  // already onboarded on v1 before this feature existed).
+  {
+    id: 'documents',
+    version: 2,
+    tourStep: { anchor: '#navDocuments', key: 'onboarding.step.documents' },
+    whatsNew: { key: 'onboarding.whatsnew.documents' },
+  },
 ];
 
 module.exports = { CURRENT_VERSION, ENTRIES };
