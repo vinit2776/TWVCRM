@@ -14,7 +14,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle } from "lucide-react";
+import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle, Trash2 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
@@ -67,6 +67,8 @@ function canPreviewPdf(status: string) {
   return status !== "draft" && status !== "voided";
 }
 
+const DISCARD_ROLES = ["admin", "manager", "accounts"];
+
 function periodLabel(start: string, end: string) {
   const s = new Date(start + "T00:00:00Z");
   const e = new Date(end + "T00:00:00Z");
@@ -112,6 +114,9 @@ export function ContractInvoicesSection({
   );
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [prorataStatement, setProrataStatement] = useState<Statement | null>(null);
+  const [discardTarget, setDiscardTarget] = useState<Statement | null>(null);
+  const [discardReason, setDiscardReason] = useState("");
+  const [discardSubmitting, setDiscardSubmitting] = useState(false);
 
   useEffect(() => {
     setCurrentMode(billingMode || 'proforma_first');
@@ -212,6 +217,31 @@ export function ContractInvoicesSection({
       toast.error("Failed to convert to GST");
     } finally {
       setConvertingId(null);
+    }
+  };
+
+  const handleDiscardStatement = async () => {
+    if (!discardTarget || !discardReason.trim()) return;
+    setDiscardSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${discardTarget.id}/discard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discard_reason: discardReason.trim() }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success(json?.message || "Draft discarded");
+        setDiscardTarget(null);
+        setDiscardReason("");
+        await refreshStatements();
+      } else {
+        toast.error(json?.error || "Failed to discard draft");
+      }
+    } catch {
+      toast.error("Failed to discard draft");
+    } finally {
+      setDiscardSubmitting(false);
     }
   };
 
@@ -347,7 +377,8 @@ export function ContractInvoicesSection({
                   <th className="text-left font-medium pb-2 pr-4">Status</th>
                   <th className="text-left font-medium pb-2 pr-4">Payment</th>
                   <th className="text-left font-medium pb-2 pr-4">GST Invoice</th>
-                  <th className="text-left font-medium pb-2">Tally Lifecycle</th>
+                  <th className="text-left font-medium pb-2 pr-4">Tally Lifecycle</th>
+                  <th className="text-right font-medium pb-2">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -419,11 +450,24 @@ export function ContractInvoicesSection({
                         Each component self-fetches /api/accounting/inbox?id=… via a
                         shared 30s SWR cache, so badges + actions in the same row
                         share one request. */}
-                    <td className="py-2.5">
+                    <td className="py-2.5 pr-4">
                       <div className="flex items-center gap-2 flex-wrap">
                         <StatementLifecycleBadge statementId={s.id} compact />
                         <StatementQuickActions statementId={s.id} compact />
                       </div>
+                    </td>
+                    <td className="py-2.5 text-right whitespace-nowrap">
+                      {s.status === "draft" && userRole && DISCARD_ROLES.includes(userRole) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => { setDiscardTarget(s); setDiscardReason(""); }}
+                        >
+                          <Trash2 className="h-3 w-3 mr-1" />
+                          Discard
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -519,6 +563,47 @@ export function ContractInvoicesSection({
             >
               {savingMode ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
               Switch to GST Direct anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!discardTarget} onOpenChange={(open) => { if (!open) { setDiscardTarget(null); setDiscardReason(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <Trash2 className="h-4 w-4 shrink-0" />
+              Discard draft {discardTarget?.statement_number}
+            </DialogTitle>
+            <DialogDescription>
+              This draft will be discarded and its period freed up, so billing can regenerate it
+              from scratch. Usage charges, bookings and service usage on this draft go back to
+              unbilled — they will be picked up by whatever bills this period next.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Reason for discarding (required)</label>
+            <Textarea
+              value={discardReason}
+              onChange={(e) => setDiscardReason(e.target.value)}
+              className="text-sm"
+              rows={2}
+              placeholder="e.g. Combined statement mislabeled — wrong period content"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { setDiscardTarget(null); setDiscardReason(""); }} disabled={discardSubmitting}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white"
+              disabled={discardSubmitting || !discardReason.trim()}
+              onClick={handleDiscardStatement}
+            >
+              {discardSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
+              Discard Draft
             </Button>
           </DialogFooter>
         </DialogContent>
