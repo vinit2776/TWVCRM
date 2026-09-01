@@ -372,6 +372,10 @@ export interface InboxRow {
   is_voided: boolean;
   voided_at: string | null;
   void_reason: string | null;
+  /** Hold — blocks send/GST-issuance only, draft stays editable. Distinct
+   *  from is_voided: a held statement is still live, just paused. */
+  is_held: boolean;
+  hold_reason: string | null;
   /** True when the proforma was cancelled via the early-GST override. Distinguishes
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
