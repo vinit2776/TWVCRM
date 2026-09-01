@@ -55,7 +55,7 @@ export function KpiTiles({
   const prevOccPct = previous && prevCapacity ? (prevOccupied! / prevCapacity) * 100 : previous ? 0 : null;
 
   const tiles = [
-    { label: "New sales", mtd: isMtd, value: formatCurrency(curSales), delta: <Delta cur={curSales} prev={prevSales} unit="pct" /> },
+    { label: "New MRR", mtd: isMtd, value: formatCurrency(curSales), delta: <Delta cur={curSales} prev={prevSales} unit="pct" /> },
     { label: "Collections", mtd: isMtd, value: formatCurrency(curCollections), delta: <Delta cur={curCollections} prev={prevCollections} unit="pct" /> },
     { label: "Collection efficiency", mtd: isMtd, value: `${curEff.toFixed(0)}%`, delta: <Delta cur={curEff} prev={prevEff} unit="pts" /> },
     { label: "Blended occupancy", mtd: false, value: `${curOccPct.toFixed(0)}%`, delta: <Delta cur={curOccPct} prev={prevOccPct} unit="pts" /> },

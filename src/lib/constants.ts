@@ -1215,6 +1215,18 @@ export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
   executed: ["active", "paid"],
 };
 
+// Statuses where the agreement is actually live, so its end_date means
+// something. The 00525 backfill derived end_date for every case from
+// start_date + tenure_months regardless of whether the agreement was ever
+// executed — so a case still at intake carries a date for a term that never
+// began. Expiry is only ever surfaced, filtered or highlighted for these.
+//
+// 'lapsed' is deliberately absent: it is terminal, and a permanently red row
+// for a closed case is noise rather than a warning.
+export const EXPIRY_RELEVANT_STATUSES = [
+  "active", "renewal_due", "grace_period",
+] as const;
+
 // Group statuses for Kanban / pipeline view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
@@ -1227,13 +1239,14 @@ export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: strin
 // ==========================================
 // Case Document Status Constants
 // ==========================================
-export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected"] as const;
+export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected", "waived"] as const;
 
 export const CASE_DOC_STATUS_LABELS: Record<string, string> = {
   pending: "Pending Upload",
   uploaded: "Uploaded",
   approved: "Approved",
   rejected: "Rejected",
+  waived: "Waived",
 };
 
 export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
@@ -1241,6 +1254,7 @@ export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
   uploaded: "bg-blue-100 text-blue-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  waived: "bg-slate-200 text-slate-700",
 };
 
 // ==========================================
@@ -1791,6 +1805,19 @@ export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
  * enum accepted by POST/PATCH /api/procurement/items.
  */
 export const ITEM_CATALOG_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+
+/**
+ * Departments that are purchased centrally (from NUN 5th floor) and then
+ * distributed to individual centers for consumption. These can have an
+ * optional per-center monthly budget in addition to the company-wide cap, and
+ * a material request must say which center it's for. AMC (annual contracts)
+ * and reimbursement (billed back to a customer's contract) are not
+ * center-specific spend and stay global-only. Currently the same set as
+ * ITEM_CATALOG_DEPARTMENTS, but kept as its own export since budget scoping
+ * and catalog tagging are separate concerns that could diverge later.
+ */
+export const CENTER_SCOPED_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+export type CenterScopedDepartment = (typeof CENTER_SCOPED_DEPARTMENTS)[number];
 
 /**
  * Departments whose items are physical, movable stock — the only ones that can

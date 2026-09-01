@@ -26,6 +26,7 @@ export async function GET(
       gst_setter:users!vendor_bills_gst_set_by_fkey(id, full_name),
       gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name),
       vendor_bill_payments(*, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
+      vendor_bill_documents(id, file_url, file_name, doc_type, created_at, uploader:users!vendor_bill_documents_uploaded_by_fkey(id, full_name)),
       electricity_bill:electricity_bills!vendor_bills_electricity_bill_id_fkey(bill_month, bill_year, landlord_total_amount, landlord_gst_applicable, landlord_gst_rate, landlord_gst_amount, electricity_bill_lines(line_type, meter_label, label, units, rate, amount, sort_order))
     `)
     .eq("id", id)

@@ -13,7 +13,7 @@ import {
   BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 import {
-  Loader2, RefreshCw, Zap, Gauge, Activity, AlertTriangle, PlugZap,
+  Loader2, RefreshCw, Zap, Gauge, Activity, AlertTriangle, PlugZap, DatabaseZap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -67,6 +67,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
   const [history, setHistory] = useState<{ date: string; kwh: number }[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const fetchDevices = useCallback(async () => {
     setDevicesLoading(true);
@@ -172,6 +173,31 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
       toast.error("Couldn't save this as the default meter");
     }
   }, [locationId, savedDefaultDevice]);
+
+  const handleSync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch(`/api/locations/${locationId}/telemetry/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start: dateFrom, end: dateTo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(typeof json.error === "string" ? json.error : "Sync failed");
+      const { rows_upserted, complete, synced_through, chunks_processed, chunks_total } = json.data;
+      if (complete) {
+        toast.success(`Synced ${rows_upserted.toLocaleString("en-IN")} readings (${dateFrom} to ${dateTo}) to the local ledger`);
+      } else {
+        toast.warning(
+          `Synced ${rows_upserted.toLocaleString("en-IN")} readings through ${synced_through} (${chunks_processed}/${chunks_total} chunks) — click Sync again to continue from there`
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }, [locationId, dateFrom, dateTo]);
 
   const latest = useMemo(() => (live?.series.length ? live.series[live.series.length - 1] : null), [live]);
   const todayWh = useMemo(
@@ -293,7 +319,17 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
             {!historyLoading && (
               <span className="text-xs text-muted-foreground mb-2">{totalRangeKwh.toFixed(1)} kWh total</span>
             )}
+            <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing} className="mb-0">
+              {syncing
+                ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                : <DatabaseZap className="h-3.5 w-3.5 mr-1.5" />}
+              {syncing ? "Syncing…" : "Sync to local ledger"}
+            </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Pulls this date range into TWV&apos;s own database, independent of OneGrid&apos;s retention — for older
+            periods than headcount logging alone would reach. Large ranges may need a few clicks to finish.
+          </p>
 
           {historyLoading && (
             <div className="py-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>

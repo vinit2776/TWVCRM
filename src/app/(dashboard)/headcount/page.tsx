@@ -18,6 +18,8 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLocations } from "@/hooks/use-locations";
 import { HeadcountEnergyChart } from "@/components/headcount/headcount-energy-chart";
+import { EnergyLedgerDayChart } from "@/components/headcount/energy-ledger-day-chart";
+import { EnergyLedgerDayDialog } from "@/components/headcount/energy-ledger-day-dialog";
 import { toast } from "sonner";
 import { cn, formatDate } from "@/lib/utils";
 import type { SpaceHeadcount, LocationCapacityConfig } from "@/types";
@@ -42,6 +44,24 @@ function formatTime(iso: string) {
 
 function formatDateShort(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
+}
+
+// en-CA gives YYYY-MM-DD directly
+function istDateKey(iso: string) {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+function todayISTKey() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+function shiftDateKey(dateKey: string, deltaDays: number) {
+  const d = new Date(`${dateKey}T12:00:00+05:30`); // noon IST avoids DST/rounding edge cases
+  d.setDate(d.getDate() + deltaDays);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+function formatEnergyLogDateLabel(dateKey: string) {
+  return new Date(`${dateKey}T12:00:00+05:30`).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
+  });
 }
 
 function toLocalDatetimeInput(iso?: string) {
@@ -115,6 +135,9 @@ export default function HeadcountPage() {
   const [totalCount, setTotalCount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // ── Local energy log day nav ──
+  const [energyLogDate, setEnergyLogDate] = useState(todayISTKey());
 
   // ── Geolocation suggestion ──
   type GeoSuggestion = { locationId: string; name: string; distanceM: number } | null;
@@ -623,6 +646,48 @@ export default function HeadcountPage() {
         <HeadcountEnergyChart locationId={locationId} mode="day" />
       )}
 
+      {activeTab === "entry" && locationId && (
+        <div className="bg-card rounded-xl border shadow-sm p-4">
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <h3 className="text-sm font-semibold">Local energy log</h3>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button" variant="ghost" size="icon" className="h-7 w-7"
+                onClick={() => setEnergyLogDate((d) => shiftDateKey(d, -1))}
+                title="Previous day"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Input
+                type="date"
+                value={energyLogDate}
+                max={todayISTKey()}
+                onChange={(e) => e.target.value && setEnergyLogDate(e.target.value)}
+                className="h-7 w-[150px] text-xs"
+              />
+              <Button
+                type="button" variant="ghost" size="icon" className="h-7 w-7"
+                onClick={() => setEnergyLogDate((d) => shiftDateKey(d, 1))}
+                disabled={energyLogDate >= todayISTKey()}
+                title="Next day"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              {energyLogDate !== todayISTKey() && (
+                <Button
+                  type="button" variant="outline" size="sm" className="h-7 text-xs"
+                  onClick={() => setEnergyLogDate(todayISTKey())}
+                >
+                  Today
+                </Button>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-2 mb-3">{formatEnergyLogDateLabel(energyLogDate)}</p>
+          <EnergyLedgerDayChart locationId={locationId} date={energyLogDate} />
+        </div>
+      )}
+
       {/* ═══ HISTORY TAB ═══════════════════════════════════════════════════ */}
       {activeTab === "history" && filterLocation !== "__all" && (
         <HeadcountEnergyChart
@@ -692,6 +757,7 @@ export default function HeadcountPage() {
                     ))}
                     <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total</th>
                     <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Energy</th>
+                    <th className="px-2 py-3 w-10" />
                     <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Logged by</th>
                     {canDelete && <th className="px-4 py-3 w-10" />}
                   </tr>
@@ -729,6 +795,14 @@ export default function HeadcountPage() {
                           {r.energy_today_wh != null
                             ? <span className="font-medium">{Math.round(r.energy_today_wh).toLocaleString("en-IN")} Wh</span>
                             : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-2 py-3">
+                          <EnergyLedgerDayDialog
+                            locationId={r.location_id}
+                            locationName={(r.location as { name?: string })?.name ?? "—"}
+                            date={istDateKey(r.recorded_at)}
+                            dateLabel={formatDateShort(r.recorded_at)}
+                          />
                         </td>
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {(r.recorder as { full_name?: string })?.full_name?.split(" ")[0] ?? "—"}

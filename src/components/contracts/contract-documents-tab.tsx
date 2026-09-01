@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Ban,
   Upload,
   CheckCircle2,
   XCircle,
@@ -58,6 +59,7 @@ const STATUS_BADGE: Record<string, string> = {
   approved: "bg-green-100 text-green-700",
   rejected: "bg-red-100 text-red-700",
   deferred: "bg-amber-100 text-amber-700",
+  waived: "bg-slate-200 text-slate-700",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -66,6 +68,7 @@ const STATUS_LABELS: Record<string, string> = {
   approved: "Approved",
   rejected: "Rejected",
   deferred: "Deferred",
+  waived: "Waived",
 };
 
 function isOverdue(deferredUntil?: string): boolean {
@@ -100,7 +103,26 @@ export function ContractDocumentsTab({
   // Un-defer state
   const [undeferringId, setUndeferringId] = useState<string | null>(null);
 
+  // Waive state — permanent, so it has no date field and its own acknowledgement
+  const [waivingDoc, setWaivingDoc] = useState<ContractDocument | null>(null);
+  const [waiveReason, setWaiveReason] = useState("");
+  const [waiveAcknowledged, setWaiveAcknowledged] = useState(false);
+  const [waiving, setWaiving] = useState(false);
+  const [unwaivingId, setUnwaivingId] = useState<string | null>(null);
+  // Hidden until migration 00535 is applied — see /api/kyc/waiver-available.
+  const [waiverAvailable, setWaiverAvailable] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/kyc/waiver-available")
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (live && j?.data?.available) setWaiverAvailable(true); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+
   const canDefer = userRole === "admin" || userRole === "manager";
+  const canWaive = canDefer && waiverAvailable;
 
   const fetchDocs = useCallback(async () => {
     setLoading(true);
@@ -127,14 +149,16 @@ export function ContractDocumentsTab({
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
-  // Report KYC status to parent: deferred docs count as "satisfied" for activation
+  // Report KYC status to parent: deferred and waived docs both count as
+  // "satisfied" for activation — one is a promise to collect later, the other
+  // a decision not to, and neither should block the contract.
   useEffect(() => {
     if (!onKycStatusChange || docs.length === 0) return;
     const required = docs.filter(d => d.is_required);
     const approved = required.filter(d => d.status === "approved").length;
-    const deferred = required.filter(d => d.status === "deferred").length;
-    const allSatisfied = required.length > 0 && (approved + deferred) >= required.length;
-    onKycStatusChange(allSatisfied, required.length, approved, deferred);
+    const excused = required.filter(d => d.status === "deferred" || d.status === "waived").length;
+    const allSatisfied = required.length > 0 && (approved + excused) >= required.length;
+    onKycStatusChange(allSatisfied, required.length, approved, excused);
   }, [docs, onKycStatusChange]);
 
   const handleUpload = async (docId: string, raw: File) => {
@@ -249,6 +273,52 @@ export function ContractDocumentsTab({
     }
   };
 
+  const handleWaive = async () => {
+    if (!waivingDoc) return;
+    if (!waiveReason.trim()) {
+      toast.error("Please enter a reason for the waiver");
+      return;
+    }
+    if (!waiveAcknowledged) {
+      toast.error("Please acknowledge that this document will never be collected");
+      return;
+    }
+    setWaiving(true);
+    const res = await fetch(`/api/contracts/${contractId}/documents/${waivingDoc.id}/waive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: waiveReason.trim() }),
+    });
+    setWaiving(false);
+
+    if (res.ok) {
+      toast.success("Requirement waived — it will no longer be chased");
+      setWaivingDoc(null);
+      setWaiveReason("");
+      setWaiveAcknowledged(false);
+      fetchDocs();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to waive document");
+    }
+  };
+
+  const handleUnwaive = async (doc: ContractDocument) => {
+    setUnwaivingId(doc.id);
+    const res = await fetch(`/api/contracts/${contractId}/documents/${doc.id}/waive`, {
+      method: "DELETE",
+    });
+    setUnwaivingId(null);
+
+    if (res.ok) {
+      toast.success("Waiver removed — document is now pending");
+      fetchDocs();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to remove the waiver");
+    }
+  };
+
   const handleUndeferr = async (doc: ContractDocument) => {
     setUndeferringId(doc.id);
     const res = await fetch(`/api/contracts/${contractId}/documents/${doc.id}/defer`, {
@@ -278,10 +348,12 @@ export function ContractDocumentsTab({
   const requiredDocs = docs.filter(d => d.is_required);
   const approvedCount = requiredDocs.filter(d => d.status === "approved").length;
   const deferredCount = requiredDocs.filter(d => d.status === "deferred").length;
+  const waivedCount = requiredDocs.filter(d => d.status === "waived").length;
   const totalRequired = requiredDocs.length;
-  const allSatisfied = totalRequired > 0 && (approvedCount + deferredCount) >= totalRequired;
+  const allSatisfied =
+    totalRequired > 0 && (approvedCount + deferredCount + waivedCount) >= totalRequired;
   const approvedPct = totalRequired > 0 ? (approvedCount / totalRequired) * 100 : 0;
-  const deferredPct = totalRequired > 0 ? (deferredCount / totalRequired) * 100 : 0;
+  const deferredPct = totalRequired > 0 ? ((deferredCount + waivedCount) / totalRequired) * 100 : 0;
 
   if (loading) {
     return (
@@ -388,6 +460,7 @@ export function ContractDocumentsTab({
         <div className="space-y-2">
           {docs.map((doc) => {
             const deferred = doc.status === "deferred";
+            const waived = doc.status === "waived";
             const overdue = deferred && isOverdue(doc.deferred_until);
 
             return (
@@ -463,6 +536,20 @@ export function ContractDocumentsTab({
                       )}
                     </div>
                   )}
+
+                  {/* Waiver details — no date, by definition */}
+                  {waived && (
+                    <div className="text-xs space-y-0.5 text-slate-600">
+                      <p>
+                        <span className="font-medium">Waived — will not be collected</span>
+                        {doc.waiver && <span> by {doc.waiver.full_name}</span>}
+                        {doc.waived_at && <span> · {formatDate(doc.waived_at)}</span>}
+                      </p>
+                      {doc.waived_reason && (
+                        <p className="italic">&ldquo;{doc.waived_reason}&rdquo;</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Action buttons */}
@@ -529,7 +616,7 @@ export function ContractDocumentsTab({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        {doc.status !== "deferred" && doc.status !== "approved" && (
+                        {doc.status !== "deferred" && doc.status !== "approved" && doc.status !== "waived" && (
                           <>
                             <DropdownMenuItem
                               className="text-amber-700 focus:text-amber-700 focus:bg-amber-50"
@@ -544,6 +631,31 @@ export function ContractDocumentsTab({
                               Defer requirement
                             </DropdownMenuItem>
                           </>
+                        )}
+                        {canWaive && doc.status !== "approved" && doc.status !== "waived" && (
+                          <DropdownMenuItem
+                            className="text-slate-700 focus:text-slate-700 focus:bg-slate-100"
+                            onClick={() => {
+                              setWaivingDoc(doc);
+                              setWaiveReason(doc.deferred_reason || "");
+                              setWaiveAcknowledged(false);
+                            }}
+                          >
+                            <Ban className="h-3.5 w-3.5 mr-2" />
+                            Waive permanently
+                          </DropdownMenuItem>
+                        )}
+                        {doc.status === "waived" && (
+                          <DropdownMenuItem
+                            className="text-muted-foreground focus:bg-muted/50"
+                            disabled={unwaivingId === doc.id}
+                            onClick={() => handleUnwaive(doc)}
+                          >
+                            {unwaivingId === doc.id
+                              ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                              : <RotateCcw className="h-3.5 w-3.5 mr-2" />}
+                            Remove waiver
+                          </DropdownMenuItem>
                         )}
                         {doc.status === "deferred" && (
                           <>
@@ -644,6 +756,71 @@ export function ContractDocumentsTab({
               >
                 {reviewing && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
                 {reviewStatus === "approved" ? "Approve" : "Reject"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── Waive dialog ── */}
+        <Dialog
+          open={!!waivingDoc}
+          onOpenChange={(v) => { if (!v) { setWaivingDoc(null); setWaiveAcknowledged(false); } }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Ban className="h-4 w-4 text-slate-600" />
+                Waive Requirement
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4 mt-1">
+              <div className="rounded-md bg-muted/50 border px-3 py-2 text-sm font-medium">
+                {waivingDoc?.label}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="waive-reason">
+                  Reason <span className="text-destructive">*</span>
+                </Label>
+                <Textarea
+                  id="waive-reason"
+                  rows={3}
+                  placeholder="e.g. Proprietorship — no MOA/AOA exists for this entity type"
+                  value={waiveReason}
+                  onChange={(e) => setWaiveReason(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  A waiver has no expiry date, so this reason is the whole record of the decision.
+                </p>
+              </div>
+
+              <div className="flex items-start gap-3 rounded-md border border-slate-300 bg-slate-50 p-3">
+                <Checkbox
+                  id="waive-ack"
+                  checked={waiveAcknowledged}
+                  onCheckedChange={(v) => setWaiveAcknowledged(!!v)}
+                  className="mt-0.5 border-slate-400"
+                />
+                <label htmlFor="waive-ack" className="text-xs text-slate-700 cursor-pointer leading-relaxed">
+                  I understand this document will <strong>never be collected</strong>. It drops out of
+                  the KYC reminders permanently. Use <strong>Defer</strong> instead if it is only
+                  outstanding for now.
+                </label>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setWaivingDoc(null); setWaiveAcknowledged(false); }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleWaive}
+                disabled={waiving || !waiveReason.trim() || !waiveAcknowledged}
+                className="bg-slate-700 hover:bg-slate-800 text-white"
+              >
+                {waiving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                Waive Requirement
               </Button>
             </DialogFooter>
           </DialogContent>

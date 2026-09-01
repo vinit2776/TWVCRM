@@ -709,10 +709,14 @@ export async function generateMonthlyStatements(
       location_id, lead_id,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number)
     `)
-    .in("status", ["active", "renewal_in_progress"])
+    .in("status", ["active", "renewal_in_progress", "renewed"])
     .lte("start_date", lastOfMonth)
     // renewal_in_progress contracts stay billable indefinitely even after their
     // original end_date lapses — see generateRentProformas for rationale.
+    // "renewed" parents (early renewal: the child was activated before the
+    // parent's own end_date) stay billable for their own remaining days only —
+    // gated by end_date.gte like "active", not exempted like renewal_in_progress —
+    // so they drop out of eligibility on their own once end_date lapses.
     .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
@@ -1200,11 +1204,14 @@ export async function generateRentProformas(
       location_id, lead_id, billing_mode,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
-    .in("status", ["active", "renewal_in_progress"])
+    .in("status", ["active", "renewal_in_progress", "renewed"])
     .lte("start_date", prepaidLastOfMonth)
     // renewal_in_progress contracts stay billable indefinitely even after their
     // original end_date lapses — the parent keeps billing at its existing terms
     // until the renewal is activated (status flips to "renewed") or terminated.
+    // "renewed" parents (early renewal) stay billable for their own remaining
+    // days only — gated by end_date.gte like "active" — so a parent whose own
+    // term already lapsed before the child activated doesn't get rebilled.
     .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
@@ -1722,10 +1729,12 @@ export async function generateUsageStatements(
       billing_cycle, start_date, end_date, lead_id,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
-    .in("status", ["active", "renewal_in_progress"])
+    .in("status", ["active", "renewal_in_progress", "renewed"])
     .lte("start_date", lastOfMonth)
     // renewal_in_progress contracts stay billable indefinitely even after their
     // original end_date lapses — see generateRentProformas for rationale.
+    // "renewed" parents (early renewal) stay billable for their own remaining
+    // days only — gated by end_date.gte like "active".
     .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);

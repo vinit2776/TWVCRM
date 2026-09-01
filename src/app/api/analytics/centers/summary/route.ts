@@ -1,14 +1,16 @@
 /**
  * GET /api/analytics/centers/summary?start=YYYY-MM-DD&end=YYYY-MM-DD&location_id=<uuid>
  *
- * Per-center sales/collections/billed/occupancy for one date range — backs
+ * Per-center new-MRR/collections/billed/occupancy for one date range — backs
  * the Center Analytics KPI tiles and comparison table. Admin only.
  *
  * See docs/plans/center-analytics-data-source.md for what each metric means
- * and why: Sales/Collections/Billed are bucketed by when the underlying
+ * and why: New MRR/Collections/Billed are bucketed by when the underlying
  * record belongs to the range (contract activation, billing period_start),
  * not by when cash moved; Occupancy is a snapshot as of `end` (clamped to
- * today), not a range aggregate.
+ * today), not a range aggregate. New MRR is `contracts.total_amount` summed
+ * for contracts activated in range — that field is the monthly recurring
+ * rent, not a full-tenure deal value (see center-metrics.ts's module doc).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -21,7 +23,7 @@ import {
   fetchStatements,
   fetchPaymentsTotal,
   fetchActiveSpaceUnits,
-  fetchSeatOccupants,
+  fetchSpaceAllocations,
   computeOccupancyByLocation,
 } from "@/lib/analytics/center-metrics";
 
@@ -54,13 +56,13 @@ export async function GET(request: NextRequest) {
   const { data: locations, error: locErr } = await locsQ;
   if (locErr) return NextResponse.json({ error: locErr.message }, { status: 500 });
 
-  let contracts, statements, units, occupants;
+  let contracts, statements, units, allocations;
   try {
-    [contracts, statements, units, occupants] = await Promise.all([
+    [contracts, statements, units, allocations] = await Promise.all([
       fetchContracts(supabase, locationId),
       fetchStatements(supabase, range),
       fetchActiveSpaceUnits(supabase, locationId),
-      fetchSeatOccupants(supabase, locationId),
+      fetchSpaceAllocations(supabase, locationId),
     ]);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -69,7 +71,7 @@ export async function GET(request: NextRequest) {
   const contractLocationById = new Map(contracts.map((c) => [c.id, c.location_id]));
 
   const asOfDate = range.end > todayIstDate() ? todayIstDate() : range.end;
-  const occByLocation = computeOccupancyByLocation(units, occupants, asOfDate);
+  const occByLocation = computeOccupancyByLocation(units, allocations, asOfDate);
 
   const { startIso: salesStartIso } = istDayBounds(range.start);
   const { endIso: salesEndIso } = istDayBounds(range.end);

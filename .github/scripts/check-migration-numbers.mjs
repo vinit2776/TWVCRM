@@ -84,6 +84,40 @@ export function findConflicts(introduced, claims) {
   return conflicts;
 }
 
+/** "00511_foo_bar.sql" -> "foo_bar". The history table records this half. */
+export function nameOf(filename) {
+  const m = /^\d{5}_(.+)\.sql$/.exec(filename);
+  return m ? m[1] : null;
+}
+
+/**
+ * Compare what this branch introduces against what production has applied.
+ * `applied` maps version -> recorded name (which may be null).
+ *
+ * An applied number is NOT automatically a conflict: migrations here are
+ * routinely pushed to production from a feature branch before that branch
+ * merges, so a branch legitimately owns an applied number. It is a conflict
+ * only when the recorded name belongs to a different migration.
+ *
+ * When the recorded name is null the two cannot be told apart, so it is
+ * reported as unverifiable rather than quietly passed — passing in silence is
+ * the exact failure this whole check exists to prevent.
+ */
+export function findAppliedConflicts(introduced, applied) {
+  const conflicts = [];
+  const unverifiable = [];
+  for (const { file, number } of introduced) {
+    if (!applied.has(number)) continue;
+    const recorded = applied.get(number);
+    if (recorded == null || recorded === "") {
+      unverifiable.push({ number, ours: file });
+    } else if (recorded !== nameOf(file)) {
+      conflicts.push({ number, ours: file, recorded });
+    }
+  }
+  return { conflicts, unverifiable };
+}
+
 const listRef = (ref) => {
   const out = git("ls-tree", "--name-only", ref, `${MIGRATIONS_DIR}/`);
   return out ? out.trim().split("\n").filter(Boolean).map((p) => p.split("/").pop()) : null;
@@ -98,6 +132,7 @@ if (isMain) {
 
 const fail = [];
 const note = [];
+let introducedForProdCheck = [];
 
 // ── 1. Duplicates in this working tree ──────────────────────────────────────
 const local = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql"));
@@ -120,6 +155,8 @@ if (!mainFiles) {
     .filter((f) => !onMain.has(f))
     .map((f) => ({ file: f, number: numberOf(f) }))
     .filter((x) => x.number);
+
+  introducedForProdCheck = introduced;
 
   if (introduced.length === 0) {
     note.push("This branch introduces no new migrations.");
@@ -158,6 +195,83 @@ if (!mainFiles) {
         `Renumber whichever has NOT been applied yet.`,
       );
     }
+  }
+}
+
+// ── 4. Numbers already burnt in production ─────────────────────────────────
+// Checks 2 and 3 answer "is anyone else holding this number". They cannot
+// answer "has this number already been used", and the two differ here:
+// migrations get pushed to production straight from feature branches, so a
+// number can sit in schema_migrations while the branch that put it there was
+// abandoned and its file never reached git at all. To a git-only check that
+// number looks free, and db push will silently skip whoever claims it next.
+//
+// Credentials are optional. Their absence is reported rather than passed over
+// quietly — a check that silently does nothing is worse than no check, because
+// it reads as a green tick. Accepts either a full connection URI
+// (SUPABASE_DB_URL) or the BACKUP_DB_* parts this repo already uses.
+async function appliedVersions() {
+  // Trailing newlines on pasted secrets have broken this repo's database
+  // config before; strip them rather than fail with an opaque DNS error.
+  const env = (k) => (process.env[k] ?? "").trim();
+
+  const url = env("SUPABASE_DB_URL");
+  const host = env("BACKUP_DB_HOST");
+  if (!url && !(host && env("BACKUP_DB_USER") && env("BACKUP_DB_PASSWORD"))) return null;
+
+  const { default: pg } = await import("pg");
+  const client = new pg.Client(
+    url
+      ? { connectionString: url, ssl: { rejectUnauthorized: false } }
+      : {
+          host,
+          port: parseInt(env("BACKUP_DB_PORT") || "5432", 10),
+          user: env("BACKUP_DB_USER"),
+          password: env("BACKUP_DB_PASSWORD"),
+          database: env("BACKUP_DB_NAME") || "postgres",
+          ssl: { rejectUnauthorized: false },
+        },
+  );
+  await client.connect();
+  try {
+    const { rows } = await client.query(
+      "SELECT version, name FROM supabase_migrations.schema_migrations",
+    );
+    return new Map(rows.map((r) => [String(r.version), r.name ?? null]));
+  } finally {
+    await client.end();
+  }
+}
+
+if (introducedForProdCheck.length > 0) {
+  let applied = null;
+  try {
+    applied = await appliedVersions();
+  } catch (err) {
+    // A credential or permission problem must never read as "no conflicts".
+    fail.push(`could not read production migration history: ${err.message}`);
+  }
+
+  if (applied) {
+    note.push(`Production has ${applied.size} applied migration(s).`);
+    const { conflicts, unverifiable } = findAppliedConflicts(introducedForProdCheck, applied);
+    for (const c of conflicts) {
+      fail.push(
+        `${c.number} is already applied in production as "${c.recorded}", but this branch ` +
+        `has ${c.ours}. That number is spent — db push will skip this file silently.`,
+      );
+    }
+    for (const u of unverifiable) {
+      fail.push(
+        `${u.number} is already applied in production and the history row records no name, ` +
+        `so it cannot be confirmed as ${u.ours}. Verify by hand before merging.`,
+      );
+    }
+  } else if (fail.length === 0) {
+    note.push(
+      "Production history NOT checked — no database credentials in the environment. " +
+      "Set SUPABASE_DB_URL (or BACKUP_DB_*) to also catch numbers burnt by an abandoned branch.",
+    );
   }
 }
 

@@ -21,7 +21,7 @@ import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_EXAMPLES,
-  PROCUREMENT_DEPARTMENT_COLORS,
+  PROCUREMENT_DEPARTMENT_COLORS, CENTER_SCOPED_DEPARTMENTS,
   ITEM_UNIT_GROUPS,
   ITEM_UNIT_LABELS,
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
@@ -104,6 +104,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     return PROCUREMENT_DEPARTMENTS.includes(initial) ? initial : "pantry";
   });
   const [locationId, setLocationId] = useState<string>(pr?.location_id ?? "");
+  const isCenterScoped = (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department);
 
   // ── AMC fields (used when department === "amc") ─────────────────────────────
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
@@ -499,6 +500,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     if (department === "reimbursement" && !billableContractId) {
       return "Select which customer's contract this reimbursement work will be billed to";
     }
+    if ((CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department) && !locationId) {
+      return "Select which center this request is for";
+    }
     for (const li of items) {
       if (!li.isCustom && !li.item_id) return "Please select all catalog items from the catalog, or use the Custom Item option for unlisted items";
       if (li.isCustom && !li.item_name.trim()) return "Custom items must have a name";
@@ -767,18 +771,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="location">Location</Label>
+            <Label htmlFor="location">
+              {isCenterScoped ? "Center" : "Location"}
+              {isCenterScoped && <span className="text-red-500 ml-0.5">*</span>}
+            </Label>
             <Select value={locationId || "__none__"} onValueChange={(v) => setLocationId(v === "__none__" ? "" : v)}>
               <SelectTrigger id="location">
-                <SelectValue placeholder="Select location (optional)" />
+                <SelectValue placeholder={isCenterScoped ? "Select which center this is for" : "Select location (optional)"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">No specific location</SelectItem>
+                {!isCenterScoped && <SelectItem value="__none__">No specific location</SelectItem>}
                 {locations.map((loc) => (
                   <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {isCenterScoped && (
+              <p className="text-xs text-muted-foreground">
+                Who this spend belongs to — even if it&apos;s picked up from NUN 5th floor and transferred over.
+              </p>
+            )}
           </div>
 
           {/* AMC annual budget preview — shown when AMC department is selected */}

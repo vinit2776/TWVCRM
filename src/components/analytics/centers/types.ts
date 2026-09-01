@@ -84,6 +84,28 @@ export interface BreakdownResponse {
   items: BreakdownItem[];
 }
 
+export interface HeatmapUnit {
+  unit_id: string;
+  code: string;
+  name: string;
+  type: string;
+  capacity: number;
+  location_id: string;
+  location_name: string;
+  /** % of days in the selected range this unit had a live-contract allocation. */
+  occupancy_pct: number;
+  /** Current tenant's monthly-equivalent rate, capacity-apportioned — a snapshot, not range-based. */
+  monthly_revenue: number;
+  vacant_now: boolean;
+  /** The contract currently occupying this unit — null when vacant. */
+  contract_id: string | null;
+}
+
+export interface HeatmapResponse {
+  range: DateRange;
+  units: HeatmapUnit[];
+}
+
 export const ROOM_TYPE_LABELS: Record<string, string> = {
   hot_desk: "Hot Desk",
   dedicated_desk: "Dedicated Desk",
@@ -91,3 +113,46 @@ export const ROOM_TYPE_LABELS: Record<string, string> = {
   managed_office: "Managed Office",
   business_centre: "Business Centre",
 };
+
+export interface ProjectionCenterSeries {
+  location_id: string;
+  location_name: string;
+  /** 12 months, Apr-Mar — sum of active/renewal-in-progress contracts overlapping each month, at current phase rate. */
+  confirmed: number[];
+  /** 12 months — hypothetical revenue added back after a contract's own end_date, at its stored escalation %. */
+  if_renewed: number[];
+}
+
+export interface ProjectionContractRow {
+  id: string;
+  contract_number: string;
+  location_id: string;
+  location_name: string;
+  client_name: string;
+  monthly_rate: number;
+  end_date: string | null;
+  status: string;
+  escalation_percentage: number;
+  renewed_rate: number;
+}
+
+export interface ProjectionAdjustment {
+  id: string;
+  contract_id: string;
+  contract_number: string;
+  location_id: string;
+  month: string;
+  amount: number;
+  reason: string;
+  created_by_name: string;
+  created_at: string;
+}
+
+export interface ProjectionsResponse {
+  fy: { year: number; label: string; is_current: boolean; start: string; end: string };
+  /** 12 YYYY-MM month keys, Apr-Mar. */
+  months: string[];
+  centers: ProjectionCenterSeries[];
+  contracts: ProjectionContractRow[];
+  adjustments: ProjectionAdjustment[];
+}

@@ -29,8 +29,9 @@ import {
   TRANSFER_STATUS_LABELS, TRANSFER_STATUS_COLORS,
   TRANSFER_ISSUE_TYPE_LABELS, TRANSFER_ISSUE_TYPES,
   TRANSFER_ISSUE_STATUS_LABELS, TRANSFER_ISSUE_STATUS_COLORS,
+  PROCUREMENT_DEPARTMENT_LABELS,
 } from "@/lib/constants";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatCurrency } from "@/lib/utils";
 import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
 import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
 import { TransferAuditTrail } from "@/components/procurement/transfer-audit-trail";
@@ -132,6 +133,14 @@ interface ApproveLineRow {
   reviewed: boolean;
 }
 
+interface CenterBudgetContext {
+  department: string;
+  monthly_budget: number;
+  spent_this_month: number;
+  utilisation_pct: number;
+  is_over_budget: boolean;
+}
+
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -142,6 +151,7 @@ export default function TransferDetailPage() {
   const [stockLevels, setStockLevels] = useState<StockLevel[]>([]);
   const [approvalIntelligence, setApprovalIntelligence] = useState<ApprovalIntelligenceItem[]>([]);
   const [openIssuesCount, setOpenIssuesCount] = useState(0);
+  const [centerBudgets, setCenterBudgets] = useState<CenterBudgetContext[]>([]);
   const [auditTrail, setAuditTrail] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -175,6 +185,7 @@ export default function TransferDetailPage() {
       setStockLevels(json.stock_levels || []);
       setApprovalIntelligence(json.approval_intelligence || []);
       setOpenIssuesCount(json.open_issues_count || 0);
+      setCenterBudgets(json.center_budgets || []);
       setAuditTrail(json.audit_trail || []);
     }
     setLoading(false);
@@ -601,6 +612,25 @@ export default function TransferDetailPage() {
               <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 {openIssuesCount} unresolved issue{openIssuesCount !== 1 ? "s" : ""} from past transfers at this location.
+              </div>
+            )}
+            {centerBudgets.length > 0 && (
+              <div className="mb-3 space-y-1.5">
+                <p className="text-xs font-medium text-blue-800">
+                  {transfer.to_location?.name ?? "Destination"}&apos;s budget this month — for awareness, this transfer doesn&apos;t re-check it
+                </p>
+                {centerBudgets.map((cb) => (
+                  <div
+                    key={cb.department}
+                    className={`flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-xs ${cb.is_over_budget ? "border-red-300 bg-red-50 text-red-800" : "border-blue-200 bg-white text-blue-900"}`}
+                  >
+                    <span className="font-medium">{PROCUREMENT_DEPARTMENT_LABELS[cb.department] ?? cb.department}</span>
+                    <span>
+                      {formatCurrency(cb.spent_this_month)} / {formatCurrency(cb.monthly_budget)} ({cb.utilisation_pct}%)
+                      {cb.is_over_budget && <span className="font-semibold"> — over budget</span>}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
             <div className="rounded-md border overflow-x-auto">

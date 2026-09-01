@@ -36,8 +36,10 @@ import {
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
+import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
+import type { VendorBillDocument } from "@/types";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -106,6 +108,7 @@ type ChainData = {
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
+    vendor_bill_documents?: VendorBillDocument[];
     electricity_bill?: {
       bill_month: number;
       bill_year: number;
@@ -1350,6 +1353,29 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Supporting Documents — everything attached to the bill, including
+          anything added after approval (e.g. a debit note or corrected
+          invoice the vendor sent later). Accounts refers to this before
+          paying, so it needs the full list, not just the original invoice
+          shown above in the Document Chain trail. */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            Supporting Documents
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <VendorBillDocuments
+            billId={bill.id}
+            approvalStatus={bill.approval_status}
+            approvedAt={bill.approved_at}
+            documents={bill.vendor_bill_documents ?? []}
+            onChanged={fetchChain}
+          />
         </CardContent>
       </Card>
 

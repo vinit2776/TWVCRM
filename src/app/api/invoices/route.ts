@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get("limit") || "25");
   const status = searchParams.get("status");
   const leadId = searchParams.get("lead_id");
+  const caseId = searchParams.get("case_id");
 
   const offset = (page - 1) * limit;
 
@@ -22,6 +24,7 @@ export async function GET(request: NextRequest) {
 
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);
+  if (caseId) query = query.eq("case_id", caseId);
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
@@ -102,7 +105,7 @@ export async function POST(request: NextRequest) {
   // ── Auto-create Razorpay payment link at creation time ────────────────────
   // This makes the link available immediately in the PDF download and avoids
   // recreating it on every email send.
-  if (data && totalAmount > 0 && result.data.lead_id) {
+  if (data && totalAmount > 0 && (result.data.lead_id || result.data.case_id)) {
     try {
       const adminSupabase = createAdminClient();
       const { data: rzpSettings } = await adminSupabase
@@ -114,19 +117,34 @@ export async function POST(request: NextRequest) {
       (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzpMap[s.key] = s.value; });
 
       if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
-        // Fetch lead contact details for Razorpay customer prefill
-        const { data: lead } = await supabase
-          .from("leads")
-          .select("first_name, last_name, email, phone, mobile")
-          .eq("id", result.data.lead_id)
-          .single();
+        // Prefill the Razorpay customer with whoever is actually being billed.
+        // On a case that is the case's billing party — an aggregator for a
+        // partner-billed case — not the end client, who does not owe it.
+        let party = null;
+        if (result.data.case_id) {
+          const { data: caseRow } = await supabase
+            .from("cases")
+            .select("client_name, client_company_name, client_email, client_phone, client_gst_number, aggregator_id, bill_to, aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)")
+            .eq("id", result.data.case_id)
+            .maybeSingle();
+          if (caseRow) {
+            party = invoiceParty({
+              case: caseRow as unknown as InvoiceCaseLike,
+              billClientOverride: result.data.bill_client_override,
+            });
+          }
+        } else {
+          const { data: lead } = await supabase
+            .from("leads")
+            .select("first_name, last_name, company, email, phone, mobile")
+            .eq("id", result.data.lead_id!)
+            .single();
+          party = invoiceParty({ lead });
+        }
 
-        const customerName = lead
-          ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim()
-          : "";
-        const customerEmail = (lead as { email?: string } | null)?.email || "";
-        const customerPhone = ((lead as { phone?: string; mobile?: string } | null)?.phone ||
-          (lead as { phone?: string; mobile?: string } | null)?.mobile || "");
+        const customerName = party?.name ?? "";
+        const customerEmail = party?.email ?? "";
+        const customerPhone = party?.phone ?? "";
 
         const auth = Buffer.from(
           `${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`

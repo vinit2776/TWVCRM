@@ -219,6 +219,19 @@ export default function PurchaseRequestDetailPage() {
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
 
   // Budget check state
+  type CenterBudgetCheck = {
+    location_id: string;
+    location_name: string | null;
+    monthly_budget: number;
+    spent_so_far: number;
+    this_mr_amount: number;
+    projected_total: number;
+    remaining_before_mr: number;
+    is_over_budget: boolean;
+    over_by: number;
+    utilisation_before: number;
+    utilisation_after: number;
+  };
   type BudgetCheck = {
     has_budget: boolean;
     monthly_budget?: number;
@@ -230,6 +243,7 @@ export default function PurchaseRequestDetailPage() {
     over_by?: number;
     utilisation_before?: number;
     utilisation_after?: number;
+    center?: CenterBudgetCheck | null;
   };
   const [budgetCheck, setBudgetCheck] = useState<BudgetCheck | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
@@ -260,8 +274,9 @@ export default function PurchaseRequestDetailPage() {
     // AMC MRs bypass budget — no need to fetch budget check
     if (!pr || !isApprover || pr.expenditure_type === "amc") return;
     setBudgetLoading(true);
+    const locationParam = pr.location_id ? `&location_id=${pr.location_id}` : "";
     const res = await fetch(
-      `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}`
+      `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}${locationParam}`
     );
     if (res.ok) {
       const data = await res.json();
@@ -1390,6 +1405,40 @@ export default function PurchaseRequestDetailPage() {
                 No monthly budget configured for {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}. All managers and admins can approve.
               </p>
             )}
+            {isApprover && !budgetLoading && budgetCheck?.center && (
+              <div className={`rounded-lg border p-3 space-y-2 ${budgetCheck.center.is_over_budget ? "border-red-200 bg-red-50" : budgetCheck.center.utilisation_after >= 80 ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                <p className={`text-xs font-semibold uppercase tracking-wide ${budgetCheck.center.is_over_budget ? "text-red-700" : budgetCheck.center.utilisation_after >= 80 ? "text-amber-700" : "text-green-700"}`}>
+                  {budgetCheck.center.location_name ?? "This center"} — Monthly Budget
+                </p>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Center budget</span>
+                    <span className="font-medium">{formatCurrency(budgetCheck.center.monthly_budget)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Spent so far</span>
+                    <span>{formatCurrency(budgetCheck.center.spent_so_far)}</span>
+                  </div>
+                  <div className="flex justify-between border-t pt-1 mt-1">
+                    <span className={`font-semibold ${budgetCheck.center.is_over_budget ? "text-red-700" : "text-muted-foreground"}`}>
+                      After approval: {formatCurrency(budgetCheck.center.projected_total)} ({budgetCheck.center.utilisation_after}%)
+                    </span>
+                    {budgetCheck.center.is_over_budget && (
+                      <span className="text-red-700 font-bold text-xs">
+                        ↑ Over by {formatCurrency(budgetCheck.center.over_by)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {budgetCheck.center.is_over_budget && (
+                  <div className={`text-xs rounded px-2 py-1.5 mt-1 ${userRole === "admin" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}`}>
+                    {userRole === "admin"
+                      ? "⚠ This approval will exceed this center's budget. As admin you can still approve."
+                      : "⛔ Manager approval is not permitted when the center budget is exceeded. Only admin can approve over-budget requests."}
+                  </div>
+                )}
+              </div>
+            )}
             {isLargeAmount && (
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                 This amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()}. Only admin users can approve this.
@@ -1411,6 +1460,7 @@ export default function PurchaseRequestDetailPage() {
               disabled={
                 actionLoading ||
                 (budgetCheck?.is_over_budget === true && userRole === "manager") ||
+                (budgetCheck?.center?.is_over_budget === true && userRole === "manager") ||
                 (hasNoQuotations && userRole !== "admin") ||
                 (hasNoQuotations && userRole === "admin" && !quotationOverrideReason.trim())
               }

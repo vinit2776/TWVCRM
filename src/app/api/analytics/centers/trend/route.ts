@@ -4,7 +4,9 @@
  * Per-center monthly series for one metric — backs the Center Analytics
  * trend chart's metric tabs (one call per tab, matching the mockup's
  * behavior). Admin only. See center-metrics.ts for the cohort-vs-snapshot
- * distinction between sales/collections and occupancy.
+ * distinction between new MRR/collections and occupancy. metric=sales
+ * returns new MRR (contracts.total_amount summed) — kept as `sales`
+ * internally, see center-metrics.ts's module doc for why.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,7 +18,7 @@ import {
   fetchStatements,
   fetchPaymentsTotal,
   fetchActiveSpaceUnits,
-  fetchSeatOccupants,
+  fetchSpaceAllocations,
   computeOccupancyByLocation,
   sumSalesInRange,
 } from "@/lib/analytics/center-metrics";
@@ -97,9 +99,9 @@ export async function GET(request: NextRequest) {
       }
     } else {
       const units = await fetchActiveSpaceUnits(supabase, locationId);
-      const occupants = await fetchSeatOccupants(supabase, locationId);
+      const allocations = await fetchSpaceAllocations(supabase, locationId);
       for (const w of windows) {
-        const occByLocation = computeOccupancyByLocation(units, occupants, w.end);
+        const occByLocation = computeOccupancyByLocation(units, allocations, w.end);
         for (const loc of locations ?? []) {
           const occ = occByLocation.get(loc.id as string) ?? { capacity: 0, occupied: 0 };
           const pct = occ.capacity > 0 ? Math.round((occ.occupied / occ.capacity) * 100) : 0;

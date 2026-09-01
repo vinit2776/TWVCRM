@@ -104,6 +104,35 @@ export async function PATCH(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
+  // Preserve document history when the signed document is swapped through
+  // this general-purpose route (e.g. the "Signed Contract → Replace" button)
+  // rather than the dedicated reupload-agreement flow — otherwise the
+  // previous executed document is silently discarded with no trace, which is
+  // exactly what reupload-agreement/route.ts exists to prevent. Chaining it
+  // here means every caller that changes signed_document_id gets history for
+  // free, not just the one dedicated route.
+  if (
+    allowedFields.signed_document_id &&
+    oldContract.signed_document_id &&
+    allowedFields.signed_document_id !== oldContract.signed_document_id
+  ) {
+    const adminSupabase = await createAdminClient();
+    const { data: oldDoc } = await adminSupabase
+      .from("documents")
+      .select("version")
+      .eq("id", oldContract.signed_document_id)
+      .single();
+    if (oldDoc) {
+      await adminSupabase
+        .from("documents")
+        .update({
+          version: (oldDoc.version || 1) + 1,
+          parent_document_id: oldContract.signed_document_id,
+        })
+        .eq("id", allowedFields.signed_document_id as string);
+    }
+  }
+
   // Department ID rules:
   //   - A contract must have a location to receive a department ID (printers
   //     are physical, tied to a building). Setting an ID on a location-less
@@ -276,36 +305,13 @@ export async function PATCH(
           prorataSatisfiedByInvoice = `${prorataInvoice.invoice_number} (${prorataInvoice.total_amount})`;
         }
       }
-      // For mid-month renewals: pro-rata must be paid before activation.
-      // Check the billing statement directly so all payment paths (Razorpay,
-      // AR manual record, Tally inbox record) unblock activation automatically.
-      if (
-        oldContract.is_renewal &&
-        oldContract.prorata_payment_status === "pending" &&
-        !body.payment_override_reason
-      ) {
-        let prorataSettled = false;
-        if (oldContract.prorata_billing_statement_id) {
-          const { data: prorataStmt } = await supabase
-            .from("billing_statements")
-            .select("payment_status")
-            .eq("id", oldContract.prorata_billing_statement_id)
-            .single();
-          if (prorataStmt?.payment_status === "paid") {
-            prorataSettled = true;
-            // Sync the contract column so future checks are fast
-            await supabase
-              .from("contracts")
-              .update({ prorata_payment_status: "paid" })
-              .eq("id", id);
-          }
-        }
-        if (!prorataSettled) {
-          return NextResponse.json({
-            error: "Cannot activate: pro-rata payment for the partial first month has not been collected. Send the PI or GST invoice from the Pro-Rata section and collect payment first.",
-          }, { status: 400 });
-        }
-      }
+      // Renewals are a continuation, not a new occupancy — the deposit already
+      // carries forward (isRenewal gate above), and the partial first month
+      // (when the new term starts mid-month) doesn't need a separate collected-
+      // upfront pro-rata PI either. It bills automatically like any contract's
+      // first month via the "generate current month's statement immediately"
+      // hook below. The Pro-Rata section remains available for staff who want
+      // to collect it manually ahead of activation, but it's no longer a gate.
 
       // Snapshot the proposal's deposit fields onto the contract at the
       // moment of activation — after this, the contract owns its own

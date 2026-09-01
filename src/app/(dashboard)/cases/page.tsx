@@ -11,8 +11,10 @@ import {
   Briefcase,
   LayoutGrid,
   List,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { caseExpiry, expiryRowClass, expiryTextClass } from "@/lib/case-expiry";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -48,6 +50,7 @@ export default function CasesPage() {
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [expiringOnly, setExpiringOnly] = useState(false);
 
   const { data: cases, pagination, loading } = useCases({
     page,
@@ -55,6 +58,11 @@ export default function CasesPage() {
     status: statusFilter || undefined,
     purpose: purposeFilter || undefined,
     location_id: locationFilter || undefined,
+    expiring_within: expiringOnly ? 30 : undefined,
+    // Soonest first while filtering by expiry — the whole point of the filter
+    // is what needs attention first.
+    sort_by: expiringOnly ? "end_date" : undefined,
+    sort_order: expiringOnly ? "asc" : undefined,
     limit: viewMode === "kanban" ? 100 : 25,
   });
 
@@ -164,6 +172,15 @@ export default function CasesPage() {
               placeholder="All Locations"
             />
           </div>
+          <Button
+            type="button"
+            variant={expiringOnly ? "default" : "outline"}
+            onClick={() => { setExpiringOnly((v) => !v); setPage(1); }}
+            className={expiringOnly ? "bg-amber-600 hover:bg-amber-700 text-white" : ""}
+          >
+            <CalendarClock className="mr-2 h-4 w-4" />
+            Expiring in 30 days
+          </Button>
         </div>
       </div>
 
@@ -190,15 +207,18 @@ export default function CasesPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Aggregator</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Purpose</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Expires</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Rate</th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Created</th>
               </tr>
             </thead>
             <tbody>
-              {cases.map((c) => (
+              {cases.map((c) => {
+                const expiry = caseExpiry(c);
+                return (
                 <tr
                   key={c.id}
-                  className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
+                  className={`border-b hover:bg-muted/30 cursor-pointer transition-colors ${expiryRowClass(expiry.tone)}`}
                   onClick={() => {
                     pushTrailEntry({ href: `/cases/${c.id}`, label: caseDisplayName(c) });
                     router.push(`/cases/${c.id}`);
@@ -241,6 +261,16 @@ export default function CasesPage() {
                       />
                     </div>
                   </td>
+                  <td className={`px-4 py-3 hidden lg:table-cell tabular-nums ${expiryTextClass(expiry.tone)}`}>
+                    {c.end_date ? (
+                      <>
+                        {formatDate(c.end_date)}
+                        <span className="block text-xs">{expiry.relative}</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     {c.rate ? formatCurrency(c.rate) : "-"}
                   </td>
@@ -248,7 +278,8 @@ export default function CasesPage() {
                     {formatDate(c.created_at)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

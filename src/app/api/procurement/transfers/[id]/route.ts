@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 import { flagTransferLine } from "@/lib/procurement/transfer-line-flags";
+import { CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -328,7 +329,7 @@ export async function GET(
   const { data: transfer, error } = await supabase
     .from("stock_transfers")
     .select(
-      `*, stock_transfer_items(*, procurement_items(id, name)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), stock_transfer_attachments(*, uploader:users!stock_transfer_attachments_uploaded_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
+      `*, stock_transfer_items(*, procurement_items(id, name, department)), stock_transfer_issues(*, resolver:users!stock_transfer_issues_resolved_by_fkey(id, full_name)), stock_transfer_attachments(*, uploader:users!stock_transfer_attachments_uploaded_by_fkey(id, full_name)), from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code, is_hub), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), approver:users!stock_transfers_approved_by_fkey(id, full_name), receiver:users!stock_transfers_received_by_fkey(id, full_name)`
     )
     .eq("id", id)
     .single();
@@ -356,6 +357,60 @@ export async function GET(
 
   const approvalIntelligence = await computeApprovalIntelligence(supabase, itemIds, transfer.to_location_id);
 
+  // ── Destination center budget context — awareness only for the approver ──
+  // Not a gate: the actual budget check already happened when the MRs behind
+  // this stock were approved. Skipped for the hidden HQ replenishment hub,
+  // which isn't a real consuming center.
+  let centerBudgets: unknown[] = [];
+  const toLocationIsHub = (transfer.to_location as { is_hub?: boolean } | null)?.is_hub === true;
+  if (transfer.status === "pending_approval" && !toLocationIsHub) {
+    const itemDepartments = new Set(
+      (transfer.stock_transfer_items as Array<{ procurement_items: { department: string | null } | null }>)
+        .map((i) => i.procurement_items?.department)
+        .filter((d): d is string => !!d && (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(d))
+    );
+
+    if (itemDepartments.size > 0) {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+
+      centerBudgets = await Promise.all(
+        Array.from(itemDepartments).map(async (dept) => {
+          const { data: budget } = await supabase
+            .from("department_budgets")
+            .select("monthly_budget, is_active")
+            .eq("department", dept)
+            .eq("budget_period", "monthly")
+            .eq("location_id", transfer.to_location_id)
+            .maybeSingle();
+
+          if (!budget?.is_active || !budget.monthly_budget) return null;
+
+          const monthlyBudget = Number(budget.monthly_budget);
+          const { data: committed } = await supabase
+            .from("purchase_requests")
+            .select("total_estimated_amount")
+            .eq("department", dept)
+            .eq("location_id", transfer.to_location_id)
+            .eq("expenditure_type", "operational")
+            .gte("created_at", monthStart)
+            .lte("created_at", monthEnd)
+            .in("status", ["approved", "partially_ordered", "po_created"]);
+
+          const spent = (committed ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
+          return {
+            department: dept,
+            monthly_budget: monthlyBudget,
+            spent_this_month: spent,
+            utilisation_pct: Math.round((spent / monthlyBudget) * 100),
+            is_over_budget: spent > monthlyBudget,
+          };
+        })
+      ).then((rows) => rows.filter(Boolean));
+    }
+  }
+
   // Audit trail — full who/what/when for this transfer. Read with the admin
   // client so it's visible to anyone allowed to view the transfer (the
   // audit_trail table is otherwise admin-only via RLS).
@@ -375,6 +430,7 @@ export async function GET(
     audit_trail: auditTrail ?? [],
     approval_intelligence: approvalIntelligence.items,
     open_issues_count: approvalIntelligence.openIssuesCount,
+    center_budgets: centerBudgets,
   });
 }
 
