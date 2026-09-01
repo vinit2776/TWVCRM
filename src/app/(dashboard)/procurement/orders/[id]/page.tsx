@@ -213,6 +213,7 @@ function validateFile(file: File): string | null {
 function getCompanyForPdf(po: PurchaseOrder): CompanyForPdf | null {
   const company = po.companies;
   if (!company) return null;
+  const isWorkvilla = company.brand_name === "Workvilla";
   return {
     name: company.name,
     brand_name: company.brand_name,
@@ -223,7 +224,11 @@ function getCompanyForPdf(po: PurchaseOrder): CompanyForPdf | null {
     pincode: company.pincode ?? null,
     phone: company.phone ?? null,
     email: company.email ?? null,
-    logoBase64: company.brand_name === "Workvilla" ? TWV_LOGO_BASE64 : MEDWORKS_LOGO_BASE64,
+    logoBase64: isWorkvilla ? TWV_LOGO_BASE64 : MEDWORKS_LOGO_BASE64,
+    // Workvilla's source is a wide wordmark (52x13 default in the generator);
+    // MedWorks Plus's is a square icon lockup — render it as a square so it
+    // doesn't stretch.
+    ...(isWorkvilla ? {} : { logoWidth: 13, logoHeight: 13 }),
   };
 }
 

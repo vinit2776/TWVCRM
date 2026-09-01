@@ -22,6 +22,11 @@ export type CompanyForPdf = Pick<
   "name" | "brand_name" | "gstin" | "address" | "city" | "state" | "pincode" | "phone" | "email"
 > & {
   logoBase64: string | null;
+  // Logo source aspect ratio varies by brand (Workvilla's is a wide wordmark,
+  // MedWorks Plus's is a square icon) — width/height must match or the image
+  // distorts. Defaults to Workvilla's existing 52x13 wordmark box.
+  logoWidth?: number;
+  logoHeight?: number;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -57,8 +62,8 @@ function addLogoToDoc(doc: jsPDF, company: CompanyForPdf): number {
 
   // Logo image (left side) — skip entirely if no logo is available for this company
   if (company.logoBase64) {
-    const logoW = 52;
-    const logoH = 13;
+    const logoW = company.logoWidth ?? 52;
+    const logoH = company.logoHeight ?? 13;
     doc.addImage(company.logoBase64, "PNG", 14, 8, logoW, logoH, undefined, "FAST");
   }
 
