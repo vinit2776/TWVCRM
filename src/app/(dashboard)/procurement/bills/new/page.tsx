@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
-import type { ProcurementVendor, PurchaseOrder } from "@/types";
+import type { ProcurementVendor, PurchaseOrder, Company } from "@/types";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -87,6 +87,10 @@ function NewVendorBillForm() {
   const [loadingPo, setLoadingPo] = useState(false);
   const [vendorLocked, setVendorLocked] = useState(false);
 
+  // Company selector — required for standalone bills (no PO); inherited read-only when a PO is linked
+  const [companyId, setCompanyId] = useState<string>("");
+  const [companies, setCompanies] = useState<Company[]>([]);
+
   // Replacement-bill mode
   const [replacesBill, setReplacesBill] = useState<{
     id: string;
@@ -98,6 +102,21 @@ function NewVendorBillForm() {
     fetch("/api/procurement/vendors").then((r) => r.json()).then((j) => {
       setVendors(j.data || []);
     });
+  }, []);
+
+  // Companies — for standalone bills (no PO), default to the first once loaded.
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!poId && !companyId && all.length > 0) {
+          setCompanyId(all[0].id);
+        }
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When ?replaces=<id> is present, fetch the predecessor bill so we can show its
@@ -131,6 +150,7 @@ function NewVendorBillForm() {
         setPoData(po);
         setVendorId(po.vendor_id);
         setVendorLocked(true);
+        setCompanyId(po.company_id);
         if (po.total_ordered_amount > 0) {
           // Pre-fill with received value if there's a shortfall, otherwise full PO value
           const rv = po.po_type !== "service" ? computeReceivedValue(po) : null;
@@ -282,6 +302,7 @@ function NewVendorBillForm() {
 
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
+    if (!poId && !companyId) return "Select which company this bill is for";
     if (!invoiceDate) return "Invoice date is required";
     const amount = parseFloat(totalAmount);
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
@@ -324,6 +345,7 @@ function NewVendorBillForm() {
 
       const payload = {
         po_id: poId ?? null,
+        company_id: companyId || null,
         vendor_id: vendorId,
         invoice_number: invoiceNumber.trim() || null,
         invoice_date: invoiceDate,
@@ -443,6 +465,34 @@ function NewVendorBillForm() {
             </Select>
             {vendorLocked && (
               <p className="text-xs text-muted-foreground">Vendor is locked to the linked purchase order</p>
+            )}
+          </div>
+
+          {/* Company */}
+          <div className="space-y-1.5">
+            <Label htmlFor="company">Company <span className="text-red-500">*</span></Label>
+            {poId ? (
+              <p className="text-sm rounded-md border bg-muted/50 px-3 py-2">
+                Company: <strong>{poData?.companies?.brand_name ?? "—"}</strong>
+              </p>
+            ) : (
+              <Select
+                value={companyId || "__none__"}
+                onValueChange={(v) => setCompanyId(v === "__none__" ? "" : v)}
+              >
+                <SelectTrigger id="company">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select a company…</SelectItem>
+                  {companies.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {poId && (
+              <p className="text-xs text-muted-foreground">Company is inherited from the linked purchase order</p>
             )}
           </div>
 

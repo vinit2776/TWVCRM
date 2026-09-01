@@ -4,6 +4,7 @@ import { createCaseSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { DOCUMENT_CHECKLISTS, COMPLIANCE_CHECKLISTS } from "@/lib/constants";
 import { caseEndDate } from "@/lib/case-workflow";
+import { EXPIRY_RELEVANT_STATUSES } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -37,6 +38,24 @@ export async function GET(request: NextRequest) {
     );
 
   if (status) query = query.eq("status", status);
+
+  // ?expiring_within=30 — live agreements whose term ends inside N days,
+  // including ones already past. Restricted to statuses where the agreement
+  // is actually executed: end_date was backfilled for every case from
+  // start_date + tenure_months, so a case still at intake carries a date for
+  // a term that never began and must not be reported as expiring.
+  const expiringWithin = searchParams.get("expiring_within");
+  if (expiringWithin) {
+    const days = Number(expiringWithin);
+    if (Number.isFinite(days) && days >= 0) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() + days);
+      query = query
+        .in("status", EXPIRY_RELEVANT_STATUSES)
+        .not("end_date", "is", null)
+        .lte("end_date", cutoff.toISOString().slice(0, 10));
+    }
+  }
   if (aggregator_id) query = query.eq("aggregator_id", aggregator_id);
   if (purpose) query = query.eq("purpose", purpose);
   if (location_id) query = query.eq("location_id", location_id);

@@ -14,8 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail, FileMinus2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { computeSettlement } from "@/lib/settlement";
@@ -121,6 +122,11 @@ interface Statement {
   voided_at?: string | null;
   /** Set when this draft was created by voiding an earlier statement. */
   voided_statement_id?: string | null;
+  /** Bad-debt write-off — CRM-only, leaves the GST invoice/Tally record untouched. */
+  written_off_at?: string | null;
+  write_off_reason?: string | null;
+  written_off_amount?: number | null;
+  written_off_by_user?: { full_name: string } | null;
   // Tally state (surfaced via TallyStatusBadge)
   issuance_channel?: string | null;
   lifecycle_stage?: string | null;
@@ -204,6 +210,11 @@ export function ViewStatementDialog({
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
+
+  // Write-off state
+  const [showWriteOffConfirm, setShowWriteOffConfirm] = useState(false);
+  const [writeOffReason, setWriteOffReason] = useState("");
+  const [writeOffSubmitting, setWriteOffSubmitting] = useState(false);
 
   // Discard-draft state
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
@@ -516,6 +527,46 @@ export function ViewStatementDialog({
   const canVoid =
     !!statement &&
     ["finalized", "exported"].includes(statement.status) &&
+    userRole === "admin";
+
+  const handleWriteOffStatement = async () => {
+    if (!statementId || !writeOffReason.trim()) return;
+    setWriteOffSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/write-off`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ write_off_reason: writeOffReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Statement written off");
+        setShowWriteOffConfirm(false);
+        setWriteOffReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to write off statement");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setWriteOffSubmitting(false);
+    }
+  };
+
+  // Billed correctly but uncollectible — distinct from Void, which assumes
+  // the invoice itself was wrong. See the tooltip on the button for the
+  // exact "use this instead of Void when…" guidance.
+  const canWriteOff =
+    !!statement &&
+    ["finalized", "exported"].includes(statement.status) &&
+    statement.payment_status !== "paid" &&
+    statement.payment_status !== "written_off" &&
     userRole === "admin";
 
   // Discard is void's draft-stage counterpart: the client has never seen a
@@ -1463,6 +1514,88 @@ export function ViewStatementDialog({
               )}
             </div>
           )}
+          {/* Already written off — persistent notice, replaces the action button */}
+          {statement?.payment_status === "written_off" && (
+            <div className="flex w-full flex-col gap-1 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-800 flex items-center gap-1.5">
+                <FileMinus2 className="h-4 w-4" />
+                Written off — ₹{(statement.written_off_amount ?? 0).toLocaleString("en-IN")} removed from Accounts Receivable
+              </p>
+              {statement.write_off_reason && (
+                <p className="text-xs text-amber-700">{statement.write_off_reason}</p>
+              )}
+              <p className="text-[11px] text-amber-600">
+                By {statement.written_off_by_user?.full_name ?? "—"}
+                {statement.written_off_at ? ` · ${formatDate(statement.written_off_at)}` : ""}
+              </p>
+            </div>
+          )}
+          {/* Write Off — admin only, finalized/exported, not paid or already written off */}
+          {canWriteOff && !showWriteOffConfirm && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                    onClick={() => setShowWriteOffConfirm(true)}
+                  >
+                    <FileMinus2 className="mr-2 h-4 w-4" />
+                    Write Off
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[260px] text-xs">
+                  <p>
+                    <b>Use when:</b> the invoice was billed correctly but the customer can&apos;t or won&apos;t pay — insolvency, unreachable, or not worth the cost to chase.
+                  </p>
+                  <p className="mt-1.5 opacity-80">
+                    Billing mistake instead? Use <b>Void</b> — it reissues the invoice for correction.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {canWriteOff && showWriteOffConfirm && statement && (() => {
+            const writeOffBalance = computeSettlement(statement.total_amount, statement.billing_payments).balanceDue;
+            return (
+              <div className="flex w-full flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-800">
+                  This removes ₹{writeOffBalance.toLocaleString("en-IN")} from Accounts Receivable. The GST invoice, Tally record and any payments already recorded stay untouched — this is CRM tracking only, and can&apos;t be undone from here.
+                </p>
+                <Textarea
+                  placeholder="Reason for write-off (required)"
+                  value={writeOffReason}
+                  onChange={(e) => setWriteOffReason(e.target.value)}
+                  className="text-sm"
+                  rows={2}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setShowWriteOffConfirm(false); setWriteOffReason(""); }}
+                    disabled={writeOffSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={handleWriteOffStatement}
+                    disabled={writeOffSubmitting || !writeOffReason.trim()}
+                  >
+                    {writeOffSubmitting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileMinus2 className="mr-2 h-4 w-4" />
+                    )}
+                    Confirm Write-off
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
           {/* Void / Cancel — admin only, finalized or exported statements */}
           {canVoid && !showVoidConfirm && (
             <Button

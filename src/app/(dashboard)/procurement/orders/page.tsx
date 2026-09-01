@@ -17,7 +17,7 @@ import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import type { PurchaseOrder } from "@/types";
+import type { PurchaseOrder, Company } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -57,8 +57,18 @@ export default function PurchaseOrdersPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [monthFilter, setMonthFilter] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+
+  // Fetch companies once for the company filter dropdown
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((res) => res.json())
+      .then((json) => setCompanies(json.data || []))
+      .catch(() => { /* non-fatal — company filter just stays empty */ });
+  }, []);
 
   // Debounce search: wait 600 ms and require ≥3 chars before querying
   useEffect(() => {
@@ -79,6 +89,7 @@ export default function PurchaseOrdersPage() {
     if (statusFilter) params.set("status", statusFilter);
     if (departmentFilter) params.set("department", departmentFilter);
     if (monthFilter) params.set("month", monthFilter);
+    if (companyFilter) params.set("company_id", companyFilter);
     if (search) params.set("search", search);
     const res = await fetch(`/api/procurement/orders?${params}`);
     if (res.ok) {
@@ -88,11 +99,11 @@ export default function PurchaseOrdersPage() {
       setTotals(json.totals ?? null);
     }
     setLoading(false);
-  }, [page, statusFilter, departmentFilter, monthFilter, search]);
+  }, [page, statusFilter, departmentFilter, monthFilter, companyFilter, search]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
-  const hasActiveFilters = !!(statusFilter || departmentFilter || monthFilter || search);
+  const hasActiveFilters = !!(statusFilter || departmentFilter || monthFilter || companyFilter || search);
 
   return (
     <div className="space-y-4">
@@ -173,6 +184,22 @@ export default function PurchaseOrdersPage() {
             </SelectContent>
           </Select>
 
+          {/* Company filter */}
+          <Select
+            value={companyFilter}
+            onValueChange={(val) => { setCompanyFilter(val === "all" ? "" : val); setPage(1); }}
+          >
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {/* Clear all filters */}
           {hasActiveFilters && (
             <Button
@@ -182,6 +209,7 @@ export default function PurchaseOrdersPage() {
                 setStatusFilter("");
                 setDepartmentFilter("");
                 setMonthFilter("");
+                setCompanyFilter("");
                 setSearchInput("");
                 setSearch("");
                 setPage(1);
@@ -274,7 +302,7 @@ export default function PurchaseOrdersPage() {
           description={hasActiveFilters ? "No orders match the selected filters." : "Create your first purchase order to get started."}
           actionLabel={hasActiveFilters ? "Clear Filters" : "New Order"}
           onAction={hasActiveFilters
-            ? () => { setStatusFilter(""); setDepartmentFilter(""); setMonthFilter(""); setSearchInput(""); setSearch(""); setPage(1); }
+            ? () => { setStatusFilter(""); setDepartmentFilter(""); setMonthFilter(""); setCompanyFilter(""); setSearchInput(""); setSearch(""); setPage(1); }
             : () => router.push("/procurement/requests?status=approved")
           }
         />
@@ -327,9 +355,14 @@ export default function PurchaseOrdersPage() {
                       {po.locations?.name ?? "—"}
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
-                        {PO_STATUS_LABELS[po.status]}
-                      </Badge>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
+                          {PO_STATUS_LABELS[po.status]}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {po.companies?.brand_name ?? "—"}
+                        </Badge>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
                       {po.total_ordered_amount > 0 ? formatCurrency(po.total_ordered_amount) : "—"}

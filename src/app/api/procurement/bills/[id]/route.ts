@@ -154,6 +154,7 @@ export async function GET(
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
        vendor_bill_batch_changes(id, changed_at, old_batch_type, new_batch_type, old_batch_date, new_batch_date, reason, changer:users!vendor_bill_batch_changes_changed_by_fkey(id, full_name)),
+       vendor_bill_documents(id, file_url, file_name, doc_type, created_at, uploader:users!vendor_bill_documents_uploaded_by_fkey(id, full_name)),
        electricity_bill:electricity_bills!vendor_bills_electricity_bill_id_fkey(bill_month, bill_year, landlord_total_amount, landlord_gst_applicable, landlord_gst_rate, landlord_gst_amount, electricity_bill_lines(line_type, meter_label, label, units, rate, amount, sort_order))`
     )
     .eq("id", id)
@@ -213,6 +214,11 @@ export async function PATCH(
   // surfaced on the bill's audit timeline so investigators don't have to
   // join two tables to understand why a partial payment was recorded).
   const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
+  // Set by edit_invoice_details when the invoice file itself was replaced —
+  // keeps the vendor_bill_documents "invoice" row in sync so the Supporting
+  // Documents list (seeded from invoice_file_url at migration time) doesn't
+  // go stale next to the column this same action already updates.
+  let syncedInvoiceFileUrl: string | null = null;
 
   switch (parsed.data.action) {
     case "record_payment": {
@@ -1035,6 +1041,13 @@ export async function PATCH(
       // queue — otherwise it would sit "rejected" forever with nobody to review it.
       const wasRejected = bill.approval_status === "rejected";
 
+      // A new file was actually uploaded (not just re-saving the same one) —
+      // flag it so the vendor_bill_documents "invoice" row gets updated too,
+      // after the main vendor_bills update below succeeds.
+      if (parsed.data.invoice_file_url && parsed.data.invoice_file_url !== bill.invoice_file_url) {
+        syncedInvoiceFileUrl = parsed.data.invoice_file_url;
+      }
+
       updatePayload = {
         invoice_number: trimmedInvoiceNumber,
         invoice_date: parsed.data.invoice_date,
@@ -1088,6 +1101,32 @@ export async function PATCH(
     .single();
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+  // Keep the Supporting Documents list in sync with a file replaced via
+  // edit_invoice_details — otherwise the "invoice" document row still points
+  // at the old file while vendor_bills.invoice_file_url has already moved on.
+  if (syncedInvoiceFileUrl) {
+    const fileName = syncedInvoiceFileUrl.split("/").pop() || "invoice";
+    const { data: existingInvoiceDoc } = await supabase
+      .from("vendor_bill_documents")
+      .select("id")
+      .eq("bill_id", id)
+      .eq("doc_type", "invoice")
+      .maybeSingle();
+
+    const syncResult = existingInvoiceDoc
+      ? await supabase
+          .from("vendor_bill_documents")
+          .update({ file_url: syncedInvoiceFileUrl, file_name: fileName })
+          .eq("id", existingInvoiceDoc.id)
+      : await supabase
+          .from("vendor_bill_documents")
+          .insert({ bill_id: id, file_url: syncedInvoiceFileUrl, file_name: fileName, doc_type: "invoice", uploaded_by: dbUser.id });
+
+    if (syncResult.error) {
+      console.error(`[bills/${id}] failed to sync invoice document after edit_invoice_details:`, syncResult.error.message);
+    }
+  }
 
   await logAudit(supabase, {
     entityType: "vendor_bill",

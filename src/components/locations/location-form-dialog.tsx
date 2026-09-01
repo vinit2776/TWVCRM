@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check, UserCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { preventEnterSubmit } from "@/lib/utils";
-import type { Location, LocationCapacityConfig, LocationPrintTemplate, User } from "@/types";
+import type { Company, Location, LocationCapacityConfig, LocationPrintTemplate, User } from "@/types";
 import {
   Select,
   SelectContent,
@@ -52,6 +52,8 @@ export function LocationFormDialog({
 }: LocationFormDialogProps) {
   const [name, setName]       = useState("");
   const [code, setCode]       = useState("");
+  const [companyId, setCompanyId] = useState("");
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [address, setAddress] = useState("");
   const [city, setCity]       = useState("");
   const [state, setState]     = useState("");
@@ -87,6 +89,7 @@ export function LocationFormDialog({
     if (location) {
       setName(location.name);
       setCode(location.code);
+      setCompanyId(location.company_id || "");
       setAddress(location.address || "");
       setCity(location.city || "");
       setState(location.state || "");
@@ -122,7 +125,7 @@ export function LocationFormDialog({
     } else {
       setPrintTemplate(null);
       setPendingTemplateFile(null);
-      setName(""); setCode(""); setAddress(""); setCity(""); setState("");
+      setName(""); setCode(""); setCompanyId(""); setAddress(""); setCity(""); setState("");
       setIsActive(true);
       setRequiresHeadcount(false);
       setCapacityConfig({});
@@ -149,6 +152,22 @@ export function LocationFormDialog({
       })
       .catch(() => setEligibleUsers([]));
   }, [open]);
+
+  // Companies — for new locations, default to the first (Workvilla) once loaded.
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: Company[] = j.data || [];
+        setCompanies(all);
+        if (!location && !companyId && all.length > 0) {
+          setCompanyId(all[0].id);
+        }
+      })
+      .catch(() => setCompanies([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, location]);
 
   const handleCapacity = (key: string, val: string) => {
     setCapacityConfig(prev => ({ ...prev, [key]: val }));
@@ -181,6 +200,10 @@ export function LocationFormDialog({
       toast.error("Name and code are required");
       return;
     }
+    if (!companyId) {
+      toast.error("Company is required");
+      return;
+    }
 
     // Build capacity_config — only include keys with valid positive numbers
     const capacity_config: Record<string, number> = {};
@@ -200,7 +223,7 @@ export function LocationFormDialog({
       }
 
       const payload = {
-        name, code: code.toUpperCase(), address, city, state,
+        name, code: code.toUpperCase(), company_id: companyId, address, city, state,
         is_active: isActive,
         requires_headcount: requiresHeadcount,
         capacity_config,
@@ -297,6 +320,24 @@ export function LocationFormDialog({
                 placeholder="e.g., MGR" maxLength={10} required />
               <p className="text-xs text-muted-foreground">Short unique identifier</p>
             </div>
+          </div>
+
+          {/* Company */}
+          <div className="space-y-2">
+            <Label htmlFor="loc-company">Company *</Label>
+            <Select value={companyId} onValueChange={setCompanyId} disabled={isEdit}>
+              <SelectTrigger id="loc-company" className="h-9">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {isEdit && (
+              <p className="text-xs text-muted-foreground">Company can&apos;t be changed after a location is created</p>
+            )}
           </div>
 
           {/* Address */}
@@ -602,7 +643,7 @@ export function LocationFormDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || !name.trim() || !code.trim()}>
+            <Button type="submit" disabled={saving || !name.trim() || !code.trim() || !companyId}>
               {saving ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>
               ) : isEdit ? "Update" : "Create"}

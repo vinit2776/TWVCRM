@@ -20,6 +20,7 @@ import {
   COMPANY_NAME,
 } from "@/lib/pdf-utils";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { renewalRecipients, type RenewalRecipient } from "@/lib/renewal-recipients";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +41,16 @@ export interface VoCaseForRenewal {
   /** Agreed escalation applied to the license fee on renewal; 0 renews flat. */
   renewal_escalation_percentage?: number | null;
   purpose: string;
+  // Routing inputs — see renewalRecipients(). Without these every notice went
+  // to the end client, including on the 51 cases billed to a partner.
+  aggregator_id?: string | null;
+  bill_to?: "aggregator" | "client" | null;
+  aggregator?: {
+    name?: string | null;
+    billing_method?: string | null;
+    primary_email?: string | null;
+    primary_phone?: string | null;
+  } | null;
   renewal_billing_statement_id?: string | null;
   renewal_reminder_count?: number;
   renewal_grace_ends_at?: string | null;
@@ -109,13 +120,26 @@ export function generateRenewalPI(params: {
   doc.setTextColor(BRAND_DARK[0], BRAND_DARK[1], BRAND_DARK[2]);
   doc.setFont("helvetica", "normal");
   y += 5;
-  const billTo = [
-    caseData.client_company_name || caseData.client_name,
-    caseData.client_company_name ? caseData.client_name : "",
-    caseData.client_email || "",
-    caseData.client_phone || "",
-    caseData.client_gst_number ? `GSTIN: ${caseData.client_gst_number}` : "",
-  ].filter(Boolean);
+  // Bill To names the party actually being invoiced. When that is an
+  // aggregator the end client is still shown underneath, because an
+  // aggregator holds many cases and the PI is ambiguous without it.
+  const piRouting = renewalRecipients(caseData);
+  const piBillingIsAggregator = piRouting.billing.kind === "aggregator";
+  const billTo = piBillingIsAggregator
+    ? [
+        piRouting.billing.name,
+        piRouting.billing.email || "",
+        piRouting.billing.phone || "",
+        `For: ${caseData.client_company_name || caseData.client_name}`,
+        `Case: ${caseData.case_number}`,
+      ].filter(Boolean)
+    : [
+        caseData.client_company_name || caseData.client_name,
+        caseData.client_company_name ? caseData.client_name : "",
+        caseData.client_email || "",
+        caseData.client_phone || "",
+        caseData.client_gst_number ? `GSTIN: ${caseData.client_gst_number}` : "",
+      ].filter(Boolean);
   billTo.forEach((line) => {
     doc.text(line, marginLeft, y);
     y += 5;
@@ -335,11 +359,16 @@ export async function createRenewalRazorpayLink(params: {
       statement_id: statementId,
       type: "vo_renewal",
     },
-    customer: {
-      name: caseData.client_company_name || caseData.client_name,
-      email: caseData.client_email || "",
-      contact: caseData.client_phone || "",
-    },
+    customer: (() => {
+      // The payer, not the end client — otherwise a partner settling their
+      // own invoice sees their client's name and contact on the receipt.
+      const payer = renewalRecipients(caseData).billing;
+      return {
+        name: payer.name,
+        email: payer.email || "",
+        contact: payer.phone || "",
+      };
+    })(),
   };
 
   const auth = Buffer.from(
@@ -381,12 +410,29 @@ export async function sendRenewalEmail(params: {
   totalAmount: number;
   razorpayUrl: string;
   pdfBuffer?: Buffer;
+  /** Who this copy is addressed to. Defaults to the case's own client so
+   *  existing callers keep working; the cron passes the routed party. */
+  recipient?: RenewalRecipient;
+  /** Extra addresses to copy in — used by the manual send. */
+  cc?: string[];
 }): Promise<boolean> {
-  const { caseData, reminderNumber, isGraceNotice, piNumber, periodStart, periodEnd, totalAmount, razorpayUrl, pdfBuffer } = params;
+  const { caseData, reminderNumber, isGraceNotice, piNumber, periodStart, periodEnd, totalAmount, razorpayUrl, pdfBuffer, cc } = params;
 
-  if (!caseData.client_email) return false;
+  const recipient: RenewalRecipient = params.recipient ?? {
+    kind: "client",
+    name: caseData.client_company_name || caseData.client_name,
+    email: caseData.client_email ?? null,
+    phone: caseData.client_phone ?? null,
+  };
 
+  if (!recipient.email) return false;
+
+  // The end client is named throughout even when the aggregator is the one
+  // being asked to pay — an aggregator holds many cases and the notice is
+  // meaningless without saying which client it concerns.
   const clientName = caseData.client_company_name || caseData.client_name;
+  const addressee = recipient.name;
+  const toAggregator = recipient.kind === "aggregator";
   const location = caseData.location;
   const locationName = location?.name ?? "The WorkVilla";
 
@@ -409,7 +455,8 @@ export async function sendRenewalEmail(params: {
         <p style="color:#ccfbf1;margin:4px 0 0;font-size:13px">Virtual Office Agreement Renewal</p>
       </div>
       <div style="padding:24px;background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px">
-        <p>Dear ${clientName},</p>
+        <p>Dear ${addressee},</p>
+        ${toAggregator ? `<p>The Virtual Office agreement for your referred client <strong>${clientName}</strong> is due for renewal.</p>` : ""}
         ${urgencyLine}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
           <tr style="background:#f0fdf4"><td style="padding:8px 12px;border:1px solid #d1fae5"><strong>PI Number</strong></td><td style="padding:8px 12px;border:1px solid #d1fae5">${piNumber}</td></tr>
@@ -437,7 +484,8 @@ export async function sendRenewalEmail(params: {
     await resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
-      to: [caseData.client_email],
+      to: [recipient.email],
+      cc: cc && cc.length ? cc : undefined,
       bcc: ["billing@theworkvilla.com"],
       subject,
       html,
@@ -477,9 +525,12 @@ export async function sendRenewalWhatsApp(params: {
   razorpayUrl: string;
   pdfBuffer?: Buffer;
   supabase: SupabaseClient;
+  /** Who to message. Defaults to the case's own client. */
+  recipient?: RenewalRecipient;
 }): Promise<boolean> {
   const { caseData, piNumber, totalAmount, razorpayUrl, pdfBuffer, supabase } = params;
-  if (!caseData.client_phone) return false;
+  const phone = params.recipient ? params.recipient.phone : caseData.client_phone;
+  if (!phone) return false;
 
   if (!pdfBuffer) {
     console.warn(`[vo-renewal] No PI PDF for ${piNumber} — WhatsApp renewal skipped.`);
@@ -509,7 +560,7 @@ export async function sendRenewalWhatsApp(params: {
     // the delivery webhook's lead lookup for a VO case, so this call was
     // hand-rolled to get the tag right.
     const result = await messaging.invoiceDocument(
-      caseData.client_phone,
+      phone,
       clientName,
       piNumber,
       // Template renders "Rs.{{3}}", so pass the bare number — the old code

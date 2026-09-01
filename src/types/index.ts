@@ -9,10 +9,35 @@ export interface LocationCapacityConfig {
   conference_room?: number; // Large conference room seats
 }
 
+// ==========================================
+// Company Types (multi-company procurement)
+// ==========================================
+
+export interface Company {
+  id: string;
+  name: string;
+  brand_name: string;
+  gstin?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  pr_prefix: string;
+  po_prefix: string;
+  bill_prefix: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Location {
   id: string;
   name: string;
   code: string;
+  company_id: string;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   address?: string;
   city?: string;
   state?: string;
@@ -466,8 +491,28 @@ export interface CrmDocument {
   parent_document_id?: string;
   uploaded_by?: string;
   uploader?: User;
+  reupload_reason?: AgreementReuploadReason | null;
+  reupload_notes?: string | null;
+  is_signed_sealed?: boolean | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AgreementReuploadReason = "name_change" | "law_change" | "other";
+
+export interface AgreementDocumentVersion {
+  id: string;
+  file_name: string;
+  file_path: string;
+  version: number;
+  reupload_reason: AgreementReuploadReason | null;
+  reupload_notes: string | null;
+  is_signed_sealed: boolean | null;
+  uploaded_by: string | null;
+  uploader: { id: string; full_name: string } | null;
+  created_at: string;
+  is_current: boolean;
+  view_url: string | null;
 }
 
 // ==========================================
@@ -536,6 +581,10 @@ export interface Contract {
   // Used to map the customer to rows in the monthly print-server report.
   // Unique per location (NULL allowed; multiple NULLs OK).
   department_id?: string | null;
+  // Customer's annual purchase order number — printed on every Proforma/GST
+  // invoice for this contract when the customer requires it for their own
+  // invoice processing.
+  po_number?: string | null;
   terms_and_conditions?: string;
   notes?: string;
   // Membership agreement fields
@@ -971,6 +1020,9 @@ export interface BillingStatement {
   hsn_sac_code?: string;
   buyer_gstin?: string;
   place_of_supply?: string;
+  // Customer PO number, snapshotted from contracts.po_number at generation
+  // time so an already-sent statement doesn't change if the contract's is edited later.
+  po_number?: string | null;
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
   emailed_at?: string;
@@ -1011,7 +1063,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -1092,6 +1144,7 @@ export type AuditEntityType =
   | "electricity_bill"
   | "electricity_billing_profile"
   | "location_electricity_config"
+  | "location_energy_sync"
   | "asset_document"
   | "contract_billing_moratorium"
   | "user_location"
@@ -1886,7 +1939,9 @@ export type CaseStatus =
   | "invoiced" | "paid" | "active"
   | "renewal_due" | "grace_period" | "renewed" | "lapsed";
 
-export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred";
+/** `deferred` is a dated promise that resumes chasing when it lapses;
+ *  `waived` is a permanent decision never to collect the document. */
+export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred" | "waived";
 
 export type ComplianceCheckStatus = "pending" | "passed" | "failed" | "waived";
 
@@ -2009,6 +2064,11 @@ export interface CaseDocument {
   notes?: string;
   created_at: string;
   updated_at: string;
+  // waiver fields — set when the requirement will never be collected
+  waived_by?: string;
+  waiver?: { id: string; full_name: string };
+  waived_at?: string;
+  waived_reason?: string;
 }
 
 export interface ContractDocument {
@@ -2019,7 +2079,7 @@ export interface ContractDocument {
   document_type: string;
   label: string;
   is_required: boolean;
-  status: CaseDocStatus; // pending | uploaded | approved | rejected | deferred
+  status: CaseDocStatus;
   reviewed_by?: string;
   reviewer?: User;
   reviewed_at?: string;
@@ -2031,6 +2091,11 @@ export interface ContractDocument {
   deferred_at?: string;
   deferred_reason?: string;
   deferred_until?: string;
+  // waiver fields — set when the requirement will never be collected
+  waived_by?: string;
+  waiver?: { id: string; full_name: string };
+  waived_at?: string;
+  waived_reason?: string;
   created_at: string;
   updated_at: string;
 }
@@ -2296,6 +2361,7 @@ export interface PurchaseRequestItem {
 export interface PurchaseRequest {
   id: string;
   pr_number: string;
+  company_id: string;
   department: ProcurementDepartment;
   location_id?: string;
   status: PrStatus;
@@ -2330,6 +2396,7 @@ export interface PurchaseRequest {
   billable_contract_id?: string | null;
   // Joined fields
   locations?: { id: string; name: string } | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   requester?: { id: string; full_name?: string; email?: string } | null;
   approver?: { id: string; full_name?: string; email?: string } | null;
   purchase_request_items?: PurchaseRequestItem[];
@@ -2477,6 +2544,7 @@ export interface AmcServiceEvent {
 export interface PurchaseOrder {
   id: string;
   po_number: string;
+  company_id: string;
   po_type: "goods" | "service";
   pr_id?: string;
   vendor_id: string;
@@ -2525,6 +2593,7 @@ export interface PurchaseOrder {
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   locations?: { id: string; name: string } | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name" | "gstin" | "address" | "city" | "state" | "pincode" | "phone" | "email"> | null;
   orderer?: { id: string; full_name?: string; email?: string } | null;
   purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at" | "expenditure_type"> & {
     approver?: { id: string; full_name?: string; email?: string } | null;
@@ -2539,6 +2608,7 @@ export interface PurchaseOrder {
 export interface VendorBill {
   id: string;
   bill_number: string;
+  company_id: string;
   po_id?: string;
   vendor_id: string;
   invoice_number?: string;
@@ -2586,6 +2656,7 @@ export interface VendorBill {
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   electricity_bill?: {
     bill_month: number;
     bill_year: number;
@@ -2614,6 +2685,19 @@ export interface VendorBill {
     partial_reason: string | null;
     recorder: { id: string; full_name: string } | null;
   }>;
+  vendor_bill_documents?: VendorBillDocument[];
+}
+
+// A document attached to a vendor bill. Additions are always allowed;
+// editing/deleting an existing one is blocked once the bill is approved
+// (enforced both in the API route and via RLS — see migration 00533).
+export interface VendorBillDocument {
+  id: string;
+  file_url: string;
+  file_name: string;
+  doc_type: "invoice" | "supporting";
+  created_at: string;
+  uploader: { id: string; full_name: string } | null;
 }
 
 export type RecurringBillRuleStatus = "active" | "paused";

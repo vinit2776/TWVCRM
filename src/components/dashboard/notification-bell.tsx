@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bell, MessageSquare } from "lucide-react";
+import { Inbox, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -72,7 +72,7 @@ export function NotificationBell() {
     <DropdownMenu open={open} onOpenChange={handleOpen}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" className="relative" title="Enquiry notifications">
-          <Bell className="h-4 w-4" />
+          <Inbox className="h-4 w-4" />
           {totalCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white leading-none">
               {totalCount > 99 ? "99+" : totalCount}
@@ -130,7 +130,7 @@ export function NotificationBell() {
           {/* Empty state */}
           {items.length === 0 && waInboundItems.length === 0 && (
             <div className="px-3 py-6 text-center">
-              <Bell className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+              <Inbox className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No notifications</p>
             </div>
           )}

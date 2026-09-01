@@ -16,11 +16,13 @@ export async function computeAmcCommitted(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any, any, any>,
   fyStart: string,
-  fyEnd: string
+  fyEnd: string,
+  companyId: string
 ): Promise<number> {
   const { data: requests, error } = await supabase
     .from("purchase_requests")
     .select("id, total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("expenditure_type", "amc")
     .gte("created_at", fyStart)
     .lte("created_at", fyEnd)

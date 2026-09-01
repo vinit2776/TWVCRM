@@ -12,6 +12,7 @@ import {
   MapPin,
   RefreshCw,
   User,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +43,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { caseDisplayName } from "@/lib/case-workflow";
+import { caseExpiry } from "@/lib/case-expiry";
+import { RenewalNoticeDialog } from "@/components/cases/renewal-notice-dialog";
 import {
   Dialog,
   DialogContent,
@@ -64,6 +67,7 @@ export default function CaseDetailPage({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [renewalNoticeOpen, setRenewalNoticeOpen] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -180,6 +184,47 @@ export default function CaseDetailPage({
         proposalStatus={caseData.agreement?.status}
         agreementStatus={caseData.ll_agreement?.status}
         billingStatus={caseData.billing_statement}
+      />
+
+      {/* Expiry band — only once the agreement is live. end_date was
+          backfilled for every case from start_date + tenure_months, so a
+          pre-active case carries a date for a term that never began and must
+          not be presented as an expiry. */}
+      {(() => {
+        const expiry = caseExpiry(caseData);
+        if (expiry.tone === "projected" || !caseData.end_date) return null;
+        const tone =
+          expiry.tone === "past" ? "border-red-300 bg-red-50 text-red-900"
+          : expiry.tone === "urgent" ? "border-red-300 bg-red-50/70 text-red-900"
+          : expiry.tone === "soon" ? "border-amber-300 bg-amber-50 text-amber-900"
+          : "border-border bg-muted/40";
+        return (
+          <div className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border-l-4 border px-4 py-3 ${tone}`}>
+            <div>
+              <p className="text-[0.65rem] font-medium uppercase tracking-wide opacity-70">
+                {expiry.tone === "past" ? "Agreement expired" : "Agreement expires"}
+              </p>
+              <p className="text-lg font-semibold tabular-nums">{formatDate(caseData.end_date)}</p>
+            </div>
+            <p className="text-sm">{expiry.relative}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRenewalNoticeOpen(true)}
+              className="bg-background"
+            >
+              <Send className="mr-1.5 h-3.5 w-3.5" />
+              Send renewal intimation
+            </Button>
+          </div>
+        );
+      })()}
+
+      <RenewalNoticeDialog
+        caseId={id}
+        open={renewalNoticeOpen}
+        onClose={() => setRenewalNoticeOpen(false)}
+        onSent={refetch}
       />
 
       <Tabs defaultValue="overview">

@@ -26,6 +26,9 @@ import {
   Pencil,
   Stamp,
   CalendarPlus,
+  Minus,
+  Plus,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +37,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
@@ -54,6 +58,7 @@ import { ContractAccessLogsSection } from "@/components/contracts/contract-acces
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   Dialog,
   DialogContent,
@@ -70,12 +75,14 @@ import {
   BILLING_CYCLE_LABELS,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
+  ACTIVATION_UNBLOCKING_PURPOSE,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
+  CancelRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
@@ -101,6 +108,9 @@ export default function ContractDetailPage({
   const router = useRouter();
   const [contract, setContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editingPoNumber, setEditingPoNumber] = useState(false);
+  const [poNumberValue, setPoNumberValue] = useState("");
+  const [savingPoNumber, setSavingPoNumber] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
@@ -114,6 +124,29 @@ export default function ContractDetailPage({
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
+  // "generate" regenerates the agreement fresh (stamp-sign-seal); "existing"
+  // overlays the stamp onto an already-uploaded signed document instead —
+  // same preview dialog, different source PDF and commit endpoint.
+  const [stampMode, setStampMode] = useState<"generate" | "existing">("generate");
+  const [stampExistingPreviewLoading, setStampExistingPreviewLoading] = useState(false);
+  // An arbitrary uploaded PDF has no known layout, so neither the page nor
+  // the position within it is reliable (a trailing KYC/enclosure table can
+  // push the signature block off the last page, and a fixed corner anchor
+  // can land on top of unrelated content) — cache the source bytes so the
+  // admin can pick the page and click exactly where the stamp should go,
+  // rendered from a pristine copy each time so nothing stacks.
+  const [stampExistingSourceBytes, setStampExistingSourceBytes] = useState<Uint8Array | null>(null);
+  const [stampExistingOriginalUrl, setStampExistingOriginalUrl] = useState<string | null>(null);
+  const [stampExistingPageCount, setStampExistingPageCount] = useState(0);
+  const [stampExistingTargetPage, setStampExistingTargetPage] = useState(1);
+  const [stampExistingRendering, setStampExistingRendering] = useState(false);
+  // Rendered raster of the current page (pdfjs-dist) for click-to-place, and
+  // the normalized (0..1) point the admin clicked — null until they click,
+  // which gates "Confirm & save" so nothing saves at a default guessed spot.
+  const [stampExistingPageImageUrl, setStampExistingPageImageUrl] = useState<string | null>(null);
+  const [stampExistingPageImageLoading, setStampExistingPageImageLoading] = useState(false);
+  const [stampExistingClickRatio, setStampExistingClickRatio] = useState<{ x: number; y: number } | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   // Manual override for the agreement PDF's DRAFT watermark — only exposed
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
@@ -126,6 +159,7 @@ export default function ContractDetailPage({
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [cancelRenewalDialogOpen, setCancelRenewalDialogOpen] = useState(false);
   const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [renewalDraft, setRenewalDraft] = useState<any>(null);
@@ -141,11 +175,20 @@ export default function ContractDetailPage({
   const userRole = user?.role ?? null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
+  // Ad-hoc invoices (proforma_invoices) attributed/attributable to this
+  // contract, plus the proposal's own pro-rata billing statement amount —
+  // both feed the activation-gate hint's "link an ad-hoc invoice instead"
+  // affordance below. Refreshed by the same onAttributionChanged hook the
+  // Ad-hoc Invoices card already calls, so linking from either place updates
+  // this too.
+  const [prorataAttribution, setProrataAttribution] = useState<{
+    attributed: Array<{ id: string; invoice_number: string; status: string; total_amount: number; attribution_purpose: string | null }>;
+    candidates: Array<{ id: string; invoice_number: string; status: string; total_amount: number }>;
+    expectedAmount: number | null;
+  }>({ attributed: [], candidates: [], expectedAmount: null });
+  const [linkingInvoiceId, setLinkingInvoiceId] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
-  // null = not yet confirmed by the prorata section's own billing-statement fetch;
-  // falls back to the (possibly stale) cached column until it reports in.
-  const [prorataSettled, setProrataSettled] = useState<boolean | null>(null);
   const [showOverride, setShowOverride] = useState(false);
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
@@ -162,10 +205,6 @@ export default function ContractDetailPage({
     setKycStatus({ allSatisfied, total, approved, deferred });
   }, []);
 
-  const handleProrataStatusChange = useCallback((settled: boolean) => {
-    setProrataSettled(settled);
-  }, []);
-
   const fetchContract = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
@@ -177,12 +216,18 @@ export default function ContractDetailPage({
       const proposalId = json.data?.proposal_id;
       const hasRenewalDraft = ["renewal_in_progress", "renewed"].includes(json.data?.status);
 
-      const [proposalResult, renewalResult] = await Promise.allSettled([
+      const [proposalResult, renewalResult, attributionResult, prorataStatementResult] = await Promise.allSettled([
         proposalId
           ? fetch(`/api/proposals/${proposalId}`).then(r => r.json())
           : Promise.resolve(null),
         hasRenewalDraft
           ? fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/contracts/${id}/attributed-invoices`).then(r => r.json())
+          : Promise.resolve(null),
+        proposalId
+          ? fetch(`/api/billing-statements?proposal_id=${proposalId}&limit=1`).then(r => r.json())
           : Promise.resolve(null),
       ]);
 
@@ -190,6 +235,18 @@ export default function ContractDetailPage({
         setLinkedProposal(
           proposalResult.status === "fulfilled" ? (proposalResult.value?.data || null) : null
         );
+
+        const attribution = attributionResult.status === "fulfilled" ? attributionResult.value?.data : null;
+        const prorataStatement = prorataStatementResult.status === "fulfilled"
+          ? (prorataStatementResult.value?.data || [])[0]
+          : null;
+        setProrataAttribution({
+          attributed: attribution?.attributed || [],
+          candidates: attribution?.candidates || [],
+          expectedAmount: prorataStatement?.total_amount ?? null,
+        });
+      } else {
+        setProrataAttribution({ attributed: [], candidates: [], expectedAmount: null });
       }
 
       if (hasRenewalDraft) {
@@ -205,6 +262,31 @@ export default function ContractDetailPage({
   useEffect(() => {
     fetchContract(true);
   }, [fetchContract]);
+
+  /** Links a candidate ad-hoc invoice as the pro-rata/first invoice from the
+   *  blocked-activation hint, mirroring the "Attribute an invoice" dialog
+   *  further down the page — same endpoint, same role gate (admin/accounts). */
+  const handleLinkProrataInvoice = async (invoiceId: string) => {
+    setLinkingInvoiceId(invoiceId);
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/attribution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: id, purpose: ACTIVATION_UNBLOCKING_PURPOSE }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Invoice linked as the pro-rata / first invoice");
+        await fetchContract(false);
+      } else {
+        toast.error(json?.error || "Failed to link invoice");
+      }
+    } catch {
+      toast.error("Failed to link invoice");
+    } finally {
+      setLinkingInvoiceId(null);
+    }
+  };
 
   /** Wraps activation to check space allocation first */
   const attemptActivation = (overrideReason?: string) => {
@@ -269,6 +351,24 @@ export default function ContractDetailPage({
       toast.error(err?.error || "Failed to terminate contract");
     }
     setTerminating(false);
+  };
+
+  const handleSavePoNumber = async () => {
+    setSavingPoNumber(true);
+    const res = await fetch(`/api/contracts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ po_number: poNumberValue.trim() || null }),
+    });
+    setSavingPoNumber(false);
+    if (res.ok) {
+      toast.success(poNumberValue.trim() ? "Customer PO number saved" : "Customer PO number cleared");
+      setEditingPoNumber(false);
+      fetchContract(false);
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to save");
+    }
   };
 
   const handleDownloadPDF = async () => {
@@ -398,14 +498,24 @@ export default function ContractDetailPage({
   const closeStampPreview = () => {
     setStampConfirmOpen(false);
     if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
+    if (stampExistingOriginalUrl) URL.revokeObjectURL(stampExistingOriginalUrl);
     setStampPreviewUrl(null);
     setStampPreviewPdfBase64(null);
     setStampPreviewRef(null);
+    setStampError(null);
+    setStampExistingSourceBytes(null);
+    setStampExistingOriginalUrl(null);
+    setStampExistingPageCount(0);
+    setStampExistingTargetPage(1);
+    setStampExistingPageImageUrl(null);
+    setStampExistingClickRatio(null);
   };
 
   const handleOpenStampPreview = async () => {
     if (!contract) return;
+    setStampMode("generate");
     setStampPreviewLoading(true);
+    setStampError(null);
     try {
       const { generateStampReference } = await import("@/lib/company-stamp");
       const stampRef = generateStampReference();
@@ -426,11 +536,214 @@ export default function ContractDetailPage({
     }
   };
 
+  // Bytes → base64 without Buffer (browser context). Chunked to stay well
+  // under the string-arg limits some engines impose on String.fromCharCode.
+  const bytesToBase64 = (bytes: Uint8Array): string => {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
+  // pdfjs-dist needs a worker script; loading it from jsdelivr (pinned to
+  // the exact installed version) sidesteps bundler-specific worker-asset
+  // wiring for Next.js/Turbopack, which isn't set up in this project.
+  const getPdfJs = async () => {
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+    return pdfjsLib;
+  };
+
+  // Rasterizes one page of `sourceBytes` for the click-to-place picker.
+  // Passes a copy to pdfjs — it can transfer/detach the buffer it's given,
+  // and the same bytes get reloaded by pdf-lib afterward to draw the stamp.
+  const renderStampExistingPageImage = async (sourceBytes: Uint8Array, pageNumber: number) => {
+    setStampExistingPageImageLoading(true);
+    try {
+      const pdfjsLib = await getPdfJs();
+      const pdf = await pdfjsLib.getDocument({ data: sourceBytes.slice() }).promise;
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas rendering isn't supported in this browser");
+      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+      setStampExistingPageImageUrl(canvas.toDataURL("image/png"));
+    } finally {
+      setStampExistingPageImageLoading(false);
+    }
+  };
+
+  // Draws TWV's signature + seal centered on the admin's clicked point
+  // (normalized 0..1 within the page) onto one page of a pristine copy of
+  // `sourceBytes` (an arbitrary uploaded PDF — layout unknown to us), and
+  // pushes the result into the shared preview dialog state. Re-loading from
+  // the cached original each call means re-clicking never stacks stamps.
+  const renderExistingStampPreview = async (
+    sourceBytes: Uint8Array,
+    pageNumber: number,
+    stampRef: string,
+    xRatio: number,
+    yRatio: number
+  ) => {
+    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { COMPANY_SIGNATURE_BASE64 } = await import("@/lib/signature-data");
+    const { COMPANY_SEAL_BASE64 } = await import("@/lib/seal-data");
+
+    const pdfDoc = await PDFDocument.load(sourceBytes);
+    const pages = pdfDoc.getPages();
+    const targetIndex = Math.min(Math.max(pageNumber, 1), pages.length) - 1;
+    const targetPage = pages[targetIndex];
+    const { width, height } = targetPage.getSize();
+
+    const dataUriToBytes = (dataUri: string) =>
+      Uint8Array.from(atob(dataUri.split(",")[1]), (c) => c.charCodeAt(0));
+
+    const sigImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SIGNATURE_BASE64));
+    const sealImage = await pdfDoc.embedPng(dataUriToBytes(COMPANY_SEAL_BASE64));
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    const sealSize = 44;
+    const sigH = 26;
+    const sigW = sigH * (sigImage.width / sigImage.height);
+    const gap = 6;
+    const clusterWidth = sigW + gap + sealSize;
+    const clusterHeight = Math.max(sigH, sealSize);
+    const margin = 4;
+
+    // PDF origin is bottom-left; the click ratio is measured from the
+    // top-left of the rendered image, so the y-axis flips here.
+    const clickX = xRatio * width;
+    const clickY = height - yRatio * height;
+
+    const clusterLeft = Math.min(Math.max(clickX - clusterWidth / 2, margin), width - clusterWidth - margin);
+    const clusterBottom = Math.min(
+      Math.max(clickY - clusterHeight / 2, margin + 12),
+      height - clusterHeight - margin
+    );
+
+    const sigX = clusterLeft;
+    const sigY = clusterBottom + (clusterHeight - sigH) / 2;
+    const sealX = sigX + sigW + gap;
+    const sealY = clusterBottom + (clusterHeight - sealSize) / 2;
+
+    targetPage.drawImage(sigImage, { x: sigX, y: sigY, width: sigW, height: sigH });
+    targetPage.drawImage(sealImage, { x: sealX, y: sealY, width: sealSize, height: sealSize });
+    targetPage.drawText(`TWV Ref: ${stampRef}`, {
+      x: sigX,
+      y: clusterBottom - 9,
+      size: 5.5,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+
+    const stampedBytes = await pdfDoc.save();
+    const pdfBase64 = bytesToBase64(stampedBytes);
+    const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(stampedBytes)], { type: "application/pdf" }));
+
+    setStampPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return blobUrl;
+    });
+    setStampPreviewPdfBase64(pdfBase64);
+  };
+
+  // Overlays TWV's signature + seal directly onto the document already
+  // uploaded as signed_document (e.g. a customer-signed scan), instead of
+  // regenerating the agreement from scratch — preserves the customer's
+  // actual signature, unlike handleOpenStampPreview above. An arbitrary
+  // upload has no known layout (a trailing enclosure/KYC table can push the
+  // real signature block off the last page, or share a page with unrelated
+  // content), so the admin picks the page and clicks exactly where the
+  // stamp should sit rather than trusting a guessed corner.
+  const handleOpenStampExistingPreview = async () => {
+    if (!contract?.signed_document?.id) return;
+    setStampMode("existing");
+    setStampExistingPreviewLoading(true);
+    setStampError(null);
+    try {
+      const viewRes = await fetch(`/api/documents/${contract.signed_document.id}/view`);
+      if (!viewRes.ok) throw new Error("Failed to get the uploaded document's URL");
+      const { signedUrl } = await viewRes.json();
+      const fileRes = await fetch(signedUrl);
+      if (!fileRes.ok) throw new Error("Failed to download the uploaded document");
+      const fileBytes = new Uint8Array(await fileRes.arrayBuffer());
+
+      const { PDFDocument } = await import("pdf-lib");
+      const { generateStampReference } = await import("@/lib/company-stamp");
+
+      const probeDoc = await PDFDocument.load(fileBytes);
+      const pageCount = probeDoc.getPageCount();
+      const defaultPage = pageCount;
+      const stampRef = generateStampReference();
+
+      setStampExistingSourceBytes(fileBytes);
+      setStampExistingOriginalUrl(URL.createObjectURL(new Blob([new Uint8Array(fileBytes)], { type: "application/pdf" })));
+      setStampExistingPageCount(pageCount);
+      setStampExistingTargetPage(defaultPage);
+      setStampExistingClickRatio(null);
+      setStampPreviewRef(stampRef);
+      setStampPreviewUrl(null);
+      setStampPreviewPdfBase64(null);
+
+      await renderStampExistingPageImage(fileBytes, defaultPage);
+      setStampConfirmOpen(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate preview");
+    } finally {
+      setStampExistingPreviewLoading(false);
+    }
+  };
+
+  const handleStampExistingPageChange = async (pageNumber: number) => {
+    if (!stampExistingSourceBytes) return;
+    const clamped = Math.min(Math.max(pageNumber, 1), stampExistingPageCount || 1);
+    setStampExistingTargetPage(clamped);
+    // Force a fresh click on the new page — a point that made sense on the
+    // old page has no relation to this one.
+    setStampExistingClickRatio(null);
+    setStampPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setStampPreviewPdfBase64(null);
+    try {
+      await renderStampExistingPageImage(stampExistingSourceBytes, clamped);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to render that page");
+    }
+  };
+
+  const handleStampExistingImageClick = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!stampExistingSourceBytes || !stampPreviewRef) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xRatio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    const yRatio = Math.min(Math.max((e.clientY - rect.top) / rect.height, 0), 1);
+    setStampExistingClickRatio({ x: xRatio, y: yRatio });
+    setStampExistingRendering(true);
+    try {
+      await renderExistingStampPreview(stampExistingSourceBytes, stampExistingTargetPage, stampPreviewRef, xRatio, yRatio);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update preview");
+    } finally {
+      setStampExistingRendering(false);
+    }
+  };
+
   const handleStampSignSeal = async () => {
     if (!contract || !stampPreviewPdfBase64 || !stampPreviewRef) return;
     setStampingSignSeal(true);
+    setStampError(null);
     try {
-      const res = await fetch(`/api/contracts/${id}/stamp-sign-seal`, {
+      const endpoint =
+        stampMode === "existing"
+          ? `/api/contracts/${id}/stamp-existing-document`
+          : `/api/contracts/${id}/stamp-sign-seal`;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pdfBase64: stampPreviewPdfBase64, stampRef: stampPreviewRef }),
@@ -441,10 +754,10 @@ export default function ContractDetailPage({
         fetchContract(false);
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to stamp contract");
+        setStampError(err?.error || "Failed to stamp contract");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to stamp contract");
+      setStampError(e instanceof Error ? e.message : "Failed to stamp contract");
     } finally {
       setStampingSignSeal(false);
     }
@@ -453,6 +766,7 @@ export default function ContractDetailPage({
   const handleCancelStamp = async () => {
     if (!contract) return;
     setCancellingStamp(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/contracts/${id}/cancel-stamp`, { method: "POST" });
       if (res.ok) {
@@ -461,10 +775,10 @@ export default function ContractDetailPage({
         fetchContract(false);
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to cancel the stamp");
+        setStampError(err?.error || "Failed to cancel the stamp");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to cancel the stamp");
+      setStampError(e instanceof Error ? e.message : "Failed to cancel the stamp");
     } finally {
       setCancellingStamp(false);
     }
@@ -634,8 +948,27 @@ export default function ContractDetailPage({
             </Button>
           )}
 
+          {/* Stamp an already-uploaded signed document (e.g. a customer-signed
+              scan) instead of regenerating the agreement — preserves the
+              customer's actual signature. Only offered while that document
+              hasn't already been through either stamp flow. */}
+          {contract.signed_document && !contract.stamp_reference && userRole === "admin" && (
+            <Button
+              variant="outline"
+              onClick={handleOpenStampExistingPreview}
+              disabled={stampExistingPreviewLoading}
+            >
+              {stampExistingPreviewLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stamp className="mr-2 h-4 w-4" />
+              )}
+              Stamp uploaded document
+            </Button>
+          )}
+
           {contract.signed_document && contract.stamp_reference && userRole === "admin" && (
-            <Button variant="outline" onClick={() => setCancelStampOpen(true)}>
+            <Button variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
               <XCircle className="mr-2 h-4 w-4" />
               Cancel sign & seal
             </Button>
@@ -682,7 +1015,19 @@ export default function ContractDetailPage({
             // not "nothing to check", it's a blocker.
             const isRenewal = !!contract.deposit_carried_from;
             const proposalMissing = !isRenewal && !contract.proposal_id;
-            const proposalPaid = isRenewal || (!!contract.proposal_id && linkedProposal?.payment_status === "paid");
+            // A paid ad-hoc invoice attributed as the pro-rata/first invoice
+            // satisfies this the same way proposal.payment_status does — see
+            // the identical OR in /api/contracts/[id]'s PATCH handler. Without
+            // this, linking one from the "Ad-hoc Invoices" card below (or the
+            // hint here) would never actually unblock the Activate button.
+            const paidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status === "paid"
+            );
+            const linkedUnpaidProrataInvoice = prorataAttribution.attributed.find(
+              (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status !== "paid"
+            );
+            const proposalPaid = isRenewal
+              || (!!contract.proposal_id && (linkedProposal?.payment_status === "paid" || !!paidProrataInvoice));
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
             // A proposal's collected deposit belongs to whichever contract first
             // claims it at activation (see contracts/[id]/route.ts) — if a
@@ -693,17 +1038,23 @@ export default function ContractDetailPage({
             const depositPaid = isRenewal || !depositRequired
               || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            // Trust the ContractProrataSection's live billing-statement check over the
-            // cached column once it reports in — the cache only syncs via the Razorpay
-            // webhook or an activation attempt, so payments recorded via AR/Tally inbox
-            // can leave it stuck at "pending" while the statement is actually paid.
-            const prorataRequired = !!(
-              contract.is_renewal &&
-              contract.prorata_payment_status === "pending" &&
-              prorataSettled !== true
-            );
-            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataRequired;
+            // Renewals don't gate on pro-rata: it's a continuation, not a new
+            // occupancy, and the partial first month (when the new term starts
+            // mid-month) bills automatically like any contract's first month —
+            // see contracts/[id]/route.ts activation handler.
+            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete;
             const hasDeferred = kycStatus.deferred > 0;
+
+            // Closest-amount-first so the invoice that most plausibly *is* the
+            // pro-rata payment (just raised as an ad-hoc invoice instead of
+            // through the proposal) surfaces before unrelated charges.
+            const expectedAmount = prorataAttribution.expectedAmount;
+            const prorataCandidates = expectedAmount == null
+              ? prorataAttribution.candidates
+              : [...prorataAttribution.candidates].sort(
+                  (a, b) => Math.abs(a.total_amount - expectedAmount) - Math.abs(b.total_amount - expectedAmount)
+                );
+            const canLinkInvoice = ["admin", "accounts"].includes(userRole ?? "");
 
             return canActivate ? (
               <Button
@@ -725,7 +1076,52 @@ export default function ContractDetailPage({
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {proposalMissing && <p>• A proposal is linked to this contract</p>}
-                    {!proposalMissing && !proposalPaid && <p>• Proposal payment collected</p>}
+                    {!proposalMissing && !proposalPaid && (
+                      <div>
+                        <p>• Proposal payment collected</p>
+                        {linkedUnpaidProrataInvoice ? (
+                          <p className="mt-1 pl-3 text-amber-800">
+                            Linked ad-hoc invoice <span className="font-mono">{linkedUnpaidProrataInvoice.invoice_number}</span>
+                            {" "}({formatCurrency(linkedUnpaidProrataInvoice.total_amount)}) is <strong>{linkedUnpaidProrataInvoice.status}</strong> —
+                            {" "}will unlock activation once it&apos;s marked paid.
+                          </p>
+                        ) : canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <div className="mt-1.5 pl-3 space-y-1 border-l-2 border-amber-200">
+                            <p className="text-amber-800">Or link an ad-hoc invoice already raised for this customer:</p>
+                            {prorataCandidates.slice(0, 3).map((inv) => {
+                              const isLikelyMatch = expectedAmount != null && Math.abs(inv.total_amount - expectedAmount) < 1;
+                              return (
+                                <div key={inv.id} className="flex items-center gap-2">
+                                  <Link2 className="h-3 w-3 shrink-0 text-amber-600" />
+                                  <span className="font-mono">{inv.invoice_number}</span>
+                                  <span>{formatCurrency(inv.total_amount)}</span>
+                                  <Badge variant="outline" className="text-[10px] py-0">{inv.status}</Badge>
+                                  {isLikelyMatch && (
+                                    <Badge variant="outline" className="text-[10px] py-0 border-emerald-300 text-emerald-700 bg-emerald-50">
+                                      Likely match
+                                    </Badge>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-5 px-1.5 text-[11px] text-amber-800 hover:text-amber-900"
+                                    disabled={linkingInvoiceId === inv.id}
+                                    onClick={() => handleLinkProrataInvoice(inv.id)}
+                                  >
+                                    {linkingInvoiceId === inv.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Link"}
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : !canLinkInvoice && prorataCandidates.length > 0 ? (
+                          <p className="mt-1 pl-3 text-amber-700">
+                            {prorataCandidates.length} ad-hoc invoice{prorataCandidates.length === 1 ? "" : "s"} for this customer could cover this —
+                            {" "}ask an admin or accounts teammate to link one below.
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
                     {!proposalMissing && !depositPaid && (
                       <p>
                         • {depositClaimedByOther
@@ -733,7 +1129,6 @@ export default function ContractDetailPage({
                           : "Security deposit collected"}
                       </p>
                     )}
-                    {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
                     )}
@@ -840,7 +1235,6 @@ export default function ContractDetailPage({
               contract={contract}
               userRole={userRole}
               onSuccess={() => fetchContract(false)}
-              onProrataStatusChange={handleProrataStatusChange}
             />
           )}
 
@@ -1211,6 +1605,17 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
+          {/* Agreement document history — old executed versions stay
+              visible/downloadable after a reupload (e.g. customer name
+              change or a change-of-law redocumentation). */}
+          <AgreementDocumentHistory
+            listUrl={`/api/contracts/${id}/agreement-versions`}
+            reuploadUrl={`/api/contracts/${id}/reupload-agreement`}
+            canManage={["admin", "manager", "sales_rep"].includes(userRole ?? "")}
+            hasExistingDocument={!!contract.signed_document}
+            onChanged={fetchContract}
+          />
+
           {/* Terms & Conditions */}
           {contract.terms_and_conditions && (
             <Card>
@@ -1433,7 +1838,16 @@ export default function ContractDetailPage({
 
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
                 {/* Role gate: admin, manager, sales_rep can renew/decline/extend */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (() => {
+                  // Renewal window: only opens up within 45 days of expiry — an
+                  // "expired" contract is already past that window by definition.
+                  // Mirrors the hard gate in POST /api/contracts/[id]/renew.
+                  const daysUntilExpiry = contract.end_date
+                    ? Math.ceil((new Date(contract.end_date + "T00:00:00Z").getTime() - Date.now()) / 86_400_000)
+                    : null;
+                  const renewalWindowOpen = contract.status === "expired" || (daysUntilExpiry !== null && daysUntilExpiry <= 45);
+
+                  return (
                   <div className="space-y-1.5 pt-1">
                     <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <span>Not sure which to use?</span>
@@ -1442,10 +1856,18 @@ export default function ContractDetailPage({
                         side="top"
                       />
                     </div>
+                    {!renewalWindowOpen && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Renew unlocks 45 days before expiry
+                        {contract.end_date && ` (from ${formatDate(new Date(new Date(contract.end_date + "T00:00:00Z").getTime() - 45 * 86_400_000).toISOString().slice(0, 10))})`}.
+                      </p>
+                    )}
                     <div className="flex gap-2">
                       <Button
                         size="sm"
                         className="flex-1"
+                        disabled={!renewalWindowOpen}
+                        title={!renewalWindowOpen ? "Renewal opens 45 days before expiry" : undefined}
                         onClick={() => setRenewDialogOpen(true)}
                       >
                         <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -1473,7 +1895,8 @@ export default function ContractDetailPage({
                       </Button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* The renewal's term has started but the contract isn't live.
                     Until it is activated the run cannot bill it, so this
@@ -1507,6 +1930,17 @@ export default function ContractDetailPage({
                         Open Renewal Draft — {renewalDraft.contract_number}
                         <span className="text-amber-600">→</span>
                       </Link>
+                    )}
+                    {renewalDraft?.status === "draft" && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setCancelRenewalDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Cancel Renewal
+                      </Button>
                     )}
                   </div>
                 )}
@@ -1596,6 +2030,49 @@ export default function ContractDetailPage({
                   </div>
                 </>
               )}
+              <Separator />
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-muted-foreground shrink-0">Customer PO Number</span>
+                {editingPoNumber ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={poNumberValue}
+                      onChange={(e) => setPoNumberValue(e.target.value)}
+                      placeholder="e.g. 4500218763"
+                      className="h-7 text-sm w-32"
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePoNumber()}
+                    />
+                    <Button size="sm" className="h-7 text-xs px-2" onClick={handleSavePoNumber} disabled={savingPoNumber}>
+                      {savingPoNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2"
+                      onClick={() => setEditingPoNumber(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    {contract.po_number ? (
+                      <Badge variant="secondary" className="font-mono">{contract.po_number}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Not set</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-1.5"
+                      onClick={() => { setPoNumberValue(contract.po_number || ""); setEditingPoNumber(true); }}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  </span>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -2104,15 +2581,112 @@ export default function ContractDetailPage({
       <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Preview: stamp with company seal</DialogTitle>
+            <DialogTitle>
+              {stampMode === "existing"
+                ? "Preview: stamp uploaded document"
+                : "Preview: stamp with company seal"}
+            </DialogTitle>
             <DialogDescription>
-              This is exactly what will be saved as the signed contract for{" "}
-              {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
-              {stampPreviewRef}. Review it before confirming. This does not go through
-              Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
-              if needed.
+              {stampMode === "existing" ? (
+                <>
+                  Click the page below where TWV&apos;s signature and seal should go on the
+                  document already uploaded for {contract.contract_number} — the
+                  customer&apos;s original signature is preserved, ref {stampPreviewRef}. This
+                  does not go through Leegality. You can cancel it afterward from
+                  &quot;Cancel sign &amp; seal&quot; if needed.
+                </>
+              ) : (
+                <>
+                  This is exactly what will be saved as the signed contract for{" "}
+                  {contract.contract_number} — TWV&apos;s signature and seal applied, ref{" "}
+                  {stampPreviewRef}. Review it before confirming. This does not go through
+                  Leegality. You can cancel it afterward from &quot;Cancel sign &amp; seal&quot;
+                  if needed.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
+          {stampMode === "existing" && stampExistingPageCount > 0 && (
+            <div className="rounded-md border bg-amber-50 border-amber-200 p-4 space-y-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-amber-900">Page</span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  disabled={stampExistingRendering || stampExistingPageImageLoading || stampExistingTargetPage <= 1}
+                  onClick={() => handleStampExistingPageChange(stampExistingTargetPage - 1)}
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </Button>
+                <Input
+                  type="number"
+                  min={1}
+                  max={stampExistingPageCount}
+                  value={stampExistingTargetPage}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!isNaN(n)) handleStampExistingPageChange(n);
+                  }}
+                  disabled={stampExistingRendering || stampExistingPageImageLoading}
+                  className="h-7 w-14 text-center px-1"
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  disabled={
+                    stampExistingRendering ||
+                    stampExistingPageImageLoading ||
+                    stampExistingTargetPage >= stampExistingPageCount
+                  }
+                  onClick={() => handleStampExistingPageChange(stampExistingTargetPage + 1)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-sm text-amber-900">of {stampExistingPageCount}</span>
+                {(stampExistingRendering || stampExistingPageImageLoading) && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-900" />
+                )}
+                {stampExistingOriginalUrl && (
+                  <Button asChild variant="outline" size="sm" className="ml-auto">
+                    <a href={stampExistingOriginalUrl} target="_blank" rel="noopener noreferrer">
+                      <Eye className="mr-1.5 h-3.5 w-3.5" />
+                      Open original full PDF
+                    </a>
+                  </Button>
+                )}
+              </div>
+              {stampExistingPageImageUrl && (
+                <div className="relative inline-block max-w-full rounded border bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- data: URL raster of an uploaded PDF page, not an optimizable asset */}
+                  <img
+                    src={stampExistingPageImageUrl}
+                    alt={`Page ${stampExistingTargetPage} of the uploaded document`}
+                    className="w-full h-auto rounded cursor-crosshair select-none"
+                    onClick={handleStampExistingImageClick}
+                  />
+                  {stampExistingClickRatio && (
+                    <div
+                      className="absolute w-4 h-4 rounded-full border-2 border-red-500 bg-red-500/30 pointer-events-none"
+                      style={{
+                        left: `${stampExistingClickRatio.x * 100}%`,
+                        top: `${stampExistingClickRatio.y * 100}%`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+              <p className="text-sm text-amber-900">
+                {stampExistingClickRatio
+                  ? "Click again anywhere to move the stamp — the marker shows its current spot."
+                  : "Click on the page above where the stamp should go."}
+              </p>
+            </div>
+          )}
           {stampPreviewUrl && (
             <div className="rounded-md border bg-muted/30 p-4 flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
@@ -2126,11 +2700,19 @@ export default function ContractDetailPage({
               </Button>
             </div>
           )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
               Cancel
             </Button>
-            <Button onClick={handleStampSignSeal} disabled={stampingSignSeal}>
+            <Button
+              onClick={handleStampSignSeal}
+              disabled={stampingSignSeal || (stampMode === "existing" && !stampPreviewPdfBase64)}
+            >
               {stampingSignSeal ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -2144,7 +2726,7 @@ export default function ContractDetailPage({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel sign & seal?</DialogTitle>
@@ -2154,8 +2736,13 @@ export default function ContractDetailPage({
               available again. You can re-stamp it afterward if needed.
             </DialogDescription>
           </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
               Keep it
             </Button>
             <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>
@@ -2207,6 +2794,15 @@ export default function ContractDetailPage({
         open={declineDialogOpen}
         onOpenChange={setDeclineDialogOpen}
         contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Cancel Renewal Dialog */}
+      <CancelRenewalDialog
+        open={cancelRenewalDialogOpen}
+        onOpenChange={setCancelRenewalDialogOpen}
+        contract={contract}
+        renewalDraft={renewalDraft}
         onSuccess={() => fetchContract(false)}
       />
 

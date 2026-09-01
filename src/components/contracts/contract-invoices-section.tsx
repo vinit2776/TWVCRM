@@ -67,6 +67,13 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
   paid: "bg-green-50 text-green-700 border-green-200",
 };
 
+// The proforma-pdf route 400s on draft/voided statements — their numbers
+// aren't locked yet, so there's nothing to render. Keep this in sync with
+// the status checks in src/app/api/billing-statements/[id]/proforma-pdf/route.ts.
+function canPreviewPdf(status: string) {
+  return status !== "draft" && status !== "voided";
+}
+
 function periodLabel(start: string, end: string) {
   const s = new Date(start + "T00:00:00Z");
   const e = new Date(end + "T00:00:00Z");
@@ -275,7 +282,6 @@ export function ContractInvoicesSection({
     });
   }, [startDate, endDate, createdAt, statements, contractId]);
 
-
   // A rent run bills the month AFTER the month it targets, so to bill the cycle
   // this contract is actually due for, target the month before its billing
   // anchor. Without this the button only works during the one calendar month
@@ -410,13 +416,22 @@ export function ContractInvoicesSection({
             <div className="flex items-center gap-2 text-xs">
               <span className="font-medium text-muted-foreground">Pro-rata Invoice</span>
               {prorataStatement ? (
-                <Link
-                  href={`/api/billing-statements/${prorataStatement.id}/proforma-pdf`}
-                  target="_blank"
-                  className="font-mono text-primary hover:underline"
-                >
-                  {prorataStatement.statement_number}
-                </Link>
+                canPreviewPdf(prorataStatement.status) ? (
+                  <Link
+                    href={`/api/billing-statements/${prorataStatement.id}/proforma-pdf`}
+                    target="_blank"
+                    className="font-mono text-primary hover:underline"
+                  >
+                    {prorataStatement.statement_number}
+                  </Link>
+                ) : (
+                  <span
+                    className="font-mono text-muted-foreground"
+                    title="Finalize this statement in Billing to preview the PDF"
+                  >
+                    {prorataStatement.statement_number}
+                  </span>
+                )
               ) : proposalNumber ? (
                 <Link href={`/proposals/${proposalId}`} className="text-primary hover:underline">
                   via {proposalNumber}
@@ -539,13 +554,22 @@ export function ContractInvoicesSection({
                       {periodLabel(s.period_start, s.period_end)}
                     </td>
                     <td className="py-2.5 pr-4">
-                      <Link
-                        href={`/api/billing-statements/${s.id}/proforma-pdf`}
-                        target="_blank"
-                        className="font-mono text-xs text-primary hover:underline"
-                      >
-                        {s.statement_number}
-                      </Link>
+                      {canPreviewPdf(s.status) ? (
+                        <Link
+                          href={`/api/billing-statements/${s.id}/proforma-pdf`}
+                          target="_blank"
+                          className="font-mono text-xs text-primary hover:underline"
+                        >
+                          {s.statement_number}
+                        </Link>
+                      ) : (
+                        <span
+                          className="font-mono text-xs text-muted-foreground"
+                          title="Finalize this statement in Billing to preview the PDF"
+                        >
+                          {s.statement_number}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 pr-4 text-right tabular-nums font-medium whitespace-nowrap">
                       {formatCurrency(s.total_amount)}

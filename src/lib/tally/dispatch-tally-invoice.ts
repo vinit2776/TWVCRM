@@ -197,6 +197,7 @@ export async function dispatchTallyInvoice(
       periodEnd: statement.period_end as string,
       dueDate: isPaid ? undefined : dueDate,
       contractNumber: contract.contract_number,
+      poNumber: statement.po_number as string | null,
       lineItems,
       subtotal,
       cgst,

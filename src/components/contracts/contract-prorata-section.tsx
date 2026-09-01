@@ -31,10 +31,9 @@ interface Props {
   contract: Contract;
   userRole: string | null;
   onSuccess: () => void;
-  onProrataStatusChange?: (settled: boolean) => void;
 }
 
-export function ContractProrataSection({ contract, userRole, onSuccess, onProrataStatusChange }: Props) {
+export function ContractProrataSection({ contract, userRole, onSuccess }: Props) {
   const [sending, setSending] = useState(false);
   const [piPreviewOpen, setPiPreviewOpen] = useState(false);
   const [ccEmails, setCcEmails] = useState<string[]>([]);
@@ -57,19 +56,6 @@ export function ContractProrataSection({ contract, userRole, onSuccess, onProrat
   }, [contract.prorata_billing_statement_id]);
 
   useEffect(() => { fetchStmtState(); }, [fetchStmtState]);
-
-  // Report the real settlement state to the parent so the Activate button
-  // gate isn't stuck on a stale `contracts.prorata_payment_status` cache —
-  // that column only syncs on the Razorpay webhook or an activation attempt,
-  // so payments recorded via AR/Tally inbox can leave it at "pending" even
-  // though the billing statement itself already shows paid.
-  useEffect(() => {
-    if (!onProrataStatusChange) return;
-    const status = contract.prorata_payment_status as string;
-    if (status === "not_applicable") { onProrataStatusChange(true); return; }
-    const settled = status === "paid" || status === "waived" || stmtState?.payment_status === "paid";
-    onProrataStatusChange(settled);
-  }, [contract.is_renewal, contract.prorata_payment_status, stmtState, onProrataStatusChange]);
 
   if (!contract.is_renewal || contract.prorata_payment_status === "not_applicable") {
     return null;
@@ -251,7 +237,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess, onProrat
             <>
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <p>Contract cannot be activated until pro-rata is paid or waived.</p>
+                <p>Optional — collect the partial first month upfront, or leave it to bill automatically as part of the contract&apos;s first regular statement once activated.</p>
               </div>
               <Button size="sm" className="w-full" onClick={() => setPiPreviewOpen(true)} disabled={sending}>
                 <Send className="mr-1.5 h-3.5 w-3.5" />
@@ -276,7 +262,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess, onProrat
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                  <p>PI sent. Contract activates once payment is received.</p>
+                  <p>PI sent — awaiting payment.</p>
                 </div>
                 {stmtState?.proforma_sent_at && (
                   <div className="flex items-center gap-1.5 text-amber-700">
@@ -321,19 +307,19 @@ export function ContractProrataSection({ contract, userRole, onSuccess, onProrat
           {displayState === "gst_in_tally" && (
             <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
               <p className="font-semibold mb-1">GST invoice in Tally inbox</p>
-              <p>Accounts is issuing the GST invoice. Once sent and paid, contract will be activatable.</p>
+              <p>Accounts is issuing the GST invoice.</p>
             </div>
           )}
 
           {displayState === "paid" && (
-            <p className="text-xs text-green-700 font-medium">✓ Payment received — contract can be activated</p>
+            <p className="text-xs text-green-700 font-medium">✓ Payment received</p>
           )}
 
           {displayState === "waived" && (
             <p className="text-xs text-muted-foreground">Admin waived pro-rata collection for this renewal.</p>
           )}
 
-          {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && (
+          {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && displayState !== "unsent" && (
             <Button
               size="sm"
               variant="ghost"
@@ -478,8 +464,9 @@ export function ContractProrataSection({ contract, userRole, onSuccess, onProrat
           <DialogHeader>
             <DialogTitle>Waive Pro-Rata Collection</DialogTitle>
             <DialogDescription>
-              This will allow the renewal contract to be activated without collecting the{" "}
-              {formatCurrency(prorataTotal)} pro-rata for {formatDate(contract.start_date)} – {formatDate(periodEndDate)}.
+              This marks the {formatCurrency(prorataTotal)} pro-rata for{" "}
+              {formatDate(contract.start_date)} – {formatDate(periodEndDate)} as not being collected
+              separately for this renewal.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -16,10 +17,10 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   FileText,
   Send,
-  CheckCircle,
   PenTool,
   Loader2,
   ExternalLink,
@@ -76,6 +77,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [stampPreviewRef, setStampPreviewRef] = useState<string | null>(null);
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
+  const [stampError, setStampError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
@@ -126,7 +128,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleViewPdf = async () => {
     setViewing(true);
     try {
-      window.open(`/api/cases/${caseId}/leave-license/pdf`, "_blank");
+      window.open(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`, "_blank");
     } finally {
       setViewing(false);
     }
@@ -257,27 +259,100 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
-  const handleAction = async (action: string) => {
-    if (!agreement) return;
-    setActing(true);
+  // ── Draft watermark ────────────────────────────────────────────────────
+  // One decision governs View, Download and Send so the three cannot disagree.
+  // Whether it can be unticked is computed server-side from the billing route
+  // and whether the case has been paid — never chosen here.
+  const [watermarkOn, setWatermarkOn] = useState(true);
+  const [watermarkPolicy, setWatermarkPolicy] = useState<{
+    route: "prepaid" | "postpaid" | "direct";
+    forced: boolean;
+    settled: boolean;
+    reason: string;
+    aggregatorName: string | null;
+  } | null>(null);
+
+  const loadWatermarkPolicy = useCallback(async () => {
+    const res = await fetch(`/api/cases/${caseId}/leave-license/watermark-policy`);
+    if (!res.ok) return;
+    const json = await res.json().catch(() => null);
+    if (!json?.data) return;
+    setWatermarkPolicy(json.data);
+    // Always re-tick when the policy reloads: a lock that has just come into
+    // force must not leave a stale unticked box behind it.
+    if (json.data.forced) setWatermarkOn(true);
+  }, [caseId]);
+
+  useEffect(() => { loadWatermarkPolicy(); }, [loadWatermarkPolicy]);
+
+  /** Suffix for the PDF routes; the server still re-decides. */
+  const watermarkQuery = watermarkOn ? "" : "?watermark=0";
+
+  // ── Send to customer ───────────────────────────────────────────────────
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendPreviewLoading, setSendPreviewLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendCc, setSendCc] = useState("");
+  const [sendPreview, setSendPreview] = useState<{
+    to: string | null;
+    toName: string;
+    toKind: "aggregator" | "client";
+    onBehalfOf: string | null;
+    subject: string;
+    html: string;
+    blocked: string | null;
+    attachmentName: string | null;
+    isDraft: boolean;
+    hasPdf: boolean;
+    watermark?: {
+      forced: boolean;
+      settled: boolean;
+      reason: string;
+      route: "prepaid" | "postpaid" | "direct";
+    };
+  } | null>(null);
+
+  const openSendDialog = async () => {
+    setSendPreviewLoading(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, agreement_id: agreement.id }),
-      });
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`);
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Action failed");
+        toast.error(json?.error || "Could not build the preview");
+        return;
       }
-      toast.success(`Agreement ${action.replace(/_/g, " ")}`);
-      fetchAgreement();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Action failed");
+      setSendPreview(json.data);
+      setSendCc("");
+      setSendOpen(true);
     } finally {
-      setActing(false);
+      setSendPreviewLoading(false);
     }
   };
+
+  const handleSendToCustomer = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc: sendCc, watermark: watermarkOn }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(json?.error || "Send failed");
+        return;
+      }
+      toast.success(`Agreement sent to ${json.data.to}`);
+      setSendOpen(false);
+      fetchAgreement();
+      loadWatermarkPolicy();
+    } catch {
+      toast.error("Send failed");
+    } finally {
+      setSending(false);
+    }
+  };
+
 
   const handleInitiateSigning = async () => {
     setActing(true);
@@ -350,7 +425,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
     setViewing(true);
     try {
-      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf`);
+      const res = await fetch(`/api/cases/${caseId}/leave-license/pdf${watermarkQuery}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         toast.error(body.error || "PDF not found — regenerate the agreement first");
@@ -409,11 +484,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     if (stampPreviewUrl) URL.revokeObjectURL(stampPreviewUrl);
     setStampPreviewUrl(null);
     setStampPreviewRef(null);
+    setStampError(null);
   };
 
   const handleOpenStampPreview = async () => {
     if (!agreement) return;
     setStampPreviewLoading(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/preview-stamp`, {
         method: "POST",
@@ -443,6 +520,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleStampSignSeal = async () => {
     if (!agreement || !stampPreviewRef) return;
     setStampingSignSeal(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/stamp-sign-seal`, {
         method: "POST",
@@ -462,7 +540,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       closeStampPreview();
       fetchAgreement();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to stamp agreement");
+      setStampError(err instanceof Error ? err.message : "Failed to stamp agreement");
     } finally {
       setStampingSignSeal(false);
     }
@@ -471,6 +549,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const handleCancelStamp = async () => {
     if (!agreement) return;
     setCancellingStamp(true);
+    setStampError(null);
     try {
       const res = await fetch(`/api/cases/${caseId}/leave-license/cancel-stamp`, {
         method: "POST",
@@ -485,7 +564,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       setCancelStampOpen(false);
       fetchAgreement();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to cancel the stamp");
+      setStampError(err instanceof Error ? err.message : "Failed to cancel the stamp");
     } finally {
       setCancellingStamp(false);
     }
@@ -522,8 +601,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
   const vars = (agreement.variables || {}) as Record<string, unknown>;
 
+  // Mirrors allowedStatuses in the manual-sign route — keep the two in step.
   const canUploadManualSign = agreement &&
-    ["client_approved", "signing", "internally_approved", "draft"].includes(agreement.status) &&
+    ["draft", "internally_approved", "sent_to_client", "client_approved", "signing"]
+      .includes(agreement.status) &&
     agreement.status !== "executed";
 
   return (
@@ -659,6 +740,46 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             </div>
           )}
 
+          {/* Draft watermark — hidden once executed, when nothing is marked */}
+          {watermarkPolicy && !watermarkPolicy.settled && (
+            <div
+              className={`flex items-start gap-3 rounded-md border p-3 ${
+                watermarkPolicy.forced
+                  ? "border-amber-200 bg-amber-50"
+                  : watermarkOn
+                    ? "border-muted bg-muted/40"
+                    : "border-red-200 bg-red-50"
+              }`}
+            >
+              <Checkbox
+                id="wm-toggle"
+                checked={watermarkOn}
+                disabled={watermarkPolicy.forced}
+                onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                className="mt-0.5"
+              />
+              <div className="min-w-0">
+                <Label htmlFor="wm-toggle" className="text-sm font-medium cursor-pointer">
+                  Draft watermark
+                </Label>
+                <p
+                  className={`text-xs ${
+                    watermarkPolicy.forced
+                      ? "text-amber-800"
+                      : watermarkOn
+                        ? "text-muted-foreground"
+                        : "text-red-700"
+                  }`}
+                >
+                  {watermarkPolicy.forced && "🔒 "}
+                  {watermarkOn
+                    ? watermarkPolicy.reason
+                    : "Clean, unexecuted copy. Who released it is recorded against the case."}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
             <Button size="sm" variant="outline" onClick={handleViewPdf} disabled={viewing}>
@@ -688,28 +809,20 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
           {/* Status Workflow Buttons */}
           <div className="flex flex-wrap gap-2 pt-2 border-t">
-            {agreement.status === "draft" && (
-              <Button size="sm" onClick={() => handleAction("approve_internally")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Approve Internally
+            {/* Send is available at any point before execution. The internal
+                and client approval steps were removed: they gated the send
+                behind two clicks that recorded nothing anyone acted on, and
+                left an agreement in sent_to_client with no way forward. */}
+            {agreement.status !== "executed" && (
+              <Button size="sm" onClick={openSendDialog} disabled={sendPreviewLoading}>
+                {sendPreviewLoading
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Send className="mr-2 h-4 w-4" />}
+                Send to Customer
               </Button>
             )}
 
-            {agreement.status === "internally_approved" && (
-              <Button size="sm" onClick={() => handleAction("send_to_client")} disabled={acting}>
-                <Send className="mr-2 h-4 w-4" />
-                Send to Client
-              </Button>
-            )}
-
-            {agreement.status === "sent_to_client" && (
-              <Button size="sm" onClick={() => handleAction("client_approved")} disabled={acting}>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Mark Client Approved
-              </Button>
-            )}
-
-            {agreement.status === "client_approved" && (
+            {["client_approved", "sent_to_client", "internally_approved"].includes(agreement.status) && (
               <Button size="sm" onClick={handleInitiateSigning} disabled={acting}>
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Stamping & Signing
@@ -751,7 +864,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             )}
 
             {agreement.signed_document_id && agreement.stamp_reference && userRole === "admin" && (
-              <Button size="sm" variant="outline" onClick={() => setCancelStampOpen(true)}>
+              <Button size="sm" variant="outline" onClick={() => { setStampError(null); setCancelStampOpen(true); }}>
                 <XCircle className="mr-2 h-4 w-4" />
                 Cancel sign & seal
               </Button>
@@ -759,6 +872,25 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
             {acting && <Loader2 className="h-4 w-4 animate-spin ml-2" />}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Agreement document history — old executed versions stay
+          visible/downloadable after a reupload (e.g. customer name change
+          or a change-of-law redocumentation). */}
+      <Card>
+        <CardContent className="pt-4">
+          <AgreementDocumentHistory
+            listUrl={`/api/cases/${caseId}/leave-license/agreement-versions`}
+            reuploadUrl={`/api/cases/${caseId}/leave-license/reupload-agreement`}
+            reuploadExtraFields={{ agreement_id: agreement.id }}
+            canManage={
+              agreement.status === "executed" &&
+              ["admin", "manager", "sales_rep", "office_admin"].includes(userRole ?? "")
+            }
+            hasExistingDocument={!!(agreement.signed_document_id || agreement.generated_document_id)}
+            onChanged={fetchAgreement}
+          />
         </CardContent>
       </Card>
 
@@ -880,6 +1012,130 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Send to Customer — preview exactly what goes out */}
+      <Dialog open={sendOpen} onOpenChange={(v) => { if (!v) setSendOpen(false); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5" />
+              Send Agreement to Customer
+            </DialogTitle>
+          </DialogHeader>
+
+          {sendPreview && (
+            <div className="space-y-4">
+              {sendPreview.blocked && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {sendPreview.blocked}
+                </div>
+              )}
+
+              <div className="rounded-md border divide-y text-sm">
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">To</span>
+                  <span className="font-medium">
+                    {sendPreview.to ?? <span className="text-red-600">no address on record</span>}
+                    {sendPreview.to && (
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {sendPreview.toName}
+                        {sendPreview.toKind === "aggregator" && " · aggregator"}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {sendPreview.onBehalfOf && (
+                  <div className="flex gap-3 px-3 py-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">On behalf of</span>
+                    <span>{sendPreview.onBehalfOf}</span>
+                  </div>
+                )}
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Subject</span>
+                  <span className="font-medium">{sendPreview.subject}</span>
+                </div>
+                <div className="flex gap-3 px-3 py-2">
+                  <span className="w-20 shrink-0 text-muted-foreground">Attached</span>
+                  <span>
+                    {sendPreview.attachmentName
+                      ? (watermarkOn
+                          ? sendPreview.attachmentName
+                          : sendPreview.attachmentName.replace(/^DRAFT-/, ""))
+                      : <span className="text-red-600">no PDF generated</span>}
+                    {sendPreview.isDraft && watermarkOn && (
+                      <span className="ml-2 text-xs text-amber-700">watermarked DRAFT</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="send-cc">CC (optional)</Label>
+                <Input
+                  id="send-cc"
+                  value={sendCc}
+                  onChange={(e) => setSendCc(e.target.value)}
+                  placeholder="someone@example.com, another@example.com"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Separate multiple addresses with commas.
+                </p>
+              </div>
+
+              {sendPreview.watermark && !sendPreview.watermark.settled && (
+                <div
+                  className={`flex items-start gap-3 rounded-md border p-3 ${
+                    sendPreview.watermark.forced
+                      ? "border-amber-200 bg-amber-50"
+                      : watermarkOn
+                        ? "border-muted bg-muted/40"
+                        : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <Checkbox
+                    id="wm-send"
+                    checked={watermarkOn}
+                    disabled={sendPreview.watermark.forced}
+                    onCheckedChange={(v: boolean | "indeterminate") => setWatermarkOn(!!v)}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <Label htmlFor="wm-send" className="text-sm font-medium cursor-pointer">
+                      Draft watermark
+                    </Label>
+                    <p className={`text-xs ${sendPreview.watermark.forced ? "text-amber-800" : "text-muted-foreground"}`}>
+                      {sendPreview.watermark.forced && "🔒 "}
+                      {sendPreview.watermark.reason}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label>Message preview</Label>
+                <div
+                  className="rounded-md border bg-muted/30 p-3 max-h-72 overflow-y-auto"
+                  dangerouslySetInnerHTML={{ __html: sendPreview.html }}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleSendToCustomer}
+              disabled={
+                sending || !sendPreview || !!sendPreview.blocked ||
+                !sendPreview.to || !sendPreview.hasPdf
+              }
+            >
+              {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              Send Now
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Upload Manually Signed Document Dialog */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-md">
@@ -948,6 +1204,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               </Button>
             </div>
           )}
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
               Cancel
@@ -966,7 +1227,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelStampOpen} onOpenChange={setCancelStampOpen}>
+      <Dialog open={cancelStampOpen} onOpenChange={(open) => { setCancelStampOpen(open); if (!open) setStampError(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel sign & seal?</DialogTitle>
@@ -976,8 +1237,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               is draft or internally approved. You can re-stamp it afterward if needed.
             </DialogDescription>
           </DialogHeader>
+          {stampError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {stampError}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelStampOpen(false)}>
+            <Button variant="outline" onClick={() => { setCancelStampOpen(false); setStampError(null); }}>
               Keep it
             </Button>
             <Button variant="destructive" onClick={handleCancelStamp} disabled={cancellingStamp}>

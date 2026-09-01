@@ -10,6 +10,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { depositIsChaseable } from "@/lib/receivables";
+import { invoiceParty } from "@/lib/invoice-party";
 
 export type DunnableKind = "deposit" | "topup" | "adhoc_invoice";
 
@@ -109,12 +110,23 @@ export async function fetchDunnableReceivables(
   }
 
   if (want("adhoc_invoice")) {
+    // Can be raised against a lead OR a Virtual Office case (migration
+    // 00532) — a case has no lead, so without this join a case-billed
+    // invoice resolved to party_name "Customer" with no email/phone, and
+    // the reminder route below rejects with 422 for having neither. Same
+    // fix as fetchOtherReceivables() in the AR route, applied here so the
+    // "Remind" button and the daily cron stop silently skipping these.
     let q = admin
       .from("proforma_invoices")
       .select(`
         id, invoice_number, total_amount, due_date, razorpay_link_url,
         followup_enabled, reminder_count, last_reminder_sent_at,
-        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
+        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile),
+        case:cases!proforma_invoices_case_id_fkey(
+          id, case_number, client_name, client_company_name, client_email, client_phone,
+          client_gst_number, aggregator_id, bill_to,
+          aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone, gst_number)
+        )
       `)
       .not("status", "in", "(paid,cancelled)");
     if (only) q = q.eq("id", only.id);
@@ -123,9 +135,14 @@ export async function fetchDunnableReceivables(
     for (const inv of data || []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = inv.lead as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const caseRow = inv.case as any;
+      const invParty = !lead && caseRow ? invoiceParty({ case: caseRow }) : null;
       out.push({
-        kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number, party_name: party(lead),
-        email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
+        kind: "adhoc_invoice", id: inv.id, reference: inv.invoice_number,
+        party_name: lead ? party(lead) : (invParty?.name || "Customer"),
+        email: lead?.email ?? invParty?.email ?? null,
+        phone: lead?.mobile || lead?.phone || invParty?.phone || null,
         amount: Number(inv.total_amount || 0), due_date: inv.due_date,
         payment_link_url: inv.razorpay_link_url,
         followup_enabled: inv.followup_enabled !== false,

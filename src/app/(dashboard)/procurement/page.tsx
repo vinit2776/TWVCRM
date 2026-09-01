@@ -8,11 +8,12 @@ import {
   ClipboardList, Package, Receipt, AlertTriangle,
   CheckCircle2, Clock, BarChart3, ArrowRight,
   IndianRupee, ShoppingCart, Truck, AlertCircle,
-  CalendarClock, Users, PieChart, Settings, Wrench,
+  CalendarClock, Users, PieChart, Settings, Wrench, MapPin,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -22,6 +23,7 @@ import {
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import type { Company } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -149,6 +151,15 @@ const DEPT_ORDER = ["pantry", "maintenance", "administration", "asset"];
 
 // ── Budget types ──────────────────────────────────────────────────────────────
 
+interface CenterBudgetRow {
+  location_id: string;
+  location_name: string;
+  monthly_budget: number | null;
+  is_active: boolean;
+  spent_this_month: number;
+  is_over_budget: boolean;
+}
+
 interface BudgetRow {
   department: string;
   monthly_budget: number | null;
@@ -158,6 +169,7 @@ interface BudgetRow {
   amc_spent_this_month: number;
   utilisation_pct: number | null;
   is_over_budget: boolean;
+  centers?: CenterBudgetRow[];
 }
 
 // ── Budget Bar component ──────────────────────────────────────────────────────
@@ -298,6 +310,20 @@ function BudgetBar({ row }: { row: BudgetRow }) {
           )}
         </div>
       </div>
+
+      {/* Row 4: per-center budget summary — consolidated across all centers above */}
+      {row.centers && row.centers.some((c) => c.is_active && c.monthly_budget) && (
+        <p className="text-[11px] text-muted-foreground">
+          {row.centers.filter((c) => c.is_active && c.monthly_budget).length} center
+          {row.centers.filter((c) => c.is_active && c.monthly_budget).length === 1 ? "" : "s"} with a budget set
+          {row.centers.some((c) => c.is_over_budget) && (
+            <span className="text-red-700 font-medium">
+              {" · "}{row.centers.filter((c) => c.is_over_budget).length} over budget:{" "}
+              {row.centers.filter((c) => c.is_over_budget).map((c) => c.location_name).join(", ")}
+            </span>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -310,6 +336,8 @@ export default function ProcurementDashboard() {
   const userRole = user?.role ?? "";
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>(""); // "" = all companies (combined view)
   const [budgetRows, setBudgetRows] = useState<BudgetRow[] | null>(null);
   const [amcBudget, setAmcBudget] = useState<{
     financial_year: number;
@@ -321,36 +349,59 @@ export default function ProcurementDashboard() {
     is_over_budget: boolean;
   } | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
+  const [reimbursementByCenter, setReimbursementByCenter] = useState<{
+    centers: Array<{ location_id: string; location_name: string; spent_this_month: number; mr_count: number }>;
+    unattributed_spend_this_month: number;
+    total_this_month: number;
+  } | null>(null);
 
-  const fetchData = () => {
+  const fetchData = (company: string) => {
     setLoading(true);
-    fetch("/api/procurement/dashboard")
+    const params = new URLSearchParams();
+    if (company) params.set("company_id", company);
+    fetch(`/api/procurement/dashboard?${params}`)
       .then((r) => r.json())
       .then((j) => { if (j.data) setData(j.data); })
       .finally(() => setLoading(false));
   };
 
-  const fetchBudgets = (role: string) => {
+  // Department + AMC budgets are entity-specific — /api/procurement/budget now
+  // requires a company_id, so there's no combined view for these two widgets
+  // when "All companies" is selected. They stay empty until one is picked.
+  const fetchBudgets = (role: string, company: string) => {
     if (!["admin", "manager"].includes(role)) return;
+    if (!company) { setBudgetRows(null); setAmcBudget(null); return; }
     setBudgetLoading(true);
-    fetch("/api/procurement/budget")
+    fetch(`/api/procurement/budget?company_id=${company}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.data) setBudgetRows(j.data);
         if (j.amc) setAmcBudget(j.amc);
       })
       .finally(() => setBudgetLoading(false));
+    fetch("/api/procurement/reimbursement-by-center")
+      .then((r) => r.json())
+      .then((j) => { if (j.data) setReimbursementByCenter(j.data); });
   };
 
+  // Companies — default filter is "All companies" (combined view), so no
+  // auto-select here, unlike the budget page which requires exactly one.
   useEffect(() => {
-    fetchData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => setCompanies(j.data || []))
+      .catch(() => setCompanies([]));
   }, []);
 
   useEffect(() => {
-    if (userRole) fetchBudgets(userRole);
+    fetchData(companyId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRole]);
+  }, [companyId]);
+
+  useEffect(() => {
+    if (userRole) fetchBudgets(userRole, companyId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole, companyId]);
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
   const currentMonth = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
@@ -367,7 +418,20 @@ export default function ProcurementDashboard() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">{currentMonth} · Live overview</p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData}>Refresh</Button>
+        <div className="flex items-center gap-2">
+          <Select value={companyId || "__all__"} onValueChange={(v) => setCompanyId(v === "__all__" ? "" : v)}>
+            <SelectTrigger className="w-[180px] h-9 text-sm">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All companies</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" onClick={() => fetchData(companyId)}>Refresh</Button>
+        </div>
       </div>
 
       {/* KPI Row */}
@@ -489,6 +553,10 @@ export default function ProcurementDashboard() {
                   </p>
                 )}
               </>
+            ) : !companyId ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                Select a company above to see its department budget breakdown — budgets are company-specific.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">Unable to load budget data.</p>
             )}
@@ -601,10 +669,47 @@ export default function ProcurementDashboard() {
                   </div>
                 </div>
               </div>
+            ) : !companyId ? (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                Select a company above to see its AMC annual budget — AMC budgets are company-specific.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-2">
                 No AMC budget configured.{" "}
                 <Link href="/settings?tab=dept-budgets" className="underline">Set in Settings</Link>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Reimbursement by Center (admin/manager only) — view only, no cap ── */}
+      {canSeePrices && reimbursementByCenter && reimbursementByCenter.total_this_month > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-muted-foreground" />
+                Reimbursement by Center · {currentMonth}
+              </CardTitle>
+              <span className="text-xs text-muted-foreground">{formatCurrency(reimbursementByCenter.total_this_month)} total</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Recovered from the customer&apos;s contract — visibility only, not counted against any department budget.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {reimbursementByCenter.centers.map((c) => (
+              <div key={c.location_id} className="flex items-center justify-between text-sm">
+                <span className="truncate">{c.location_name}</span>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatCurrency(c.spent_this_month)} <span className="text-xs">({c.mr_count} MR{c.mr_count !== 1 ? "s" : ""})</span>
+                </span>
+              </div>
+            ))}
+            {reimbursementByCenter.unattributed_spend_this_month > 0 && (
+              <p className="text-xs text-muted-foreground italic pt-1 border-t">
+                + {formatCurrency(reimbursementByCenter.unattributed_spend_this_month)} on contracts with no center set
               </p>
             )}
           </CardContent>

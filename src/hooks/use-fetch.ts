@@ -93,7 +93,6 @@ export function useFetch<T>(
         if (!signal.aborted) setLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [url, paramString],
   );
 

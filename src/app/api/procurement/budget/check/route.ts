@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
+import { CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
 
 function getCurrentFY(date = new Date()): number {
   const month = date.getMonth() + 1;
@@ -26,8 +27,11 @@ export async function GET(request: NextRequest) {
   const department = searchParams.get("department");
   const expenditureType = searchParams.get("expenditure_type") ?? "operational";
   const mrAmount = parseFloat(searchParams.get("amount") ?? "0");
+  const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
 
   if (!department) return NextResponse.json({ error: "department required" }, { status: 400 });
+  if (!companyId) return NextResponse.json({ error: "company_id required" }, { status: 400 });
 
   // ── AMC annual budget check ──────────────────────────────────────────────
   if (expenditureType === "amc") {
@@ -37,6 +41,7 @@ export async function GET(request: NextRequest) {
     const { data: budget } = await supabase
       .from("department_budgets")
       .select("monthly_budget, is_active, notes")
+      .eq("company_id", companyId)
       .eq("department", "amc")
       .eq("budget_period", "annual")
       .eq("financial_year", currentFY)
@@ -52,12 +57,13 @@ export async function GET(request: NextRequest) {
     // Committed: approved and beyond, excluding requests whose POs were all
     // cancelled. Shared with the AMC register so the two cannot show different
     // numbers for the same thing.
-    const committedTotal = await computeAmcCommitted(supabase, fyStart, fyEnd);
+    const committedTotal = await computeAmcCommitted(supabase, fyStart, fyEnd, companyId);
 
     // Provisional: submitted pending approval
     const { data: provisional } = await supabase
       .from("purchase_requests")
       .select("total_estimated_amount")
+      .eq("company_id", companyId)
       .eq("expenditure_type", "amc")
       .gte("created_at", fyStart)
       .lte("created_at", fyEnd)
@@ -93,6 +99,7 @@ export async function GET(request: NextRequest) {
   const { data: budget } = await supabase
     .from("department_budgets")
     .select("monthly_budget, is_active, notes")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("budget_period", "monthly")
     .is("location_id", null)
@@ -110,6 +117,7 @@ export async function GET(request: NextRequest) {
   const { data: committed, error: committedError } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
@@ -120,6 +128,7 @@ export async function GET(request: NextRequest) {
   const { data: provisional } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
@@ -131,6 +140,54 @@ export async function GET(request: NextRequest) {
   const projectedTotal = spentSoFar + mrAmount;
   const isOverBudget = projectedTotal > monthlyBudget;
   const remainingBudget = Math.max(0, monthlyBudget - spentSoFar);
+
+  // ── Center budget check — awareness only, not a separate hard gate here ──
+  // (the approval endpoint enforces both; this preview mirrors it) ─────────
+  let center = null;
+  if (locationId && (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department)) {
+    const { data: centerBudget } = await supabase
+      .from("department_budgets")
+      .select("monthly_budget, is_active")
+      .eq("company_id", companyId)
+      .eq("department", department)
+      .eq("budget_period", "monthly")
+      .eq("location_id", locationId)
+      .maybeSingle();
+
+    if (centerBudget?.is_active && centerBudget.monthly_budget) {
+      const { data: location } = await supabase.from("locations").select("name").eq("id", locationId).maybeSingle();
+      const centerMonthlyBudget = Number(centerBudget.monthly_budget);
+
+      const { data: centerCommitted } = await supabase
+        .from("purchase_requests")
+        .select("total_estimated_amount")
+        .eq("company_id", companyId)
+        .eq("department", department)
+        .eq("location_id", locationId)
+        .eq("expenditure_type", "operational")
+        .gte("created_at", monthStart)
+        .lte("created_at", monthEnd)
+        .in("status", ["approved", "partially_ordered", "po_created"]);
+
+      const centerSpentSoFar = (centerCommitted ?? []).reduce((s, mr) => s + Number(mr.total_estimated_amount ?? 0), 0);
+      const centerProjectedTotal = centerSpentSoFar + mrAmount;
+      const centerIsOverBudget = centerProjectedTotal > centerMonthlyBudget;
+
+      center = {
+        location_id: locationId,
+        location_name: location?.name ?? null,
+        monthly_budget: centerMonthlyBudget,
+        spent_so_far: centerSpentSoFar,
+        this_mr_amount: mrAmount,
+        projected_total: centerProjectedTotal,
+        remaining_before_mr: Math.max(0, centerMonthlyBudget - centerSpentSoFar),
+        is_over_budget: centerIsOverBudget,
+        over_by: centerIsOverBudget ? centerProjectedTotal - centerMonthlyBudget : 0,
+        utilisation_before: Math.round((centerSpentSoFar / centerMonthlyBudget) * 100),
+        utilisation_after: Math.round((centerProjectedTotal / centerMonthlyBudget) * 100),
+      };
+    }
+  }
 
   return NextResponse.json({
     has_budget: true,
@@ -145,5 +202,6 @@ export async function GET(request: NextRequest) {
     over_by: isOverBudget ? projectedTotal - monthlyBudget : 0,
     utilisation_before: Math.round((spentSoFar / monthlyBudget) * 100),
     utilisation_after: Math.round((projectedTotal / monthlyBudget) * 100),
+    center,
   });
 }

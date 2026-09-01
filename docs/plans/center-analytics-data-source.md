@@ -1,10 +1,20 @@
 # Center Analytics — Data Source Scoping
 
-Status: **Data-source decisions agreed with Vinit 2026-08-21. Not built.** Follows the
+Status: **Data-source decisions agreed with Vinit 2026-08-21. Built and live.** Follows the
 [Center Analytics mockup](../..) (interactive HTML artifact, admin-only, center-wise
 sales/collections/occupancy). This doc pins down what production tables and queries back each
 number on that page before writing migrations or API routes — all five open questions below are
 resolved; see the **Decisions** section.
+
+**Correction (2026-08-23):** the "Sales" definition below assumed `contracts.total_amount` is a
+full-tenure deal value. It isn't — confirmed against `billing.ts` (never divides by
+`tenure_months` anywhere) and `monthly-summary/route.ts` (reconstructs billing history as
+`monthsElapsed * contract.total_amount`) that this column **is already the monthly recurring
+rent**. The query (`SUM(contracts.total_amount) WHERE activated_at BETWEEN <range>`) is unchanged
+and correct — only the label was wrong. Relabeled "Sales" → "New MRR" throughout the UI; kept as
+`sales` internally to avoid an unrequested rename. This same wrong assumption also caused a real
+bug in the Space Heat Map's per-unit revenue (was dividing by `tenure_months` on top of an
+already-monthly figure) — fixed separately, see PR #557.
 
 ## Goal
 
@@ -22,11 +32,13 @@ done in the route (no Postgres RPC/view involved) — e.g.
 Center Analytics should follow the same shape: one route per section, admin-only, `location_id`
 + date-range params.
 
-### Sales (new business booked) — no existing period-scoped query to reuse
+### New MRR (new business booked) — no existing period-scoped query to reuse
 
-`contracts` has no `monthly_rent` column — the deal-value field is `contracts.total_amount`
-(full-tenure value, computed from `items` JSONB at creation). There's no ready-made "sales in a
-period" query anywhere today, but two precedents exist for the underlying columns:
+Originally scoped as "Sales" on the assumption that `contracts.total_amount` was a full-tenure
+deal value. It's actually the monthly recurring rent already (see the correction note above) —
+so this metric is "new monthly recurring rent added in the period," not total contract value.
+There's no ready-made period-scoped query for this anywhere today, but two precedents exist for
+the underlying columns:
 
 - [`source-roi/route.ts:44-58`](../../src/app/api/dashboard/source-roi/route.ts) sums
   `contracts.total_amount` for `status IN ('active','renewed')` as its revenue metric.
@@ -130,9 +142,9 @@ params, following the pattern in e.g.
 
 ## Decisions (agreed with Vinit 2026-08-21)
 
-1. **Sales definition:** contract activation — `SUM(contracts.total_amount) WHERE activated_at
-   BETWEEN <range> AND location_id = X`. Matches the precedent in `source-roi` and
-   `week-in-review`.
+1. **New MRR definition** (originally "Sales" — see the 2026-08-23 correction note above):
+   contract activation — `SUM(contracts.total_amount) WHERE activated_at BETWEEN <range> AND
+   location_id = X`. Matches the precedent in `source-roi` and `week-in-review`.
 2. **Collections/Billed historical accuracy:** accept inaccuracy before the May 1 2026 billing
    go-live. Build on `billing_statements`/`billing_payments` via `settlement.ts` only — do
    **not** wire in the `contract_payments` fallback reconstruction. "Last 6 months" will show
