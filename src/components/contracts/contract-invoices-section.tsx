@@ -343,7 +343,7 @@ export function ContractInvoicesSection({
       const res = await fetch("/api/billing/auto-generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "rent", contract_id: contractId, ...(cycleTarget ?? {}) }),
+        body: JSON.stringify({ dry_run: false, mode: "rent", contract_id: contractId, ...(cycleTarget ?? {}) }),
       });
       const json = await res.json();
       if (!res.ok) {

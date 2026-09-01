@@ -189,7 +189,7 @@ export function ProformaBillingCard({
         const res = await fetch("/api/billing/auto-generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
+          body: JSON.stringify({ dry_run: false, mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
         });
         const json = await res.json();
         if (!res.ok) { toast.error(json.error || "Run failed"); return; }
