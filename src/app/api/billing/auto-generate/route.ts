@@ -68,10 +68,22 @@ export async function GET() {
  * POST — manual trigger from the Billing UI (admin/manager/accounts).
  *
  * Body:
- *   { month?, year?, contract_id? }   — run live: generate + finalize + dispatch
- *   { dry_run: true, month?, year? }  — PREVIEW only: compute amounts/GST and
- *                                        return what WOULD be generated, writing
- *                                        nothing and sending nothing.
+ *   { dry_run: false, contract_id, month?, year? }  — run live for ONE contract
+ *                                                       (generate + finalize + dispatch).
+ *   { dry_run: false, mode: "usage", month?, year? } — run live for the whole
+ *                                                       usage batch (drafts only,
+ *                                                       never dispatched from here).
+ *   { month?, year? }  (or anything else)             — PREVIEW only: compute
+ *                                                       amounts/GST and return what
+ *                                                       WOULD be generated, writing
+ *                                                       nothing and sending nothing.
+ *
+ * `dry_run` must be the exact boolean `false` to run live — every other value
+ * (missing, misspelled, `true`, `"false"`, etc.) is treated as a preview. A
+ * whole-batch live RENT run is refused outright; that path is
+ * /api/billing/dispatch-run, which queues one job per contract with per-job
+ * visibility and retry instead of dispatching everything synchronously in one
+ * request. See the inline comment below for why.
  *
  * Live runs send the internal summary email (notifyBillingRun). Dry runs do not.
  */
@@ -90,9 +102,28 @@ export async function POST(request: NextRequest) {
   const month      = body.month      ? parseInt(String(body.month)) : undefined;
   const year       = body.year       ? parseInt(String(body.year))  : undefined;
   const contractId = body.contract_id || undefined;
-  const dryRun     = body.dry_run === true;
+  // Fail-safe default: only an explicit `dry_run: false` runs live. A missing,
+  // misspelled (e.g. `dryRun`), or truthy-but-wrong-shaped flag falls back to
+  // a preview instead of silently dispatching real proformas — see the
+  // 2026-09-01 incident where a hand-typed `dryRun` (camelCase) key was
+  // ignored by `=== true` and defaulted straight into a live send.
+  const dryRun     = body.dry_run !== false;
   const modeIn     = String(body.mode || "both").toLowerCase();
   const mode: GenMode = (modeIn === "rent" || modeIn === "usage") ? modeIn : "both";
+
+  // Whole-batch live rent sending is disabled on this synchronous endpoint.
+  // It dispatches real invoices to every eligible customer in one request with
+  // no per-job visibility, retry, or abort — that's what caused the incident
+  // above. The supported live-batch path is /api/billing/dispatch-run, which
+  // queues one job per contract. A live run here is only allowed when scoped
+  // to a single contract_id (the "bill this contract now" action — see
+  // contract-invoices-section.tsx) or when mode is usage-only (drafts only,
+  // never dispatched to a client from this route).
+  if (!dryRun && mode !== "usage" && !contractId) {
+    return NextResponse.json({
+      error: "Live batch rent generation is disabled on this endpoint — use /api/billing/dispatch-run instead, or pass dry_run: true to preview here.",
+    }, { status: 400 });
+  }
 
   const admin = createAdminClient();
   const opts  = { month, year, contractId, dryRun, mode };

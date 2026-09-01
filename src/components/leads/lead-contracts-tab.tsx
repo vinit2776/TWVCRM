@@ -180,13 +180,45 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                     const kycApproved = kyc?.approved ?? 0;
                     const kycTotal = kyc?.total ?? 0;
                     const kycFullyApproved = kycTotal > 0 && kycApproved >= kycTotal;
+                    // Renewal chain linkage — without this, a renewal draft looks like
+                    // an unrelated new contract, and a "Renewal in Progress" parent gives
+                    // no clue that a draft is already waiting to be activated. That gap is
+                    // exactly what let someone create a brand-new contract instead of
+                    // opening the pending draft (see TWV-C-0045 → TWV-C-0096 incident).
+                    const parent = c.parent_contract_id
+                      ? contracts.find((p) => p.id === c.parent_contract_id)
+                      : undefined;
+                    const renewalDraft = c.status === "renewal_in_progress"
+                      ? contracts
+                          .filter((child) => child.parent_contract_id === c.id && child.status !== "rejected")
+                          .sort((a, b) => (b.renewal_sequence ?? 0) - (a.renewal_sequence ?? 0))[0]
+                      : undefined;
                     return (
                     <tr key={c.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/contracts/${c.id}`)}>
-                      <td className="px-4 py-3 font-mono text-xs">{c.contract_number}</td>
+                      <td className="px-4 py-3 font-mono text-xs">
+                        {c.contract_number}
+                        {c.is_renewal && (
+                          <div className="mt-0.5 font-sans text-[11px] font-normal text-muted-foreground whitespace-nowrap">
+                            ↳ renewal of {parent?.contract_number ?? "…"}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
                           {CONTRACT_STATUS_LABELS[c.status]}
                         </Badge>
+                        {c.status === "renewal_in_progress" && (
+                          renewalDraft ? (
+                            <div className="mt-1 text-[11px] text-muted-foreground whitespace-nowrap">
+                              → draft {renewalDraft.contract_number} pending activation
+                            </div>
+                          ) : (
+                            <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-destructive whitespace-nowrap">
+                              <AlertTriangle className="h-3 w-3" />
+                              no renewal draft found — don&apos;t create a new contract, check Cancel Renewal
+                            </div>
+                          )
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell">
                         {kycTotal === 0 ? (
