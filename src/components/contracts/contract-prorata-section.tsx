@@ -319,7 +319,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <p className="text-xs text-muted-foreground">Admin waived pro-rata collection for this renewal.</p>
           )}
 
-          {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && (
+          {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && displayState !== "unsent" && (
             <Button
               size="sm"
               variant="ghost"
