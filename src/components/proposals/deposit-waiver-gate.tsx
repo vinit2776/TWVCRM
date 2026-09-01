@@ -13,10 +13,11 @@ interface Props {
   isVerified: boolean;
   requestedAt?: string | null;
   verifiedByName?: string | null;
+  internalNotes?: string | null;
   onVerified: () => void;
 }
 
-export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requestedAt, verifiedByName, onVerified }: Props) {
+export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requestedAt, verifiedByName, internalNotes, onVerified }: Props) {
   const [otp, setOtp] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -25,7 +26,7 @@ export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requ
   if (isVerified) {
     return (
       <Card className="border-green-200 bg-green-50">
-        <CardContent className="py-4">
+        <CardContent className="py-4 space-y-1.5">
           <div className="flex items-center gap-2 text-green-700">
             <CheckCircle2 className="h-5 w-5" />
             <p className="text-sm font-medium">
@@ -33,6 +34,9 @@ export function DepositWaiverGate({ proposalId, proposalNumber, isVerified, requ
               {verifiedByName && <span className="font-normal"> · by {verifiedByName}</span>}
             </p>
           </div>
+          {internalNotes && (
+            <p className="text-xs text-green-700/80 italic pl-7">{internalNotes}</p>
+          )}
         </CardContent>
       </Card>
     );

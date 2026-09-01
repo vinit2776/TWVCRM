@@ -1681,6 +1681,7 @@ export default function ProposalDetailPage({
                 isVerified={waiverVerified}
                 requestedAt={proposal.deposit_waiver_requested_at}
                 verifiedByName={proposal.deposit_waiver_verified_by_user?.full_name}
+                internalNotes={proposal.deposit_internal_notes}
                 onVerified={fetchProposal}
               />
             </div>
