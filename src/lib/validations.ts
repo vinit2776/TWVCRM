@@ -299,6 +299,8 @@ export const createContractSchema = z.object({
   notes: z.string().optional(),
   // Lead data to save back
   pan_number: z.string().optional(),
+  // Customer's own PO number for this contract, when they require one on every invoice
+  po_number: z.string().optional(),
 }).refine(
   (d) => !d.end_date || d.end_date >= d.start_date,
   { message: "End date must be on or after the start date", path: ["end_date"] }

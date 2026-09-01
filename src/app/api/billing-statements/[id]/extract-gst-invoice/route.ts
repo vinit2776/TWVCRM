@@ -32,7 +32,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id: _statementId } = await params;
+  const { id: statementId } = await params;
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -51,6 +51,13 @@ export async function POST(
   if (!(await isHandoffV2Enabled(adminClient))) {
     return NextResponse.json({ error: "Tally handoff v2 is not enabled" }, { status: 409 });
   }
+
+  const { data: statement } = await adminClient
+    .from("billing_statements")
+    .select("po_number")
+    .eq("id", statementId)
+    .maybeSingle();
+  const expectedPoNumber = statement?.po_number ?? null;
 
   // ── Parse multipart body ─────────────────────────────────────────────────
   let formData: FormData;
@@ -73,6 +80,7 @@ export async function POST(
       fields: {},
       raw_text_snippet: null,
       bridge_match: false,
+      po_number_found: null,
     };
     return NextResponse.json(response);
   }
@@ -85,7 +93,7 @@ export async function POST(
   const buffer = Buffer.from(await file.arrayBuffer());
 
   // ── Layer 1: PDF text parse ──────────────────────────────────────────────
-  const parsed = await extractFromPdf(buffer);
+  const parsed = await extractFromPdf(buffer, expectedPoNumber);
 
   // ── Layer 2: Bridge match cross-check ────────────────────────────────────
   // If we extracted an invoice number, see if the read-only bridge has
@@ -113,6 +121,7 @@ export async function POST(
     fields: parsed.fields,
     raw_text_snippet: parsed.raw_text_snippet,
     bridge_match: bridgeMatch,
+    po_number_found: parsed.po_number_found,
   };
 
   return NextResponse.json(response);

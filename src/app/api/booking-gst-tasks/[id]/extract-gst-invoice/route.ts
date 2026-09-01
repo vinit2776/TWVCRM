@@ -50,7 +50,7 @@ export async function POST(
 
   // Image files skip PDF extraction — return manual source
   if (file.type !== "application/pdf") {
-    const response: ExtractResponse = { source: "manual", fields: {}, raw_text_snippet: null, bridge_match: false };
+    const response: ExtractResponse = { source: "manual", fields: {}, raw_text_snippet: null, bridge_match: false, po_number_found: null };
     return NextResponse.json(response);
   }
 
@@ -76,6 +76,7 @@ export async function POST(
     fields: parsed.fields,
     raw_text_snippet: parsed.raw_text_snippet,
     bridge_match: bridgeMatch,
+    po_number_found: null,
   };
 
   return NextResponse.json(response);

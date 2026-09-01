@@ -18,6 +18,7 @@ export interface PdfExtractResult {
   fields: ExtractedFields;
   raw_text_snippet: string | null;
   source: AutofillSource;
+  po_number_found: boolean | null;
 }
 
 /**
@@ -99,12 +100,29 @@ function parseAmount(s: string): number | null {
 }
 
 /**
+ * True iff `expectedPoNumber` appears in `text`, ignoring case and treating
+ * runs of whitespace as equivalent — pdf-parse sometimes splits a PO number
+ * across a line break or collapses/expands spacing around it.
+ */
+function textContainsPoNumber(text: string, expectedPoNumber: string): boolean {
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "");
+  const needle = normalize(expectedPoNumber);
+  if (!needle) return false;
+  return normalize(text).includes(needle);
+}
+
+/**
  * Extract Tally invoice fields from a PDF buffer.
  *
  * Returns whatever it could find. Caller checks which fields are present and
  * decides whether to fall back to bridge match or accept partial autofill.
+ *
+ * `expectedPoNumber` — when the statement being uploaded against has a
+ * Customer PO Number on file, pass it in to get back `po_number_found`: a
+ * check against the *full* extracted text (not just the 200-char snippet)
+ * confirming accounts actually put it on the Tally invoice.
  */
-export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResult> {
+export async function extractFromPdf(pdfBuffer: Buffer, expectedPoNumber?: string | null): Promise<PdfExtractResult> {
   // pdf-parse's index.js has a debug-mode path that calls
   // fs.readFileSync('./test/data/05-versions-space.pdf') relative to CWD.
   // In Next.js (webpack/Turbopack), module.parent is unset so isDebugMode=true
@@ -124,6 +142,7 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResul
       fields: {},
       raw_text_snippet: null,
       source: "manual",
+      po_number_found: null,
     };
   }
 
@@ -132,6 +151,7 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResul
       fields: {},
       raw_text_snippet: null,
       source: "manual",
+      po_number_found: null,
     };
   }
 
@@ -149,6 +169,10 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResul
   const invoiceDate = parseDdMmmYyyy(text) ?? parseDdMmYyyy(text);
   const invoiceAmount = parseAmount(text);
 
+  const poNumberFound = expectedPoNumber?.trim()
+    ? textContainsPoNumber(text, expectedPoNumber)
+    : null;
+
   return {
     fields: {
       invoice_number: invoiceNumber ?? undefined,
@@ -160,5 +184,6 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResul
     },
     raw_text_snippet: text.slice(0, 200),
     source: "pdf_text",
+    po_number_found: poNumberFound,
   };
 }

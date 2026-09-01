@@ -1620,6 +1620,14 @@ const InboxRowItem = memo(function InboxRowItem({
               </span>
             );
           })()}
+          {row.po_number && (
+            <span
+              className="font-mono px-1.5 py-0.5 rounded bg-violet-50 text-violet-900 border border-violet-200 font-medium"
+              title="Customer PO Number — put this on the Tally invoice"
+            >
+              PO: {row.po_number}
+            </span>
+          )}
           {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin) ? (
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
               {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number ?? voBillParty(row)?.gstin}

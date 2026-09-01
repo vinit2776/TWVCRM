@@ -556,6 +556,10 @@ export interface Contract {
   // Used to map the customer to rows in the monthly print-server report.
   // Unique per location (NULL allowed; multiple NULLs OK).
   department_id?: string | null;
+  // Customer's annual purchase order number — printed on every Proforma/GST
+  // invoice for this contract when the customer requires it for their own
+  // invoice processing.
+  po_number?: string | null;
   terms_and_conditions?: string;
   notes?: string;
   // Membership agreement fields
@@ -991,6 +995,9 @@ export interface BillingStatement {
   hsn_sac_code?: string;
   buyer_gstin?: string;
   place_of_supply?: string;
+  // Customer PO number, snapshotted from contracts.po_number at generation
+  // time so an already-sent statement doesn't change if the contract's is edited later.
+  po_number?: string | null;
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
   emailed_at?: string;

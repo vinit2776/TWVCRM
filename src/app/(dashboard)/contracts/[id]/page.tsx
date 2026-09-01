@@ -107,6 +107,9 @@ export default function ContractDetailPage({
   const router = useRouter();
   const [contract, setContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editingPoNumber, setEditingPoNumber] = useState(false);
+  const [poNumberValue, setPoNumberValue] = useState("");
+  const [savingPoNumber, setSavingPoNumber] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
@@ -346,6 +349,24 @@ export default function ContractDetailPage({
       toast.error(err?.error || "Failed to terminate contract");
     }
     setTerminating(false);
+  };
+
+  const handleSavePoNumber = async () => {
+    setSavingPoNumber(true);
+    const res = await fetch(`/api/contracts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ po_number: poNumberValue.trim() || null }),
+    });
+    setSavingPoNumber(false);
+    if (res.ok) {
+      toast.success(poNumberValue.trim() ? "Customer PO number saved" : "Customer PO number cleared");
+      setEditingPoNumber(false);
+      fetchContract(false);
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to save");
+    }
   };
 
   const handleDownloadPDF = async () => {
@@ -1972,6 +1993,49 @@ export default function ContractDetailPage({
                   </div>
                 </>
               )}
+              <Separator />
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-muted-foreground shrink-0">Customer PO Number</span>
+                {editingPoNumber ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={poNumberValue}
+                      onChange={(e) => setPoNumberValue(e.target.value)}
+                      placeholder="e.g. 4500218763"
+                      className="h-7 text-sm w-32"
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && handleSavePoNumber()}
+                    />
+                    <Button size="sm" className="h-7 text-xs px-2" onClick={handleSavePoNumber} disabled={savingPoNumber}>
+                      {savingPoNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2"
+                      onClick={() => setEditingPoNumber(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    {contract.po_number ? (
+                      <Badge variant="secondary" className="font-mono">{contract.po_number}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">Not set</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-1.5"
+                      onClick={() => { setPoNumberValue(contract.po_number || ""); setEditingPoNumber(true); }}
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  </span>
+                )}
+              </div>
             </CardContent>
           </Card>
 
