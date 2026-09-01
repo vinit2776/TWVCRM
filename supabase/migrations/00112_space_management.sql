@@ -30,7 +30,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS location_floors (
-  id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                   UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   location_id          UUID NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
   name                 VARCHAR(255) NOT NULL,
   floor_number         INTEGER,                        -- -1=basement, 0=ground, 1,2...
@@ -101,7 +101,7 @@ CREATE POLICY "floors_delete" ON location_floors
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS space_units (
-  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id               UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   location_id      UUID NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
   floor_id         UUID REFERENCES location_floors(id) ON DELETE SET NULL,
   name             VARCHAR(255) NOT NULL,       -- "Cabin 03"
@@ -191,7 +191,7 @@ CREATE POLICY "space_units_delete" ON space_units
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS contract_space_allocations (
-  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id             UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   contract_id    UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
   space_unit_id  UUID NOT NULL REFERENCES space_units(id) ON DELETE CASCADE,
   allocated_at   TIMESTAMPTZ DEFAULT NOW(),
