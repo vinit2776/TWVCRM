@@ -199,6 +199,7 @@ export async function POST(
     periodStart: statement.period_start,
     periodEnd: statement.period_end,
     contractNumber: contract.contract_number,
+    poNumber: statement.po_number,
     lineItems,
     subtotal,
     cgst,

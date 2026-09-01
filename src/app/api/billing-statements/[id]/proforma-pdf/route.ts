@@ -209,6 +209,7 @@ export async function GET(
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,
     contractNumber: partyRef,
+    poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
     cgst,

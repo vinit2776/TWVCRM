@@ -212,6 +212,7 @@ export async function POST(request: NextRequest) {
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,
       notes: d.notes,
+      po_number: d.po_number?.trim() || null,
       location_id: d.location_id || proposalLocationId || null,
       // Membership agreement fields
       workspace_description: d.workspace_description,

@@ -68,11 +68,15 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [autofillSource, setAutofillSource] = useState<AutofillSource | null>(null);
   const [bridgeMatched, setBridgeMatched] = useState(false);
   const [autofilledFields, setAutofilledFields] = useState<Set<string>>(new Set());
+  // Null = not checked yet (no PO number expected, or PDF text couldn't be
+  // read at all). Only meaningful once autofillSource is set.
+  const [poNumberFound, setPoNumberFound] = useState<boolean | null>(null);
 
   async function runAutofill(file: File) {
     setExtracting(true);
     setAutofillSource(null);
     setBridgeMatched(false);
+    setPoNumberFound(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -86,6 +90,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         return;
       }
       const data = (await res.json()) as ExtractResponse;
+      setPoNumberFound(data.po_number_found);
       const filled = new Set<string>();
       if (data.fields.invoice_number) {
         setInvoiceNumber(data.fields.invoice_number);
@@ -245,6 +250,19 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           )}
         </div>
       </div>
+
+      {row.po_number && (
+        <div className="rounded border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden />
+          <span>
+            <span className="font-semibold">Customer PO Number: </span>
+            <span className="font-mono">{row.po_number}</span>
+            <span className="block text-xs text-violet-800 mt-0.5">
+              This customer requires their PO number on the invoice — put it on the Tally invoice before issuing.
+            </span>
+          </span>
+        </div>
+      )}
 
       {/* Issuance context: everything accounts needs to re-create the invoice in Tally. */}
       <div className="rounded border bg-background p-3 text-xs space-y-2">
@@ -454,6 +472,26 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
               </span>
             </>
           )}
+        </div>
+      )}
+
+      {/* PO number verification — only meaningful once a PDF was read (autofillSource
+          set) and the statement actually has a PO number to check for. */}
+      {row.po_number && autofillSource && autofillSource !== "manual" && poNumberFound !== null && (
+        <div
+          className={`text-xs rounded border p-2 flex items-start gap-1.5 ${
+            poNumberFound
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-amber-50 border-amber-200 text-amber-900"
+          }`}
+        >
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
+          <span>
+            {poNumberFound
+              ? <>PO number <span className="font-mono">{row.po_number}</span> found on the uploaded invoice.</>
+              : <>PO number <span className="font-mono">{row.po_number}</span> was NOT found on the uploaded invoice — double-check it&apos;s printed on the Tally invoice before sending.</>
+            }
+          </span>
         </div>
       )}
 

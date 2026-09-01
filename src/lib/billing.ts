@@ -637,7 +637,7 @@ export async function generateMonthlyStatements(
     .select(`
       id, contract_number, title, status, total_amount, subtotal, tax_percentage, tax_amount,
       billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
-      location_id, lead_id,
+      location_id, lead_id, po_number,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress", "renewed"])
@@ -1000,6 +1000,7 @@ export async function generateMonthlyStatements(
           is_interstate: isInterstate,
           buyer_gstin: lead?.gst_number || null,
           place_of_supply: isInterstate ? (lead?.state || "Other") : "Tamil Nadu",
+          po_number: contract.po_number || null,
           line_items: lineItems,
           prepaid_month: prepaid.month,
           prepaid_year: prepaid.year,
@@ -1132,7 +1133,7 @@ export async function generateRentProformas(
     .select(`
       id, contract_number, title, status, total_amount, subtotal, tax_percentage,
       billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
-      location_id, lead_id, billing_mode,
+      location_id, lead_id, billing_mode, po_number,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress", "renewed"])
@@ -1448,6 +1449,7 @@ export async function generateRentProformas(
           is_interstate:       false,
           buyer_gstin:         lead?.gst_number || null,
           place_of_supply:     "Tamil Nadu",
+          po_number:           contract.po_number || null,
           line_items:          lineItems,
           prepaid_month:       prepaid.month,
           prepaid_year:        prepaid.year,
@@ -1581,7 +1583,7 @@ export async function generateUsageStatements(
     .from("contracts")
     .select(`
       id, contract_number, total_amount, subtotal, tax_percentage,
-      billing_cycle, start_date, end_date, lead_id,
+      billing_cycle, start_date, end_date, lead_id, po_number,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress", "renewed"])
@@ -1895,6 +1897,7 @@ export async function generateUsageStatements(
           is_interstate:        isInterstate,
           buyer_gstin:          lead?.gst_number || null,
           place_of_supply:      isInterstate ? (lead?.state || "Other") : "Tamil Nadu",
+          po_number:            contract.po_number || null,
           line_items:           lineItems,
           prepaid_month:        null,
           prepaid_year:         null,

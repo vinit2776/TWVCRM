@@ -169,6 +169,8 @@ export interface GstInvoiceData {
   periodStart: string;
   periodEnd: string;
   contractNumber: string;
+  /** Customer's own PO number for this contract — printed on both the proforma and tax invoice when set. */
+  poNumber?: string | null;
   /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
   dueDate?: string;
   // Line items
@@ -236,23 +238,33 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
+  let detailY = 32;
   if (isProforma) {
     doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
     doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    if (data.poNumber) {
+      detailY += 5;
+      doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
+    }
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
   } else {
     doc.text(`Invoice No: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
     doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    if (data.poNumber) {
+      detailY += 5;
+      doc.text(`Customer PO Number: ${data.poNumber}`, pageWidth - 14, detailY, { align: "right" });
+    }
 
     // e-Invoice: IRN + IRP QR code (B2B mandatory per GST rules)
     if (data.irn) {
+      detailY += 5;
       doc.setFontSize(6.5);
       doc.setTextColor(100, 100, 100);
       const irnShort = data.irn.length > 40 ? data.irn.slice(0, 40) + "…" : data.irn;
-      doc.text(`IRN: ${irnShort}`, pageWidth - 14, 37, { align: "right" });
+      doc.text(`IRN: ${irnShort}`, pageWidth - 14, detailY, { align: "right" });
     }
     if (data.irnQrBase64) {
       try {
@@ -270,7 +282,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     }
   }
 
-  y = data.irn ? 42 : 38;
+  y = detailY + (detailY > 32 ? 5 : 6);
 
   // ── Seller / Buyer box ──
   doc.setDrawColor(200, 200, 200);
