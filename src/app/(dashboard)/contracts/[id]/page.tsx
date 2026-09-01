@@ -82,6 +82,7 @@ import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
+  CancelRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
@@ -155,6 +156,7 @@ export default function ContractDetailPage({
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [cancelRenewalDialogOpen, setCancelRenewalDialogOpen] = useState(false);
   const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [renewalDraft, setRenewalDraft] = useState<any>(null);
@@ -1884,6 +1886,17 @@ export default function ContractDetailPage({
                         <span className="text-amber-600">→</span>
                       </Link>
                     )}
+                    {renewalDraft?.status === "draft" && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setCancelRenewalDialogOpen(true)}
+                      >
+                        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                        Cancel Renewal
+                      </Button>
+                    )}
                   </div>
                 )}
 
@@ -2693,6 +2706,15 @@ export default function ContractDetailPage({
         open={declineDialogOpen}
         onOpenChange={setDeclineDialogOpen}
         contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Cancel Renewal Dialog */}
+      <CancelRenewalDialog
+        open={cancelRenewalDialogOpen}
+        onOpenChange={setCancelRenewalDialogOpen}
+        contract={contract}
+        renewalDraft={renewalDraft}
         onSuccess={() => fetchContract(false)}
       />
 
