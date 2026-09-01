@@ -16,12 +16,19 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle, CalendarPlus } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { unbilledMonths } from "@/lib/billing-months";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
 
 interface Statement {
   id: string;
   statement_number: string;
+  contract_id: string | null;
+  billed_on_behalf_of_contract_id: string | null;
+  statement_type: string;
+  prepaid_month: number | null;
+  prepaid_year: number | null;
+  voided_at: string | null;
   period_start: string;
   period_end: string;
   total_amount: number;
@@ -92,6 +99,9 @@ interface ContractInvoicesSectionProps {
   prorataPaymentReceivedAt?: string;
   billingCycle?: string | null;
   nextBillingDate?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  createdAt?: string | null;
 }
 
 /** One rent line the upcoming-cycle preview would bill. */
@@ -114,6 +124,8 @@ interface CyclePreview {
 
 const BILLING_ROLES = ["admin", "manager", "accounts"];
 
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 export function ContractInvoicesSection({
   contractId,
   billingMode,
@@ -124,6 +136,9 @@ export function ContractInvoicesSection({
   prorataPaymentReceivedAt,
   billingCycle,
   nextBillingDate,
+  startDate,
+  endDate,
+  createdAt,
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -146,8 +161,11 @@ export function ContractInvoicesSection({
     setCurrentMode(billingMode || 'proforma_first');
   }, [billingMode]);
 
+  // Chain-wide: the unbilled-month check needs the parent's statements too (a
+  // renewal's opening months are billed there while it awaits activation). The
+  // table below still lists only this contract's own statements.
   const refreshStatements = () => {
-    return fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
+    return fetch(`/api/billing-statements?contract_id=${contractId}&include_chain=1&limit=200`)
       .then((r) => r.json())
       .then((d) => setStatements((d.data || []) as Statement[]))
       .catch(() => setStatements([]));
@@ -176,19 +194,26 @@ export function ContractInvoicesSection({
       .catch(() => setProrataStatement(null));
   }, [proposalId]);
 
+  // Only this contract's own statements belong in the invoice table — an
+  // ancestor's rows are fetched for the coverage check, not for display.
+  const ownStatements = useMemo(
+    () => statements.filter((s) => !s.contract_id || s.contract_id === contractId),
+    [statements, contractId],
+  );
+
   // Proformas still open under the old Proforma First flow — switching to
   // GST Direct only affects future cycles, so these are left behind unless
   // resolved via the GST override (convert-to-gst-early).
   const pendingUnpaidStatements = useMemo(
     () =>
-      statements.filter(
+      ownStatements.filter(
         (s) =>
           s.status === "finalized" &&
           s.payment_status !== "paid" &&
           !s.gst_invoice_number &&
           !s.pi_cancelled_at
       ),
-    [statements]
+    [ownStatements]
   );
 
   const applyModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
@@ -243,6 +268,19 @@ export function ContractInvoicesSection({
       setConvertingId(null);
     }
   };
+
+  // Months already past their billing run with no rent statement against them.
+  // Surfaced rather than auto-billed: rent is sometimes invoiced outside the
+  // CRM, so this is a prompt to check, not proof of lost revenue.
+  const missedMonths = useMemo(() => {
+    if (!startDate || !endDate || !createdAt) return [];
+    return unbilledMonths({
+      startDate, endDate, createdAt,
+      today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      statements,
+      contractId,
+    });
+  }, [startDate, endDate, createdAt, statements, contractId]);
 
   // A rent run bills the month AFTER the month it targets, so to bill the cycle
   // this contract is actually due for, target the month before its billing
@@ -426,6 +464,28 @@ export function ContractInvoicesSection({
         </div>
       )}
 
+      {/* Months already past their billing run with nothing charged against
+          them. Deliberately a prompt, not an alarm — rent is sometimes
+          invoiced outside the CRM, so a person decides what this means. */}
+      {missedMonths.length > 0 && (
+        <div className="px-6 pb-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-medium">
+                  No rent invoiced for {missedMonths.map((m) => MONTH_LABELS[m.month - 1] + " " + m.year).join(", ")}
+                </span>
+                <p className="text-xs mt-1 text-amber-800">
+                  These months are past their billing run. If the rent was collected outside the CRM,
+                  no action is needed — otherwise raise it before it ages further.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Billing mode toggle */}
       {canEditMode && (
         <div className="px-6 pb-3">
@@ -469,7 +529,7 @@ export function ContractInvoicesSection({
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : statements.length === 0 ? (
+        ) : ownStatements.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">
             No invoices generated yet. Statements are created automatically each month after contract activation.
           </p>
@@ -488,7 +548,7 @@ export function ContractInvoicesSection({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {statements.map((s) => (
+                {ownStatements.map((s) => (
                   <tr key={s.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}

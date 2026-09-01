@@ -4,7 +4,7 @@ import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { getProrataPaidDate } from "@/lib/proposals";
-import { firstBillingAnchor } from "@/lib/billing";
+import { firstBillingAnchor } from "@/lib/billing-months";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();

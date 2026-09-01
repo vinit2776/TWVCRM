@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { cycleMonthWindows, firstBillingAnchor } from "../billing";
+import { cycleMonthWindows } from "../billing";
+import { firstBillingAnchor } from "../billing-months";
 
 /**
  * cycleMonthWindows drives advance (quarterly / half-yearly / yearly) rent
