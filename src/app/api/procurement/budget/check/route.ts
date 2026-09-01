@@ -28,8 +28,10 @@ export async function GET(request: NextRequest) {
   const expenditureType = searchParams.get("expenditure_type") ?? "operational";
   const mrAmount = parseFloat(searchParams.get("amount") ?? "0");
   const locationId = searchParams.get("location_id");
+  const companyId = searchParams.get("company_id");
 
   if (!department) return NextResponse.json({ error: "department required" }, { status: 400 });
+  if (!companyId) return NextResponse.json({ error: "company_id required" }, { status: 400 });
 
   // ── AMC annual budget check ──────────────────────────────────────────────
   if (expenditureType === "amc") {
@@ -39,6 +41,7 @@ export async function GET(request: NextRequest) {
     const { data: budget } = await supabase
       .from("department_budgets")
       .select("monthly_budget, is_active, notes")
+      .eq("company_id", companyId)
       .eq("department", "amc")
       .eq("budget_period", "annual")
       .eq("financial_year", currentFY)
@@ -54,12 +57,13 @@ export async function GET(request: NextRequest) {
     // Committed: approved and beyond, excluding requests whose POs were all
     // cancelled. Shared with the AMC register so the two cannot show different
     // numbers for the same thing.
-    const committedTotal = await computeAmcCommitted(supabase, fyStart, fyEnd);
+    const committedTotal = await computeAmcCommitted(supabase, fyStart, fyEnd, companyId);
 
     // Provisional: submitted pending approval
     const { data: provisional } = await supabase
       .from("purchase_requests")
       .select("total_estimated_amount")
+      .eq("company_id", companyId)
       .eq("expenditure_type", "amc")
       .gte("created_at", fyStart)
       .lte("created_at", fyEnd)
@@ -95,6 +99,7 @@ export async function GET(request: NextRequest) {
   const { data: budget } = await supabase
     .from("department_budgets")
     .select("monthly_budget, is_active, notes")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("budget_period", "monthly")
     .is("location_id", null)
@@ -112,6 +117,7 @@ export async function GET(request: NextRequest) {
   const { data: committed, error: committedError } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
@@ -122,6 +128,7 @@ export async function GET(request: NextRequest) {
   const { data: provisional } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
+    .eq("company_id", companyId)
     .eq("department", department)
     .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
@@ -141,6 +148,7 @@ export async function GET(request: NextRequest) {
     const { data: centerBudget } = await supabase
       .from("department_budgets")
       .select("monthly_budget, is_active")
+      .eq("company_id", companyId)
       .eq("department", department)
       .eq("budget_period", "monthly")
       .eq("location_id", locationId)
@@ -153,6 +161,7 @@ export async function GET(request: NextRequest) {
       const { data: centerCommitted } = await supabase
         .from("purchase_requests")
         .select("total_estimated_amount")
+        .eq("company_id", companyId)
         .eq("department", department)
         .eq("location_id", locationId)
         .eq("expenditure_type", "operational")

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   ClipboardList, Phone, Mail, AlertTriangle, CheckCircle2,
   XCircle, Clock, Loader2, Search, ChevronRight, RefreshCw,
@@ -18,7 +19,7 @@ import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { ServicePoBillingCycle } from "@/lib/constants";
 import { billingProgress, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
-import type { AmcStatus } from "@/types";
+import type { AmcStatus, Company } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -164,11 +165,15 @@ type AmcBudget = {
 
 export default function AmcRegisterPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const canSeeBudget = ["admin", "manager"].includes(user?.role ?? "");
   const [rows, setRows] = useState<AmcRow[]>([]);
   const [budget, setBudget] = useState<AmcBudget | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<AmcStatus | "all">("all");
   const [search, setSearch] = useState("");
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyId, setCompanyId] = useState<string>(""); // "" = all companies
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [eventsCache, setEventsCache] = useState<Map<string, ServiceEvent[]>>(new Map());
   const [eventsLoading, setEventsLoading] = useState<Set<string>>(new Set());
@@ -198,18 +203,30 @@ export default function AmcRegisterPage() {
     try {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("amc_status", statusFilter);
+      if (companyId) params.set("company_id", companyId);
       const res = await fetch(`/api/procurement/amc?${params}`);
       const json = await res.json();
       setRows(json.data ?? []);
-      if (json.budget) setBudget(json.budget);
+      // budgetSummary is only computed server-side when company_id is set —
+      // clear any stale figure from a previous selection rather than keep
+      // showing it once "All companies" is chosen.
+      setBudget(json.budget ?? null);
     } catch {
       toast.error("Failed to load AMC contracts");
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, companyId]);
 
   useEffect(() => { fetchAmc(); }, [fetchAmc]);
+
+  // Companies — for the optional company filter, default is "All companies".
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((j) => setCompanies(j.data || []))
+      .catch(() => setCompanies([]));
+  }, []);
 
   const filtered = rows.filter((r) => {
     if (!search) return true;
@@ -245,6 +262,15 @@ export default function AmcRegisterPage() {
       </div>
 
       {/* ── AMC Annual Budget Banner ─────────────────────────────────────── */}
+      {/* A combined AMC budget across two separate legal entities doesn't make
+          sense, so the server only computes budgetSummary when a single
+          company is selected — this fallback replaces the banner rather than
+          rendering blank while budget is null and no company is picked. */}
+      {!budget && !companyId && canSeeBudget && (
+        <div className="rounded-xl border border-dashed border-purple-200 bg-purple-50/30 px-4 py-3 text-sm text-purple-800">
+          Select a company below to see its AMC annual budget — budgets are tracked per company.
+        </div>
+      )}
       {budget && (
         <div className={`rounded-xl border px-4 py-3 ${budget.is_over_budget ? "border-red-200 bg-red-50" : "border-purple-200 bg-purple-50/50"}`}>
           <div className="flex items-center justify-between gap-3 mb-2">
@@ -336,15 +362,28 @@ export default function AmcRegisterPage() {
         })}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search by vendor, PO, or item..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9"
-        />
+      {/* Search + company filter */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative max-w-sm flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by vendor, PO, or item..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Select value={companyId || "__all__"} onValueChange={(v) => setCompanyId(v === "__all__" ? "" : v)}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="All companies" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All companies</SelectItem>
+            {companies.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* List */}

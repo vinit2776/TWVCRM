@@ -19,7 +19,7 @@ import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, getMonthDateRange } from "@/lib/utils";
-import type { PurchaseRequest } from "@/types";
+import type { PurchaseRequest, Company } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -99,6 +99,8 @@ function PurchaseRequestsContent() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState(() => urlParams?.get("status") ?? "");
   const [deptFilter, setDeptFilter] = useState(() => urlParams?.get("department") ?? "");
+  const [companyFilter, setCompanyFilter] = useState(() => urlParams?.get("company_id") ?? "");
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   // Hidden filter set from URL (budget drill-through) — not exposed in the UI
@@ -146,6 +148,14 @@ function PurchaseRequestsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Fetch companies once for the company filter dropdown
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((res) => res.json())
+      .then((json) => setCompanies(json.data || []))
+      .catch(() => { /* non-fatal — company filter just stays empty */ });
+  }, []);
+
   // Debounce search: wait 600 ms and require ≥3 chars before querying
   useEffect(() => {
     const trimmed = searchInput.trim();
@@ -164,6 +174,7 @@ function PurchaseRequestsContent() {
     const params = new URLSearchParams({ page: String(page), limit: "25" });
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
+    if (companyFilter) params.set("company_id", companyFilter);
     if (search) params.set("search", search);
     if (flatFromDate) params.set("from_date", flatFromDate);
     if (flatToDate) params.set("to_date", flatToDate);
@@ -175,18 +186,19 @@ function PurchaseRequestsContent() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, deptFilter, search, flatFromDate, flatToDate, expenditureType]);
+  }, [page, statusFilter, deptFilter, companyFilter, search, flatFromDate, flatToDate, expenditureType]);
 
   const fetchAllForRange = useCallback(async (from: string, to: string): Promise<PurchaseRequest[]> => {
     const params = new URLSearchParams({ all: "1", from_date: from, to_date: to });
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
+    if (companyFilter) params.set("company_id", companyFilter);
     if (expenditureType) params.set("expenditure_type", expenditureType);
     const res = await fetch(`/api/procurement/requests?${params}`);
     if (!res.ok) return [];
     const json = await res.json();
     return json.data || [];
-  }, [statusFilter, deptFilter, expenditureType]);
+  }, [statusFilter, deptFilter, companyFilter, expenditureType]);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +332,20 @@ function PurchaseRequestsContent() {
               ))}
             </SelectContent>
           </Select>
+          <Select
+            value={companyFilter}
+            onValueChange={(val) => { setCompanyFilter(val === "all" ? "" : val); setPage(1); }}
+          >
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button onClick={() => router.push("/procurement/requests/new")}>
             <Plus className="h-4 w-4 mr-1" /> New Request
           </Button>
@@ -411,9 +437,14 @@ function PurchaseRequestsContent() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
-                        {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
-                      </Badge>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
+                          {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {pr.companies?.brand_name ?? "—"}
+                        </Badge>
+                      </div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                       {pr.locations?.name ?? "—"}
@@ -563,9 +594,14 @@ function PurchaseRequestsContent() {
                         </Link>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
-                          {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
-                        </Badge>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
+                            {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
+                          </Badge>
+                          <Badge variant="outline" className="text-xs">
+                            {pr.companies?.brand_name ?? "—"}
+                          </Badge>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>

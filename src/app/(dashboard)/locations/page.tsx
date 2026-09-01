@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Plus, Pencil } from "lucide-react";
@@ -12,13 +12,26 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
-import type { Location } from "@/types";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import type { Company, Location } from "@/types";
 
 export default function LocationsPage() {
   const { locations, loading, refetch } = useLocations(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editLocation, setEditLocation] = useState<Location | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
   const router = useRouter();
+
+  useEffect(() => {
+    fetch("/api/companies").then((r) => r.json()).then((j) => setCompanies(j.data || []));
+  }, []);
+
+  const filteredLocations = companyFilter === "all"
+    ? locations
+    : locations.filter((loc) => loc.company_id === companyFilter);
 
   const handleEdit = (e: React.MouseEvent, loc: Location) => {
     e.stopPropagation();
@@ -39,13 +52,26 @@ export default function LocationsPage() {
           <h1 className="text-2xl font-bold">Locations</h1>
           <p className="text-sm text-muted-foreground">Manage your coworking centers</p>
         </div>
-        <Button onClick={handleAdd}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Location
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={companyFilter} onValueChange={setCompanyFilter}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All companies</SelectItem>
+              {companies.map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.brand_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button onClick={handleAdd}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Location
+          </Button>
+        </div>
       </div>
 
-      {loading ? <TableSkeleton rows={4} /> : locations.length === 0 ? (
+      {loading ? <TableSkeleton rows={4} /> : filteredLocations.length === 0 ? (
         <EmptyState
           icon={MapPin}
           title="No locations yet"
@@ -60,6 +86,7 @@ export default function LocationsPage() {
               <tr className="border-b bg-muted/50">
                 <th className="px-4 py-3 text-left font-medium">Name</th>
                 <th className="px-4 py-3 text-left font-medium">Code</th>
+                <th className="px-4 py-3 text-left font-medium">Company</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">City</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Address</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Floor In-Charges</th>
@@ -68,7 +95,7 @@ export default function LocationsPage() {
               </tr>
             </thead>
             <tbody>
-              {locations.map((loc) => (
+              {filteredLocations.map((loc) => (
                 <tr
                   key={loc.id}
                   className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
@@ -91,6 +118,9 @@ export default function LocationsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{loc.code}</code>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge variant="outline">{loc.companies?.brand_name ?? "—"}</Badge>
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">{loc.city || "—"}</td>
                   <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground max-w-[200px] truncate">

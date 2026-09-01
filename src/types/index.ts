@@ -9,10 +9,35 @@ export interface LocationCapacityConfig {
   conference_room?: number; // Large conference room seats
 }
 
+// ==========================================
+// Company Types (multi-company procurement)
+// ==========================================
+
+export interface Company {
+  id: string;
+  name: string;
+  brand_name: string;
+  gstin?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  pr_prefix: string;
+  po_prefix: string;
+  bill_prefix: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Location {
   id: string;
   name: string;
   code: string;
+  company_id: string;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   address?: string;
   city?: string;
   state?: string;
@@ -2329,6 +2354,7 @@ export interface PurchaseRequestItem {
 export interface PurchaseRequest {
   id: string;
   pr_number: string;
+  company_id: string;
   department: ProcurementDepartment;
   location_id?: string;
   status: PrStatus;
@@ -2363,6 +2389,7 @@ export interface PurchaseRequest {
   billable_contract_id?: string | null;
   // Joined fields
   locations?: { id: string; name: string } | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   requester?: { id: string; full_name?: string; email?: string } | null;
   approver?: { id: string; full_name?: string; email?: string } | null;
   purchase_request_items?: PurchaseRequestItem[];
@@ -2510,6 +2537,7 @@ export interface AmcServiceEvent {
 export interface PurchaseOrder {
   id: string;
   po_number: string;
+  company_id: string;
   po_type: "goods" | "service";
   pr_id?: string;
   vendor_id: string;
@@ -2558,6 +2586,7 @@ export interface PurchaseOrder {
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   locations?: { id: string; name: string } | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name" | "gstin" | "address" | "city" | "state" | "pincode" | "phone" | "email"> | null;
   orderer?: { id: string; full_name?: string; email?: string } | null;
   purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at" | "expenditure_type"> & {
     approver?: { id: string; full_name?: string; email?: string } | null;
@@ -2572,6 +2601,7 @@ export interface PurchaseOrder {
 export interface VendorBill {
   id: string;
   bill_number: string;
+  company_id: string;
   po_id?: string;
   vendor_id: string;
   invoice_number?: string;
@@ -2619,6 +2649,7 @@ export interface VendorBill {
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  companies?: Pick<Company, "id" | "name" | "brand_name"> | null;
   electricity_bill?: {
     bill_month: number;
     bill_year: number;
