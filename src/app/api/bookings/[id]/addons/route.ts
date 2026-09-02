@@ -153,6 +153,17 @@ export async function POST(
     if (!addon_type || !(VALID_TYPES as readonly string[]).includes(addon_type)) {
       return NextResponse.json({ error: `Invalid addon_type at entry ${i + 1}` }, { status: 400 });
     }
+    // Extended-time charges only make sense once the customer has actually
+    // used extra time in the room. Before check-in, the booking's own
+    // duration is still adjustable via Reschedule — which already recomputes
+    // the full charge for the new time slot, so an extended_time addon on
+    // top of that double-bills the same hours (see TWV-B-0219).
+    if (addon_type === "extended_time" && booking.status !== "checked_in") {
+      return NextResponse.json(
+        { error: "Extended-time charges can only be added after check-in. To change the booking's time before check-in, use Reschedule instead — it already recalculates the full charge for the new duration." },
+        { status: 400 },
+      );
+    }
     if (!description || typeof description !== "string" || !description.trim()) {
       return NextResponse.json({ error: `Description required at entry ${i + 1}` }, { status: 400 });
     }

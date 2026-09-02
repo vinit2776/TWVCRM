@@ -284,7 +284,7 @@ function BookingTable({
                         {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
                       </Badge>
                     </td>
-                    <td className="px-4 py-2.5 text-right font-medium text-xs hidden sm:table-cell">{formatCurrency(b.total_amount)}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-xs hidden sm:table-cell">{formatCurrency(b.total_amount_with_gst || b.total_amount + (b.gst_amount || 0))}</td>
                     <td className="px-4 py-2.5 hidden lg:table-cell">
                       <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_STATUS_COLORS[b.payment_status]}`}>
                         {BOOKING_PAYMENT_STATUS_LABELS[b.payment_status]}
@@ -769,7 +769,7 @@ export default function BookingsPage() {
                                 {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
                               </Badge>
                             </td>
-                            <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount)}</td>
+                            <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount_with_gst || b.total_amount + (b.gst_amount || 0))}</td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-1">
                                 <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
