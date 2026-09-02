@@ -5,10 +5,21 @@ import { sendPushToUsers } from "@/lib/push";
 import { notifyClaimSlaBreached } from "@/lib/facility-notifications";
 import { withCronHealth } from "@/lib/cron-ping";
 
+const OPEN_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+const NAG_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const ISSUE_SELECT = `
+      id, issue_number, title, priority, sla_target_at, assigned_to,
+      category_id,
+      assignee:users!facility_issues_assigned_to_fkey(id, full_name, email)
+    `;
+
 /**
  * GET /api/cron/facility-sla-check
  * Runs every 6 hours (see vercel.json). Marks overdue issues as SLA-breached
- * and sends one digest email/push per recipient (not per issue).
+ * and sends one digest email/push per recipient (not per issue). Tickets that
+ * are still open past their SLA get re-included in this alert once per day
+ * (via sla_breach_last_notified_at) rather than only at the moment they first
+ * breach — otherwise an old breach that nobody acts on goes silent forever.
  */
 async function handler(request: NextRequest) {
   const authHeader = request.headers.get("Authorization");
@@ -18,36 +29,54 @@ async function handler(request: NextRequest) {
 
   const supabase = createAdminClient();
   const now = new Date().toISOString();
+  const nagCutoff = new Date(Date.now() - NAG_INTERVAL_MS).toISOString();
 
-  // Find all open issues that have breached their SLA but haven't been marked yet
-  const { data: issues, error } = await supabase
+  // Issues breaching their SLA for the first time this run.
+  const { data: newlyBreached, error: newError } = await supabase
     .from("facility_issues")
-    .select(`
-      id, issue_number, title, priority, sla_target_at, assigned_to,
-      category_id,
-      assignee:users!facility_issues_assigned_to_fkey(id, full_name, email)
-    `)
-    .in("status", ["new", "acknowledged", "in_progress", "reopened"])
+    .select(ISSUE_SELECT)
+    .in("status", OPEN_STATUSES)
     .eq("sla_breached", false)
     .not("sla_target_at", "is", null)
     .lt("sla_target_at", now);
 
-  if (error) {
-    console.error("[sla-check] query failed:", error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (newError) {
+    console.error("[sla-check] query failed:", newError.message);
+    return NextResponse.json({ error: newError.message }, { status: 500 });
   }
 
-  if (!issues || issues.length === 0) {
+  // Issues that breached previously, are still open, and haven't been
+  // re-nagged in the last 24h.
+  const { data: staleBreached, error: staleError } = await supabase
+    .from("facility_issues")
+    .select(ISSUE_SELECT)
+    .in("status", OPEN_STATUSES)
+    .eq("sla_breached", true)
+    .or(`sla_breach_last_notified_at.is.null,sla_breach_last_notified_at.lt.${nagCutoff}`);
+
+  if (staleError) {
+    console.error("[sla-check] stale query failed:", staleError.message);
+    return NextResponse.json({ error: staleError.message }, { status: 500 });
+  }
+
+  const issues = [...(newlyBreached || []), ...(staleBreached || [])];
+
+  if (issues.length === 0) {
     return NextResponse.json({ checked: 0, breached: 0 });
   }
 
-  // Mark all as breached in one update
+  // Mark newly-breached issues as breached, and stamp every alerted issue
+  // (new or re-nagged) with the notification time so the 24h throttle works.
   const issueIds = issues.map((i) => i.id as string);
-  const { error: updateError } = await supabase
-    .from("facility_issues")
-    .update({ sla_breached: true })
-    .in("id", issueIds);
+  const newlyBreachedIds = (newlyBreached || []).map((i) => i.id as string);
+  const [breachUpdate, nagUpdate] = await Promise.all([
+    newlyBreachedIds.length > 0
+      ? supabase.from("facility_issues").update({ sla_breached: true }).in("id", newlyBreachedIds)
+      : Promise.resolve({ error: null }),
+    supabase.from("facility_issues").update({ sla_breach_last_notified_at: now }).in("id", issueIds),
+  ]);
 
+  const updateError = breachUpdate.error || nagUpdate.error;
   if (updateError) {
     console.error("[sla-check] update failed:", updateError.message);
     return NextResponse.json({ error: updateError.message }, { status: 500 });
@@ -161,7 +190,7 @@ async function handler(request: NextRequest) {
     })
   );
 
-  console.log(`[sla-check] marked ${issueIds.length} issues, notified ${assigneeMap.size} recipients`);
+  console.log(`[sla-check] ${newlyBreachedIds.length} newly breached, ${issueIds.length - newlyBreachedIds.length} re-nagged, notified ${assigneeMap.size} recipients`);
 
   // ── Claim SLA breach check ────────────────────────────────────────────────
   // Find unowned open tickets that have exceeded their time-to-claim deadline
@@ -192,7 +221,12 @@ async function handler(request: NextRequest) {
     console.log(`[sla-check] claim SLA: marked ${unclaimedIds.length} unclaimed breaches`);
   }
 
-  return NextResponse.json({ checked: issues.length, breached: issueIds.length, claim_breached: unclaimedBreached?.length ?? 0 });
+  return NextResponse.json({
+    checked: issues.length,
+    newly_breached: newlyBreachedIds.length,
+    re_nagged: issueIds.length - newlyBreachedIds.length,
+    claim_breached: unclaimedBreached?.length ?? 0,
+  });
 }
 
 export const GET = withCronHealth("cron/facility-sla-check", handler);

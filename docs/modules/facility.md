@@ -287,7 +287,8 @@ Per-category checklist items that are copied into service events. Optionally sco
 | `resolved_at` | TIMESTAMPTZ | nullable |
 | `closed_at` | TIMESTAMPTZ | nullable |
 | `sla_target_at` | TIMESTAMPTZ | deadline computed from priority + category SLA hours at report time |
-| `sla_breached` | BOOLEAN DEFAULT false | set to true at resolve time if resolved_at > sla_target_at |
+| `sla_breached` | BOOLEAN DEFAULT false | set to true at resolve time if resolved_at > sla_target_at; also set by the `facility-sla-check` cron for still-open issues past `sla_target_at` |
+| `sla_breach_last_notified_at` | TIMESTAMPTZ | nullable — last time `facility-sla-check` included this issue in an SLA-breach alert; throttles the daily re-nag on old breaches (migration 00544) |
 | `resolution_root_cause` | `facility_root_cause` | nullable |
 | `resolution_notes` | TEXT | nullable |
 | `resolution_time_minutes` | INTEGER | `acknowledged_at` → `resolved_at` in minutes |
@@ -571,13 +572,13 @@ It notifies all active admins so they can update the category routing.
 ### SLA Breach Digest (Cron)
 
 `GET /api/cron/facility-sla-check` runs every 6h (UTC: `0 */6 * * *`). It:
-1. Queries all open issues with `sla_breached = false AND sla_target_at < now()`
-2. Bulk-sets `sla_breached = true` on matched issues
+1. Queries all open issues with `sla_breached = false AND sla_target_at < now()` (newly breached) **and** open issues with `sla_breached = true` whose `sla_breach_last_notified_at` is null or more than 24h old (still-open re-nags)
+2. Bulk-sets `sla_breached = true` on the newly-breached set, and stamps `sla_breach_last_notified_at = now()` on every issue in either set
 3. Groups matched issues by assignee
 4. Sends **one digest email + push per recipient** (not per issue) to avoid spam
 5. Unassigned breaches are routed to all active admins
 
-Protected by `Authorization: Bearer ${CRON_SECRET}`.
+An issue that breaches and is never resolved keeps appearing in this alert once a day (not once ever) until it's resolved or reopened — `sla_breach_last_notified_at` is the throttle, `sla_breached` alone is not. Protected by `Authorization: Bearer ${CRON_SECRET}`.
 
 ---
 
