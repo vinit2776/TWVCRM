@@ -279,8 +279,26 @@ export function ContractInvoicesSection({
       today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
       statements,
       contractId,
+      contractStatus,
     });
-  }, [startDate, endDate, createdAt, statements, contractId]);
+  }, [startDate, endDate, createdAt, statements, contractId, contractStatus]);
+
+  // Monthly + renewal_in_progress with a real detected gap: the one case
+  // where a missed month can sit behind "now" with nothing else able to
+  // reach it. The batch cron only ever bills forward from today, and a plain
+  // monthly contract's next_billing_date is never advanced (see below), so
+  // there is no anchor to walk back from — "Bill next cycle" would otherwise
+  // only ever be able to raise TODAY's next month, never the one actually
+  // owed. Scoped tightly to renewal_in_progress + missedMonths (itself now
+  // aware of the renewal-continues-billing rule, see the window note on
+  // unbilledMonths() in billing-months.ts) so this can't be used to
+  // backfill an unrelated missed month on an ordinary active contract —
+  // those need their own investigation, not a one-click resend.
+  const monthlyBackfillTarget = useMemo(() => {
+    if (billingCycle !== "monthly" || contractStatus !== "renewal_in_progress" || missedMonths.length === 0) return null;
+    const oldest = missedMonths[0];
+    return oldest.month === 1 ? { month: 12, year: oldest.year - 1 } : { month: oldest.month - 1, year: oldest.year };
+  }, [billingCycle, contractStatus, missedMonths]);
 
   // A rent run bills the month AFTER the month it targets, so to bill the cycle
   // this contract is actually due for, target the month before its billing
@@ -288,14 +306,16 @@ export function ContractInvoicesSection({
   // the anchor happens to fall due in — an advance-billed contract asking for
   // its next quarter early, or one whose dispatch failed and left the anchor
   // behind, could never be billed from here.
-  // Monthly contracts are excluded: nothing advances their next_billing_date,
-  // so the stored value is stale by design — they bill from the current month.
+  // Monthly contracts are otherwise excluded: nothing advances their
+  // next_billing_date, so the stored value is stale by design — they bill
+  // from the current month unless monthlyBackfillTarget applies above.
   const cycleTarget = useMemo(() => {
+    if (monthlyBackfillTarget) return monthlyBackfillTarget;
     if (!nextBillingDate || !billingCycle || billingCycle === "monthly") return null;
     const [y, m] = nextBillingDate.split("-").map(Number);
     if (!y || !m) return null;
     return m === 1 ? { month: 12, year: y - 1 } : { month: m - 1, year: y };
-  }, [nextBillingDate, billingCycle]);
+  }, [monthlyBackfillTarget, nextBillingDate, billingCycle]);
 
   // Bill this one contract's upcoming rent cycle without running the whole
   // month's batch. Same generator the batch uses (so proration, rate phases,
@@ -396,7 +416,7 @@ export function ContractInvoicesSection({
           {canBillCycle && (
             <Button variant="outline" size="sm" onClick={openCycleDialog}>
               <CalendarPlus className="h-3.5 w-3.5 mr-1" />
-              Bill next cycle
+              {monthlyBackfillTarget ? "Bill missed month" : "Bill next cycle"}
             </Button>
           )}
           <Link href={`/billing?contract_id=${contractId}`}>
@@ -635,11 +655,12 @@ export function ContractInvoicesSection({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CalendarPlus className="h-4 w-4 shrink-0" />
-              Bill the upcoming cycle
+              {monthlyBackfillTarget ? "Bill a missed month" : "Bill the upcoming cycle"}
             </DialogTitle>
             <DialogDescription>
-              Raises this contract&apos;s next rent proforma on its own, without running the
-              month&apos;s batch. Sending it creates the payment link and emails the client.
+              {monthlyBackfillTarget
+                ? "This contract's renewal hasn't been activated yet, and a past month never got a rent statement. Raises that missed month's rent proforma at the renewal's terms, without running the month's batch. Sending it creates the payment link and emails the client."
+                : "Raises this contract's next rent proforma on its own, without running the month's batch. Sending it creates the payment link and emails the client."}
             </DialogDescription>
           </DialogHeader>
 

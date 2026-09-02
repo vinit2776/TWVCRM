@@ -134,6 +134,16 @@ function countsTowards(
  * A returned month means no rent-bearing statement covers it. That is a prompt
  * for a human, not proof of lost revenue — the rent may have been invoiced
  * outside the CRM, which is exactly why this reports instead of billing.
+ *
+ * The end of the window is normally the earlier of the contract's own
+ * `end_date` and today — once a term is over, nothing more should have been
+ * billed against it. `renewal_in_progress` is the one exception: the rent
+ * generator (`computeRenewalSplitRentSegments` in billing.ts) deliberately
+ * keeps billing a parent past its own `end_date`, at the renewal draft's
+ * rate, for as long as the renewal sits unactivated — so capping the window
+ * at `end_date` here would silently stop checking for gaps the generator is
+ * still supposed to be filling. For that status the window instead runs
+ * through today, same as an active contract with no end in sight yet.
  */
 export function unbilledMonths(opts: {
   startDate: string;
@@ -154,14 +164,19 @@ export function unbilledMonths(opts: {
   statements: RentCoverage[];
   /** This contract's id — required only when `statements` spans a chain. */
   contractId?: string;
+  /** This contract's current status — see the window note above. Omit when
+   *  unknown; the window then falls back to capping at `endDate`, same as
+   *  every non-`renewal_in_progress` status. */
+  contractStatus?: string;
 }): BillingMonth[] {
   const ownFirst = ymOf(firstBillingAnchor(opts.startDate));
   const firstRunnable = monthAfter(ymOf(opts.createdAt.slice(0, 10)));
   const first = monthKey(ownFirst) >= monthKey(firstRunnable) ? ownFirst : firstRunnable;
 
-  const contractEnd = ymOf(opts.endDate);
   const now = ymOf(opts.today);
-  const last = monthKey(contractEnd) <= monthKey(now) ? contractEnd : now;
+  const last = opts.contractStatus === "renewal_in_progress"
+    ? now
+    : (monthKey(ymOf(opts.endDate)) <= monthKey(now) ? ymOf(opts.endDate) : now);
 
   if (monthKey(first) > monthKey(last)) return [];
 

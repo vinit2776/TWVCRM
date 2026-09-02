@@ -137,6 +137,7 @@ async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalR
 interface EligibleContract {
   id: string;
   contract_number: string;
+  status: string;
   start_date: string;
   end_date: string;
   created_at: string;
@@ -165,7 +166,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // an audit of history, so expired/terminated contracts must be included.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("id, contract_number, start_date, end_date, created_at, lead_id")
+    .select("id, contract_number, status, start_date, end_date, created_at, lead_id")
     .in("status", ["active", "renewal_in_progress", "renewed", "expired", "terminated"]);
 
   if (!contracts || contracts.length === 0) return [];
@@ -215,6 +216,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       today,
       statements: chainStatements,
       contractId: c.id,
+      contractStatus: c.status,
     });
     for (const m of missing) {
       rows.push({
