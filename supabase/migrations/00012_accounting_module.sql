@@ -21,7 +21,7 @@ CREATE TYPE contract_payment_status AS ENUM ('pending', 'verified', 'rejected');
 -- Contract Facilities Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS contract_facilities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   unit VARCHAR(100) NOT NULL,
@@ -63,7 +63,7 @@ CREATE POLICY "Authenticated users can delete contract facilities"
 -- Accounting Periods Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS accounting_periods (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   year INTEGER NOT NULL,
   month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
   status accounting_period_status DEFAULT 'open',
@@ -99,7 +99,7 @@ CREATE POLICY "Authenticated users can update accounting periods"
 -- Facility Usage Records Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS facility_usage_records (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   accounting_period_id UUID NOT NULL REFERENCES accounting_periods(id) ON DELETE RESTRICT,
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE RESTRICT,
   contract_facility_id UUID NOT NULL REFERENCES contract_facilities(id) ON DELETE RESTRICT,
@@ -145,7 +145,7 @@ CREATE POLICY "Authenticated users can delete facility usage records"
 -- Contract Payments Table
 -- ==========================================
 CREATE TABLE IF NOT EXISTS contract_payments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   payment_number VARCHAR(50) UNIQUE,
   contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE RESTRICT,
   accounting_period_id UUID REFERENCES accounting_periods(id) ON DELETE SET NULL,

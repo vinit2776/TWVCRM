@@ -19,14 +19,7 @@ ALTER TABLE proposals
   ADD CONSTRAINT deposit_accounted_requires_proof
   CHECK (deposit_accounted IS NOT TRUE OR deposit_accounted_proof_path IS NOT NULL);
 
-ALTER TABLE deposit_topups
-  ADD COLUMN IF NOT EXISTS accounted BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS accounted_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS accounted_by UUID REFERENCES users(id),
-  ADD COLUMN IF NOT EXISTS accounted_proof_path TEXT;
-
-ALTER TABLE deposit_topups
-  DROP CONSTRAINT IF EXISTS deposit_topup_accounted_requires_proof;
-ALTER TABLE deposit_topups
-  ADD CONSTRAINT deposit_topup_accounted_requires_proof
-  CHECK (accounted IS NOT TRUE OR accounted_proof_path IS NOT NULL);
+-- The deposit_topups half of this migration (accounted/accounted_at/accounted_by/
+-- accounted_proof_path + its CHECK constraint) moved to 00368_deposit_topups.sql,
+-- appended after that file's CREATE TABLE — deposit_topups doesn't exist yet at
+-- this point in a from-scratch migration run.

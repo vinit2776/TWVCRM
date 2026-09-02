@@ -6,7 +6,7 @@
 -- Lead score (0–100) is recalculated from average feedback.
 
 CREATE TABLE booking_feedbacks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
   booking_id UUID NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
   lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
 
