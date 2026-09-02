@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "@/components/shared/toast-provider";
+import { EnvironmentBanner } from "@/components/shared/environment-banner";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
@@ -46,6 +47,7 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
       </head>
       <body className={`${inter.variable} antialiased`}>
+        <EnvironmentBanner />
         {children}
         <ToastProvider />
         <Analytics />
