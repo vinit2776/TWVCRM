@@ -194,7 +194,7 @@ async function fetchLocationNamesByContract(
 export type RatePhaseDetail = { phase_order: number; duration_months: number; monthly_rate: number; end_date: string | null };
 
 /** contract_id → its tiered rate_phases (any order), for a set of contracts. */
-async function fetchRatePhasesByContract(
+export async function fetchRatePhasesByContract(
   supabase: SupabaseClient,
   contractIds: string[]
 ): Promise<Map<string, RatePhaseDetail[]>> {

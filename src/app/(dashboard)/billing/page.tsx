@@ -432,7 +432,15 @@ export default function BillingPage() {
   // Refresh statements + monthly summary after a successful run from any card
   const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
 
-  const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
+  // Deep-link support (e.g. the Billing Reconciliation report links straight to
+  // an invoice): ?statement=<id> opens the dialog on load, same lazy-init
+  // pattern as `activeTab` above — avoids the Suspense boundary useSearchParams() requires.
+  const [viewStatementId, setViewStatementId]             = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("statement");
+    }
+    return null;
+  });
 
   // ── Record Payment dialog (form lives in RecordPaymentDialog) ────────────
   const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);

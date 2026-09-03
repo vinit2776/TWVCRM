@@ -123,6 +123,9 @@ const navSections: NavSection[] = [
       { href: "/contracts/kyc-pending", label: "KYC Pending",   icon: ShieldCheck, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/billing",    label: "Billing", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/receivables", label: "Receivables (AR)",  icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
+      // Deliberately narrower than the LEGACY_ROLES shorthand used above — this
+      // report is scoped to admin/manager/accounts only, not sales_rep/floor_manager/viewer.
+      { href: "/accounting/billing-reconciliation", label: "Billing Reconciliation", icon: FileSpreadsheet, roles: ["admin", "manager", "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
