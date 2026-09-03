@@ -383,7 +383,28 @@ export async function fetchOtherReceivables(
     `)
     .not("status", "in", "(paid,cancelled)");
 
+  // Sending an invoice mirrors it into billing_statements specifically so it
+  // flows through the same AR ladder and Tally handoff every other invoice
+  // type uses (see /api/invoices/[id]/email) — that mirror, not this raw
+  // proforma_invoices row, is the tracked receivable from that point on. Skip
+  // any invoice that already has one, or it shows up twice on this page: once
+  // here and once in the Detail view via its statement, under two different
+  // ids with two different action sets. Only a still-draft invoice (never
+  // sent, no mirror yet) belongs in this card.
+  const invoiceIds = (invoices || []).map((inv) => inv.id);
+  const invoicesWithStatement = new Set<string>();
+  if (invoiceIds.length > 0) {
+    const { data: linkedStatements } = await supabase
+      .from("billing_statements")
+      .select("invoice_id")
+      .in("invoice_id", invoiceIds);
+    for (const s of linkedStatements || []) {
+      if (s.invoice_id) invoicesWithStatement.add(s.invoice_id as string);
+    }
+  }
+
   for (const inv of invoices || []) {
+    if (invoicesWithStatement.has(inv.id)) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = inv.lead as any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
