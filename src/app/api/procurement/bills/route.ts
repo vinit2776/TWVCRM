@@ -5,6 +5,7 @@ import { z } from "zod";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 import { createVendorBill } from "@/lib/vendor-bills";
 import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
+import { tryAutoApproveAmcBill } from "@/lib/procurement/amc-bill-auto-approve";
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
@@ -23,6 +24,10 @@ const createBillSchema = z.object({
   invoice_file_url: z.string().url().nullish(),
   service_report_id: z.string().uuid().nullish(),
   replaces_bill_id: z.string().uuid().nullish(),
+  // Lets the uploader opt a specific AMC cycle back into manual review (e.g.
+  // an amount or date that looks off) even though later cycles on an
+  // approved AMC contract would otherwise auto-approve.
+  amc_manual_review_requested: z.boolean().default(false),
 }).refine(
   (d) => (d.gst_amount ?? 0) <= Math.round(d.total_amount * 0.28 * 100) / 100,
   {
@@ -311,12 +316,25 @@ export async function POST(request: NextRequest) {
 
   // If this vendor has an active recurring bill rule, see if it clears the
   // guardrails to skip manual approval entirely.
-  const autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
+  let autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
+  let autoApprovalSource: "recurring_rule" | "amc_cycle" | null = autoApproval.autoApproved ? "recurring_rule" : null;
+
+  // Otherwise, for a service PO that's an AMC contract, a later cycle's
+  // invoice can skip approval once the contract's first invoice has already
+  // been through one manual approval — see tryAutoApproveAmcBill for why.
+  if (!autoApproval.autoApproved && parsed.data.po_id) {
+    autoApproval = await tryAutoApproveAmcBill(
+      supabase, bill.id, parsed.data.po_id, parsed.data.amc_manual_review_requested
+    );
+    if (autoApproval.autoApproved) autoApprovalSource = "amc_cycle";
+  }
 
   if (autoApproval.autoApproved) {
     sendPushToProcurementRoles({
       title: "Invoice Auto-Approved",
-      body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} auto-approved under a recurring bill rule`,
+      body: autoApprovalSource === "amc_cycle"
+        ? `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} auto-approved (AMC contract already approved)`
+        : `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} auto-approved under a recurring bill rule`,
       url: `/procurement/bills/${bill.id}`,
       tag: `bill-approval-${bill.id}`,
     }).catch((err) => console.error("[push] auto-approve notification failed:", err));
