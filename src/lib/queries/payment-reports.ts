@@ -94,12 +94,14 @@ export function canReviewPaymentReport(role: string | null | undefined): boolean
 /**
  * The default audience for a new report.
  *
- * Addressed at accounts by role rather than `all`, because "all" on a
- * contract means the sales rep and floor manager get paged about a bank
- * reconciliation they can't perform. Routing only — the thread stays readable
- * by everyone authorized on the entity, same as every other query.
+ * Matches PAYMENT_REPORT_REVIEW_ROLES, not `all`: "all" on a contract means
+ * the sales rep and floor manager get paged about a bank reconciliation they
+ * can't perform, but leaving admin out (as accounts-only once did) meant an
+ * admin never saw an unverified report in their "Awaiting you" queue even
+ * though they're allowed to verify it. Routing only — the thread stays
+ * readable by everyone authorized on the entity, same as every other query.
  */
-export const PAYMENT_REPORT_AUDIENCE_ROLES: readonly UserRole[] = ["accounts"];
+export const PAYMENT_REPORT_AUDIENCE_ROLES: readonly UserRole[] = ["admin", "accounts"];
 
 /**
  * How long accounts get before the thread starts chasing itself.
