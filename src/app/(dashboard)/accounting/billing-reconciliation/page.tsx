@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Billing Reconciliation — monthly billing vs. collection, by center.
+ * Recurring Contract Billing Reconciliation — monthly billing vs. collection, by center.
  *
  * One row per currently billable contract (plus a recently terminated/renewed
  * contract still carrying an unpaid balance), one column per month for a
@@ -185,10 +185,10 @@ export default function BillingReconciliationPage() {
 
   return (
     <div className="space-y-4 p-6">
-      <PageBreadcrumb resetTo={{ label: "Billing Reconciliation" }} />
+      <PageBreadcrumb resetTo={{ label: "Recurring Contract Billing Reconciliation" }} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Billing Reconciliation</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Recurring Contract Billing Reconciliation</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
             One row per contract, one column per month — what should be billed, what was invoiced, and what&apos;s been collected, grouped by center.
           </p>
