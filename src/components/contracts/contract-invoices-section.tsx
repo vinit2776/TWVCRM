@@ -294,11 +294,25 @@ export function ContractInvoicesSection({
   // unbilledMonths() in billing-months.ts) so this can't be used to
   // backfill an unrelated missed month on an ordinary active contract —
   // those need their own investigation, not a one-click resend.
+  //
+  // Only ever targets a gap AFTER the contract's own end_date — never a gap
+  // still inside its original term. A month inside the term went missing for
+  // some other reason (rent invoiced outside the CRM before the billing
+  // rollout, a different bug, etc.) and isn't this feature's problem to fix;
+  // offering to auto-raise it here would silently paper over whatever that
+  // reason actually was. Only the portion the renewal-in-progress rule itself
+  // creates — the period after the parent's term lapsed — belongs to this
+  // button.
   const monthlyBackfillTarget = useMemo(() => {
-    if (billingCycle !== "monthly" || contractStatus !== "renewal_in_progress" || missedMonths.length === 0) return null;
-    const oldest = missedMonths[0];
+    if (billingCycle !== "monthly" || contractStatus !== "renewal_in_progress" || missedMonths.length === 0 || !endDate) return null;
+    const [endY, endM] = endDate.split("-").map(Number);
+    if (!endY || !endM) return null;
+    const endKey = endY * 12 + endM;
+    const afterOwnTerm = missedMonths.filter((m) => m.year * 12 + m.month > endKey);
+    if (afterOwnTerm.length === 0) return null;
+    const oldest = afterOwnTerm[0];
     return oldest.month === 1 ? { month: 12, year: oldest.year - 1 } : { month: oldest.month - 1, year: oldest.year };
-  }, [billingCycle, contractStatus, missedMonths]);
+  }, [billingCycle, contractStatus, missedMonths, endDate]);
 
   // A rent run bills the month AFTER the month it targets, so to bill the cycle
   // this contract is actually due for, target the month before its billing
