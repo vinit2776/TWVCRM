@@ -161,6 +161,36 @@ function NewVendorBillForm() {
       .finally(() => setLoadingPo(false));
   }, [poId]);
 
+  // ── Steer AMC service invoices to the guided flow ───────────────────────────
+  // A standalone bill here has no service_report_id, isn't capped at the cycle
+  // cost, and doesn't count against the contract's cycle limit — the invoice
+  // dialog on the PO page is the only place those guardrails apply. If the
+  // vendor picked here already has an open AMC contract, point at it instead
+  // of letting the user quietly bill outside that flow.
+  const [vendorAmcPos, setVendorAmcPos] = useState<
+    Array<{ id: string; po_number: string; billing_cycle: string | null }>
+  >([]);
+  const [amcBannerDismissed, setAmcBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setAmcBannerDismissed(false);
+    if (poId || !vendorId) { setVendorAmcPos([]); return; }
+    let cancelled = false;
+    fetch(`/api/procurement/orders?vendor_id=${vendorId}&limit=25`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const pos = (json.data ?? []).filter(
+          (po: PurchaseOrder) =>
+            po.po_type === "service" && !!po.amc_start_date &&
+            !po.amc_terminated_at && po.status !== "cancelled"
+        );
+        setVendorAmcPos(pos);
+      })
+      .catch(() => { if (!cancelled) setVendorAmcPos([]); });
+    return () => { cancelled = true; };
+  }, [vendorId, poId]);
+
   // ── Duplicate-invoice detector — debounced check ─────────────────────────
   useEffect(() => {
     // Reset dismissal whenever the inputs change
@@ -467,6 +497,42 @@ function NewVendorBillForm() {
               <p className="text-xs text-muted-foreground">Vendor is locked to the linked purchase order</p>
             )}
           </div>
+
+          {/* Steer AMC invoices to the guided per-cycle flow instead of a standalone bill */}
+          {!amcBannerDismissed && vendorAmcPos.length > 0 && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-900 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium">
+                  This vendor has {vendorAmcPos.length} active AMC contract{vendorAmcPos.length > 1 ? "s" : ""}
+                </p>
+                <p className="text-xs mt-0.5 text-blue-800">
+                  If this invoice is for a service cycle, record it from the contract instead —
+                  a standalone bill here skips the service report requirement and won&apos;t count
+                  against the cycle limit.
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                  {vendorAmcPos.map((po) => (
+                    <Link
+                      key={po.id}
+                      href={`/procurement/orders/${po.id}`}
+                      target="_blank"
+                      className="text-xs font-mono text-blue-700 hover:underline"
+                    >
+                      {po.po_number} →
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAmcBannerDismissed(true)}
+                className="text-blue-500 hover:text-blue-700 shrink-0"
+                aria-label="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Company */}
           <div className="space-y-1.5">
