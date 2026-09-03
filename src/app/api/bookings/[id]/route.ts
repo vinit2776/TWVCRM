@@ -7,6 +7,7 @@ import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 import { deleteUserFromDevice } from "@/lib/cosec";
 import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
+import { getCachedSettings } from "@/lib/app-settings-cache";
 
 export const maxDuration = 30;
 
@@ -34,6 +35,45 @@ function formatIstTime(d: Date): string {
     minute: "2-digit",
     hour12: true,
   }).format(d).toUpperCase();
+}
+
+/**
+ * Best-effort cancel of a booking's existing Razorpay payment link. Called
+ * when a reschedule changes the amount due, so a stale link can no longer
+ * be paid at the old (wrong) amount — see TWV-B-0219, where a reschedule
+ * left the previously-issued link showing an amount that no longer matched
+ * the booking. Never throws: a failed cancel just means the old link stays
+ * live at Razorpay until it expires on its own, which is not worse than the
+ * status quo before this existed.
+ */
+async function cancelStaleBookingPaymentLink(linkId: string): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    const settings = await getCachedSettings(admin, [
+      "razorpay_key_id",
+      "razorpay_key_secret",
+      "razorpay_enabled",
+    ]);
+    if (settings["razorpay_enabled"] !== "true") return;
+    const keyId = settings["razorpay_key_id"];
+    const keySecret = settings["razorpay_key_secret"];
+    if (!keyId || !keySecret) return;
+
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      await fetch(`https://api.razorpay.com/v1/payment_links/${linkId}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Basic ${auth}` },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    console.warn("[reschedule] Could not cancel stale payment link (non-fatal):", err);
+  }
 }
 
 /**
@@ -497,6 +537,21 @@ export async function PATCH(
       updates.original_booking_date = booking.booking_date;
       updates.original_start_time = booking.start_time;
       updates.original_end_time = booking.end_time;
+    }
+
+    // A payment link already sent to the customer is now stale if the total
+    // changed — cancel it and clear it from the booking so the next "Share
+    // Payment Link" click generates a fresh one off the corrected total,
+    // instead of resending the old (wrong) amount. Staff still control when
+    // the customer actually gets messaged; this only stops the wrong link
+    // from being payable.
+    if (
+      booking.razorpay_payment_link_id &&
+      Number(rsTotals.total_amount_with_gst) !== Number(booking.total_amount_with_gst)
+    ) {
+      await cancelStaleBookingPaymentLink(booking.razorpay_payment_link_id as string);
+      updates.razorpay_payment_link_id = null;
+      updates.razorpay_payment_link_url = null;
     }
   }
 
