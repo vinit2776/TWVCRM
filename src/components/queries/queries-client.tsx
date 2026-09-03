@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, MessageCircleQuestion } from "lucide-react";
+import { toast } from "sonner";
+import { BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageCircleQuestion, Send } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
@@ -295,6 +296,43 @@ function QueryCard({
   const overdue = !isResolved && item.needed_by ? daysOverdue(item.needed_by) : 0;
   const borderColor = isResolved ? undefined : reasonBorderColor(item.awaiting_reason);
 
+  // Bumped every time "Reply" is clicked, whether or not the panel was
+  // already open — QueryThreadPanel watches this to focus its reply box, the
+  // one action here that genuinely can't be done in a single click.
+  const [replyFocusToken, setReplyFocusToken] = useState(0);
+  const [resolving, setResolving] = useState(false);
+
+  function jumpToReply() {
+    if (!expanded) onToggle();
+    setReplyFocusToken((t) => t + 1);
+  }
+
+  function jumpToVerify() {
+    if (!expanded) onToggle();
+  }
+
+  // The one action of the three that IS a single click: "Reply & resolve"
+  // already accepts an empty body, so closing a thread you already have your
+  // answer on doesn't need the panel open at all.
+  async function resolveDirectly() {
+    setResolving(true);
+    try {
+      const res = await fetch(`/api/queries/${item.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolve: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not resolve this query");
+      toast.success("Resolved");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not resolve this query");
+    } finally {
+      setResolving(false);
+    }
+  }
+
   const audienceText =
     item.audience === "users"
       ? item.awaiting_viewer
@@ -361,14 +399,47 @@ function QueryCard({
             <p className="text-sm mt-2 line-clamp-2">{item.last_message.body}</p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted flex-shrink-0"
-        >
-          {expanded ? "Close" : "Open thread"}
-          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        </button>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {!isResolved && item.awaiting_reason === "needs_answer" && (
+            <button
+              type="button"
+              onClick={jumpToReply}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-red-600 bg-red-500 text-white hover:bg-red-600"
+            >
+              <Send className="h-3 w-3" />
+              Reply
+            </button>
+          )}
+          {!isResolved && item.awaiting_reason === "verify_payment" && (
+            <button
+              type="button"
+              onClick={jumpToVerify}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-amber-600 bg-amber-500 text-white hover:bg-amber-600"
+            >
+              <BadgeCheck className="h-3 w-3" />
+              Verify payment
+            </button>
+          )}
+          {!isResolved && item.awaiting_reason === "awaiting_close" && (
+            <button
+              type="button"
+              onClick={resolveDirectly}
+              disabled={resolving}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-blue-600 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              {resolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Resolve
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+          >
+            {expanded ? "Close" : "Open thread"}
+            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        </div>
       </div>
 
       {expanded && (
@@ -378,6 +449,7 @@ function QueryCard({
             entityId={item.entity_id}
             initialQueryId={item.id}
             onChanged={onChanged}
+            focusReplyToken={replyFocusToken}
           />
         </div>
       )}
