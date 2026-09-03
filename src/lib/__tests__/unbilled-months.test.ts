@@ -255,3 +255,102 @@ describe("unbilledMonths across a renewal chain", () => {
     })).toEqual([]);
   });
 });
+
+/**
+ * Regression coverage for the renewal_in_progress window bug: unbilledMonths()
+ * used to cap its check at the contract's own end_date for every status,
+ * which meant a renewal stuck unactivated past its parent's term silently
+ * stopped being checked for gaps the rent generator (computeRenewalSplitRentSegments
+ * in billing.ts) is still supposed to be filling. Modelled on the real case —
+ * Cargolux's TWV-C-0020, term ended 2026-08-14, renewal TWV-C-0123 accepted
+ * but never activated, September rent never generated or flagged.
+ *
+ * createdAt is set to 2026-08-01 (rather than the contract's real 2025-08-15
+ * start) purely so the checkable window opens right at the boundary under
+ * test — August itself is already covered by augStatement, isolating whether
+ * September gets flagged instead of also needing 11 months of prior coverage
+ * fixtures that have nothing to do with what's being tested here.
+ */
+describe("unbilledMonths — renewal_in_progress window", () => {
+  const augStatement: RentCoverage = {
+    statement_type: "rent",
+    period_start: "2026-08-01",
+    period_end: "2026-08-31",
+    prepaid_month: 8,
+    prepaid_year: 2026,
+    voided_at: null,
+  };
+
+  it("flags September as missing for a renewal_in_progress contract whose own term lapsed in August", () => {
+    const missing = unbilledMonths({
+      startDate: "2025-08-15",
+      endDate: "2026-08-14",
+      createdAt: "2026-08-01",
+      today: "2026-09-02",
+      statements: [augStatement],
+      contractStatus: "renewal_in_progress",
+    });
+    expect(missing).toEqual([{ year: 2026, month: 9 }]);
+  });
+
+  it("does NOT flag September for the same dates when status is plain active (no renewal in flight)", () => {
+    const missing = unbilledMonths({
+      startDate: "2025-08-15",
+      endDate: "2026-08-14",
+      createdAt: "2026-08-01",
+      today: "2026-09-02",
+      statements: [augStatement],
+      contractStatus: "active",
+    });
+    expect(missing).toEqual([]);
+  });
+
+  it("does NOT flag September when contractStatus is omitted — falls back to the pre-fix capped behaviour", () => {
+    const missing = unbilledMonths({
+      startDate: "2025-08-15",
+      endDate: "2026-08-14",
+      createdAt: "2026-08-01",
+      today: "2026-09-02",
+      statements: [augStatement],
+    });
+    expect(missing).toEqual([]);
+  });
+
+  it("stops flagging once a September statement exists for the renewal_in_progress contract", () => {
+    const missing = unbilledMonths({
+      startDate: "2025-08-15",
+      endDate: "2026-08-14",
+      createdAt: "2026-08-01",
+      today: "2026-09-02",
+      statements: [
+        augStatement,
+        {
+          statement_type: "rent",
+          period_start: "2026-09-01",
+          period_end: "2026-09-30",
+          prepaid_month: 9,
+          prepaid_year: 2026,
+          voided_at: null,
+        },
+      ],
+      contractStatus: "renewal_in_progress",
+    });
+    expect(missing).toEqual([]);
+  });
+
+  it("keeps accumulating missed months up through today while renewal_in_progress persists", () => {
+    const missing = unbilledMonths({
+      startDate: "2025-08-15",
+      endDate: "2026-08-14",
+      createdAt: "2026-08-01",
+      today: "2026-11-05",
+      statements: [augStatement],
+      contractStatus: "renewal_in_progress",
+    });
+    expect(missing).toEqual([
+      { year: 2026, month: 9 },
+      { year: 2026, month: 10 },
+      { year: 2026, month: 11 },
+    ]);
+  });
+});
