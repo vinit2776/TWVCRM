@@ -117,12 +117,13 @@ export async function POST(
       payment_date: paidAt.slice(0, 10),
       payment_mode: "other",
       payment_reference: reference,
+      recorded_by: actor.id,
     });
     await adminSupabase
       .from("billing_statements")
       .update({ payment_status: "paid" })
       .eq("id", statement.id);
-    await handleStatementPaid(adminSupabase, statement.id, "invoice_payment_recorded");
+    await handleStatementPaid(adminSupabase, statement.id, "invoice_payment_recorded", actor.id);
   }
 
   // Update invoice — no more self-generated GST invoice number/fields.

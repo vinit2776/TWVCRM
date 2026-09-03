@@ -59,6 +59,7 @@ export async function POST(
     statementTotalAmount: adjustment.statement?.total_amount,
     previousPaymentStatus: adjustment.statement?.payment_status || "unpaid",
     reason: "deposit_adjustment_reversed",
+    performedBy: dbUser.id,
   });
 
   await logAudit(admin, {
