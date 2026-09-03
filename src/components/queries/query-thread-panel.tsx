@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Send, Users, XCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
@@ -25,6 +25,14 @@ interface Props {
   initialQueryId?: string | null;
   /** Fires after any mutation so callers can refresh their badge/count. */
   onChanged?: () => void;
+  /**
+   * Bumped by the "Reply" quick-action on the list card — every change
+   * scrolls to and focuses the reply box, whether the panel was already open
+   * or just mounted. Not a boolean: a re-click while already focused (or
+   * already expanded) still needs to move focus back, which a boolean that
+   * only ever flips true→true wouldn't trigger a re-run for.
+   */
+  focusReplyToken?: number;
 }
 
 function timeAgo(iso: string): string {
@@ -37,9 +45,10 @@ function timeAgo(iso: string): string {
 
 const DEFAULT_TARGETING: QueryTargeting = { audience: "all", audience_roles: [], audience_user_ids: [] };
 
-export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChanged }: Props) {
+export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChanged, focusReplyToken }: Props) {
   const { user } = useCurrentUser();
   const def = queryEntityDef(entityType);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
 
   const [loading, setLoading] = useState(true);
   const [thread, setThread] = useState<QueryThread | null>(null);
@@ -116,6 +125,16 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
       }
     })();
   }, [entityType, entityId, initialQueryId, loadThread]);
+
+  // Runs after `thread` settles too (not just on token change) — a click
+  // that both expands the panel and bumps the token races the thread fetch,
+  // so the box the ref points at may not exist on the render the token
+  // changed on.
+  useEffect(() => {
+    if (!focusReplyToken || !thread || thread.status === "resolved") return;
+    replyRef.current?.focus();
+    replyRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focusReplyToken, thread]);
 
   async function ask() {
     const body = composerText.trim();
@@ -454,6 +473,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
       ) : (
         <div className="space-y-1.5">
           <textarea
+            ref={replyRef}
             rows={2}
             value={composerText}
             onChange={(e) => setComposerText(e.target.value)}

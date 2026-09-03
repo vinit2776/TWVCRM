@@ -166,6 +166,13 @@ export interface QueryListItem extends QueryTargeting {
   /** True when this viewer is the one expected to act next. Computed by
    *  isAwaitingUser() in audience.ts. */
   awaiting_viewer: boolean;
+  /**
+   * Why it's awaiting_viewer, so the card can distinguish "you need to say
+   * something" from "you already got your answer, just close it" — two very
+   * different amounts of effort that isAwaitingUser() alone can't tell apart.
+   * Null whenever awaiting_viewer is false.
+   */
+  awaiting_reason: "needs_answer" | "awaiting_close" | "verify_payment" | null;
 }
 
 export interface QueryThread extends Omit<QueryListItem, "last_message"> {

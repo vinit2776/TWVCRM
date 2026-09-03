@@ -96,6 +96,23 @@ function computeAwaiting(row: QueryRow, def: QueryEntityDef, viewer: Viewer): bo
   );
 }
 
+/**
+ * Why a thread is awaiting this viewer, not just that it is.
+ *
+ * A payment report always needs a bank-statement check, whoever raised it —
+ * that's a different kind of work from a reply, so it gets its own reason
+ * regardless of who's asking. Otherwise: if you're the one who raised the
+ * thread, isAwaitingUser() only turns true once someone else has replied
+ * (see its rule 2 — you can't be "awaiting yourself" the moment you ask), so
+ * created_by === viewer here always means "you got an answer, go close it".
+ * Anyone else it's awaiting is being asked to actually say something.
+ */
+function awaitingReasonFor(row: QueryRow, viewer: Viewer, isAwaiting: boolean): QueryListItem["awaiting_reason"] {
+  if (!isAwaiting) return null;
+  if (row.kind === "payment_reported") return "verify_payment";
+  return row.created_by.id === viewer.id ? "awaiting_close" : "needs_answer";
+}
+
 /** Shared row → list item mapping, so list and stats agree on "awaiting". */
 function toListItem(
   row: QueryRow,
@@ -105,6 +122,7 @@ function toListItem(
 ): QueryListItem {
   const messages = sortedMessages(row);
   const last = messages[messages.length - 1] ?? null;
+  const isAwaiting = computeAwaiting(row, def, viewer);
 
   return {
     id: row.id,
@@ -130,8 +148,46 @@ function toListItem(
     last_message: last
       ? { body: last.body, event_type: last.event_type, created_at: last.created_at }
       : null,
-    awaiting_viewer: computeAwaiting(row, def, viewer),
+    awaiting_viewer: isAwaiting,
+    awaiting_reason: awaitingReasonFor(row, viewer, isAwaiting),
   };
+}
+
+const AWAITING_REASON_RANK: Record<NonNullable<QueryListItem["awaiting_reason"]>, number> = {
+  // Someone is blocked on you actually saying something — the most urgent
+  // bucket, since it's the only one where silence stalls another person.
+  needs_answer: 0,
+  // A claimed payment needs a bank-statement check — real work, but not a
+  // reply someone is refreshing the page waiting on.
+  verify_payment: 1,
+  // You already have your answer; this is a click, not a thought.
+  awaiting_close: 2,
+};
+
+/**
+ * Reorders the "Awaiting you" tab by urgency instead of recency.
+ *
+ * Sorting by updated_at (every other tab's order) actively buries the thing
+ * this tab exists to surface: a query nobody has touched in two weeks has an
+ * old updated_at, so it sinks under whatever was merely replied-to five
+ * minutes ago. Overdue threads come first (most-overdue first), then by what
+ * kind of effort is being asked of the viewer, then oldest-idle-first within
+ * each bucket — so a thread nobody has acted on for a while doesn't hide
+ * behind fresher ones just because it's stale.
+ */
+function sortByUrgency(items: QueryListItem[], today: string): QueryListItem[] {
+  return [...items].sort((a, b) => {
+    const overdueA = !!a.needed_by && a.needed_by < today;
+    const overdueB = !!b.needed_by && b.needed_by < today;
+    if (overdueA !== overdueB) return overdueA ? -1 : 1;
+    if (overdueA && overdueB) return (a.needed_by as string).localeCompare(b.needed_by as string);
+
+    const rankA = a.awaiting_reason ? AWAITING_REASON_RANK[a.awaiting_reason] : 3;
+    const rankB = b.awaiting_reason ? AWAITING_REASON_RANK[b.awaiting_reason] : 3;
+    if (rankA !== rankB) return rankA - rankB;
+
+    return a.updated_at.localeCompare(b.updated_at);
+  });
 }
 
 /** Drop threads whose entity type this viewer's role isn't authorized on. */
@@ -231,12 +287,17 @@ export async function GET(req: NextRequest) {
     if (tab === "mine") q = q.eq("created_by", auth.dbUser.id);
     if (tab === "overdue") q = q.not("needed_by", "is", null).lt("needed_by", today);
   }
-  if (cursor) q = q.lt("updated_at", cursor);
-
   // "Awaiting you" and the role-visibility filter are both post-filters, so
   // over-fetch and slice after — otherwise a page of ten could come back
   // near-empty. Capped so a large backlog can't pull the whole table.
   const isPostFiltered = !entityId && tab === "awaiting_me";
+  // This tab is re-sorted by urgency below, not updated_at (see
+  // sortByUrgency) — an updated_at cursor would cut rows out of the SQL
+  // fetch before that reordering ever happens, silently skipping items on
+  // "Load more". The whole (capped) candidate set is already fetched fresh
+  // every call here, so cursor is reinterpreted as a plain offset into the
+  // sorted list instead.
+  if (cursor && !isPostFiltered) q = q.lt("updated_at", cursor);
   const { data, error } = await q.limit(isPostFiltered ? 200 : PAGE_SIZE + 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -255,7 +316,15 @@ export async function GET(req: NextRequest) {
     toListItem(row, def, viewer, summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null),
   );
 
-  if (isPostFiltered) items = items.filter((i) => i.awaiting_viewer);
+  if (isPostFiltered) {
+    items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
+    const offset = cursor ? Number(cursor) || 0 : 0;
+    const slice = items.slice(offset, offset + PAGE_SIZE);
+    return NextResponse.json({
+      items: slice,
+      next_cursor: offset + PAGE_SIZE < items.length ? String(offset + PAGE_SIZE) : null,
+    });
+  }
 
   const hasMore = items.length > PAGE_SIZE;
   const page = hasMore ? items.slice(0, PAGE_SIZE) : items;

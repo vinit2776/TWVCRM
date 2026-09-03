@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, MessageCircleQuestion } from "lucide-react";
+import { toast } from "sonner";
+import { BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageCircleQuestion, Send } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
@@ -42,6 +43,35 @@ function timeAgo(iso: string): string {
 function daysOverdue(neededBy: string): number {
   const due = new Date(`${neededBy}T00:00:00`).getTime();
   return Math.floor((Date.now() - due) / 86_400_000);
+}
+
+/**
+ * The accent border used to say only "this is awaiting you" — one color for
+ * every reason, which told you nothing about how much work it actually is.
+ * Recolor by why: red for "someone needs you to actually say something",
+ * amber for a payment claim that needs a bank-statement check (same tone as
+ * the "Payment reported" pill), blue for "you already have your answer, this
+ * is a click, not a thought".
+ *
+ * Set via inline style, not a `border-l-{color}` utility class: this file
+ * already pairs the per-side width/color with the all-sides `border`
+ * utility, and Tailwind's own cascade layer ordering — not class order in
+ * the attribute — decides which of two same-specificity border-color rules
+ * wins. `border`'s shorthand color can end up after the per-side utility in
+ * the generated stylesheet and silently overrides it. An inline style has no
+ * such ordering to lose to.
+ */
+function reasonBorderColor(reason: QueryListItem["awaiting_reason"]): string | undefined {
+  switch (reason) {
+    case "needs_answer":
+      return "#ef4444"; // red-500
+    case "verify_payment":
+      return "#f59e0b"; // amber-500
+    case "awaiting_close":
+      return "#3b82f6"; // blue-500
+    default:
+      return undefined;
+  }
 }
 
 export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
@@ -264,6 +294,44 @@ function QueryCard({
   const def = queryEntityDef(item.entity_type);
   const isResolved = item.status === "resolved";
   const overdue = !isResolved && item.needed_by ? daysOverdue(item.needed_by) : 0;
+  const borderColor = isResolved ? undefined : reasonBorderColor(item.awaiting_reason);
+
+  // Bumped every time "Reply" is clicked, whether or not the panel was
+  // already open — QueryThreadPanel watches this to focus its reply box, the
+  // one action here that genuinely can't be done in a single click.
+  const [replyFocusToken, setReplyFocusToken] = useState(0);
+  const [resolving, setResolving] = useState(false);
+
+  function jumpToReply() {
+    if (!expanded) onToggle();
+    setReplyFocusToken((t) => t + 1);
+  }
+
+  function jumpToVerify() {
+    if (!expanded) onToggle();
+  }
+
+  // The one action of the three that IS a single click: "Reply & resolve"
+  // already accepts an empty body, so closing a thread you already have your
+  // answer on doesn't need the panel open at all.
+  async function resolveDirectly() {
+    setResolving(true);
+    try {
+      const res = await fetch(`/api/queries/${item.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolve: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not resolve this query");
+      toast.success("Resolved");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not resolve this query");
+    } finally {
+      setResolving(false);
+    }
+  }
 
   const audienceText =
     item.audience === "users"
@@ -276,9 +344,8 @@ function QueryCard({
 
   return (
     <div
-      className={`border rounded-lg p-3.5 ${isResolved ? "opacity-60" : ""} ${
-        item.awaiting_viewer && !isResolved ? "border-l-[3px] border-l-amber-500" : ""
-      }`}
+      className={`border rounded-lg p-3.5 ${isResolved ? "opacity-60" : ""}`}
+      style={borderColor ? { borderLeftWidth: 3, borderLeftColor: borderColor } : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -332,14 +399,47 @@ function QueryCard({
             <p className="text-sm mt-2 line-clamp-2">{item.last_message.body}</p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted flex-shrink-0"
-        >
-          {expanded ? "Close" : "Open thread"}
-          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        </button>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {!isResolved && item.awaiting_reason === "needs_answer" && (
+            <button
+              type="button"
+              onClick={jumpToReply}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-red-600 bg-red-500 text-white hover:bg-red-600"
+            >
+              <Send className="h-3 w-3" />
+              Reply
+            </button>
+          )}
+          {!isResolved && item.awaiting_reason === "verify_payment" && (
+            <button
+              type="button"
+              onClick={jumpToVerify}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-amber-600 bg-amber-500 text-white hover:bg-amber-600"
+            >
+              <BadgeCheck className="h-3 w-3" />
+              Verify payment
+            </button>
+          )}
+          {!isResolved && item.awaiting_reason === "awaiting_close" && (
+            <button
+              type="button"
+              onClick={resolveDirectly}
+              disabled={resolving}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-blue-600 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              {resolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Resolve
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+          >
+            {expanded ? "Close" : "Open thread"}
+            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        </div>
       </div>
 
       {expanded && (
@@ -349,6 +449,7 @@ function QueryCard({
             entityId={item.entity_id}
             initialQueryId={item.id}
             onChanged={onChanged}
+            focusReplyToken={replyFocusToken}
           />
         </div>
       )}
