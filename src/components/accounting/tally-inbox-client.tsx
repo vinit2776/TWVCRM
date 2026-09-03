@@ -14,7 +14,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef, memo } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon, History, MapPin, Receipt } from "lucide-react";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { formatCurrency, formatDate, bookingWindowHours } from "@/lib/utils";
@@ -799,6 +799,8 @@ export function TallyInboxClient() {
       onRecordPayment={() => openPayDialog(row)}
       onViewHistory={() => setHistoryRow({ id: row.statement_id, statement_number: row.statement_number })}
       onQueryChanged={() => void refreshRow(row.statement_id)}
+      currentUserRole={currentUserRole}
+      onWaived={() => void refreshRow(row.statement_id)}
     />
   );
 
@@ -1442,6 +1444,8 @@ const InboxRowItem = memo(function InboxRowItem({
   onRecordPayment,
   onViewHistory,
   onQueryChanged,
+  currentUserRole,
+  onWaived,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -1459,6 +1463,8 @@ const InboxRowItem = memo(function InboxRowItem({
   onRecordPayment: () => void;
   onViewHistory: () => void;
   onQueryChanged: () => void;
+  currentUserRole: string;
+  onWaived: () => void;
 }) {
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
@@ -1470,6 +1476,47 @@ const InboxRowItem = memo(function InboxRowItem({
     row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
   );
   const [queryOpen, setQueryOpen] = useState(false);
+  const [waivePromptOpen, setWaivePromptOpen] = useState(false);
+  const [waiveReasonInput, setWaiveReasonInput] = useState("");
+  const [waiving, setWaiving] = useState(false);
+  const [waiveContracts, setWaiveContracts] = useState<{ id: string; contract_number: string }[] | null>(null);
+  const [waiveSelectedContract, setWaiveSelectedContract] = useState("");
+
+  const handleWaiveConfirm = async () => {
+    const reason = waiveReasonInput.trim();
+    if (!reason) return;
+    if (waiveContracts && !waiveSelectedContract) return;
+    setWaiving(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${row.statement_id}/waive-gst`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason,
+          ...(waiveSelectedContract ? { contract_id: waiveSelectedContract } : {}),
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && body.needs_contract_selection) {
+          setWaiveContracts(body.contracts);
+          return;
+        }
+        toast.error(body.error || "Failed to recategorize");
+        return;
+      }
+      toast.success("Recategorized as a security deposit — closed, no GST invoice required");
+      setWaivePromptOpen(false);
+      setWaiveReasonInput("");
+      setWaiveContracts(null);
+      setWaiveSelectedContract("");
+      onWaived();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setWaiving(false);
+    }
+  };
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -1560,11 +1607,21 @@ const InboxRowItem = memo(function InboxRowItem({
       <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
         {/* ── Line 1 ── primary identity */}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
-          <span
-            className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
-          >
-            {bucketLabel(row.bucket)}
-          </span>
+          {row.gst_waived_at ? (
+            <span
+              className="text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 bg-green-50 text-green-800 border-green-200"
+              title={row.gst_waived_reason ? `No GST required: ${row.gst_waived_reason}` : "No GST required"}
+            >
+              <Receipt className="h-2.5 w-2.5 inline -mt-0.5 mr-0.5" aria-hidden />
+              Deposit · no GST required
+            </span>
+          ) : (
+            <span
+              className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
+            >
+              {bucketLabel(row.bucket)}
+            </span>
+          )}
           <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
         </div>
         <div className="text-right">
@@ -1799,6 +1856,61 @@ const InboxRowItem = memo(function InboxRowItem({
                 <><Upload className="h-3 w-3" /> Upload GST invoice <ChevronDown className="h-3 w-3" /></>
               )}
             </button>
+          )}
+          {canUpload && !isClosed && !!row.invoice && !row.gst_waived_at
+            && (currentUserRole === "accounts" || currentUserRole === "admin")
+            && !waivePromptOpen && (
+            <button
+              type="button"
+              onClick={() => setWaivePromptOpen(true)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-green-300 text-green-800 hover:bg-green-50"
+              title="This ad-hoc invoice actually collected a security deposit — recategorize it and close without a Tally GST invoice"
+            >
+              <Receipt className="h-3 w-3" />
+              Mark as deposit — no GST
+            </button>
+          )}
+          {waivePromptOpen && (
+            <div className="col-span-2 w-full rounded border border-green-200 bg-green-50/50 p-2 space-y-2">
+              <textarea
+                autoFocus
+                rows={2}
+                value={waiveReasonInput}
+                onChange={(e) => setWaiveReasonInput(e.target.value)}
+                placeholder="Reason (e.g. refundable security deposit for Cabin 4, collected via this ad-hoc invoice) — at least 10 characters"
+                className="w-full text-xs px-2 py-1.5 rounded border focus:outline-none focus:ring-1 focus:ring-foreground/30"
+              />
+              {waiveContracts && (
+                <select
+                  value={waiveSelectedContract}
+                  onChange={(e) => setWaiveSelectedContract(e.target.value)}
+                  className="w-full text-xs px-2 py-1.5 rounded border"
+                >
+                  <option value="">This customer has more than one active contract — pick which to credit</option>
+                  {waiveContracts.map((c) => (
+                    <option key={c.id} value={c.id}>{c.contract_number}</option>
+                  ))}
+                </select>
+              )}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleWaiveConfirm()}
+                  disabled={waiving || waiveReasonInput.trim().length < 10 || (!!waiveContracts && !waiveSelectedContract)}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-700 text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {waiving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  Confirm — close without GST
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setWaivePromptOpen(false); setWaiveReasonInput(""); setWaiveContracts(null); setWaiveSelectedContract(""); }}
+                  className="text-xs px-2 py-1 rounded border hover:bg-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           )}
           {canSend && (
             <button
