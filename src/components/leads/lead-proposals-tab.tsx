@@ -295,37 +295,6 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     }
   };
 
-  // ── Mark Invoice Paid + Send GST Invoice ──
-  const handleMarkInvoicePaid = async (inv: ProformaInvoice) => {
-    const ref = window.prompt(
-      `Enter payment reference / UTR for ${inv.invoice_number} (optional):`
-    );
-    if (ref === null) return; // cancelled
-
-    const amount = window.prompt(
-      `Confirm amount received (₹):`,
-      String(Number(inv.total_amount))
-    );
-    if (!amount) return;
-
-    const res = await fetch(`/api/invoices/${inv.id}/payment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: parseFloat(amount), reference: ref.trim() || undefined }),
-    });
-    const json = await res.json();
-    if (res.ok) {
-      toast.success(
-        json.customer_email
-          ? `Payment recorded. Confirmation sent to ${json.customer_email} — GST invoice will follow from accounts.`
-          : "Invoice marked as paid — routed to accounts for GST invoice issuance."
-      );
-      fetchData();
-    } else {
-      toast.error(json.error || "Failed to record payment");
-    }
-  };
-
   // ── Cancel Invoice ──
   const handleCancelInvoice = async (inv: ProformaInvoice) => {
     if (!window.confirm(`Cancel invoice ${inv.invoice_number}? This cannot be undone.`)) return;
@@ -625,24 +594,17 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Sent
                               </DropdownMenuItem>
                             )}
-                            {(inv.status === "sent" || inv.status === "overdue") && (
-                              <DropdownMenuItem
-                                onClick={() => handleMarkInvoicePaid(inv)}
-                                className="text-green-600"
-                              >
-                                <CheckCircle2 className="mr-2 h-4 w-4" />
-                                Mark Paid
-                              </DropdownMenuItem>
-                            )}
-                            {inv.status === "sent" && (
-                              <DropdownMenuItem
-                                onClick={() => handleUpdateInvoiceStatus(inv.id, "overdue", "Overdue")}
-                                className="text-red-600"
-                              >
-                                <XCircle className="mr-2 h-4 w-4" />
-                                Mark as Overdue
-                              </DropdownMenuItem>
-                            )}
+                            {/*
+                              Payment and overdue status are handled from the
+                              AR page's own statement-backed flow (Record
+                              payment / lifecycle tracking off billing_
+                              statements), not from this raw invoice — that
+                              window.prompt()-based "Mark Paid" bypassed the
+                              structured record-payment dialog entirely, and
+                              "Mark as Overdue" only flipped a status label
+                              that AR's days_overdue badge already derives
+                              from due_date on its own.
+                            */}
                             {canCancelInvoice && ["draft", "sent", "overdue"].includes(inv.status) && (
                               <DropdownMenuItem
                                 onClick={() => handleCancelInvoice(inv)}

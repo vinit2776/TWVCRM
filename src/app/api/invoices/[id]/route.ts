@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { mirrorInvoiceToStatement } from "@/lib/adhoc-invoice-mirror";
 
 export async function GET(
   _request: NextRequest,
@@ -73,6 +74,17 @@ export async function PATCH(
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
 
+  // "Mark as Sent" — the invoice reached the customer some way other than
+  // /api/invoices/[id]/email (downloaded and shared on WhatsApp, say), so
+  // there's no email to trigger the billing_statements mirror every other
+  // ad-hoc invoice gets. Without it, this invoice would flip to "sent" and
+  // then never appear anywhere the AR pipeline looks — no Detail-view row,
+  // no "Report paid", nothing to record a payment against.
+  const isMarkingSent = body.status === "sent" && oldInvoice?.status === "draft";
+  if (isMarkingSent && !oldInvoice?.due_date) {
+    allowedFields.due_date = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
   const { data, error } = await supabase
     .from("proforma_invoices")
     .update(allowedFields)
@@ -81,6 +93,18 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (isMarkingSent && oldInvoice) {
+    try {
+      await mirrorInvoiceToStatement(
+        createAdminClient(),
+        { ...oldInvoice, due_date: (allowedFields.due_date as string | undefined) ?? oldInvoice.due_date },
+        { linkId: oldInvoice.razorpay_link_id, linkUrl: oldInvoice.razorpay_link_url },
+      );
+    } catch (e) {
+      console.error("[invoice PATCH] billing_statements mirror failed (non-fatal):", e);
+    }
+  }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id && oldInvoice) {

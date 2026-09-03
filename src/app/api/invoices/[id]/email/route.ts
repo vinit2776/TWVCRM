@@ -4,8 +4,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
-import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
+import { mirrorInvoiceToStatement } from "@/lib/adhoc-invoice-mirror";
 
 export const maxDuration = 30;
 
@@ -252,57 +252,11 @@ export async function POST(
     // Razorpay link on the existing row instead of piling up duplicate AR entries.
     try {
       const adminForStatement = createAdminClient();
-      const { data: existingStatement } = await adminForStatement
-        .from("billing_statements")
-        .select("id")
-        .eq("invoice_id", id)
-        .maybeSingle();
-
-      if (existingStatement) {
-        if (paymentLinkUrl) {
-          await adminForStatement
-            .from("billing_statements")
-            .update({ razorpay_payment_link_id: invoice.razorpay_link_id, razorpay_payment_link_url: paymentLinkUrl })
-            .eq("id", existingStatement.id);
-        }
-      } else {
-        const todayYmd = new Date().toISOString().slice(0, 10);
-        const lineItems = ((invoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
-          description: item.description,
-          qty: item.quantity,
-          unit_price: item.unit_price,
-          amount: item.total,
-          hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
-        }));
-
-        await adminForStatement.from("billing_statements").insert({
-          invoice_id: id,
-          contract_id: null,
-          proposal_id: invoice.proposal_id ?? null,
-          // Carry the case through to the mirrored statement. This is what
-          // makes the Tally Inbox, receivables and the payment panel resolve
-          // the right buyer: they read the statement, and billing_statements
-          // already routes a case's buyer via voBillParty(). Without it a
-          // case-raised invoice would show a blank party downstream.
-          case_id: invoice.case_id ?? null,
-          statement_type: "usage",
-          created_via: "adhoc_invoice",
-          status: "finalized",
-          payment_status: "unpaid",
-          handoff_state: "pi_awaiting_payment",
-          period_start: todayYmd,
-          period_end: todayYmd,
-          subtotal: invoice.subtotal,
-          fixed_amount: invoice.subtotal,
-          tax_percentage: invoice.tax_percentage,
-          tax_amount: invoice.tax_amount,
-          total_amount: invoice.total_amount,
-          due_date: dueDate,
-          razorpay_payment_link_id: invoice.razorpay_link_id ?? null,
-          razorpay_payment_link_url: paymentLinkUrl,
-          line_items: [{ type: "usage", label: invoice.title, items: lineItems, subtotal: invoice.subtotal }],
-        });
-      }
+      await mirrorInvoiceToStatement(
+        adminForStatement,
+        { ...invoice, due_date: invoice.due_date ?? dueDate },
+        { linkId: invoice.razorpay_link_id, linkUrl: paymentLinkUrl },
+      );
     } catch (e) {
       console.error("[invoice email] billing_statements mirror failed (non-fatal):", e);
     }
