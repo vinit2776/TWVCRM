@@ -376,6 +376,12 @@ export interface InboxRow {
    *  from is_voided: a held statement is still live, just paused. */
   is_held: boolean;
   hold_reason: string | null;
+  /** Set when accounts recategorized this ad-hoc-invoice statement as a
+   *  security deposit and closed it without a Tally GST invoice — the money
+   *  was credited to the customer's deposit balance instead. See
+   *  src/app/api/billing-statements/[id]/waive-gst/route.ts. */
+  gst_waived_at: string | null;
+  gst_waived_reason: string | null;
   /** True when the proforma was cancelled via the early-GST override. Distinguishes
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
