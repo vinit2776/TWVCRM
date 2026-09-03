@@ -45,7 +45,7 @@ export interface InvoiceParty {
   blocked: string | null;
 }
 
-function leadName(lead: InvoiceLeadLike): string {
+export function leadName(lead: InvoiceLeadLike): string {
   return (
     lead.company ||
     [lead.first_name, lead.last_name].filter(Boolean).join(" ") ||
