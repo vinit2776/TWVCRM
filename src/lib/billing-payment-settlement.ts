@@ -24,9 +24,13 @@ export async function finalizeBillingPayment(
     statementTotalAmount: number | string | null;
     previousPaymentStatus: string;
     reason: string; // passed through to handleStatementPaid for its own logging
+    /** The user who recorded this payment, when one exists — surfaced on the
+     *  statement timeline's state-change entries. Omit for system-triggered
+     *  settlement (Razorpay webhook), which has no human actor. */
+    performedBy?: string | null;
   }
 ): Promise<{ paymentStatus: SettlementPaymentStatus; totalPaid: number; balanceDue: number }> {
-  const { statementId, statementTotalAmount, previousPaymentStatus, reason } = params;
+  const { statementId, statementTotalAmount, previousPaymentStatus, reason, performedBy = null } = params;
 
   const { data: allPayments } = await supabase
     .from("billing_payments")
@@ -57,7 +61,7 @@ export async function finalizeBillingPayment(
 
     const v2Enabled = await isHandoffV2Enabled(supabase);
     if (v2Enabled) {
-      await handleStatementPaid(supabase, statementId, reason);
+      await handleStatementPaid(supabase, statementId, reason, performedBy);
     } else {
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();

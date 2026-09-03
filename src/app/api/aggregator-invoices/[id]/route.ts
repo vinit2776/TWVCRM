@@ -188,6 +188,7 @@ export async function PATCH(
         statementTotalAmount: statement.total_amount,
         previousPaymentStatus: statement.payment_status,
         reason: "aggregator_invoice_manual_mark_paid",
+        performedBy: dbUser?.id ?? null,
       });
     }
   }

@@ -143,6 +143,7 @@ export async function POST(
     statementTotalAmount: statement.total_amount,
     previousPaymentStatus: statement.payment_status,
     reason: "manual_payment_entry",
+    performedBy: dbUser.id,
   });
   const newPaymentStatus = settlement.paymentStatus;
 

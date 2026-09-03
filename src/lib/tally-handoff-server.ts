@@ -69,6 +69,7 @@ export async function setHandoffState(
   statementId: string,
   newState: HandoffState,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<void> {
   const { data: current } = await supabase
     .from("billing_statements")
@@ -102,13 +103,13 @@ export async function setHandoffState(
 
   // Audit log — drives the StatementTimeline component (PR A of lifecycle
   // visibility). performed_by is null for system-triggered transitions
-  // (webhook, cron, bridge sync); the trigger string identifies which
-  // pathway fired the change.
+  // (webhook, cron, bridge sync) that call this with no actor; the trigger
+  // string identifies which pathway fired the change either way.
   await supabase.from("audit_trail").insert({
     entity_type: "billing_statement",
     entity_id: statementId,
     action: "update",
-    performed_by: null,
+    performed_by: performedBy,
     changes: {
       handoff_state: { old: previousState, new: newState },
       trigger,
@@ -262,6 +263,7 @@ export async function handleStatementPaid(
   supabase: SupabaseClient,
   statementId: string,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<void> {
   const { data: statement } = await supabase
     .from("billing_statements")
@@ -310,20 +312,20 @@ export async function handleStatementPaid(
 
     if (voBillingMode === "proforma_first") {
       if (currentState === "gst_sent_awaiting_payment") {
-        await setHandoffState(supabase, statementId, "complete", trigger);
+        await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
         return;
       }
-      await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+      await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
       return;
     }
 
     // gst_direct: the GST invoice was already issued via Tally handoff by
     // the time payment lands.
     if (currentState === "gst_sent_awaiting_payment") {
-      await setHandoffState(supabase, statementId, "complete", trigger);
+      await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
       return;
     }
-    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger);
+    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger, performedBy);
     return;
   }
 
@@ -392,27 +394,27 @@ export async function handleStatementPaid(
 
   if (proposalId || invoiceId) {
     if (currentState === "gst_sent_awaiting_payment") {
-      await setHandoffState(supabase, statementId, "complete", trigger);
+      await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
       return;
     }
-    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
     return;
   }
 
   // If GST invoice was already sent and we're now recording payment (e.g. bank
   // transfer on an Override/PI-cancelled statement), close the loop directly.
   if (currentState === "gst_sent_awaiting_payment") {
-    await setHandoffState(supabase, statementId, "complete", trigger);
+    await setHandoffState(supabase, statementId, "complete", trigger, performedBy);
     return;
   }
 
   if (billingMode === "proforma_first") {
-    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger, performedBy);
     return;
   }
 
   if (billingMode === "gst_direct") {
-    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger);
+    await setHandoffState(supabase, statementId, "paid_awaiting_receipt_record", trigger, performedBy);
     return;
   }
 

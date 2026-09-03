@@ -351,7 +351,7 @@ export async function GET(req: NextRequest) {
     // Only fetched in single-row mode with ?include=timeline.
     !includeTimeline || noIds ? Promise.resolve({ data: null }) : supabase
       .from("audit_trail")
-      .select("action, changes, performed_by, created_at")
+      .select("action, changes, performed_by, created_at, performer:users!audit_trail_performed_by_fkey(full_name)")
       .eq("entity_type", "billing_statement")
       .eq("entity_id", statementIds[0])
       .order("created_at", { ascending: true }),
@@ -550,12 +550,16 @@ export async function GET(req: NextRequest) {
           uploaded_by: string | null;
           superseded_by: string | null;
         }>,
-        auditEntries: (auditRes.data || []) as Array<{
+        auditEntries: ((auditRes.data || []) as Array<{
           action: string;
           changes: Record<string, unknown> | null;
           performed_by: string | null;
           created_at: string;
-        }>,
+          performer: { full_name: string | null } | { full_name: string | null }[] | null;
+        }>).map((a) => ({
+          ...a,
+          performer: Array.isArray(a.performer) ? a.performer[0] ?? null : a.performer,
+        })),
         uploaderNameByAuthId,
       });
     }
@@ -1089,6 +1093,7 @@ function buildTimelineEvents(args: {
     changes: Record<string, unknown> | null;
     performed_by: string | null;
     created_at: string;
+    performer: { full_name: string | null } | null;
   }>;
   /** uploaded_by (auth.users id) → display name, resolved by the caller. */
   uploaderNameByAuthId: Map<string, string>;
@@ -1158,21 +1163,33 @@ function buildTimelineEvents(args: {
   // State changes from audit_trail — only include rows that actually
   // recorded a handoff_state transition. Skips noise like other field edits.
   for (const a of args.auditEntries) {
-    const c = a.changes as { handoff_state?: { old: string | null; new: string }; trigger?: string } | null;
+    const c = a.changes as {
+      handoff_state?: { old: string | null; new: string };
+      trigger?: string;
+      _actor_label?: { new: string };
+    } | null;
     if (!c?.handoff_state) continue;
     const fromLabel = c.handoff_state.old
       ? (HANDOFF_STATE_LABELS[c.handoff_state.old as HandoffState] ?? c.handoff_state.old)
       : "(initial)";
     const toLabel = HANDOFF_STATE_LABELS[c.handoff_state.new as HandoffState] ?? c.handoff_state.new;
+    // Human actor (users.id) takes priority; a non-UUID system actor
+    // (webhook, cron, bridge) is normalized into _actor_label by logAudit —
+    // system-triggered transitions via setHandoffState() carry neither, and
+    // stay unattributed rather than showing a raw trigger string as if it
+    // were a name.
+    const actorName = a.performer?.full_name ?? c._actor_label?.new ?? null;
+    const bySuffix = actorName ? ` — by ${actorName}` : "";
     events.push({
       kind: "state_changed",
       at: a.created_at,
-      label: `State: ${fromLabel} → ${toLabel}`,
+      label: `State: ${fromLabel} → ${toLabel}${bySuffix}`,
       details: {
         from: c.handoff_state.old,
         to: c.handoff_state.new,
         trigger: c.trigger,
         performed_by: a.performed_by,
+        performed_by_name: actorName,
       },
     });
   }

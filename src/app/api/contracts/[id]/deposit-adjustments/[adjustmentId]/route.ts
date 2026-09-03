@@ -90,6 +90,7 @@ export async function PATCH(
       statementTotalAmount: adjustment.statement?.total_amount,
       previousPaymentStatus: adjustment.statement?.payment_status || "unpaid",
       reason: "deposit_adjustment_approved",
+      performedBy: dbUser.id,
     });
 
     await logAudit(admin, {
