@@ -360,6 +360,9 @@ export default function PurchaseOrderDetailPage() {
   const invFileRef = useRef<HTMLInputElement>(null);
   // Service PO invoice: which service report this invoice covers
   const [invServiceReportId, setInvServiceReportId] = useState("");
+  // AMC contracts auto-approve every invoice after the first — this opts a
+  // specific one back into manual review (e.g. amount or date looks off).
+  const [invAmcManualReview, setInvAmcManualReview] = useState(false);
 
   // Edit Delivery (correct a wrong DC upload — file/number/date/notes only, no qty changes)
   const [editDeliveryId, setEditDeliveryId] = useState<string | null>(null);
@@ -785,6 +788,7 @@ export default function PurchaseOrderDetailPage() {
           notes: invNotes.trim() || null,
           invoice_file_url: fileUrl,
           service_report_id: invServiceReportId || null,
+          amc_manual_review_requested: invAmcManualReview,
         }),
       });
       const json = await res.json();
@@ -793,7 +797,11 @@ export default function PurchaseOrderDetailPage() {
         return;
       }
 
-      toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
+      toast.success(
+        json.data.auto_approved
+          ? `Vendor invoice recorded and auto-approved — ${json.data.bill_number} is ready for Acc Payables`
+          : `Vendor invoice recorded — ${json.data.bill_number}`
+      );
       setActionDialog(null);
       setInvFile(null);
       setInvNumber("");
@@ -802,6 +810,7 @@ export default function PurchaseOrderDetailPage() {
       setInvAmount("");
       setInvNotes("");
       setInvServiceReportId("");
+      setInvAmcManualReview(false);
       if (invFileRef.current) invFileRef.current.value = "";
       await fetchPo();
     } finally {
@@ -1819,12 +1828,16 @@ export default function PurchaseOrderDetailPage() {
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             {bill ? (
-                              <div className="flex items-center justify-center gap-1">
+                              <Link
+                                href={`/procurement/bills/${bill.id}`}
+                                className="inline-flex items-center justify-center gap-1 hover:opacity-80"
+                                onClick={(e) => e.stopPropagation()}
+                              >
                                 <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
                                 <Badge variant="secondary" className={`text-[10px] ${bill.approval_status === "approved" ? "bg-green-100 text-green-800" : bill.approval_status === "rejected" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
                                   {bill.approval_status === "approved" ? "OK" : bill.approval_status === "rejected" ? "Rejected" : "Pending"}
                                 </Badge>
-                              </div>
+                              </Link>
                             ) : (
                               <span className="text-xs text-amber-600">Pending</span>
                             )}
@@ -2414,6 +2427,7 @@ export default function PurchaseOrderDetailPage() {
           setInvAmount("");
           setInvNotes("");
           setInvServiceReportId("");
+          setInvAmcManualReview(false);
           if (invFileRef.current) invFileRef.current.value = "";
         }}
       >
@@ -2427,6 +2441,25 @@ export default function PurchaseOrderDetailPage() {
                 {po.po_type === "service"
                   ? <>Cycle cost: <strong>{formatCurrency(po.unit_cost_per_cycle ?? 0)}</strong> — invoice must not exceed this amount.</>
                   : <>PO value: <strong>{formatCurrency(po.total_ordered_amount)}</strong> — invoice must not exceed this amount.</>}
+              </div>
+            )}
+
+            {isAmcPo && (po?.vendor_bills ?? []).some((b) => b.approval_status === "approved") && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 space-y-2">
+                <p className="text-sm text-emerald-800">
+                  This AMC contract already has an approved invoice — this one will
+                  auto-approve on save and go straight to Acc Payables, no separate
+                  sign-off needed.
+                </p>
+                <label className="flex items-start gap-2 text-xs text-emerald-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={invAmcManualReview}
+                    onChange={(e) => setInvAmcManualReview(e.target.checked)}
+                  />
+                  <span>Something&apos;s off this cycle (amount, date, etc.) — send for manual review instead</span>
+                </label>
               </div>
             )}
 
