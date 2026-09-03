@@ -294,11 +294,14 @@ function BookingTable({
                         <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
                           <LogIn className="h-3 w-3 shrink-0" />
                           {formatActualTime12(b.check_in_at)}
-                          {b.check_out_at && (
+                          {b.check_out_at ? (
                             <>
                               <LogOut className="h-3 w-3 shrink-0 ml-0.5" />
                               {formatActualTime12(b.check_out_at)}
+                              <span className="text-muted-foreground">({actualUsageDuration(b.check_in_at, b.check_out_at)})</span>
                             </>
+                          ) : (
+                            <span className="text-muted-foreground">(in progress)</span>
                           )}
                         </div>
                       )}
