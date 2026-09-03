@@ -88,6 +88,7 @@ export async function GET(req: NextRequest) {
       created_at, proforma_sent_at, tally_delivered_at,
       voided_at, void_reason, pi_cancelled_at,
       held_at, hold_reason,
+      gst_waived_at, gst_waived_reason,
       lifecycle_stage, tally_credit_note_number,
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
@@ -196,6 +197,8 @@ export async function GET(req: NextRequest) {
     void_reason: string | null;
     held_at: string | null;
     hold_reason: string | null;
+    gst_waived_at: string | null;
+    gst_waived_reason: string | null;
     pi_cancelled_at: string | null;
     lifecycle_stage: string | null;
     tally_credit_note_number: string | null;
@@ -600,6 +603,8 @@ export async function GET(req: NextRequest) {
       void_reason: s.void_reason,
       is_held: !!s.held_at,
       hold_reason: s.hold_reason,
+      gst_waived_at: s.gst_waived_at,
+      gst_waived_reason: s.gst_waived_reason,
       pi_was_cancelled: !!s.pi_cancelled_at,
       lifecycle_stage: s.lifecycle_stage,
       tally_credit_note_number: s.tally_credit_note_number,
