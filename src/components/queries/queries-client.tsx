@@ -44,6 +44,35 @@ function daysOverdue(neededBy: string): number {
   return Math.floor((Date.now() - due) / 86_400_000);
 }
 
+/**
+ * The accent border used to say only "this is awaiting you" — one color for
+ * every reason, which told you nothing about how much work it actually is.
+ * Recolor by why: red for "someone needs you to actually say something",
+ * amber for a payment claim that needs a bank-statement check (same tone as
+ * the "Payment reported" pill), blue for "you already have your answer, this
+ * is a click, not a thought".
+ *
+ * Set via inline style, not a `border-l-{color}` utility class: this file
+ * already pairs the per-side width/color with the all-sides `border`
+ * utility, and Tailwind's own cascade layer ordering — not class order in
+ * the attribute — decides which of two same-specificity border-color rules
+ * wins. `border`'s shorthand color can end up after the per-side utility in
+ * the generated stylesheet and silently overrides it. An inline style has no
+ * such ordering to lose to.
+ */
+function reasonBorderColor(reason: QueryListItem["awaiting_reason"]): string | undefined {
+  switch (reason) {
+    case "needs_answer":
+      return "#ef4444"; // red-500
+    case "verify_payment":
+      return "#f59e0b"; // amber-500
+    case "awaiting_close":
+      return "#3b82f6"; // blue-500
+    default:
+      return undefined;
+  }
+}
+
 export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   // Arriving from a notification (?open=<id>) means "you were called about
   // this one". "Awaiting you" is the wrong landing tab for that — the linked
@@ -264,6 +293,7 @@ function QueryCard({
   const def = queryEntityDef(item.entity_type);
   const isResolved = item.status === "resolved";
   const overdue = !isResolved && item.needed_by ? daysOverdue(item.needed_by) : 0;
+  const borderColor = isResolved ? undefined : reasonBorderColor(item.awaiting_reason);
 
   const audienceText =
     item.audience === "users"
@@ -276,9 +306,8 @@ function QueryCard({
 
   return (
     <div
-      className={`border rounded-lg p-3.5 ${isResolved ? "opacity-60" : ""} ${
-        item.awaiting_viewer && !isResolved ? "border-l-[3px] border-l-amber-500" : ""
-      }`}
+      className={`border rounded-lg p-3.5 ${isResolved ? "opacity-60" : ""}`}
+      style={borderColor ? { borderLeftWidth: 3, borderLeftColor: borderColor } : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">

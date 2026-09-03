@@ -99,6 +99,17 @@ async function fetchThread(
     audienceUsers = (users ?? []) as QueryAuthor[];
   }
 
+  const awaitingViewer = isAwaitingUser(
+    {
+      ...targeting,
+      status: row.status,
+      created_by_id: row.created_by,
+      last_message_author_id: last?.created_by?.id ?? null,
+    },
+    def,
+    viewer,
+  );
+
   return {
     status: 200,
     thread: {
@@ -124,16 +135,17 @@ async function fetchThread(
       payment_report: Array.isArray(row.payment_report)
         ? row.payment_report[0] ?? null
         : row.payment_report ?? null,
-      awaiting_viewer: isAwaitingUser(
-        {
-          ...targeting,
-          status: row.status,
-          created_by_id: row.created_by,
-          last_message_author_id: last?.created_by?.id ?? null,
-        },
-        def,
-        viewer,
-      ),
+      awaiting_viewer: awaitingViewer,
+      // Same reasoning as awaitingReasonFor() in the list route — kept in
+      // sync there since a single-thread panel and the list card should
+      // never disagree about why a thread is awaiting you.
+      awaiting_reason: !awaitingViewer
+        ? null
+        : row.kind === "payment_reported"
+          ? "verify_payment"
+          : row.created_by === viewer.id
+            ? "awaiting_close"
+            : "needs_answer",
     },
   };
 }
