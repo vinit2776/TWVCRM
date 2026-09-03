@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
@@ -433,14 +434,24 @@ export default function BillingPage() {
   const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
 
   // Deep-link support (e.g. the Billing Reconciliation report links straight to
-  // an invoice): ?statement=<id> opens the dialog on load, same lazy-init
-  // pattern as `activeTab` above — avoids the Suspense boundary useSearchParams() requires.
+  // an invoice): ?statement=<id> opens the dialog. A lazy useState initializer
+  // alone only fires on a hard reload — Next's router reuses this page's
+  // already-mounted instance on a client-side <Link> navigation from another
+  // route, so the initializer never re-runs and the dialog silently fails to
+  // open. usePathname() IS reactive across that navigation (its return value
+  // updates on the reused instance), so re-reading the query string whenever
+  // it changes catches the soft-navigation case too.
   const [viewStatementId, setViewStatementId]             = useState<string | null>(() => {
     if (typeof window !== "undefined") {
       return new URLSearchParams(window.location.search).get("statement");
     }
     return null;
   });
+  const pathname = usePathname();
+  useEffect(() => {
+    const sid = new URLSearchParams(window.location.search).get("statement");
+    if (sid) setViewStatementId(sid);
+  }, [pathname]);
 
   // ── Record Payment dialog (form lives in RecordPaymentDialog) ────────────
   const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);
