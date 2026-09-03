@@ -56,6 +56,27 @@ function formatTime12(timeStr: string): string {
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+// check_in_at / check_out_at are full ISO timestamps (unlike start_time /
+// end_time, which are bare "HH:MM:SS" slot strings) — always render in IST
+// regardless of the browser/server's local timezone.
+function formatActualTime12(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function actualUsageDuration(checkInAt: string, checkOutAt: string): string {
+  const minutes = Math.max(0, Math.round((new Date(checkOutAt).getTime() - new Date(checkInAt).getTime()) / 60000));
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
 function isBookingPastStartTime(b: Booking): boolean {
   const now = new Date();
   const today = now.toISOString().split("T")[0];
@@ -269,6 +290,21 @@ function BookingTable({
                     <td className="px-4 py-2.5 hidden xl:table-cell text-xs text-muted-foreground">{b.location?.name || "—"}</td>
                     <td className="px-4 py-2.5">
                       <div className="text-xs">{formatTime12(b.start_time)} – {formatTime12(b.end_time)}</div>
+                      {b.check_in_at && (
+                        <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                          <LogIn className="h-3 w-3 shrink-0" />
+                          {formatActualTime12(b.check_in_at)}
+                          {b.check_out_at ? (
+                            <>
+                              <LogOut className="h-3 w-3 shrink-0 ml-0.5" />
+                              {formatActualTime12(b.check_out_at)}
+                              <span className="text-muted-foreground">({actualUsageDuration(b.check_in_at, b.check_out_at)})</span>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">(in progress)</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-xs">{customerName}</td>
                     <td className="px-4 py-2.5 hidden lg:table-cell">
@@ -759,6 +795,21 @@ export default function BookingsPage() {
                               <div className="text-xs text-muted-foreground">
                                 {formatTime12(b.start_time)} – {formatTime12(b.end_time)}
                               </div>
+                              {b.check_in_at && (
+                                <div className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                                  <LogIn className="h-3 w-3 shrink-0" />
+                                  {formatActualTime12(b.check_in_at)}
+                                  {b.check_out_at ? (
+                                    <>
+                                      <LogOut className="h-3 w-3 shrink-0 ml-0.5" />
+                                      {formatActualTime12(b.check_out_at)}
+                                      <span className="text-muted-foreground">({actualUsageDuration(b.check_in_at, b.check_out_at)})</span>
+                                    </>
+                                  ) : (
+                                    <span className="text-muted-foreground">(in progress)</span>
+                                  )}
+                                </div>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-xs">{customerName}</td>
                             <td className="px-4 py-3 hidden lg:table-cell">
