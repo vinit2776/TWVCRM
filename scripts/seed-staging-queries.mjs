@@ -182,8 +182,7 @@ async function upsertVendorBill(vendorId, createdBy, companyId) {
   return data.id;
 }
 
-async function upsertPurchaseRequest(requestedBy, locationId, companyId) {
-  const prNumber = "QA-PR-01";
+async function upsertPurchaseRequest(prNumber, requestedBy, locationId, companyId, amount) {
   const { data: existing } = await supa.from("purchase_requests").select("id").eq("pr_number", prNumber).maybeSingle();
   if (existing) return existing.id;
   const { data, error } = await supa
@@ -194,13 +193,38 @@ async function upsertPurchaseRequest(requestedBy, locationId, companyId) {
       location_id: locationId,
       status: "submitted",
       requested_by: requestedBy,
-      total_estimated_amount: 3200,
+      total_estimated_amount: amount,
       company_id: companyId,
     })
     .select("id")
     .single();
   if (error) throw error;
-  console.log("Created purchase request QA-PR-01");
+  console.log(`Created purchase request ${prNumber}`);
+  return data.id;
+}
+
+/** For the "verified" payment-report scenario — a real payment row to point billing_payment_id at. */
+async function upsertBillingPayment(statementId, amount) {
+  const reference = "QA-PAYMENT-VERIFIED-01";
+  const { data: existing } = await supa
+    .from("billing_payments")
+    .select("id")
+    .eq("payment_reference", reference)
+    .maybeSingle();
+  if (existing) return existing.id;
+  const { data, error } = await supa
+    .from("billing_payments")
+    .insert({
+      billing_statement_id: statementId,
+      amount,
+      payment_date: dateDaysAgo(3),
+      payment_mode: "upi",
+      payment_reference: reference,
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  console.log("Created billing payment QA-PAYMENT-VERIFIED-01");
   return data.id;
 }
 
@@ -291,6 +315,7 @@ async function upsertQuery({
       payment_mode: paymentReport.paymentMode,
       payment_reference: paymentReport.paymentReference ?? null,
       status: paymentReport.status,
+      billing_payment_id: paymentReport.billingPaymentId ?? null,
       resolution_note: paymentReport.resolutionNote ?? null,
       reviewed_by: paymentReport.reviewedBy ?? null,
       reviewed_at: paymentReport.reviewedAt ?? null,
@@ -321,7 +346,9 @@ async function main() {
   const statementId = await getOrCreateStatement(contract.id, contract.lead_id);
   const vendor = await getVendor();
   const billId = await upsertVendorBill(vendor.id, accountsId, companyId);
-  const prId = await upsertPurchaseRequest(salesId, null, companyId);
+  const prId = await upsertPurchaseRequest("QA-PR-01", salesId, null, companyId, 3200);
+  const pr2Id = await upsertPurchaseRequest("QA-PR-02", salesId, null, companyId, 4800);
+  const verifiedPaymentId = await upsertBillingPayment(statementId, 17700);
 
   // 1. Billing · open question, audience all — awaiting everyone including admin.
   await upsertQuery({
@@ -350,16 +377,21 @@ async function main() {
   });
 
   // 3. Payables · answered but never closed (the "needs closing" clutter case).
+  // NOTE: qa_seed_bill_answered (the original of this scenario) got resolved
+  // by clicking the "Resolve" quick-action during manual testing, so it now
+  // lives under Resolved instead — which is a fine outcome to leave seeded
+  // (it exercises that click path), but it stopped covering "answered, not
+  // yet overdue" in Awaiting You. This is a fresh copy of the same shape.
   await upsertQuery({
-    marker: "qa_seed_bill_answered",
+    marker: "qa_seed_bill_answered_2",
     entityType: "vendor_bill",
     entityId: billId,
     kind: "question",
     audience: "all",
     createdBy: adminId,
-    createdAt: daysAgo(9),
-    openingBody: "Which TDS section applies to this bill, and at what rate?",
-    reply: { body: "Section 194C, 2% — standard contractor rate for this vendor.", by: accountsId, createdAt: daysAgo(8) },
+    createdAt: daysAgo(7),
+    openingBody: "Does the GST on this bill look right against the vendor's invoice?",
+    reply: { body: "Yes — matches their GSTIN and the rate on file.", by: accountsId, createdAt: daysAgo(6) },
   });
 
   // 4. Procurement · resolved this week.
@@ -449,6 +481,139 @@ async function main() {
       resolutionNote: "No matching bank credit found; customer confirmed wrong screenshot.",
       reviewedBy: accountsId,
       reviewedAt: daysAgo(4),
+    },
+  });
+
+  // 9. Payments reported · resolved as "verified" — the third outcome, needs
+  //    a real billing_payments row for billing_payment_id to point at.
+  await upsertQuery({
+    marker: "qa_seed_payment_report_verified",
+    entityType: "billing_statement",
+    entityId: statementId,
+    kind: "payment_reported",
+    audience: "roles",
+    audienceRoles: ["admin", "accounts"],
+    createdBy: salesId,
+    createdAt: daysAgo(4),
+    openingBody: "Customer reports paying ₹17,700 · UPI · " + dateDaysAgo(3) + ".",
+    resolve: {
+      by: accountsId,
+      at: daysAgo(2),
+      eventType: "payment_verified",
+      body: "Matched to the bank credit on " + dateDaysAgo(3) + " — recorded.",
+    },
+    paymentReport: {
+      amount: 17700,
+      paidOn: dateDaysAgo(3),
+      paymentMode: "upi",
+      paymentReference: "QA-UTR-VERIFIED-01",
+      status: "verified",
+      billingPaymentId: verifiedPaymentId,
+      reviewedBy: accountsId,
+      reviewedAt: daysAgo(2),
+    },
+  });
+
+  // 10. Payments reported · open AND overdue — tests the overdue+verify_payment
+  //     color/sort interaction (red "Overdue" pill on an amber-bordered card).
+  await upsertQuery({
+    marker: "qa_seed_payment_report_overdue",
+    entityType: "billing_statement",
+    entityId: statementId,
+    kind: "payment_reported",
+    audience: "roles",
+    audienceRoles: ["admin", "accounts"],
+    createdBy: accountsId,
+    createdAt: daysAgo(4),
+    neededBy: dateDaysAgo(1),
+    openingBody: "Customer reports paying ₹6,200 · Cash · " + dateDaysAgo(4) + ". Please verify — this is going stale.",
+    paymentReport: {
+      amount: 6200,
+      paidOn: dateDaysAgo(4),
+      paymentMode: "cash",
+      status: "reported",
+    },
+  });
+
+  // 11. Tally Inbox · open question, audience all — awaiting admin (INBOX_ROLES
+  //     includes admin), so this module has an "awaiting you" example, not
+  //     just the "targeted at someone else" one from #6.
+  await upsertQuery({
+    marker: "qa_seed_tally_inbox_open",
+    entityType: "proposal_deposit",
+    entityId: contract.proposal_id,
+    kind: "question",
+    audience: "all",
+    createdBy: accountsId,
+    createdAt: daysAgo(1),
+    openingBody: "Is this a fresh security deposit or a top-up against an existing contract?",
+  });
+
+  // 12. Procurement · open, targeted directly at admin — this module otherwise
+  //     only has the resolved PR from #4, so "Awaiting you" + Procurement chip
+  //     would show nothing without this.
+  await upsertQuery({
+    marker: "qa_seed_procurement_open",
+    entityType: "purchase_request",
+    entityId: pr2Id,
+    kind: "question",
+    audience: "users",
+    audienceUserIds: [adminId],
+    createdBy: salesId,
+    createdAt: daysAgo(1),
+    openingBody: "Which budget head and location should this be charged to?",
+  });
+
+  // 13. Contracts · raised by admin, addressed to two people, nobody has
+  //     replied yet — covers two gaps at once: "Raised by me" with something
+  //     NOT also in "Awaiting you" (every other raised-by-admin thread here
+  //     already got a reply), and a multi-person audience (audience_user_ids
+  //     with 2+ people renders "N people", not "You" — only true when the
+  //     viewer isn't one of the addressees, since awaiting_viewer wins first).
+  await upsertQuery({
+    marker: "qa_seed_raised_by_me_multi_user",
+    entityType: "contract",
+    entityId: contract.id,
+    kind: "question",
+    audience: "users",
+    audienceUserIds: [accountsId, salesId],
+    createdBy: adminId,
+    createdAt: daysAgo(2),
+    openingBody: "What was actually agreed on the security deposit for this contract — any waiver approved?",
+  });
+
+  // 14. Payables · multiple roles addressed at once — tests the "→ Accounts,
+  //     Admin" multi-role audience label.
+  await upsertQuery({
+    marker: "qa_seed_multi_role_audience",
+    entityType: "vendor_bill",
+    entityId: billId,
+    kind: "question",
+    audience: "roles",
+    audienceRoles: ["accounts", "admin"],
+    createdBy: salesId,
+    createdAt: daysAgo(1),
+    openingBody: "This looks like it may duplicate a bill already booked for this vendor — can you confirm before paying?",
+  });
+
+  // 15. Contracts · answered AND overdue at the same time — an edge case for
+  //     the color/sort logic: overdue always sorts first regardless of
+  //     awaiting_reason, so this should render with BOTH the amber "Overdue"
+  //     pill and the blue "awaiting_close" border/Resolve button.
+  await upsertQuery({
+    marker: "qa_seed_overdue_awaiting_close",
+    entityType: "contract",
+    entityId: contract.id,
+    kind: "question",
+    audience: "all",
+    createdBy: adminId,
+    createdAt: daysAgo(10),
+    neededBy: dateDaysAgo(2),
+    openingBody: "Was a rate revision agreed for this contract that isn't reflected yet?",
+    reply: {
+      body: "No revision on file — confirmed with the customer, rate stays as-is.",
+      by: salesId,
+      createdAt: daysAgo(8),
     },
   });
 
