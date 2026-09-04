@@ -783,10 +783,14 @@ async function fetchPortfolio(supabase: any): Promise<Portfolio> {
   // returned 0 rows (only `data` was destructured, `error` was ignored).
   // The contract detail page's own "Monthly Fee" display resolves to
   // `subtotal ?? total_amount` (see contracts/[id]/page.tsx) — use the same.
+  // Includes renewal_in_progress alongside active — a contract mid-renewal
+  // is still billing (the old term keeps running until the new one
+  // activates), so excluding it silently dropped that tenant's rent to zero
+  // in this portfolio MRR figure for the whole renewal window.
   const { data: contracts } = await supabase
     .from("contracts")
     .select("subtotal, total_amount")
-    .eq("status", "active");
+    .in("status", ["active", "renewal_in_progress"]);
 
   const rows = contracts || [];
   return {
