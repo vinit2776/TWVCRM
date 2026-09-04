@@ -10,6 +10,20 @@
  * call buildBillingReconciliationReport() so the numbers in the browser and
  * the download can never drift apart.
  *
+ * Renewal double-count guard: while a renewal child hasn't activated yet
+ * (still draft/sent/viewed/accepted — see PRE_ACTIVATION_STATUSES), it stays
+ * quiet on future months instead of projecting its own expected rent. The
+ * parent is still projecting its own guess for those same months (see the
+ * cutoff branch below) — showing both would count one future month's rent
+ * twice across two rows and inflate every total. Once the child actually
+ * activates, the system flips the parent to `renewed`, which already makes
+ * the parent hand off to "renewed_out" instead of projecting — so at every
+ * point in the lifecycle exactly one row is ever projecting a given future
+ * month, never zero, never two. A real statement or moratorium on the child
+ * still always wins even before activation — this guard only suppresses the
+ * *guess*, never real data (e.g. an ad-hoc invoice billed against the child
+ * ahead of activation shows up normally).
+ *
  * Row inclusion:
  *   - status IN (active, renewal_in_progress) — always shown.
  *   - ANY status with at least one finalized, non-voided statement that's
@@ -74,6 +88,10 @@ import { leadName } from "@/lib/invoice-party";
 import { todayIst } from "@/lib/receivables";
 
 const BILLABLE_STATUSES = ["active", "renewal_in_progress"] as const;
+// A renewal child sitting in one of these statuses hasn't activated yet —
+// deliberately excludes "rejected" (a dead renewal, not "pending") and
+// "expired"/"terminated" (not real pre-activation states for a fresh child).
+const PRE_ACTIVATION_STATUSES = ["draft", "sent", "viewed", "accepted"] as const;
 
 export type ReconciliationCellType =
   | "paid"
@@ -408,6 +426,17 @@ export async function buildBillingReconciliationReport(
         }
         // terminated, expired, or any other lapsed status — nothing more is coming.
         return emptyCell("terminated");
+      }
+
+      // A renewal child not yet active stays quiet here rather than projecting
+      // its own future rent — the parent is still doing that (see the
+      // cutoff branch above), and until the child actually activates there's
+      // only one real future number, not two. Real statements/moratoriums
+      // above still take priority even here — if ops bills this contract
+      // directly (e.g. an ad-hoc invoice attributed before activation), that
+      // real data is never suppressed, only the guess is.
+      if (c.is_renewal && c.parent_contract_id && PRE_ACTIVATION_STATUSES.includes(c.status as (typeof PRE_ACTIVATION_STATUSES)[number])) {
+        return emptyCell("not_started");
       }
 
       // Not yet billed — project what the real generator would eventually charge.
