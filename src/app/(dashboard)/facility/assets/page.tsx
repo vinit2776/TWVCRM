@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Search, Pencil, ScanLine, Printer, CheckSquare } from "lucide-react";
+import { Plus, Search, Pencil, ScanLine, Printer, CheckSquare, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -69,6 +69,14 @@ export default function FacilityAssetsPage() {
     router.push(`/facility/assets/batch-print?ids=${encodeURIComponent(ids)}`);
   };
 
+  const downloadCsv = () => {
+    const params = new URLSearchParams({ format: "csv" });
+    if (locationId) params.set("location_id", locationId);
+    if (categoryId) params.set("category_id", categoryId);
+    if (search.trim()) params.set("search", search.trim());
+    window.location.href = `/api/facility/assets?${params.toString()}`;
+  };
+
   useEffect(() => {
     fetch("/api/locations?is_active=true").then((r) => r.json()).then((j) => setLocations(j.data || []));
     fetch("/api/facility/categories").then((r) => r.json()).then((j) => setCategories(j.data || []));
@@ -104,6 +112,9 @@ export default function FacilityAssetsPage() {
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setScannerOpen(true)}>
             <ScanLine className="h-4 w-4 mr-1" /> Scan QR
+          </Button>
+          <Button size="sm" variant="outline" onClick={downloadCsv}>
+            <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
           <Button
             size="sm"
