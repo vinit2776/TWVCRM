@@ -66,10 +66,15 @@ export async function GET() {
       .neq("payment_status", "paid"),
 
     // Payables: vendor bills unpaid / partial. Use due_date if present, fall
-    // back to invoice_date.
+    // back to invoice_date. Scoped to approval_status = 'approved' — a
+    // pending bill isn't actually payable yet (Acc Payables only records
+    // payments against approved bills, and its default list view filters
+    // to approved), so counting it here overstates what's owed. Matches
+    // the receivables side, which likewise only counts finalized statements.
     adminSupabase
       .from("vendor_bills")
       .select("id, total_amount, amount_paid, due_date, invoice_date, payment_status, approved_at, created_at")
+      .eq("approval_status", "approved")
       .in("payment_status", ["unpaid", "partially_paid"]),
   ]);
 
