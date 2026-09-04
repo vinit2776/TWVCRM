@@ -81,6 +81,15 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     [categories, form.category_id],
   );
 
+  // `categories` holds inactive ones too so the code-prefix lookup below can
+  // still resolve an asset whose category was deactivated after it was created.
+  // The pickers must not *offer* inactive categories though — except the one
+  // this asset already has, which has to stay visible and selected.
+  const selectableCategories = useMemo(
+    () => categories.filter((c) => c.is_active || c.id === asset?.category_id),
+    [categories, asset?.category_id],
+  );
+
   const customFields: CategoryCustomField[] = useMemo(
     () => (selectedCategory?.custom_field_schema as CategoryCustomField[] | undefined) || [],
     [selectedCategory],
@@ -90,7 +99,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     if (!open) return;
     Promise.all([
       fetch("/api/locations?is_active=true").then((r) => r.json()),
-      fetch("/api/facility/categories").then((r) => r.json()),
+      fetch("/api/facility/categories?include_inactive=true").then((r) => r.json()),
     ]).then(([loc, cat]) => {
       setLocations(loc.data || []);
       setCategories(cat.data || []);
@@ -302,7 +311,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
           <option value="">— Select —</option>
-          {categories.map((c) => (
+          {selectableCategories.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
@@ -616,7 +625,11 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           onChange={(e) => { setForm({ ...form, category_id: e.target.value }); setCustomValues({}); }}
           className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
         >
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {selectableCategories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.is_active ? c.name : `${c.name} (inactive)`}
+            </option>
+          ))}
         </select>
         {form.category_id !== asset?.category_id && (
           <Hint>Changing category assigns a new asset code and resets category-specific fields below.</Hint>
