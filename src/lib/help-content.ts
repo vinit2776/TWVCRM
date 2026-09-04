@@ -1570,8 +1570,11 @@ export const HELP_CONTENT: HelpContentData = {
   /*  Support info                                                     */
   /* ================================================================ */
 
+  // Internal staff support contact — NOT the sales/customer inbox
+  // (contact@theworkvilla.com). Placeholder until a dedicated internal
+  // support address/channel exists.
   supportInfo: {
-    email: "contact@theworkvilla.com",
-    phone: "+91 97910 97900",
+    email: "vinit@theworkvilla.com",
+    phone: "",
   },
 };
