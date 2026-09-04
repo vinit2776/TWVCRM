@@ -9,6 +9,10 @@ const CommandPalette = dynamic(
   () => import("@/components/shared/command-palette").then(m => ({ default: m.CommandPalette }))
 );
 
+const HelpChatWidget = dynamic(
+  () => import("@/components/help/help-chat-widget").then(m => ({ default: m.HelpChatWidget }))
+);
+
 export default function DashboardLayout({
   children,
 }: {
@@ -33,6 +37,7 @@ export default function DashboardLayout({
         <MobileNav />
         <CommandPalette />
         <ReportIssueButton />
+        <HelpChatWidget />
       </div>
     </CurrentUserProvider>
   );
