@@ -345,9 +345,16 @@ export default function AccountsReceivablePage() {
   // this dialog is not behind canRecordPayment.
   const [reportRow, setReportRow] = useState<ReceivableRow | null>(null);
   const [pendingReports, setPendingReports] = useState<PendingPaymentReport[]>([]);
-  // Reporting a security deposit paid straight into the bank. Separate state
-  // from reportRow because the two hang off different entity types.
+  // Reporting a security deposit paid straight into the bank, or an ad-hoc
+  // invoice reported paid before it was ever formally sent through the CRM.
+  // Separate state from reportRow because these hang off different entity
+  // types.
   const [reportDepositRow, setReportDepositRow] = useState<OtherReceivableRow | null>(null);
+  // Set only for the ad-hoc-invoice case: reporting one requires a
+  // billing_statement to attach the claim to, which a still-draft invoice
+  // doesn't have yet — see openReportForOtherRow.
+  const [reportAdhocStatementId, setReportAdhocStatementId] = useState<string | null>(null);
+  const [promotingAdhocId, setPromotingAdhocId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -599,6 +606,46 @@ export default function AccountsReceivablePage() {
   };
 
   const openHistory = (row: { id: string; statement_number: string }) => setHistoryRow(row);
+
+  /**
+   * "Report paid" on an OtherReceivableRow — a security deposit reports
+   * straight against the proposal, but an ad-hoc invoice needs a
+   * billing_statement to attach the claim to. A still-draft invoice (never
+   * emailed, never marked sent) doesn't have one yet — which is the normal
+   * case here: someone paid an invoice that was handed over outside the
+   * CRM, and nobody went back to click Mark as Sent first.
+   *
+   * Reporting a payment is itself proof the invoice reached the customer,
+   * so this promotes the invoice to "sent" first (the same mirror-creation
+   * path Mark as Sent uses — idempotent if it's already sent) and only then
+   * opens the report dialog against the resulting statement.
+   */
+  const openReportForOtherRow = async (row: OtherReceivableRow) => {
+    if (row.kind !== "adhoc_invoice") {
+      setReportDepositRow(row);
+      return;
+    }
+    setPromotingAdhocId(row.id);
+    try {
+      const res = await fetch(`/api/invoices/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "sent" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to prepare this invoice for reporting");
+      if (!json.billing_statement_id) {
+        throw new Error("Couldn't find or create a statement for this invoice — try again, or check with an admin");
+      }
+      setReportAdhocStatementId(json.billing_statement_id);
+      setReportDepositRow(row);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to prepare this invoice for reporting");
+    } finally {
+      setPromotingAdhocId(null);
+    }
+  };
 
   const exportCsv = () => {
     window.location.href = "/api/accounting/receivables/export";
@@ -1085,7 +1132,8 @@ export default function AccountsReceivablePage() {
         totalCount={otherRows.length}
         canRecordPayment={canRecordPayment}
         onRecorded={load}
-        onReportDeposit={setReportDepositRow}
+        onReportDeposit={openReportForOtherRow}
+        promotingId={promotingAdhocId}
         reportsForRow={reportsForOtherRow}
       />
 
@@ -1113,12 +1161,26 @@ export default function AccountsReceivablePage() {
 
       <ReportPaymentDialog
         open={!!reportDepositRow}
-        onOpenChange={(o) => !o && setReportDepositRow(null)}
-        entityType="proposal_deposit"
-        entityId={reportDepositRow?.id ?? null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setReportDepositRow(null);
+            setReportAdhocStatementId(null);
+          }
+        }}
+        // Deposits report against the proposal directly. Ad-hoc invoices
+        // report against the billing_statement openReportForOtherRow just
+        // promoted/found for them.
+        entityType={reportDepositRow?.kind === "adhoc_invoice" ? "billing_statement" : "proposal_deposit"}
+        entityId={
+          reportDepositRow?.kind === "adhoc_invoice"
+            ? reportAdhocStatementId
+            : reportDepositRow?.id ?? null
+        }
         partyLabel={
           reportDepositRow
-            ? `${reportDepositRow.party_name} · ${reportDepositRow.reference} · security deposit`
+            ? `${reportDepositRow.party_name} · ${reportDepositRow.reference} · ${
+                reportDepositRow.kind === "adhoc_invoice" ? "ad-hoc invoice" : "security deposit"
+              }`
             : null
         }
         suggestedAmount={reportDepositRow?.balance_due ?? null}
@@ -1320,12 +1382,14 @@ interface OtherSummary {
  * or search box, which was as good as invisible to anyone not already
  * looking for it.
  */
-function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, reportsForRow }: {
+function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, promotingId, reportsForRow }: {
   rows: OtherReceivableRow[];
   totalCount: number;
   canRecordPayment: boolean;
   onRecorded: () => void;
   onReportDeposit: (row: OtherReceivableRow) => void;
+  /** id of the row currently being promoted to "sent" before its report dialog opens — see openReportForOtherRow. */
+  promotingId: string | null;
   reportsForRow: (row: OtherReceivableRow) => PendingPaymentReport[];
 }) {
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
@@ -1446,20 +1510,33 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                           </Button>
                         )}
                         {/*
-                          Only security deposits for now. A top-up has no
-                          report path yet: there are no pending top-ups to
-                          report against, so shipping the button would be
-                          shipping an untestable one.
+                          Deposits and ad-hoc invoices — not top-ups. A
+                          top-up has no report path yet: there are no
+                          pending top-ups to report against, so shipping the
+                          button would be shipping an untestable one. An
+                          ad-hoc invoice here is normally still a draft (see
+                          the AR duplication fix — a sent one lives in the
+                          Detail view instead), so reporting one first
+                          silently promotes it to "sent" — see
+                          openReportForOtherRow.
                         */}
-                        {r.kind === "deposit" && (
+                        {(r.kind === "deposit" || r.kind === "adhoc_invoice") && (
                           <Button
                             size="sm"
                             variant="outline"
                             className="border-teal-200 text-teal-700 hover:bg-teal-50"
                             onClick={() => onReportDeposit(r)}
-                            title="Customer says they've paid the deposit outside the CRM — tell accounts"
+                            disabled={promotingId === r.id}
+                            title={
+                              r.kind === "deposit"
+                                ? "Customer says they've paid the deposit outside the CRM — tell accounts"
+                                : "Customer says they've paid this invoice outside the CRM — tell accounts"
+                            }
                           >
-                            <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
+                            {promotingId === r.id
+                              ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                              : <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" />}
+                            Report paid
                           </Button>
                         )}
                         <Button

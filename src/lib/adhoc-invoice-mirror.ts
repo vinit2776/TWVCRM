@@ -32,7 +32,7 @@ export async function mirrorInvoiceToStatement(
   admin: SupabaseClient,
   invoice: MirrorableInvoice,
   razorpay: { linkId: string | null; linkUrl: string | null },
-): Promise<{ dueDate: string }> {
+): Promise<{ dueDate: string; statementId: string }> {
   // The AR reminder ladder reads due_date off the invoice row directly, not
   // off this mirror — callers persist this back onto proforma_invoices
   // themselves when the invoice didn't already have one.
@@ -51,7 +51,7 @@ export async function mirrorInvoiceToStatement(
         .update({ razorpay_payment_link_id: razorpay.linkId, razorpay_payment_link_url: razorpay.linkUrl })
         .eq("id", existingStatement.id);
     }
-    return { dueDate };
+    return { dueDate, statementId: existingStatement.id as string };
   }
 
   const todayYmd = new Date().toISOString().slice(0, 10);
@@ -63,7 +63,7 @@ export async function mirrorInvoiceToStatement(
     hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
   }));
 
-  await admin.from("billing_statements").insert({
+  const { data: newStatement } = await admin.from("billing_statements").insert({
     invoice_id: invoice.id,
     contract_id: null,
     proposal_id: invoice.proposal_id ?? null,
@@ -89,7 +89,7 @@ export async function mirrorInvoiceToStatement(
     razorpay_payment_link_id: razorpay.linkId,
     razorpay_payment_link_url: razorpay.linkUrl,
     line_items: [{ type: "usage", label: invoice.title, items: lineItems, subtotal: invoice.subtotal }],
-  });
+  }).select("id").single();
 
-  return { dueDate };
+  return { dueDate, statementId: newStatement!.id as string };
 }

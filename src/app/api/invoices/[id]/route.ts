@@ -94,13 +94,15 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  let billingStatementId: string | null = null;
   if (isMarkingSent && oldInvoice) {
     try {
-      await mirrorInvoiceToStatement(
+      const { statementId } = await mirrorInvoiceToStatement(
         createAdminClient(),
         { ...oldInvoice, due_date: (allowedFields.due_date as string | undefined) ?? oldInvoice.due_date },
         { linkId: oldInvoice.razorpay_link_id, linkUrl: oldInvoice.razorpay_link_url },
       );
+      billingStatementId = statementId;
     } catch (e) {
       console.error("[invoice PATCH] billing_statements mirror failed (non-fatal):", e);
     }
@@ -117,5 +119,5 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json({ data });
+  return NextResponse.json({ data, billing_statement_id: billingStatementId });
 }
