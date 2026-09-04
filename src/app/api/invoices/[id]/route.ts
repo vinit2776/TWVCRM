@@ -80,8 +80,19 @@ export async function PATCH(
   // ad-hoc invoice gets. Without it, this invoice would flip to "sent" and
   // then never appear anywhere the AR pipeline looks — no Detail-view row,
   // no "Report paid", nothing to record a payment against.
-  const isMarkingSent = body.status === "sent" && oldInvoice?.status === "draft";
-  if (isMarkingSent && !oldInvoice?.due_date) {
+  //
+  // Gated on the OLD status being "draft" until it wasn't enough: an invoice
+  // already sitting at "sent" (mirrored via the old, pre-fix Mark as Sent
+  // that never created one) or "overdue" (the old Mark as Overdue button,
+  // removed but not retroactive) asks for the exact same "sent" body and
+  // never got a second chance to mirror. mirrorInvoiceToStatement is
+  // idempotent — it looks up an existing statement before creating one — so
+  // it's safe to just always attempt it here whenever the caller wants this
+  // invoice "sent" and it isn't already a dead end.
+  const wantsSent = body.status === "sent";
+  const eligibleForMirror =
+    wantsSent && !!oldInvoice && oldInvoice.status !== "paid" && oldInvoice.status !== "cancelled";
+  if (eligibleForMirror && !oldInvoice.due_date) {
     allowedFields.due_date = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
 
@@ -95,7 +106,7 @@ export async function PATCH(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   let billingStatementId: string | null = null;
-  if (isMarkingSent && oldInvoice) {
+  if (eligibleForMirror) {
     try {
       const { statementId } = await mirrorInvoiceToStatement(
         createAdminClient(),
