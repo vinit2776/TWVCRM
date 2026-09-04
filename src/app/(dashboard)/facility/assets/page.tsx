@@ -11,7 +11,7 @@ import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
-import type { FacilityAsset } from "@/types";
+import type { FacilityAsset, FacilityAssetCategory } from "@/types";
 
 interface Location { id: string; name: string }
 
@@ -19,9 +19,11 @@ export default function FacilityAssetsPage() {
   const router = useRouter();
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [categories, setCategories] = useState<FacilityAssetCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [locationId, setLocationId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<FacilityAsset | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -32,6 +34,7 @@ export default function FacilityAssetsPage() {
     setLoading(true);
     const params = new URLSearchParams({ include_stats: "true" });
     if (locationId) params.set("location_id", locationId);
+    if (categoryId) params.set("category_id", categoryId);
     if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/facility/assets?${params.toString()}`);
     const json = await res.json();
@@ -68,13 +71,16 @@ export default function FacilityAssetsPage() {
 
   useEffect(() => {
     fetch("/api/locations?is_active=true").then((r) => r.json()).then((j) => setLocations(j.data || []));
+    fetch("/api/facility/categories").then((r) => r.json()).then((j) => setCategories(j.data || []));
   }, []);
 
   useEffect(() => {
     const t = setTimeout(fetchData, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId, search]);
+  }, [locationId, categoryId, search]);
+
+  const hasActiveFilters = !!(search.trim() || locationId || categoryId);
 
   // Group by location for nicer presentation
   const grouped = useMemo(() => {
@@ -121,10 +127,28 @@ export default function FacilityAssetsPage() {
           <option value="">All locations</option>
           {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
+        <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="h-10 px-2 rounded-md border bg-background text-sm">
+          <option value="">All categories</option>
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
       </div>
 
       {loading ? (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
+      ) : grouped.length === 0 && hasActiveFilters ? (
+        <div className="max-w-md mx-auto py-14 px-4 text-center space-y-3">
+          <div className="text-lg font-semibold">No assets match this filter</div>
+          <p className="text-sm text-muted-foreground">
+            Try a different location, category, or search term.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setSearch(""); setLocationId(""); setCategoryId(""); }}
+          >
+            Clear filters
+          </Button>
+        </div>
       ) : grouped.length === 0 ? (
         <div className="max-w-md mx-auto py-14 px-4 text-center space-y-6">
           <div className="text-2xl font-semibold">Start your asset register</div>
