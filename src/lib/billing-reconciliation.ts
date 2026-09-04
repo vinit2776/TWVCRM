@@ -19,21 +19,29 @@
  *     even an active one that's fallen behind from a month outside the
  *     12-month window (see "Carried forward" below).
  *
- * Per-month cell resolution order (see the cells.map body):
+ * Per-month cell resolution order (see the cells.map body) — a real
+ * statement is checked FIRST and always wins over any inferred state. A
+ * `renewal_in_progress` contract's end_date routinely lapses before its
+ * renewal actually activates (creating the renewal draft never touches the
+ * parent's end_date — see renew/route.ts), and ops keeps billing the gap
+ * manually in the meantime; if the "past cutoff" check ran before the
+ * statement lookup, that real, already-issued invoice would be silently
+ * masked by a "projected"/"renewed_out"/"terminated" guess — invoice number
+ * included. Never bury ground truth under an inference:
  *   1. Before the row's own start_date → "not_started" (only ever hit by a
  *      freshly created renewal child before its term begins).
- *   2. Past the row's own cutoff month (end_date for active/renewal_in_progress/
+ *   2. A real, finalized, non-voided statement covers this month → "paid" /
+ *      "partial" / "unpaid", using computeSettlement() — the one shared
+ *      definition of "paid" in this codebase — rather than trusting the
+ *      statement's own (informal, not always fresh) payment_status column.
+ *   3. An approved moratorium covers this month → "moratorium".
+ *   4. Past the row's own cutoff month (end_date for active/renewal_in_progress/
  *      renewed rows, terminated_at for everything else) →
  *        "renewed_out" (status is renewed and a child contract exists),
  *        "projected" (still active/renewal_in_progress — beyond-tenure
  *        escalation estimate, no successor yet),
  *        or "terminated" (anything else — terminated, expired, or a lapsed
  *        contract with no further billing).
- *   3. An approved moratorium covers this month → "moratorium".
- *   4. A real, finalized, non-voided statement covers this month → "paid" /
- *      "partial" / "unpaid", using computeSettlement() — the one shared
- *      definition of "paid" in this codebase — rather than trusting the
- *      statement's own (informal, not always fresh) payment_status column.
  *   5. Otherwise "future" — rent not yet billed, computed via the exact same
  *      rate-phase-aware pure function (computeRenewalSplitRentSegments) the
  *      real generator uses, so the projection matches what production
@@ -352,6 +360,35 @@ export async function buildBillingReconciliationReport(
 
       if (wKey < startMonthKey) return emptyCell("not_started");
 
+      // A real, already-issued statement is ground truth and always wins,
+      // regardless of what the contract's own lifecycle fields say. A
+      // `renewal_in_progress` contract's end_date routinely lapses before its
+      // renewal actually activates (creating the draft never moves it), and
+      // ops keeps billing the gap manually in the meantime — that real
+      // invoice must never be masked by a "past cutoff" guess just because
+      // the nominal end_date has already passed.
+      const statement = statementsByContractMonth.get(c.id)?.get(wKey);
+      if (statement) {
+        const payments = paymentsByStatement.get(statement.id) ?? [];
+        const settlement = computeSettlement(statement.total_amount, payments);
+        const cell = emptyCell(
+          settlement.paymentStatus === "paid" ? "paid" : settlement.paymentStatus === "partially_paid" ? "partial" : "unpaid"
+        );
+        cell.amount = settlement.settlementAmount;
+        cell.collected = settlement.totalPaid;
+        cell.owed = settlement.balanceDue;
+        cell.invoiceNumber = statement.gst_invoice_number || statement.statement_number;
+        cell.statementId = statement.id;
+        return cell;
+      }
+
+      const reason = moratoriumByContractMonth.get(c.id)?.get(wKey);
+      if (reason) {
+        const cell = emptyCell("moratorium");
+        cell.reason = reason;
+        return cell;
+      }
+
       if (wKey > cutoffMonth) {
         if (c.status === "renewed") {
           const cell = emptyCell("renewed_out");
@@ -371,28 +408,6 @@ export async function buildBillingReconciliationReport(
         }
         // terminated, expired, or any other lapsed status — nothing more is coming.
         return emptyCell("terminated");
-      }
-
-      const reason = moratoriumByContractMonth.get(c.id)?.get(wKey);
-      if (reason) {
-        const cell = emptyCell("moratorium");
-        cell.reason = reason;
-        return cell;
-      }
-
-      const statement = statementsByContractMonth.get(c.id)?.get(wKey);
-      if (statement) {
-        const payments = paymentsByStatement.get(statement.id) ?? [];
-        const settlement = computeSettlement(statement.total_amount, payments);
-        const cell = emptyCell(
-          settlement.paymentStatus === "paid" ? "paid" : settlement.paymentStatus === "partially_paid" ? "partial" : "unpaid"
-        );
-        cell.amount = settlement.settlementAmount;
-        cell.collected = settlement.totalPaid;
-        cell.owed = settlement.balanceDue;
-        cell.invoiceNumber = statement.gst_invoice_number || statement.statement_number;
-        cell.statementId = statement.id;
-        return cell;
       }
 
       // Not yet billed — project what the real generator would eventually charge.
