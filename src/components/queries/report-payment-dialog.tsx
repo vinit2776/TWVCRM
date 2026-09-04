@@ -246,7 +246,7 @@ export function ReportPaymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Report payment received</DialogTitle>
           {partyLabel && <p className="text-sm text-muted-foreground mt-1">{partyLabel}</p>}
