@@ -31,6 +31,16 @@ CREATE POLICY "Users can update their own help_chat_interactions"
   ON help_chat_interactions FOR UPDATE
   USING (user_id IN (SELECT id FROM users WHERE auth_id = auth.uid()));
 
+-- Users can read their own rows — required not just for their own use, but
+-- because `INSERT ... RETURNING` (what supabase-js's .insert().select()
+-- compiles to) needs the SELECT policy to pass for the row being returned,
+-- not just the INSERT policy for the write itself. Without this, the whole
+-- insert silently rolls back with a generic RLS violation even though the
+-- INSERT policy above is satisfied.
+CREATE POLICY "Users can read their own help_chat_interactions"
+  ON help_chat_interactions FOR SELECT
+  USING (user_id IN (SELECT id FROM users WHERE auth_id = auth.uid()));
+
 -- Usage analytics are admin-only, same as the Assistant Analytics page.
 CREATE POLICY "Admins can read all help_chat_interactions"
   ON help_chat_interactions FOR SELECT
