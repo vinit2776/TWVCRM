@@ -7,6 +7,7 @@ import { HELP_CONTENT } from "@/lib/help-content";
 import { filterSectionsForRole } from "@/lib/help/role-filter";
 import { getTopMatches } from "@/lib/help/help-search";
 import { buildHelpChatSystemPrompt } from "@/lib/help/help-chat-prompt";
+import { normalizePagePath } from "@/lib/help/page-path";
 
 // Overridable via env so the model can be bumped without a redeploy for this
 // one call site — mirrors the pattern in src/lib/email-parser.ts and the
@@ -34,6 +35,9 @@ const requestSchema = z.object({
   // them alternating correctly. Capped short since this is a Q&A assistant,
   // not a long-running chat.
   history: z.array(chatMessageSchema).max(6).optional().default([]),
+  // Current route, for "where is the assistant used" analytics — never
+  // used for anything else, and never sent to the model.
+  page: z.string().max(300).optional().default("/"),
 });
 
 export async function POST(request: NextRequest) {
@@ -60,7 +64,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  const { question, history } = parsed.data;
+  const { question, history, page } = parsed.data;
+  const pagePath = normalizePagePath(page);
 
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "The assistant isn't configured yet" }, { status: 503 });
@@ -125,9 +130,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Couldn't get an answer just now" }, { status: 502 });
     }
 
+    const sectionIds = matches.map((m) => m.section.id);
+
+    // Structured analytics only — never the question/answer text (see the
+    // 00549 migration's comment). Best-effort: a logging failure must not
+    // fail the actual answer the user is waiting on, so the response still
+    // returns normally, just without an interactionId to attach feedback to.
+    const { data: interaction, error: interactionError } = await supabase
+      .from("help_chat_interactions")
+      .insert({
+        user_id: dbUser.id,
+        role: dbUser.role,
+        page_path: pagePath,
+        had_match: matches.length > 0,
+        section_ids: sectionIds,
+      })
+      .select("id")
+      .single();
+    if (interactionError) {
+      console.error("[help-chat] interaction logging failed", interactionError.message);
+    }
+
     return NextResponse.json({
       answer,
       sources: matches.map((m) => ({ sectionId: m.section.id, title: m.section.title })),
+      interactionId: interaction?.id ?? null,
     });
   } catch (err) {
     console.error("[help-chat]", err instanceof Error ? err.message : err);

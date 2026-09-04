@@ -60,6 +60,7 @@ import {
   Inbox,
   Zap,
   MessageCircleQuestion,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -239,6 +240,7 @@ const navSections: NavSection[] = [
       // { href: "/admin/tally-sync",    label: "Tally Sync",     icon: RefreshCw,     roles: ["admin"] },
       { href: "/infrastructure",      label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",             label: "Support",        icon: LifeBuoy,      roles: ["admin"] },
+      { href: "/admin/assistant-analytics", label: "Assistant Analytics", icon: MessageCircle, roles: ["admin"] },
       { href: "/settings",            label: "Settings",       icon: Settings,      roles: ["admin"] },
       { href: "/team",                label: "Team",           icon: UserPlus,      roles: ["admin", "manager", "sales_rep"] },
     ],

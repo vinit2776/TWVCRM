@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -16,6 +17,7 @@ const MAX_HISTORY_SENT = 6;
 
 export function HelpChatWidget() {
   const { user } = useCurrentUser();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<HelpChatMessageData[]>([]);
   const [input, setInput] = useState("");
@@ -46,7 +48,7 @@ export function HelpChatWidget() {
       const res = await fetch("/api/help-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed, history }),
+        body: JSON.stringify({ question: trimmed, history, page: pathname }),
       });
       const data = await res.json().catch(() => ({}));
 
@@ -65,7 +67,14 @@ export function HelpChatWidget() {
 
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), role: "assistant", content: data.answer, sources: data.sources },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.answer,
+          sources: data.sources,
+          interactionId: data.interactionId ?? null,
+          feedback: null,
+        },
       ]);
     } catch {
       setMessages((prev) => [
@@ -79,6 +88,25 @@ export function HelpChatWidget() {
       ]);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function handleFeedback(
+    messageId: string,
+    interactionId: string,
+    feedback: "helpful" | "not_helpful"
+  ) {
+    // Optimistic — this is a low-stakes analytics signal, not something
+    // worth blocking or rolling back the UI over if the request fails.
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, feedback } : m)));
+    try {
+      await fetch("/api/help-chat/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interactionId, feedback }),
+      });
+    } catch {
+      // Silent — feedback is best-effort telemetry, not core functionality.
     }
   }
 
@@ -133,7 +161,7 @@ export function HelpChatWidget() {
             )}
 
             {messages.map((message) => (
-              <HelpChatMessage key={message.id} message={message} />
+              <HelpChatMessage key={message.id} message={message} onFeedback={handleFeedback} />
             ))}
 
             {sending && (
