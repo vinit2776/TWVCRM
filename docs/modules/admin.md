@@ -18,7 +18,7 @@ Additional admin-only sub-routes under `/admin/` exist for the physical access c
 |---|---|---|---|
 | `/team` | `src/app/(dashboard)/team/page.tsx` | `admin`, `manager`, `sales_rep` | List all CRM users; admin can create/edit/deactivate/reset passwords |
 | `/settings` | `src/app/(dashboard)/settings/page.tsx` | All roles (tabs filtered by role) | Profile edit for everyone; admin-only tabs for gateway, procurement, etc. |
-| `/locations` | `src/app/(dashboard)/locations/page.tsx` | `admin`, `manager`, `fms`, `floor_manager` | List and create locations |
+| `/locations` | `src/app/(dashboard)/locations/page.tsx` | `admin`, `manager`, `fms`, `floor_manager`, `it_manager` | List and create locations (edit/delete role-gated further, see below) |
 | `/locations/[id]` | `src/app/(dashboard)/locations/[id]/page.tsx` | Same | Floor/unit management, analytics, electricity config |
 | `/admin/tally-sync` | `src/app/(dashboard)/admin/tally-sync/page.tsx` | `admin` only | Tally bridge status, GST invoice mode, ledger mapping, audit log |
 | `/admin/employees` | `src/app/(dashboard)/admin/employees/page.tsx` | `admin`, `manager`, `office_admin`, `floor_manager`, `fms` | Physical access staff roster + COSEC provisioning |
@@ -381,6 +381,10 @@ Upserted (one row per location). Full schema in `src/types/index.ts` `LocationEl
 | `name` | Required | Server (400 if missing) |
 | `code` | Required; uppercased; unique | Server + DB UNIQUE |
 | `incharge_user_id_1` and `incharge_user_id_2` | Must be different users when both non-null | Server + DB CHECK `locations_incharges_distinct` |
+
+**Role gating is finer than page visibility.** Seeing `/locations` in the sidebar isn't the same as being able to edit or delete — the API checks its own role list independent of the sidebar:
+- `PUT /api/locations/[id]` (edit): `admin`, `manager`, `it_manager` — added `it_manager` so IT can correct a location typo/mistake without needing an admin/manager, since it_manager otherwise has no path to fix facility-asset-adjacent data errors. `fms` and `floor_manager` can view/select a location but cannot edit one.
+- `DELETE /api/locations/[id]` (soft-delete, sets `is_active = false`): `admin` only — unchanged; deactivating a location affects billing/leads/bookings company-wide, not just facility, so it stays the most restricted action.
 
 ### Floor (`POST /api/locations/[id]/floors`)
 

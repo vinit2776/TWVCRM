@@ -131,7 +131,14 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
   }, [form.location_id]);
 
   useEffect(() => {
-    if (isEdit) return;
+    // Editing an asset without touching its location/category: leave the
+    // existing code alone (including reverting back to it if the user tries
+    // a different location/category and then changes their mind).
+    if (isEdit && form.location_id === asset?.location_id && form.category_id === asset?.category_id) {
+      const original = asset?.asset_code || "";
+      setForm((f) => (f.asset_code === original ? f : { ...f, asset_code: original }));
+      return;
+    }
     if (!form.category_id || !form.location_id) {
       setForm((f) => ({ ...f, asset_code: "" }));
       return;
@@ -152,7 +159,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
         const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
         setForm((f) => ({ ...f, asset_code: `${prefix}${String(next).padStart(3, "0")}` }));
       });
-  }, [form.location_id, form.category_id, isEdit, categories, locations]);
+  }, [form.location_id, form.category_id, isEdit, categories, locations, asset]);
 
   const handlePhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -231,6 +238,18 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
+      if (isEdit && asset && form.location_id !== asset.location_id) {
+        const oldLocName = locations.find((l) => l.id === asset.location_id)?.name || "previous location";
+        const newLocName = locations.find((l) => l.id === form.location_id)?.name || "new location";
+        await fetch(`/api/facility/assets/${asset.id}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event_type: "relocation",
+            note: `Moved from ${oldLocName} to ${newLocName}. Asset code updated to ${form.asset_code}.`,
+          }),
+        }).catch(() => null);
+      }
       toast.success(
         isEdit ? "Asset updated" : "Asset added! Open it to print the QR code or attach AMC documents.",
         { duration: 5000 }
@@ -567,9 +586,16 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <Label className="text-xs">Location</Label>
-          <select value={form.location_id} disabled className="mt-1 w-full h-9 px-2 rounded-md border bg-muted text-sm cursor-not-allowed">
+          <select
+            value={form.location_id}
+            onChange={(e) => setForm({ ...form, location_id: e.target.value, floor_id: "" })}
+            className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+          >
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
+          {form.location_id !== asset?.location_id && (
+            <Hint>Changing location assigns a new asset code and logs a relocation event.</Hint>
+          )}
         </div>
         <div>
           <Label className="text-xs">Floor</Label>
@@ -585,9 +611,16 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       </div>
       <div>
         <Label className="text-xs">Category</Label>
-        <select value={form.category_id} disabled className="mt-1 w-full h-9 px-2 rounded-md border bg-muted text-sm cursor-not-allowed">
+        <select
+          value={form.category_id}
+          onChange={(e) => { setForm({ ...form, category_id: e.target.value }); setCustomValues({}); }}
+          className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+        >
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        {form.category_id !== asset?.category_id && (
+          <Hint>Changing category assigns a new asset code and resets category-specific fields below.</Hint>
+        )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
