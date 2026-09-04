@@ -13,7 +13,8 @@ export async function GET(request: NextRequest) {
   const categoryId = searchParams.get("category_id");
   const status = searchParams.get("status");
   const search = searchParams.get("search");
-  const includeStats = searchParams.get("include_stats") === "true";
+  const format = searchParams.get("format");
+  const includeStats = searchParams.get("include_stats") === "true" || format === "csv";
 
   let query = supabase
     .from("facility_assets")
@@ -62,6 +63,34 @@ export async function GET(request: NextRequest) {
       a.total_issue_count = s.total;
       a.last_issue_at = s.last;
     }
+  }
+
+  if (format === "csv") {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const header = [
+      "Asset Code", "Name", "Location", "Floor", "Category", "Status",
+      "Make", "Model", "Serial Number", "MAC Address", "IP Address", "Vendor",
+      "Purchase Date", "Warranty Expiry", "Installation Date", "Next Service Due",
+      "Assigned Department", "Open Issues", "Total Issues", "Location Notes", "Notes",
+    ].join(",");
+    const lines = (assets || []).map((a) =>
+      [
+        esc(a.asset_code), esc(a.name), esc(a.location?.name), esc(a.floor?.name),
+        esc(a.category?.name), esc(a.status),
+        esc(a.make), esc(a.model), esc(a.serial_number), esc(a.mac_address), esc(a.ip_address), esc(a.vendor),
+        esc(a.purchase_date?.slice(0, 10)), esc(a.warranty_expiry?.slice(0, 10)),
+        esc(a.installation_date?.slice(0, 10)), esc(a.next_service_due?.slice(0, 10)),
+        esc(a.assigned_department), a.open_issue_count ?? 0, a.total_issue_count ?? 0,
+        esc(a.location_notes), esc(a.notes),
+      ].join(",")
+    );
+    const csv = [header, ...lines].join("\n");
+    return new NextResponse(csv, {
+      headers: {
+        "Content-Type": "text/csv",
+        "Content-Disposition": `attachment; filename="facility-assets-${new Date().toISOString().slice(0, 10)}.csv"`,
+      },
+    });
   }
 
   return NextResponse.json({ data: assets || [] });
