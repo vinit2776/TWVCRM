@@ -69,7 +69,7 @@ export async function GET() {
     // back to invoice_date.
     adminSupabase
       .from("vendor_bills")
-      .select("id, total_amount, amount_paid, due_date, invoice_date, payment_status")
+      .select("id, total_amount, amount_paid, due_date, invoice_date, payment_status, approved_at, created_at")
       .in("payment_status", ["unpaid", "partially_paid"]),
   ]);
 
@@ -95,6 +95,10 @@ export async function GET() {
   const payRows = (bills ?? []).map((b) => ({
     ref_date: b.due_date ?? b.invoice_date ?? today,
     amount: Math.max(0, Number(b.total_amount ?? 0) - Number(b.amount_paid ?? 0)),
+    // A bill joins the payables queue when it is approved, not when it was
+    // raised — approved_at is what "new" should track. Bills still awaiting
+    // approval have no approved_at, so they fall back to created_at.
+    entered_at: (b.approved_at as string | null) ?? (b.created_at as string | null),
   }));
 
   const round = (n: number) => Math.round(n * 100) / 100;
@@ -103,6 +107,10 @@ export async function GET() {
 
   const receivablesTotal = recvRows.reduce((s, x) => s + x.amount, 0);
   const payablesTotal = payRows.reduce((s, x) => s + x.amount, 0);
+
+  // "New" on the accounts dashboard means arrived in the last 24 hours.
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const payNew = payRows.filter((x) => !!x.entered_at && x.entered_at >= dayAgo);
 
   return NextResponse.json({
     data: {
@@ -121,6 +129,10 @@ export async function GET() {
         d_0_30: { count: p.d_0_30.count, total: round(p.d_0_30.total) },
         d_31_60: { count: p.d_31_60.count, total: round(p.d_31_60.total) },
         d_60_plus: { count: p.d_60_plus.count, total: round(p.d_60_plus.total) },
+        new_24h: {
+          count: payNew.length,
+          total: round(payNew.reduce((s, x) => s + x.amount, 0)),
+        },
       },
     },
   });

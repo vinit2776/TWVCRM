@@ -37,6 +37,7 @@ import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-w
 import { NetworkWidget } from "@/components/network/network-widget";
 import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-review-widget";
 import { QuickChargeWidget } from "@/components/dashboard/widgets/quick-charge-widget";
+import { AccountsOverviewWidget } from "@/components/dashboard/widgets/accounts-overview-widget";
 
 import Link from "next/link";
 import { Zap } from "lucide-react";
@@ -238,13 +239,15 @@ export default function DashboardPage() {
         return <WeekInReviewWidget key="week_in_review" />;
       case "quick_charge":
         return <QuickChargeWidget key="quick_charge" />;
+      case "accounts_overview":
+        return <AccountsOverviewWidget key="accounts_overview" />;
       default:
         return null;
     }
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 
