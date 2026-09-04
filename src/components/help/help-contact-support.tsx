@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 
 interface HelpContactSupportProps {
   email: string;
-  phone: string;
+  phone?: string;
 }
 
 export function HelpContactSupport({ email, phone }: HelpContactSupportProps) {
@@ -29,13 +29,15 @@ export function HelpContactSupport({ email, phone }: HelpContactSupportProps) {
                 <Mail className="h-4 w-4" />
                 {email}
               </a>
-              <a
-                href={`tel:${phone.replace(/\s/g, "")}`}
-                className="flex items-center gap-1.5 text-sm text-primary hover:underline"
-              >
-                <Phone className="h-4 w-4" />
-                {phone}
-              </a>
+              {phone && (
+                <a
+                  href={`tel:${phone.replace(/\s/g, "")}`}
+                  className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+                >
+                  <Phone className="h-4 w-4" />
+                  {phone}
+                </a>
+              )}
             </div>
           </div>
         </div>

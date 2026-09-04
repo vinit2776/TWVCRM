@@ -78,4 +78,18 @@ describe("buildHelpChatSystemPrompt", () => {
 
     expect(prompt).toContain("Something locked: no one via this list");
   });
+
+  it("omits a blank support phone instead of leaving a dangling 'or'", () => {
+    const prompt = buildHelpChatSystemPrompt({
+      roleLabel: "Sales Rep",
+      matches: [],
+      globalFaqs: [],
+      rolePermissions: ROLE_PERMISSIONS,
+      supportEmail: "vinit@theworkvilla.com",
+      supportPhone: "",
+    });
+
+    expect(prompt).toContain("reaching vinit@theworkvilla.com —");
+    expect(prompt).not.toContain("vinit@theworkvilla.com or");
+  });
 });
