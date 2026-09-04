@@ -41,10 +41,11 @@ interface Props {
   /**
    * 'contract' when the invoice is unknown (the common case),
    * 'billing_statement' when reporting against a specific one, or
-   * 'proposal_deposit' for a security deposit — which has no invoice to
-   * allocate to, so the picker never appears for it.
+   * 'proposal_deposit' / 'deposit_topup' for money with no invoice to
+   * allocate to — the picker never appears for either (gated on the
+   * `contractId` prop below, not on entityType).
    */
-  entityType: "contract" | "billing_statement" | "proposal_deposit";
+  entityType: "contract" | "billing_statement" | "proposal_deposit" | "deposit_topup";
   entityId: string | null;
   /** One-line context under the title: "Bluescale Analytics · TWV-C-0188". */
   partyLabel?: string | null;
@@ -331,6 +332,13 @@ export function ReportPaymentDialog({
             <p className="text-xs rounded-md border border-violet-200 bg-violet-50 text-violet-900 p-2.5">
               Security deposit. Once accounts confirm it against the bank it is recorded on the
               proposal and appears in the Tally Inbox for booking.
+            </p>
+          )}
+
+          {entityType === "deposit_topup" && (
+            <p className="text-xs rounded-md border border-purple-200 bg-purple-50 text-purple-900 p-2.5">
+              Deposit top-up. Once accounts confirm it against the bank it is recorded on the
+              top-up and appears in the Tally Inbox for booking.
             </p>
           )}
 

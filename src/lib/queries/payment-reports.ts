@@ -26,6 +26,7 @@ export const PAYMENT_REPORT_ENTITY_TYPES = [
   "contract",
   "billing_statement",
   "proposal_deposit",
+  "deposit_topup",
 ] as const;
 export type PaymentReportEntityType = (typeof PAYMENT_REPORT_ENTITY_TYPES)[number];
 
@@ -35,15 +36,16 @@ export type PaymentReportEntityType = (typeof PAYMENT_REPORT_ENTITY_TYPES)[numbe
  *
  *   invoice — a billing statement. Proof is the billing_payments row created
  *             when accounts record it, stored in billing_payment_id.
- *   deposit — a proposal security deposit. Recorded on the proposal itself,
- *             so there is no payment row; proof is that proposal's
- *             deposit_payment_status becoming 'paid', re-checked server-side
- *             before a report may be marked verified.
+ *   deposit — a proposal security deposit, or a deposit top-up. Neither has a
+ *             payment row of its own — proof is the source row's own status
+ *             flag (deposit_payment_status / deposit_topups.status) flipping
+ *             to 'paid', re-checked server-side before a report may be
+ *             marked verified.
  */
 export type PaymentReportTargetKind = "invoice" | "deposit";
 
 export function targetKindForEntity(entityType: PaymentReportEntityType): PaymentReportTargetKind {
-  return entityType === "proposal_deposit" ? "deposit" : "invoice";
+  return entityType === "proposal_deposit" || entityType === "deposit_topup" ? "deposit" : "invoice";
 }
 
 /**

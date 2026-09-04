@@ -127,14 +127,14 @@ export async function PATCH(
 
   // ── Verified: the money must actually have been recorded ─────────────────
   //
-  // Two shapes of proof, because deposits have no payment row of their own.
-  // For a deposit the equivalent evidence is the proposal's
-  // deposit_payment_status having flipped to 'paid' — re-read here rather
-  // than trusted from the client, so a report cannot be marked verified by
-  // anyone who merely says the deposit was recorded.
+  // Two shapes of proof, because deposits and top-ups have no payment row of
+  // their own. The equivalent evidence is the source row's own status flag
+  // having flipped to 'paid' — re-read here rather than trusted from the
+  // client, so a report cannot be marked verified by anyone who merely says
+  // the money was recorded.
   let paymentId: string | null = null;
 
-  if (outcome === "verified" && report.target_kind === "deposit") {
+  if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "proposal_deposit") {
     const { data: proposal } = await admin
       .from("proposals")
       .select("id, deposit_payment_status, deposit_payment_amount")
@@ -149,6 +149,27 @@ export async function PATCH(
         {
           error:
             "Record the deposit first — this proposal's deposit still reads as unpaid, so there is nothing to verify against.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "deposit_topup") {
+    const { data: topup } = await admin
+      .from("deposit_topups")
+      .select("id, status")
+      .eq("id", report.query.entity_id)
+      .maybeSingle();
+
+    if (!topup) {
+      return NextResponse.json({ error: "That top-up no longer exists" }, { status: 400 });
+    }
+    if (topup.status !== "paid") {
+      return NextResponse.json(
+        {
+          error:
+            "Record the top-up first — it still reads as unpaid, so there is nothing to verify against.",
         },
         { status: 400 },
       );

@@ -91,6 +91,18 @@ async function depositOutstanding(admin: SupabaseClient, proposalId: string): Pr
   return Math.max(0, required - Number(p.deposit_payment_amount || 0));
 }
 
+async function topupOutstanding(admin: SupabaseClient, topupId: string): Promise<number> {
+  const { data: t } = await admin
+    .from("deposit_topups")
+    .select("amount, status")
+    .eq("id", topupId)
+    .maybeSingle();
+  if (!t) return 0;
+  // Already settled, or withdrawn — nothing left to claim.
+  if (t.status !== "pending") return 0;
+  return Math.max(0, Number(t.amount || 0));
+}
+
 export async function reportableBalance(
   admin: SupabaseClient,
   entityType: PaymentReportEntityType,
@@ -101,7 +113,9 @@ export async function reportableBalance(
       ? await statementOutstanding(admin, entityId)
       : entityType === "contract"
         ? await contractOutstanding(admin, entityId)
-        : await depositOutstanding(admin, entityId);
+        : entityType === "deposit_topup"
+          ? await topupOutstanding(admin, entityId)
+          : await depositOutstanding(admin, entityId);
 
   const { data: open } = await admin
     .from("query_payment_reports")

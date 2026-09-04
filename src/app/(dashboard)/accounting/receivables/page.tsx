@@ -608,12 +608,13 @@ export default function AccountsReceivablePage() {
   const openHistory = (row: { id: string; statement_number: string }) => setHistoryRow(row);
 
   /**
-   * "Report paid" on an OtherReceivableRow — a security deposit reports
-   * straight against the proposal, but an ad-hoc invoice needs a
-   * billing_statement to attach the claim to. A still-draft invoice (never
-   * emailed, never marked sent) doesn't have one yet — which is the normal
-   * case here: someone paid an invoice that was handed over outside the
-   * CRM, and nobody went back to click Mark as Sent first.
+   * "Report paid" on an OtherReceivableRow — a security deposit or a top-up
+   * reports straight against its own row (no invoice to allocate to), but an
+   * ad-hoc invoice needs a billing_statement to attach the claim to. A
+   * still-draft invoice (never emailed, never marked sent) doesn't have one
+   * yet — which is the normal case here: someone paid an invoice that was
+   * handed over outside the CRM, and nobody went back to click Mark as Sent
+   * first.
    *
    * Reporting a payment is itself proof the invoice reached the customer,
    * so this promotes the invoice to "sent" first (the same mirror-creation
@@ -1167,10 +1168,17 @@ export default function AccountsReceivablePage() {
             setReportAdhocStatementId(null);
           }
         }}
-        // Deposits report against the proposal directly. Ad-hoc invoices
-        // report against the billing_statement openReportForOtherRow just
-        // promoted/found for them.
-        entityType={reportDepositRow?.kind === "adhoc_invoice" ? "billing_statement" : "proposal_deposit"}
+        // Deposits and top-ups report against their own row directly — no
+        // invoice to allocate to. Ad-hoc invoices report against the
+        // billing_statement openReportForOtherRow just promoted/found for
+        // them.
+        entityType={
+          reportDepositRow?.kind === "adhoc_invoice"
+            ? "billing_statement"
+            : reportDepositRow?.kind === "topup"
+              ? "deposit_topup"
+              : "proposal_deposit"
+        }
         entityId={
           reportDepositRow?.kind === "adhoc_invoice"
             ? reportAdhocStatementId
@@ -1179,7 +1187,11 @@ export default function AccountsReceivablePage() {
         partyLabel={
           reportDepositRow
             ? `${reportDepositRow.party_name} · ${reportDepositRow.reference} · ${
-                reportDepositRow.kind === "adhoc_invoice" ? "ad-hoc invoice" : "security deposit"
+                reportDepositRow.kind === "adhoc_invoice"
+                  ? "ad-hoc invoice"
+                  : reportDepositRow.kind === "topup"
+                    ? "deposit top-up"
+                    : "security deposit"
               }`
             : null
         }
@@ -1510,17 +1522,17 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                           </Button>
                         )}
                         {/*
-                          Deposits and ad-hoc invoices — not top-ups. A
-                          top-up has no report path yet: there are no
-                          pending top-ups to report against, so shipping the
-                          button would be shipping an untestable one. An
-                          ad-hoc invoice here is normally still a draft (see
-                          the AR duplication fix — a sent one lives in the
-                          Detail view instead), so reporting one first
+                          Deposits, top-ups and ad-hoc invoices all report
+                          the same way now — a top-up is just as much a
+                          receivable as the deposit it tops up, and reports
+                          straight against its own row like a deposit does.
+                          An ad-hoc invoice here is normally still a draft
+                          (see the AR duplication fix — a sent one lives in
+                          the Detail view instead), so reporting one first
                           silently promotes it to "sent" — see
                           openReportForOtherRow.
                         */}
-                        {(r.kind === "deposit" || r.kind === "adhoc_invoice") && (
+                        {(r.kind === "deposit" || r.kind === "topup" || r.kind === "adhoc_invoice") && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -1530,7 +1542,9 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                             title={
                               r.kind === "deposit"
                                 ? "Customer says they've paid the deposit outside the CRM — tell accounts"
-                                : "Customer says they've paid this invoice outside the CRM — tell accounts"
+                                : r.kind === "topup"
+                                  ? "Customer says they've paid this top-up outside the CRM — tell accounts"
+                                  : "Customer says they've paid this invoice outside the CRM — tell accounts"
                             }
                           >
                             {promotingId === r.id
