@@ -22,7 +22,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Users, Save, AlertTriangle } from "lucide-react";
+import { Loader2, Users, Save, AlertTriangle, Ban, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { SCOPE_LABEL } from "@/lib/facility-ui";
 import { FACILITY_ROLES, hasRole } from "@/lib/facility";
@@ -44,6 +44,7 @@ export default function FacilitySettingsPage() {
   const [rosterSelection, setRosterSelection] = useState<Set<string>>(new Set());
   const [savingRoster, setSavingRoster] = useState(false);
   const [catDrafts, setCatDrafts] = useState<Record<string, {
+    name: string;
     default_assignee_id: string;
     default_sla_critical_hrs: string;
     default_sla_high_hrs: string;
@@ -51,6 +52,7 @@ export default function FacilitySettingsPage() {
     default_sla_low_hrs: string;
   }>>({});
   const [savingCatId, setSavingCatId] = useState<string | null>(null);
+  const [togglingCatId, setTogglingCatId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -66,6 +68,7 @@ export default function FacilitySettingsPage() {
       setCategories(cats);
       setAssignees(assigneeRes.data ?? []);
       setCatDrafts(Object.fromEntries(cats.map((c) => [c.id, {
+        name: c.name,
         default_assignee_id: c.default_assignee_id ?? "",
         default_sla_critical_hrs: String(c.default_sla_critical_hrs ?? ""),
         default_sla_high_hrs: String(c.default_sla_high_hrs ?? ""),
@@ -140,6 +143,10 @@ export default function FacilitySettingsPage() {
   const saveCategory = async (cat: FacilityAssetCategory) => {
     const draft = catDrafts[cat.id];
     if (!draft) return;
+    if (!draft.name.trim()) {
+      toast.error("Category name can't be empty");
+      return;
+    }
     setSavingCatId(cat.id);
     try {
       const assigneeRes = await fetch(`/api/facility/categories/${cat.id}`, {
@@ -154,6 +161,7 @@ export default function FacilitySettingsPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          name: draft.name.trim(),
           default_sla_critical_hrs: Number(draft.default_sla_critical_hrs) || 0,
           default_sla_high_hrs: Number(draft.default_sla_high_hrs) || 0,
           default_sla_medium_hrs: Number(draft.default_sla_medium_hrs) || 0,
@@ -161,12 +169,32 @@ export default function FacilitySettingsPage() {
         }),
       });
       if (!assigneeRes.ok || !slaRes.ok) throw new Error();
-      toast.success(`${cat.name} defaults saved`);
+      toast.success(`${draft.name.trim()} defaults saved`);
       load();
     } catch {
       toast.error("Failed to save category defaults");
     } finally {
       setSavingCatId(null);
+    }
+  };
+
+  const toggleCategoryActive = async (cat: FacilityAssetCategory) => {
+    setTogglingCatId(cat.id);
+    try {
+      const res = cat.is_active
+        ? await fetch(`/api/facility/categories/${cat.id}`, { method: "DELETE" })
+        : await fetch(`/api/facility/categories/${cat.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_active: true }),
+          });
+      if (!res.ok) throw new Error();
+      toast.success(cat.is_active ? `${cat.name} deactivated` : `${cat.name} reactivated`);
+      load();
+    } catch {
+      toast.error(cat.is_active ? "Failed to deactivate category" : "Failed to reactivate category");
+    } finally {
+      setTogglingCatId(null);
     }
   };
 
@@ -244,21 +272,48 @@ export default function FacilitySettingsPage() {
       <section className="space-y-3">
         <h2 className="text-sm font-semibold">Categories &amp; TAT defaults</h2>
         <p className="text-xs text-muted-foreground -mt-2">
-          Default assignee (most specific — overrides the department head above) and TAT hours per priority, used to compute a new Work Order&apos;s deadline unless manually overridden at creation.
+          Default assignee (most specific — overrides the department head above) and TAT hours per priority, used to compute a new Work Order&apos;s deadline unless manually overridden at creation. Rename a category directly in its name field, then hit save. Deactivating hides it from pickers for new assets/issues — existing assets and issues keep it and are unaffected; reactivate any time.
         </p>
         <div className="rounded-lg border divide-y">
           {categories.map((cat) => {
             const draft = catDrafts[cat.id];
             if (!draft) return null;
             return (
-              <div key={cat.id} className="p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">
-                    {cat.name} <span className="text-xs text-muted-foreground">({SCOPE_LABEL[cat.scope]})</span>
+              <div key={cat.id} className={`p-3 space-y-2 ${!cat.is_active ? "opacity-60" : ""}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <Input
+                      value={draft.name}
+                      onChange={(e) => setCatDrafts((prev) => ({
+                        ...prev, [cat.id]: { ...prev[cat.id], name: e.target.value },
+                      }))}
+                      className="h-8 max-w-[220px] text-sm font-medium"
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">({SCOPE_LABEL[cat.scope]})</span>
+                    {!cat.is_active && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground shrink-0">Inactive</span>
+                    )}
                   </div>
-                  <Button size="sm" variant="outline" disabled={savingCatId === cat.id} onClick={() => saveCategory(cat)}>
-                    {savingCatId === cat.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  </Button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button size="sm" variant="outline" disabled={savingCatId === cat.id} onClick={() => saveCategory(cat)} title="Save changes">
+                      {savingCatId === cat.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={togglingCatId === cat.id}
+                      onClick={() => toggleCategoryActive(cat)}
+                      title={cat.is_active ? "Deactivate category" : "Reactivate category"}
+                    >
+                      {togglingCatId === cat.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : cat.is_active ? (
+                        <Ban className="h-3.5 w-3.5 text-destructive" />
+                      ) : (
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="space-y-1">

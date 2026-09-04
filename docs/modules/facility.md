@@ -623,6 +623,8 @@ Body: `{ default_assignee_id: string | null, backup_assignee_id: string | null }
 
 Updates only the assignee routing fields on a category. Validated with Zod (UUID format or null). Logs an audit trail. Used by `/facility/settings` to save routing configuration. Requires `manage` role (`admin`, `it_manager`).
 
+`/facility/settings` also uses `PUT /api/facility/categories/[id]` from the same row to rename a category and to toggle `is_active` (Deactivate/Reactivate button) — deactivating is a soft-delete: it hides the category from pickers for new assets/issues (`GET` filters `is_active = true` by default) without touching existing rows that already reference it, since `DELETE` on this endpoint is itself just `is_active = false` under the hood.
+
 ### `GET /api/facility/assets/[id]/cost-summary`
 
 Returns monthly cost-of-ownership for an asset from approved vendor bills. Follows the chain: `facility_issues → purchase_requests (issue_id) → purchase_orders (pr_id) → vendor_bills (po_id)`. Only bills with `approval_status = 'approved'` are included. Costs aggregated by `invoice_date` month.
