@@ -247,17 +247,38 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
-      if (isEdit && asset && form.location_id !== asset.location_id) {
-        const oldLocName = locations.find((l) => l.id === asset.location_id)?.name || "previous location";
-        const newLocName = locations.find((l) => l.id === form.location_id)?.name || "new location";
-        await fetch(`/api/facility/assets/${asset.id}/events`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      // Either of these rewrites the asset_code, which is what's printed on the
+      // QR sticker — so both need a history entry explaining why the sticker on
+      // the wall no longer matches. Only mention the code when it really moved.
+      if (isEdit && asset) {
+        const codeChanged = form.asset_code !== asset.asset_code;
+        const codeNote = codeChanged
+          ? ` Asset code changed from ${asset.asset_code} to ${form.asset_code} — reprint the QR sticker.`
+          : "";
+        const nameOf = (list: { id: string; name: string }[], id: string, fallback: string) =>
+          list.find((x) => x.id === id)?.name || fallback;
+        const events: { event_type: string; note: string }[] = [];
+
+        if (form.location_id !== asset.location_id) {
+          events.push({
             event_type: "relocation",
-            note: `Moved from ${oldLocName} to ${newLocName}. Asset code updated to ${form.asset_code}.`,
-          }),
-        }).catch(() => null);
+            note: `Moved from ${nameOf(locations, asset.location_id, "previous location")} to ${nameOf(locations, form.location_id, "new location")}.${codeNote}`,
+          });
+        }
+        if (form.category_id !== asset.category_id) {
+          events.push({
+            event_type: "other",
+            note: `Recategorised from ${nameOf(categories, asset.category_id, "previous category")} to ${nameOf(categories, form.category_id, "new category")}.${codeNote}`,
+          });
+        }
+
+        for (const event of events) {
+          await fetch(`/api/facility/assets/${asset.id}/events`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(event),
+          }).catch(() => null);
+        }
       }
       toast.success(
         isEdit ? "Asset updated" : "Asset added! Open it to print the QR code or attach AMC documents.",
