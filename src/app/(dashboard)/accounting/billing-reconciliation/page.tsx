@@ -11,11 +11,11 @@
  * the download can never disagree with what's on screen.
  */
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Download, ExternalLink, FileSpreadsheet } from "lucide-react";
+import { Loader2, Download, ExternalLink, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -150,22 +150,67 @@ function ContractRow({ row }: { row: ReconciliationContractRow }) {
 export default function BillingReconciliationPage() {
   const [report, setReport] = useState<ReconciliationReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
+  const fetchInFlight = useRef(false);
+  // Tracks whether we've ever successfully loaded data — a background
+  // refetch failing (transient network blip) shouldn't blank out a table
+  // that's already showing good data; only the very first load blocks on
+  // error. Kept as a ref (not state) so loadReport's identity stays stable
+  // and the focus-listener effect below doesn't need to re-subscribe.
+  const hasDataRef = useRef(false);
+
+  // A statement generated or paid on another page leaves this tab's already-
+  // fetched data stale — there's no push/realtime update, so refetch whenever
+  // the tab regains focus (covers "fixed it elsewhere, tabbed back") in
+  // addition to the explicit Refresh button below. Guarded against overlap
+  // since focus can fire in quick succession (e.g. alt-tabbing).
+  const loadReport = useCallback(async (opts: { silent?: boolean } = {}) => {
+    if (fetchInFlight.current) return;
+    fetchInFlight.current = true;
+    if (!opts.silent) setLoading(true);
+    else setRefreshing(true);
+    try {
+      const res = await fetch("/api/accounting/billing-reconciliation");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to load (${res.status})`);
+      }
+      const data: ReconciliationReport = await res.json();
+      setReport(data);
+      setError(null);
+      setLastLoadedAt(new Date());
+      hasDataRef.current = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load";
+      if (hasDataRef.current) {
+        toast.error(`Refresh failed: ${message}`);
+      } else {
+        setError(message);
+      }
+    } finally {
+      fetchInFlight.current = false;
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/api/accounting/billing-reconciliation")
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `Failed to load (${res.status})`);
-        }
-        return res.json();
-      })
-      .then((data: ReconciliationReport) => setReport(data))
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
+    loadReport();
+  }, [loadReport]);
+
+  useEffect(() => {
+    const onFocus = () => loadReport({ silent: true });
+    const onVisibilityChange = () => { if (!document.hidden) loadReport({ silent: true }); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadReport]);
 
   const handleExport = async () => {
     setExporting(true);
@@ -201,10 +246,21 @@ export default function BillingReconciliationPage() {
             Any unpaid balance older than the 12-month window shows in <strong>Carried Fwd</strong> instead of quietly scrolling out of view.
           </p>
         </div>
-        <Button onClick={handleExport} disabled={exporting || !report}>
-          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          Export .xlsx
-        </Button>
+        <div className="flex items-center gap-3">
+          {lastLoadedAt ? (
+            <span className="text-xs text-muted-foreground">
+              Updated {lastLoadedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          ) : null}
+          <Button variant="outline" onClick={() => loadReport({ silent: true })} disabled={loading || refreshing}>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          <Button onClick={handleExport} disabled={exporting || !report}>
+            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            Export .xlsx
+          </Button>
+        </div>
       </div>
 
       {loading ? (
