@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch } from "lucide-react";
+import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch, ShieldCheck, Clock } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
-import type { ProcurementVendor, PurchaseOrder, Company } from "@/types";
+import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -86,6 +86,9 @@ function NewVendorBillForm() {
   const [poData, setPoData] = useState<PurchaseOrder | null>(null);
   const [loadingPo, setLoadingPo] = useState(false);
   const [vendorLocked, setVendorLocked] = useState(false);
+
+  // Recurring-bill (blanket approval) rule for the selected vendor, if any
+  const [activeRule, setActiveRule] = useState<RecurringBillRule | null>(null);
 
   // Company selector — required for standalone bills (no PO); inherited read-only when a PO is linked
   const [companyId, setCompanyId] = useState<string>("");
@@ -190,6 +193,22 @@ function NewVendorBillForm() {
       .catch(() => { if (!cancelled) setVendorAmcPos([]); });
     return () => { cancelled = true; };
   }, [vendorId, poId]);
+
+  // Recurring-bill rule lookup — tells the user upfront whether this vendor is
+  // pre-approved so they don't have to check the vendor's Recurring Bills tab first.
+  useEffect(() => {
+    if (!vendorId) { setActiveRule(null); return; }
+    let cancelled = false;
+    fetch(`/api/procurement/vendors/${vendorId}/recurring-bill-rules`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const rules: RecurringBillRule[] = json.data ?? [];
+        setActiveRule(rules.find((r) => r.status === "active") ?? null);
+      })
+      .catch(() => { if (!cancelled) setActiveRule(null); });
+    return () => { cancelled = true; };
+  }, [vendorId]);
 
   // ── Duplicate-invoice detector — debounced check ─────────────────────────
   useEffect(() => {
@@ -532,6 +551,34 @@ function NewVendorBillForm() {
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
+          )}
+
+          {/* Blanket-approval banner — this vendor has a recurring-bill rule */}
+          {activeRule && (
+            activeRule.first_bill_id ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex items-start gap-3">
+                <ShieldCheck className="h-4 w-4 flex-shrink-0 mt-0.5 text-emerald-600" />
+                <div>
+                  <p className="font-medium">Pre-approved vendor</p>
+                  <p className="text-xs text-emerald-800 mt-0.5">
+                    Invoices around <strong>{formatCurrency(activeRule.expected_amount)}</strong> (±{activeRule.tolerance_percent}%),
+                    up to <strong>{formatCurrency(activeRule.max_auto_approve_amount)}</strong>, skip approval automatically once saved and go
+                    straight to Payables. Outside that range, it falls back to the normal approval queue — nothing is blocked either way.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-3">
+                <Clock className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                <div>
+                  <p className="font-medium">Recurring-bill rule set up, not active yet</p>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    This vendor has a rule waiting on its first-bill confirmation. This invoice still needs a manual approval —
+                    once it&apos;s approved, future bills from this vendor will start auto-approving.
+                  </p>
+                </div>
+              </div>
+            )
           )}
 
           {/* Company */}
