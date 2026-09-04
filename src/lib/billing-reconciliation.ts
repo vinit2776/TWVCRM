@@ -1,32 +1,34 @@
 /**
  * Billing Reconciliation report — data assembly.
  *
- * One row per contract that's currently billable (or was recently and still
- * has money outstanding), one cell per month in a rolling window starting
- * this month. Built for /accounting/billing-reconciliation and its .xlsx
- * export — both call buildBillingReconciliationReport() so the numbers in
- * the browser and the download can never drift apart.
+ * One row per contract that's currently billable, plus any contract of any
+ * status that still has money outstanding somewhere in its history. One cell
+ * per month in a rolling 12-month window starting this month, plus a leading
+ * "carried forward" figure for any unpaid/partial balance from BEFORE that
+ * window — so a stale unpaid invoice can never silently scroll out of view.
+ * Built for /accounting/billing-reconciliation and its .xlsx export — both
+ * call buildBillingReconciliationReport() so the numbers in the browser and
+ * the download can never drift apart.
  *
- * Row lifecycle (confirmed against the mock before this was built):
+ * Row inclusion:
  *   - status IN (active, renewal_in_progress) — always shown.
- *   - status IN (terminated, renewed) — shown only while a finalized,
- *     non-voided statement in the display window is still unpaid/partially
- *     paid; dropped the reporting cycle after that balance settles. An old
- *     unresolved balance from OUTSIDE this window (terminated/renewed long
- *     ago, still unpaid) intentionally does not resurrect the row — that's
- *     what Receivables (AR) is for. `expired` contracts are out of scope for
- *     now; the resolution logic below generalizes cleanly to them later if
- *     that's ever asked for.
+ *   - ANY status with at least one finalized, non-voided statement that's
+ *     still unpaid/partially_paid, no matter how old — shown until that
+ *     balance settles, at which point it drops off the next cycle. This is
+ *     what surfaces old debt on a terminated/renewed/expired contract, or
+ *     even an active one that's fallen behind from a month outside the
+ *     12-month window (see "Carried forward" below).
  *
- * Per-month cell resolution order (see resolveCell):
- *   1. Past the row's own cutoff month (end_date for active/renewal_in_progress/
- *      renewed rows, terminated_at for terminated rows) →
- *        "renewed_out" (status was renewed and a child contract exists),
- *        "terminated" (status was terminated),
- *        or "projected" (still active, no successor yet — beyond-tenure
- *        escalation estimate).
- *   2. Before the row's own start_date → "not_started" (only ever hit by a
+ * Per-month cell resolution order (see the cells.map body):
+ *   1. Before the row's own start_date → "not_started" (only ever hit by a
  *      freshly created renewal child before its term begins).
+ *   2. Past the row's own cutoff month (end_date for active/renewal_in_progress/
+ *      renewed rows, terminated_at for everything else) →
+ *        "renewed_out" (status is renewed and a child contract exists),
+ *        "projected" (still active/renewal_in_progress — beyond-tenure
+ *        escalation estimate, no successor yet),
+ *        or "terminated" (anything else — terminated, expired, or a lapsed
+ *        contract with no further billing).
  *   3. An approved moratorium covers this month → "moratorium".
  *   4. A real, finalized, non-voided statement covers this month → "paid" /
  *      "partial" / "unpaid", using computeSettlement() — the one shared
@@ -36,6 +38,15 @@
  *      rate-phase-aware pure function (computeRenewalSplitRentSegments) the
  *      real generator uses, so the projection matches what production
  *      billing will eventually produce for that month.
+ *
+ * Carried forward: any unpaid/partially_paid statement whose period_start
+ * falls BEFORE the 12-month window is never a column on its own — instead
+ * its amount/owed is summed into row.carriedForward, rendered as one leading
+ * figure ahead of the month columns. Without this, a balance more than 12
+ * months old would simply never appear anywhere on this report (the window
+ * only ever looks forward from today) — Receivables (AR) is still the place
+ * for aging/collections workflow, but this report should never look "clean"
+ * on a contract that secretly owes money from outside the visible months.
  *
  * Known v1 limitation: "future" and "projected" amounts are the rent line
  * only (contract_addons proration is inline in generateRentProformas and not
@@ -55,7 +66,6 @@ import { leadName } from "@/lib/invoice-party";
 import { todayIst } from "@/lib/receivables";
 
 const BILLABLE_STATUSES = ["active", "renewal_in_progress"] as const;
-const LIFECYCLE_CARRYOVER_STATUSES = ["terminated", "renewed"] as const;
 
 export type ReconciliationCellType =
   | "paid"
@@ -80,6 +90,13 @@ export interface ReconciliationCell {
   refContractNumber: string | null;
 }
 
+export interface CarriedForward {
+  amount: number;
+  collected: number;
+  owed: number;
+  count: number;
+}
+
 export interface ReconciliationContractRow {
   id: string;
   contractNumber: string;
@@ -95,6 +112,7 @@ export interface ReconciliationContractRow {
   renewedAt: string | null;
   parentContractId: string | null;
   parentContractNumber: string | null;
+  carriedForward: CarriedForward;
   cells: ReconciliationCell[];
   rowTotalAmount: number;
   rowTotalOwed: number;
@@ -116,6 +134,7 @@ export interface ReconciliationGroup {
   locationId: string;
   locationName: string;
   contracts: ReconciliationContractRow[];
+  carriedForwardTotal: MonthlyTotal;
   monthlyTotals: MonthlyTotal[];
   totalAmount: number;
   totalOwed: number;
@@ -124,7 +143,7 @@ export interface ReconciliationGroup {
 export interface ReconciliationReport {
   months: MonthColumn[];
   groups: ReconciliationGroup[];
-  overall: { monthlyTotals: MonthlyTotal[]; totalAmount: number; totalOwed: number };
+  overall: { carriedForwardTotal: MonthlyTotal; monthlyTotals: MonthlyTotal[]; totalAmount: number; totalOwed: number };
 }
 
 const emptyCell = (type: ReconciliationCellType): ReconciliationCell => ({
@@ -170,6 +189,15 @@ const CONTRACT_SELECT = `
   location:locations!contracts_location_id_fkey(id, name)
 `;
 
+interface StatementRow {
+  id: string;
+  contract_id: string;
+  period_start: string;
+  total_amount: number;
+  gst_invoice_number: string | null;
+  statement_number: string | null;
+}
+
 export async function buildBillingReconciliationReport(
   supabase: SupabaseClient,
   opts: { months?: number } = {}
@@ -188,47 +216,46 @@ export async function buildBillingReconciliationReport(
     .select(CONTRACT_SELECT)
     .in("status", BILLABLE_STATUSES);
 
-  // ── 2. Terminated/renewed contracts that still owe money in-window ───────
-  const { data: unsettled } = await supabase
+  // ── 2. Every unpaid/partial statement, ANY period, ANY contract status ───
+  // Drives two things: which extra (non-billable-status) contracts to pull
+  // in, and — for whichever of these fall before the window — the
+  // "carried forward" figure so old debt can't silently age out of view.
+  const { data: unpaidAnywhere } = await supabase
     .from("billing_statements")
-    .select("contract_id")
+    .select("id, contract_id, period_start, total_amount, gst_invoice_number, statement_number")
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])
     .is("voided_at", null)
-    .gte("period_start", windowFirst)
-    .lte("period_start", windowLast)
-    .not("contract_id", "is", null);
-  const unsettledContractIds = [...new Set((unsettled ?? []).map((r) => r.contract_id as string))];
+    .not("contract_id", "is", null)
+    .returns<StatementRow[]>();
 
-  let carryoverContracts: ContractRow[] = [];
-  if (unsettledContractIds.length > 0) {
+  const unpaidContractIds = [...new Set((unpaidAnywhere ?? []).map((r) => r.contract_id))];
+  const baseContractIds = new Set((baseContracts ?? []).map((c) => c.id));
+  const extraContractIds = unpaidContractIds.filter((id) => !baseContractIds.has(id));
+
+  let extraContracts: ContractRow[] = [];
+  if (extraContractIds.length > 0) {
     const { data } = await supabase
       .from("contracts")
       .select(CONTRACT_SELECT)
-      .in("status", LIFECYCLE_CARRYOVER_STATUSES)
-      .in("id", unsettledContractIds);
-    carryoverContracts = (data ?? []) as unknown as ContractRow[];
+      .in("id", extraContractIds);
+    extraContracts = (data ?? []) as unknown as ContractRow[];
   }
 
-  const contracts = [...((baseContracts ?? []) as unknown as ContractRow[]), ...carryoverContracts];
+  const contracts = [...((baseContracts ?? []) as unknown as ContractRow[]), ...extraContracts];
   const contractIds = contracts.map((c) => c.id);
   if (contractIds.length === 0) {
-    return { months, groups: [], overall: { monthlyTotals: months.map(() => ({ amount: 0, owed: 0 })), totalAmount: 0, totalOwed: 0 } };
+    return {
+      months,
+      groups: [],
+      overall: { carriedForwardTotal: { amount: 0, owed: 0 }, monthlyTotals: months.map(() => ({ amount: 0, owed: 0 })), totalAmount: 0, totalOwed: 0 },
+    };
   }
 
   // ── 3. Everything the per-month resolver needs, batched (no N+1) ─────────
   const ratePhasesByContract = await fetchRatePhasesByContract(supabase, contractIds);
 
-  interface StatementRow {
-    id: string;
-    contract_id: string;
-    period_start: string;
-    total_amount: number;
-    gst_invoice_number: string | null;
-    statement_number: string | null;
-  }
-
-  const { data: statements } = await supabase
+  const { data: windowStatements } = await supabase
     .from("billing_statements")
     .select("id, contract_id, period_start, total_amount, gst_invoice_number, statement_number")
     .in("contract_id", contractIds)
@@ -239,14 +266,28 @@ export async function buildBillingReconciliationReport(
     .returns<StatementRow[]>();
 
   const statementsByContractMonth = new Map<string, Map<string, StatementRow>>();
-  for (const s of statements ?? []) {
+  for (const s of windowStatements ?? []) {
     const cid = s.contract_id;
     const key = monthKey(s.period_start);
     if (!statementsByContractMonth.has(cid)) statementsByContractMonth.set(cid, new Map());
     statementsByContractMonth.get(cid)!.set(key, s);
   }
 
-  const statementIds = (statements ?? []).map((s) => s.id as string);
+  // Pre-window unpaid/partial statements, per contract — these are the ones
+  // with no month column of their own, so they roll into carriedForward.
+  const preWindowUnpaidByContract = new Map<string, StatementRow[]>();
+  for (const s of unpaidAnywhere ?? []) {
+    if (s.period_start >= windowFirst) continue;
+    if (!preWindowUnpaidByContract.has(s.contract_id)) preWindowUnpaidByContract.set(s.contract_id, []);
+    preWindowUnpaidByContract.get(s.contract_id)!.push(s);
+  }
+
+  const statementIds = [
+    ...new Set([
+      ...(windowStatements ?? []).map((s) => s.id),
+      ...[...preWindowUnpaidByContract.values()].flat().map((s) => s.id),
+    ]),
+  ];
   const paymentsByStatement = new Map<string, SettlementPayment[]>();
   if (statementIds.length > 0) {
     const { data: payments } = await supabase
@@ -318,15 +359,18 @@ export async function buildBillingReconciliationReport(
           cell.refContractNumber = child?.contract_number ?? null;
           return cell;
         }
-        if (c.status === "terminated") return emptyCell("terminated");
-        // Still active, no successor yet — beyond-tenure escalation estimate.
-        const lastSubtotal = Number(c.subtotal || c.total_amount);
-        const escalationPct = c.escalation_percentage ?? 10;
-        const projectedSubtotal = Math.round(lastSubtotal * (1 + escalationPct / 100));
-        const { totalAmount } = computeGstAndRounding(projectedSubtotal, c.tax_percentage ?? 18);
-        const cell = emptyCell("projected");
-        cell.amount = totalAmount;
-        return cell;
+        if (BILLABLE_STATUSES.includes(c.status as (typeof BILLABLE_STATUSES)[number])) {
+          // Still active, no successor yet — beyond-tenure escalation estimate.
+          const lastSubtotal = Number(c.subtotal || c.total_amount);
+          const escalationPct = c.escalation_percentage ?? 10;
+          const projectedSubtotal = Math.round(lastSubtotal * (1 + escalationPct / 100));
+          const { totalAmount } = computeGstAndRounding(projectedSubtotal, c.tax_percentage ?? 18);
+          const cell = emptyCell("projected");
+          cell.amount = totalAmount;
+          return cell;
+        }
+        // terminated, expired, or any other lapsed status — nothing more is coming.
+        return emptyCell("terminated");
       }
 
       const reason = moratoriumByContractMonth.get(c.id)?.get(wKey);
@@ -364,8 +408,22 @@ export async function buildBillingReconciliationReport(
       return cell;
     });
 
-    const rowTotalAmount = cells.reduce((s, cell) => s + cell.amount, 0);
-    const rowTotalOwed = cells.reduce((s, cell) => s + cell.owed, 0);
+    const carriedForward = (preWindowUnpaidByContract.get(c.id) ?? []).reduce(
+      (acc, s) => {
+        const payments = paymentsByStatement.get(s.id) ?? [];
+        const settlement = computeSettlement(s.total_amount, payments);
+        return {
+          amount: acc.amount + settlement.settlementAmount,
+          collected: acc.collected + settlement.totalPaid,
+          owed: acc.owed + settlement.balanceDue,
+          count: acc.count + 1,
+        };
+      },
+      { amount: 0, collected: 0, owed: 0, count: 0 }
+    );
+
+    const rowTotalAmount = carriedForward.amount + cells.reduce((s, cell) => s + cell.amount, 0);
+    const rowTotalOwed = carriedForward.owed + cells.reduce((s, cell) => s + cell.owed, 0);
 
     return {
       id: c.id,
@@ -382,6 +440,7 @@ export async function buildBillingReconciliationReport(
       renewedAt: c.renewed_at,
       parentContractId: c.parent_contract_id,
       parentContractNumber: c.parent_contract_id ? parentById.get(c.parent_contract_id)?.contract_number ?? null : null,
+      carriedForward,
       cells,
       rowTotalAmount,
       rowTotalOwed,
@@ -405,10 +464,15 @@ export async function buildBillingReconciliationReport(
           { amount: 0, owed: 0 }
         )
       );
+      const carriedForwardTotal = groupRows.reduce(
+        (acc, r) => ({ amount: acc.amount + r.carriedForward.amount, owed: acc.owed + r.carriedForward.owed }),
+        { amount: 0, owed: 0 }
+      );
       return {
         locationId: groupRows[0]?.locationId ?? "",
         locationName,
         contracts: groupRows,
+        carriedForwardTotal,
         monthlyTotals,
         totalAmount: groupRows.reduce((s, r) => s + r.rowTotalAmount, 0),
         totalOwed: groupRows.reduce((s, r) => s + r.rowTotalOwed, 0),
@@ -421,11 +485,16 @@ export async function buildBillingReconciliationReport(
       { amount: 0, owed: 0 }
     )
   );
+  const overallCarriedForwardTotal = groups.reduce(
+    (acc, g) => ({ amount: acc.amount + g.carriedForwardTotal.amount, owed: acc.owed + g.carriedForwardTotal.owed }),
+    { amount: 0, owed: 0 }
+  );
 
   return {
     months,
     groups,
     overall: {
+      carriedForwardTotal: overallCarriedForwardTotal,
       monthlyTotals: overallMonthlyTotals,
       totalAmount: groups.reduce((s, g) => s + g.totalAmount, 0),
       totalOwed: groups.reduce((s, g) => s + g.totalOwed, 0),

@@ -117,7 +117,7 @@ function ContractRow({ row }: { row: ReconciliationContractRow }) {
         <div className="font-mono text-xs font-semibold text-primary">{row.contractNumber}</div>
         <div className="text-[10px] text-muted-foreground mt-0.5">{row.status}</div>
       </td>
-      <td className="sticky left-[128px] z-10 bg-white border-r px-3 py-2 align-top min-w-[210px] shadow-[4px_0_8px_-6px_rgba(0,0,0,0.15)]">
+      <td className="sticky left-[128px] z-10 bg-white border-r px-3 py-2 align-top min-w-[210px]">
         <Link href={`/contracts/${row.id}`} className="flex items-center gap-1 font-semibold text-sm hover:text-primary hover:underline">
           {row.companyName}
           <ExternalLink className="h-2.5 w-2.5 opacity-50" />
@@ -127,6 +127,13 @@ function ContractRow({ row }: { row: ReconciliationContractRow }) {
             &uarr; renewal of {row.parentContractNumber}
           </Link>
         ) : null}
+      </td>
+      <td className="sticky left-[338px] z-10 bg-white border-r px-1.5 py-1.5 align-top min-w-[140px] shadow-[4px_0_8px_-6px_rgba(0,0,0,0.15)]">
+        {row.carriedForward.amount > 0 ? (
+          <TotalCell amount={row.carriedForward.amount} owed={row.carriedForward.owed} />
+        ) : (
+          <div className="px-2 py-1 text-right text-xs text-muted-foreground">—</div>
+        )}
       </td>
       {row.cells.map((cell, i) => (
         <td key={i} className="px-1.5 py-1.5 align-top">
@@ -191,6 +198,7 @@ export default function BillingReconciliationPage() {
           <h1 className="text-2xl font-bold tracking-tight">Recurring Contract Billing Reconciliation</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
             One row per contract, one column per month — what should be billed, what was invoiced, and what&apos;s been collected, grouped by center.
+            Any unpaid balance older than the 12-month window shows in <strong>Carried Fwd</strong> instead of quietly scrolling out of view.
           </p>
         </div>
         <Button onClick={handleExport} disabled={exporting || !report}>
@@ -225,6 +233,12 @@ export default function BillingReconciliationPage() {
                   <tr className="border-b bg-slate-50">
                     <th className="sticky left-0 z-20 bg-slate-50 border-r px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground min-w-[128px]">Contract</th>
                     <th className="sticky left-[128px] z-20 bg-slate-50 border-r px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground min-w-[210px]">Company</th>
+                    <th
+                      title="Unpaid/partial balance from before this 12-month window"
+                      className="sticky left-[338px] z-20 bg-slate-50 border-r px-1.5 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground min-w-[140px] shadow-[4px_0_8px_-6px_rgba(0,0,0,0.15)]"
+                    >
+                      Carried Fwd
+                    </th>
                     {report.months.map((m, i) => (
                       <th key={i} className="px-1.5 py-2 text-right text-xs font-semibold text-muted-foreground min-w-[130px]">{monthLabel(m.month, m.year)}</th>
                     ))}
@@ -235,7 +249,7 @@ export default function BillingReconciliationPage() {
                   {report.groups.map((group) => (
                     <Fragment key={group.locationName}>
                       <tr className="bg-blue-50/60 border-y border-blue-100">
-                        <td colSpan={2} className="sticky left-0 z-10 bg-blue-50/60 px-3 py-1.5 text-xs font-bold text-blue-800">
+                        <td colSpan={3} className="sticky left-0 z-10 bg-blue-50/60 px-3 py-1.5 text-xs font-bold text-blue-800 shadow-[4px_0_8px_-6px_rgba(0,0,0,0.1)]">
                           {group.locationName} <span className="font-normal text-blue-600">&middot; {group.contracts.length} contract{group.contracts.length === 1 ? "" : "s"}</span>
                         </td>
                         <td colSpan={report.months.length} />
@@ -245,6 +259,9 @@ export default function BillingReconciliationPage() {
                       <tr className="border-b-2 bg-slate-50/70">
                         <td colSpan={2} className="sticky left-0 z-10 bg-slate-50/70 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
                           {group.locationName} total
+                        </td>
+                        <td className="sticky left-[338px] z-10 bg-slate-50/70 px-1.5 py-1 shadow-[4px_0_8px_-6px_rgba(0,0,0,0.1)]">
+                          <TotalCell amount={group.carriedForwardTotal.amount} owed={group.carriedForwardTotal.owed} />
                         </td>
                         {group.monthlyTotals.map((t, i) => (
                           <td key={i} className="px-1.5 py-1"><TotalCell amount={t.amount} owed={t.owed} /></td>
@@ -256,6 +273,12 @@ export default function BillingReconciliationPage() {
                   <tr className="bg-slate-800">
                     <td colSpan={2} className="sticky left-0 z-10 bg-slate-800 px-3 py-2 text-sm font-bold text-white">
                       Overall total &middot; {report.groups.length} center{report.groups.length === 1 ? "" : "s"}
+                    </td>
+                    <td className="sticky left-[338px] z-10 bg-slate-800 px-1.5 py-1.5 text-white shadow-[4px_0_8px_-6px_rgba(0,0,0,0.3)]">
+                      <div className="min-w-[140px] px-2 py-1 text-right">
+                        <div className="text-sm font-semibold tabular-nums">{formatCurrency(report.overall.carriedForwardTotal.amount)}</div>
+                        {report.overall.carriedForwardTotal.owed > 0 ? <div className="text-[10px] font-medium text-red-300">{formatCurrency(report.overall.carriedForwardTotal.owed)} due</div> : null}
+                      </div>
                     </td>
                     {report.overall.monthlyTotals.map((t, i) => (
                       <td key={i} className="px-1.5 py-1.5 text-white">
