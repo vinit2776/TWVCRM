@@ -215,6 +215,7 @@ async function loadStats(
   viewer: Viewer,
 ): Promise<{ stats: QueryStats } | { error: string }> {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const today = new Date().toISOString().slice(0, 10);
 
   const [openRes, resolvedRes] = await Promise.all([
@@ -245,6 +246,7 @@ async function loadStats(
       awaiting_you: open.filter(({ row, def }) => computeAwaiting(row, def, viewer)).length,
       overdue: open.filter(({ row }) => !!row.needed_by && row.needed_by < today).length,
       resolved_this_week: resolvedRes.count,
+      new_24h: open.filter(({ row }) => row.created_at >= dayAgo).length,
     },
   };
 }

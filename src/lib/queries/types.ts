@@ -196,6 +196,10 @@ export interface QueryStats {
   overdue: number;
   open: number;
   resolved_this_week: number;
+  /** Open threads raised within the last 24h — the "new" badge on the
+   *  accounts dashboard. Counted over the same role-filtered set as `open`,
+   *  so it never exceeds it. */
+  new_24h: number;
 }
 
 /**

@@ -517,6 +517,11 @@ export interface InboxStats {
   discrepancies: number;
   aging_over_48h: number;
   total_open: number;
+  /** Open items that entered their current state within the last 24h — the
+   *  "new" badge on the accounts dashboard. Measured off state_changed_at
+   *  (same clock as aging_hours), so it means "newly landed in this queue",
+   *  not "record created recently". */
+  new_24h: number;
 }
 
 export interface InboxResponse {

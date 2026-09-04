@@ -36,7 +36,8 @@ export type WidgetId =
   | "rent_revenue"
   | "network"
   | "week_in_review"
-  | "quick_charge";
+  | "quick_charge"
+  | "accounts_overview";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   network:                { id: "network",                title: "Network Status" },
   week_in_review:         { id: "week_in_review",         title: "Last 7 Days" },
   quick_charge:           { id: "quick_charge",           title: "Log a Charge" },
+  accounts_overview:      { id: "accounts_overview",      title: "Accounts Overview" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -147,17 +149,15 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "followups",
   ],
 
-  // Accounts: finance/accounts team
+  // Accounts: finance/accounts team.
+  //
+  // Deliberately a single widget. The previous nine were inherited from the
+  // admin/sales set — MTD totals, ROI, renewal pipeline — none of which is
+  // accounts work. AccountsOverviewWidget answers the two questions this role
+  // actually opens the dashboard for: what is queued on me, and where does the
+  // money stand.
   accounts: [
-    "quick_charge",
-    "mtd_bookings",
-    "cash_aging",
-    "revenue_pulse",
-    "renewal_pipeline",
-    "quota_overuse",
-    "aggregator_performance",
-    "procurement_spend",
-    "financial_summary",
+    "accounts_overview",
   ],
 
   // FMS: Facility Manager

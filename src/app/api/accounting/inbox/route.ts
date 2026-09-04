@@ -42,6 +42,9 @@ export const dynamic = "force-dynamic";
 
 const CLOSED_PAGE_SIZE = 50;
 
+/** Window the accounts dashboard's "new" badge counts over. */
+const NEW_WINDOW_HOURS = 24;
+
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
 
@@ -689,9 +692,10 @@ export async function GET(req: NextRequest) {
         else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
         else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
         if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+        if (r.aging_hours < NEW_WINDOW_HOURS) acc.new_24h += 1;
         return acc;
       },
-      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, new_24h: 0 },
     );
     return NextResponse.json({
       stats: singleStats,
@@ -1026,9 +1030,10 @@ export async function GET(req: NextRequest) {
       else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
       else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
       if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+      if (r.aging_hours < NEW_WINDOW_HOURS) acc.new_24h += 1;
       return acc;
     },
-    { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+    { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0, new_24h: 0 },
   );
 
   // Fold booking rows into stats
@@ -1038,6 +1043,7 @@ export async function GET(req: NextRequest) {
     if (br.has_discrepancy) stats.discrepancies += 1;
     else if (br.bucket === "gst_to_issue") stats.gst_to_issue += 1;
     if (br.aging_hours >= AGING_ESCALATE_HOURS) stats.aging_over_48h += 1;
+    if (br.aging_hours < NEW_WINDOW_HOURS) stats.new_24h += 1;
   }
 
   const response: InboxResponse = {
