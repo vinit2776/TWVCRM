@@ -66,7 +66,16 @@ export async function GET(request: NextRequest) {
   }
 
   if (format === "csv") {
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // Excel and Sheets execute any cell whose text starts with = + - @ (or a
+    // leading tab/CR) as a formula. These columns are free text an operator
+    // typed in, so without this a note beginning "=" runs as a formula on
+    // whoever opens the export. A leading apostrophe pins the cell back to
+    // text without changing what it reads as.
+    const esc = (v: unknown) => {
+      const raw = String(v ?? "");
+      const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
     const header = [
       "Asset Code", "Name", "Location", "Floor", "Category", "Status",
       "Make", "Model", "Serial Number", "MAC Address", "IP Address", "Vendor",
@@ -84,10 +93,12 @@ export async function GET(request: NextRequest) {
         esc(a.location_notes), esc(a.notes),
       ].join(",")
     );
-    const csv = [header, ...lines].join("\n");
+    // Excel assumes the system codepage without a BOM, which mangles ₹ and any
+    // non-ASCII name in the free-text columns.
+    const csv = "\ufeff" + [header, ...lines].join("\n");
     return new NextResponse(csv, {
       headers: {
-        "Content-Type": "text/csv",
+        "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="facility-assets-${new Date().toISOString().slice(0, 10)}.csv"`,
       },
     });
