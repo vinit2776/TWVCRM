@@ -65,11 +65,19 @@ export async function GET() {
       .eq("status", "finalized")
       .neq("payment_status", "paid"),
 
-    // Payables: vendor bills unpaid / partial. Use due_date if present, fall
-    // back to invoice_date.
+    // Payables: approved vendor bills, unpaid / partial. Use due_date if
+    // present, fall back to invoice_date.
+    //
+    // The approval gate is not cosmetic. A bill nobody has approved yet is not
+    // money the business owes — Finance cannot pay it (batch-payment/route.ts
+    // rejects anything not approved), and Acc Payables itself only ever lists
+    // approval_status: "approved" (see the accounting page's default filter).
+    // Without this filter the dashboard overstated payables by every bill
+    // still sitting in procurement awaiting sign-off.
     adminSupabase
       .from("vendor_bills")
       .select("id, total_amount, amount_paid, due_date, invoice_date, payment_status, approved_at, created_at")
+      .eq("approval_status", "approved")
       .in("payment_status", ["unpaid", "partially_paid"]),
   ]);
 
@@ -96,8 +104,9 @@ export async function GET() {
     ref_date: b.due_date ?? b.invoice_date ?? today,
     amount: Math.max(0, Number(b.total_amount ?? 0) - Number(b.amount_paid ?? 0)),
     // A bill joins the payables queue when it is approved, not when it was
-    // raised — approved_at is what "new" should track. Bills still awaiting
-    // approval have no approved_at, so they fall back to created_at.
+    // raised — approved_at is what "new" should track. Every row here is
+    // approved so approved_at is set; created_at is a defensive fallback for
+    // legacy rows approved before the column existed.
     entered_at: (b.approved_at as string | null) ?? (b.created_at as string | null),
   }));
 
