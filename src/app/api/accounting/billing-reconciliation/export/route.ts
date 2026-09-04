@@ -66,7 +66,7 @@ export async function GET(_req: NextRequest) {
   const monthHeaders = report.months.map((m) =>
     new Date(m.year, m.month - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "2-digit" })
   );
-  const headerRow = sheet.addRow(["Contract", "Company", "Status", ...monthHeaders, "12-Mo Total"]);
+  const headerRow = sheet.addRow(["Contract", "Company", "Status", "Carried Fwd", ...monthHeaders, "12-Mo Total"]);
   headerRow.font = { bold: true };
   headerRow.eachCell((cell) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
@@ -110,21 +110,25 @@ export async function GET(_req: NextRequest) {
         { text: contract.companyName, hyperlink: appUrl(`/contracts/${contract.id}`) },
         contract.status,
       ]);
-      contract.cells.forEach((cell, i) => writeAmountCell(row, 4 + i, cell));
-      writeTotalCell(row, 4 + contract.cells.length, contract.rowTotalAmount, contract.rowTotalOwed);
+      writeTotalCell(row, 4, contract.carriedForward.amount, contract.carriedForward.owed);
+      if (contract.carriedForward.count > 0) row.getCell(4).note = `${contract.carriedForward.count} statement${contract.carriedForward.count === 1 ? "" : "s"} from before this window`;
+      contract.cells.forEach((cell, i) => writeAmountCell(row, 5 + i, cell));
+      writeTotalCell(row, 5 + contract.cells.length, contract.rowTotalAmount, contract.rowTotalOwed);
     }
 
     const subtotalRow = sheet.addRow([`${group.locationName} total`, "", ""]);
     subtotalRow.font = { bold: true };
-    group.monthlyTotals.forEach((t, i) => writeTotalCell(subtotalRow, 4 + i, t.amount, t.owed));
-    writeTotalCell(subtotalRow, 4 + group.monthlyTotals.length, group.totalAmount, group.totalOwed);
+    writeTotalCell(subtotalRow, 4, group.carriedForwardTotal.amount, group.carriedForwardTotal.owed);
+    group.monthlyTotals.forEach((t, i) => writeTotalCell(subtotalRow, 5 + i, t.amount, t.owed));
+    writeTotalCell(subtotalRow, 5 + group.monthlyTotals.length, group.totalAmount, group.totalOwed);
     subtotalRow.eachCell((cell) => { if (!cell.fill) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F2F2" } }; });
   }
 
   const overallRow = sheet.addRow([`Overall total · ${report.groups.length} center${report.groups.length === 1 ? "" : "s"}`, "", ""]);
   overallRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  report.overall.monthlyTotals.forEach((t, i) => writeTotalCell(overallRow, 4 + i, t.amount, t.owed));
-  writeTotalCell(overallRow, 4 + report.overall.monthlyTotals.length, report.overall.totalAmount, report.overall.totalOwed);
+  writeTotalCell(overallRow, 4, report.overall.carriedForwardTotal.amount, report.overall.carriedForwardTotal.owed);
+  report.overall.monthlyTotals.forEach((t, i) => writeTotalCell(overallRow, 5 + i, t.amount, t.owed));
+  writeTotalCell(overallRow, 5 + report.overall.monthlyTotals.length, report.overall.totalAmount, report.overall.totalOwed);
   overallRow.eachCell((cell) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
     if (!cell.font) cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -133,8 +137,9 @@ export async function GET(_req: NextRequest) {
   sheet.getColumn(1).width = 16;
   sheet.getColumn(2).width = 28;
   sheet.getColumn(3).width = 16;
-  for (let i = 4; i <= 4 + report.months.length; i++) sheet.getColumn(i).width = 16;
-  sheet.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
+  sheet.getColumn(4).width = 16;
+  for (let i = 5; i <= 5 + report.months.length; i++) sheet.getColumn(i).width = 16;
+  sheet.views = [{ state: "frozen", xSplit: 4, ySplit: 1 }];
 
   const buffer = await workbook.xlsx.writeBuffer();
   const filename = `billing-reconciliation-${todayIst()}.xlsx`;
