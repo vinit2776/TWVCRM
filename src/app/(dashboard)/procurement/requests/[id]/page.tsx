@@ -187,6 +187,77 @@ function entityBadgeClass(entityType: string): string {
   return "bg-gray-100 text-gray-700";
 }
 
+// ─── Activity log noise reduction ────────────────────────────────────────────
+// Every page load logs a "view" event, including the detail page's own
+// refetch right after one of its own mutations — so a single real action
+// (e.g. "Updated: status") is immediately followed by a same-user "view" that
+// carries no new information. Consecutive "view" events on the same entity
+// are collapsed into one summary row so genuine changes aren't buried under
+// them.
+
+type DisplayAuditEvent =
+  | { kind: "single"; event: AuditEvent }
+  | {
+      kind: "view-group";
+      id: string;
+      entity_type: string;
+      entity_label: string;
+      count: number;
+      performers: string[];
+      last_created_at: string;
+    };
+
+function buildDisplayAuditEvents(events: AuditEvent[]): DisplayAuditEvent[] {
+  // Drop a "view" that immediately follows a real action by the same person
+  // on the same entity — that's the page's own post-mutation refetch, not a
+  // second look.
+  const filtered: AuditEvent[] = [];
+  for (const ev of events) {
+    const prev = filtered[filtered.length - 1];
+    const isSelfRefetch =
+      ev.action === "view" &&
+      prev &&
+      prev.action !== "view" &&
+      prev.entity_id === ev.entity_id &&
+      prev.performer?.id === ev.performer?.id;
+    if (!isSelfRefetch) filtered.push(ev);
+  }
+
+  // Collapse remaining consecutive "view" events on the same entity into one row.
+  const result: DisplayAuditEvent[] = [];
+  let i = 0;
+  while (i < filtered.length) {
+    const ev = filtered[i];
+    if (ev.action !== "view") {
+      result.push({ kind: "single", event: ev });
+      i++;
+      continue;
+    }
+    let j = i;
+    const performers = new Set<string>();
+    while (j < filtered.length && filtered[j].action === "view" && filtered[j].entity_id === ev.entity_id) {
+      performers.add(filtered[j].performer?.full_name ?? "Unknown");
+      j++;
+    }
+    const count = j - i;
+    if (count === 1) {
+      result.push({ kind: "single", event: ev });
+    } else {
+      result.push({
+        kind: "view-group",
+        id: `view-group-${ev.id}`,
+        entity_type: ev.entity_type,
+        entity_label: ev.entity_label,
+        count,
+        performers: Array.from(performers),
+        last_created_at: filtered[j - 1].created_at,
+      });
+    }
+    i = j;
+  }
+  return result;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Page component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -359,6 +430,7 @@ export default function PurchaseRequestDetailPage() {
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
   // Lifecycle derived data
+  const displayAuditEvents = lifecycle ? buildDisplayAuditEvents(lifecycle.audit_trail) : [];
   const stageStatuses = lifecycle ? computeStageStatuses(lifecycle) : null;
   const nextStageIdx = stageStatuses ? stageStatuses.indexOf("current") : -1;
   const isMrTerminated = pr.status === "rejected" || pr.status === "cancelled";
@@ -1242,21 +1314,49 @@ export default function PurchaseRequestDetailPage() {
       {/* ═══════════════════════════════════════════════════════════════════
           Section C: Activity Log (Audit Trail)
       ════════════════════════════════════════════════════════════════════ */}
-      {lifecycle && lifecycle.audit_trail.length > 0 && (
+      {lifecycle && displayAuditEvents.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-base">Activity Log</CardTitle>
               <Badge variant="secondary" className="ml-auto text-xs">
-                {lifecycle.audit_trail.length} event{lifecycle.audit_trail.length !== 1 ? "s" : ""}
+                {displayAuditEvents.length} event{displayAuditEvents.length !== 1 ? "s" : ""}
               </Badge>
             </div>
           </CardHeader>
           <CardContent>
             <div className="space-y-0">
-              {lifecycle.audit_trail.map((event, idx) => {
-                const isLast = idx === lifecycle.audit_trail.length - 1;
+              {displayAuditEvents.map((d, idx) => {
+                const isLast = idx === displayAuditEvents.length - 1;
+
+                if (d.kind === "view-group") {
+                  return (
+                    <div key={d.id} className="flex gap-3">
+                      <div className="flex flex-col items-center flex-shrink-0">
+                        <div className="w-2.5 h-2.5 rounded-full mt-1.5 bg-gray-300" />
+                        {!isLast && <div className="w-0.5 flex-1 bg-border mt-1" />}
+                      </div>
+                      <div className="pb-4 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`inline-block text-xs font-mono font-semibold px-1.5 py-0.5 rounded opacity-70 ${entityBadgeClass(d.entity_type)}`}
+                          >
+                            {d.entity_label}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            Viewed {d.count} times
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {d.performers.join(", ")} · {formatDate(d.last_created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const event = d.event;
                 const changesEntries = event.changes
                   ? Object.entries(event.changes).filter(([, v]) => v !== null && v !== undefined)
                   : [];
