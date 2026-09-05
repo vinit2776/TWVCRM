@@ -35,7 +35,7 @@ import {
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
   BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -1349,7 +1349,7 @@ export default function PurchaseRequestDetailPage() {
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
-                          {d.performers.join(", ")} · {formatDate(d.last_created_at)}
+                          {d.performers.join(", ")} · {formatDateTime(d.last_created_at)}
                         </p>
                       </div>
                     </div>
@@ -1411,7 +1411,7 @@ export default function PurchaseRequestDetailPage() {
 
                       {/* Performer + time */}
                       <p className="text-xs text-muted-foreground mt-1">
-                        {event.performer?.full_name ?? "System"} · {formatDate(event.created_at)}
+                        {event.performer?.full_name ?? "System"} · {formatDateTime(event.created_at)}
                       </p>
                     </div>
                   </div>
