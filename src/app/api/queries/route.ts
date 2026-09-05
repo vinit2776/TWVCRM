@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
+import { entityTypesForModule, queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { canSeeQuery, isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
 import {
   requireQueryUser,
@@ -12,7 +12,7 @@ import {
 } from "@/lib/queries/server";
 import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
-import type { QueryAuthor, QueryKind, QueryListItem, QueryStats } from "@/lib/queries/types";
+import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryListItem, type QueryModule, type QueryStats } from "@/lib/queries/types";
 
 /**
  * GET  /api/queries — list threads (tabbed), or ?stats=true for the header
@@ -268,7 +268,11 @@ export async function GET(req: NextRequest) {
 
   const tab = (url.searchParams.get("tab") ?? "awaiting_me") as Tab;
   const cursor = url.searchParams.get("cursor");
-  const moduleFilter = url.searchParams.get("module");
+  const moduleParam = url.searchParams.get("module");
+  const moduleFilter =
+    moduleParam && (Object.keys(QUERY_MODULE_LABELS) as string[]).includes(moduleParam)
+      ? (moduleParam as QueryModule)
+      : null;
   // Filters by what a thread *is*, not which module it hangs off. Payment
   // reports hang off contracts, so a module chip files them next to
   // renewal-intent questions — accounts need a way to see just the money.
@@ -289,6 +293,14 @@ export async function GET(req: NextRequest) {
     if (tab === "mine") q = q.eq("created_by", auth.dbUser.id);
     if (tab === "overdue") q = q.not("needed_by", "is", null).lt("needed_by", today);
   }
+  // Pushed into the SQL query rather than filtered in memory after the fetch
+  // below: both are real predicates on the row set, and applying them after
+  // a PAGE_SIZE-sized `.limit()` meant a thread past the first page of
+  // *unfiltered* results by recency was silently invisible under any module
+  // or kind filter — "Payments reported" showed whichever handful of reports
+  // happened to survive the cutoff, not the actual most recent ones.
+  if (kindFilter) q = q.eq("kind", kindFilter);
+  if (moduleFilter) q = q.in("entity_type", entityTypesForModule(moduleFilter));
   // "Awaiting you" and the role-visibility filter are both post-filters, so
   // over-fetch and slice after — otherwise a page of ten could come back
   // near-empty. Capped so a large backlog can't pull the whole table.
@@ -304,10 +316,7 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const rows = (data ?? []) as unknown as QueryRow[];
-  let visible = visibleRows(rows, viewer);
-
-  if (moduleFilter) visible = visible.filter(({ def }) => def.module === moduleFilter);
-  if (kindFilter) visible = visible.filter(({ row }) => row.kind === kindFilter);
+  const visible = visibleRows(rows, viewer);
 
   const summaries = await loadEntitySummaries(
     admin,
