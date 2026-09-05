@@ -32,6 +32,7 @@ export async function GET(
       amc_scope_covered, amc_scope_exclusions,
       amc_terminated_at, amc_termination_reason,
       total_ordered_amount, created_at, status,
+      billing_cycle, cycle_count, unit_cost_per_cycle,
       terminator:users!amc_terminated_by(id, full_name),
       procurement_vendors(id, name)
     `)
