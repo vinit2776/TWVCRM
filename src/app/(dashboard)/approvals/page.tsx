@@ -5,7 +5,7 @@ import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import {
   ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2,
-  Gift, RefreshCw,
+  Gift, RefreshCw, Percent,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -90,6 +90,8 @@ const TYPE_LABELS: Record<string, string> = {
   escalation_waiver:    "Escalation Waiver",
   unifi_adhoc_voucher:  "WiFi Voucher",
 };
+
+const ESCALATION_APPROVAL_TYPES = ["escalation_reduction", "escalation_waiver"];
 
 // ---------------------------------------------------------------------------
 // Row component
@@ -232,6 +234,164 @@ function CompRequestRow({
             >
               {acting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
               Approve Comp
+            </Button>
+            {rejecting ? (
+              <Button
+                size="sm" variant="destructive" className="flex-1 h-8 text-xs"
+                disabled={acting || !rejectionReason.trim()}
+                onClick={() => handleAction("reject")}
+              >
+                {acting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <XCircle className="h-3 w-3 mr-1" />}
+                Confirm Reject
+              </Button>
+            ) : (
+              <Button
+                size="sm" variant="outline" className="flex-1 h-8 text-xs text-destructive hover:text-destructive"
+                onClick={() => { setRejecting(true); setRejectionReason(""); }}
+              >
+                <XCircle className="h-3 w-3 mr-1" />Reject
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Escalation approval row (negotiated escalation reduction/waiver on a
+// contract renewal — blocks activation until acted on)
+// ---------------------------------------------------------------------------
+
+function EscalationApprovalRow({
+  req,
+  canAct,
+  onActed,
+}: {
+  req: ApprovalRequest;
+  canAct: boolean;
+  onActed: () => void;
+}) {
+  const meta = req.metadata || {};
+  const [acting, setActing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+
+  const handleAction = async (action: "approve" | "reject") => {
+    if (action === "reject" && !rejectionReason.trim()) {
+      toast.error("Please provide a rejection reason");
+      return;
+    }
+    setActing(true);
+    try {
+      const res = await fetch(`/api/approval-requests/${req.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          ...(action === "reject" ? { rejection_reason: rejectionReason.trim() } : {}),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(apiErrorMessage(json.error, `Failed to ${action}`));
+        return;
+      }
+      toast.success(json.message || `Request ${action}d`);
+      emitApprovalChanged();
+      onActed();
+    } finally {
+      setActing(false);
+    }
+  };
+
+  return (
+    <div className="border border-border rounded-lg p-4 space-y-3 hover:bg-muted/10 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Percent className="h-4 w-4 text-purple-600 shrink-0" />
+          <div>
+            <div className="flex items-center gap-2">
+              <Badge className="text-[10px] px-1.5 py-0 bg-purple-100 text-purple-800 hover:bg-purple-100">
+                {TYPE_LABELS[req.approval_type] || req.approval_type}
+              </Badge>
+              <StatusBadge status={req.status} />
+            </div>
+            <p className="text-sm font-medium mt-0.5">
+              <Link href={`/contracts/${req.entity_id}`} className="hover:underline text-primary font-mono">
+                {req.entity_reference || req.entity_id}
+              </Link>
+            </p>
+          </div>
+        </div>
+        <span className="text-xs text-muted-foreground shrink-0">{timeAgo(req.requested_at || req.created_at)}</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <div>
+          <span className="font-medium text-foreground">Requested by: </span>
+          {(req.requester as { full_name?: string } | null)?.full_name || "Unknown"}
+        </div>
+        {meta.parent_contract_number != null && (
+          <div>
+            <span className="font-medium text-foreground">Renewal of: </span>
+            {String(meta.parent_contract_number)}
+          </div>
+        )}
+        {meta.parent_escalation_percentage != null && (
+          <div>
+            <span className="font-medium text-foreground">Escalation: </span>
+            {String(meta.parent_escalation_percentage)}% → <span className="font-semibold text-foreground">{String(meta.proposed_escalation_percentage)}%</span>
+          </div>
+        )}
+        {meta.parent_subtotal != null && meta.proposed_subtotal != null && (
+          <div>
+            <span className="font-medium text-foreground">Rate: </span>
+            {formatCurrency(Number(meta.parent_subtotal))}/mo → <span className="font-semibold text-foreground">{formatCurrency(Number(meta.proposed_subtotal))}/mo</span>
+          </div>
+        )}
+      </div>
+
+      {req.reason && (
+        <p className="text-xs text-muted-foreground italic border-l-2 border-border pl-2">
+          &ldquo;{req.reason}&rdquo;
+        </p>
+      )}
+
+      {req.status === "rejected" && req.rejection_reason && (
+        <p className="text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5 text-red-700">
+          <strong>Rejection reason:</strong> {req.rejection_reason}
+        </p>
+      )}
+      {req.status !== "pending" && req.actor && (
+        <p className="text-xs text-muted-foreground">
+          {req.status === "approved" ? "Approved" : req.status === "rejected" ? "Rejected" : "Handled"} by{" "}
+          {(req.actor as { full_name?: string }).full_name || "Unknown"}
+          {req.acted_at ? ` · ${timeAgo(req.acted_at)}` : ""}
+        </p>
+      )}
+
+      {req.status === "pending" && canAct && (
+        <div className="space-y-2 pt-1">
+          {rejecting && (
+            <Input
+              autoFocus
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              placeholder="Reason for rejection (required)…"
+              className="h-8 text-xs"
+            />
+          )}
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="flex-1 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
+              disabled={acting}
+              onClick={() => handleAction("approve")}
+            >
+              {acting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+              Approve
             </Button>
             {rejecting ? (
               <Button
@@ -456,6 +616,7 @@ export default function ApprovalsPage() {
   const userRole = user?.role ?? null;
   const userId = user?.id ?? null;
   const [requests, setRequests]     = useState<ApprovalRequest[]>([]);
+  const [escalationRequests, setEscalationRequests] = useState<ApprovalRequest[]>([]);
   const [history, setHistory]       = useState<ApprovalRequest[]>([]);
   const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
   const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
@@ -480,6 +641,12 @@ export default function ApprovalsPage() {
             ? all.filter(r => r.approval_type === "comp_request")
             : all.filter(r => r.approval_type === "comp_request" && r.requested_by === userId)
         );
+        // Escalation reduction/waiver requests can only be acted on by
+        // admin/manager (see PATCH /api/approval-requests/[id]), so only
+        // approvers need to see them here.
+        setEscalationRequests(
+          isApprover ? all.filter(r => ESCALATION_APPROVAL_TYPES.includes(r.approval_type)) : []
+        );
       }
 
       // Fetch pending vendor bills (only admins/managers see them — admins can act)
@@ -499,7 +666,7 @@ export default function ApprovalsPage() {
         const json = await historyRes.json();
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const resolved = ((json.data || []) as ApprovalRequest[]).filter(
-          r => r.approval_type === "comp_request"
+          r => (r.approval_type === "comp_request" || ESCALATION_APPROVAL_TYPES.includes(r.approval_type))
             && r.status !== "pending"
             && new Date(r.created_at) > cutoff
             && (isApprover || r.requested_by === userId)
@@ -601,9 +768,9 @@ export default function ApprovalsPage() {
           <TabsList className="w-full">
             <TabsTrigger value="pending" className="flex-1">
               Pending
-              {(requests.length + pendingBills.length) > 0 && (
+              {(requests.length + pendingBills.length + escalationRequests.length) > 0 && (
                 <Badge className="ml-2 text-[10px] bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200">
-                  {requests.length + pendingBills.length}
+                  {requests.length + pendingBills.length + escalationRequests.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -617,7 +784,7 @@ export default function ApprovalsPage() {
 
           {/* Pending tab */}
           <TabsContent value="pending" className="mt-4 space-y-6">
-            {requests.length === 0 && pendingBills.length === 0 ? (
+            {requests.length === 0 && pendingBills.length === 0 && escalationRequests.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <CheckCircle2 className="h-10 w-10 text-green-400 mx-auto mb-3" />
@@ -698,6 +865,26 @@ export default function ApprovalsPage() {
                   </section>
                 )}
 
+                {/* Escalation Approvals section — blocks contract activation until acted on */}
+                {escalationRequests.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Percent className="h-4 w-4 text-purple-600" />
+                      <h2 className="text-sm font-semibold">
+                        Escalation Approvals <span className="text-muted-foreground font-normal">({escalationRequests.length})</span>
+                      </h2>
+                    </div>
+                    {escalationRequests.map(req => (
+                      <EscalationApprovalRow
+                        key={req.id}
+                        req={req}
+                        canAct={isApprover}
+                        onActed={fetchData}
+                      />
+                    ))}
+                  </section>
+                )}
+
                 {/* Comp Requests section */}
                 {requests.length > 0 && (
                   <section className="space-y-3">
@@ -731,12 +918,21 @@ export default function ApprovalsPage() {
               </Card>
             ) : (
               history.map(req => (
-                <CompRequestRow
-                  key={req.id}
-                  req={req}
-                  canAct={false}
-                  onActed={fetchData}
-                />
+                ESCALATION_APPROVAL_TYPES.includes(req.approval_type) ? (
+                  <EscalationApprovalRow
+                    key={req.id}
+                    req={req}
+                    canAct={false}
+                    onActed={fetchData}
+                  />
+                ) : (
+                  <CompRequestRow
+                    key={req.id}
+                    req={req}
+                    canAct={false}
+                    onActed={fetchData}
+                  />
+                )
               ))
             )}
 
