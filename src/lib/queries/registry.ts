@@ -707,6 +707,19 @@ export function queryEntityDef(type: string): QueryEntityDef | null {
   return (QUERY_ENTITIES as Record<string, QueryEntityDef | undefined>)[type] ?? null;
 }
 
+/**
+ * Every entity type filed under one module chip on /queries.
+ *
+ * Lets the module filter run as a SQL `.in("entity_type", ...)` instead of
+ * an in-memory filter applied after the page's row limit — see the "kind"
+ * filter for why that ordering matters.
+ */
+export function entityTypesForModule(module: QueryModule): QueryEntityType[] {
+  return Object.values(QUERY_ENTITIES)
+    .filter((d) => d.module === module)
+    .map((d) => d.type);
+}
+
 /** Every role authorized on at least one entity type — the gate for /queries
  *  itself. Someone with none of these has no reason to see the page. */
 export const ANY_QUERY_ROLE: readonly UserRole[] = Array.from(
