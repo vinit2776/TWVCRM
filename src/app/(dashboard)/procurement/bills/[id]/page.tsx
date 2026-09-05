@@ -30,6 +30,7 @@ import {
   PROCUREMENT_DEPARTMENT_LABELS,
   PAYMENT_BATCH_TYPE_LABELS,
   PARTIAL_APPROVAL_REASONS, PARTIAL_APPROVAL_REASON_LABELS,
+  BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audit-labels";
@@ -74,6 +75,9 @@ type ChainData = {
     id: string; po_number: string; status: string; po_type: string;
     created_at: string; total_ordered_amount: number | null;
     expected_delivery_date: string | null;
+    billing_cycle: ServicePoBillingCycle | null;
+    cycle_count: number | null;
+    unit_cost_per_cycle: number | null;
     orderer: { id: string; full_name: string } | null;
     purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string; unit_price: number | null }>;
   } | null;
@@ -1175,6 +1179,8 @@ export default function VendorBillDetailPage() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {chain.po.po_type === "service" ? "Service PO" : "Goods PO"}
+                    {chain.po.billing_cycle && ` · ${BILLING_CYCLE_LABELS[chain.po.billing_cycle]}`}
+                    {chain.po.cycle_count != null && chain.po.cycle_count > 1 && ` (${chain.po.cycle_count} cycles${chain.po.unit_cost_per_cycle ? ` of ${formatCurrency(chain.po.unit_cost_per_cycle)}` : ""})`}
                     {chain.po.orderer && ` · Ordered by ${chain.po.orderer.full_name}`}
                     {chain.po.total_ordered_amount != null && ` · ${formatCurrency(chain.po.total_ordered_amount)}`}
                   </p>

@@ -33,6 +33,7 @@ import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
   BILLING_STATEMENT_STATUS_LABELS, BILLING_STATEMENT_STATUS_COLORS,
+  BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
@@ -823,9 +824,28 @@ export default function PurchaseRequestDetailPage() {
                 <p className="text-xs text-muted-foreground">End Date</p>
                 <p className="font-medium">{pr.amc_end_date ?? "—"}</p>
               </div>
+              {(() => {
+                const amcItem = pr.purchase_request_items?.[0];
+                const cycle = cycleFromUnit(amcItem?.unit);
+                const cycles = Number(amcItem?.quantity ?? 1);
+                return (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Billing Cycle</p>
+                    <p className="font-medium">
+                      {BILLING_CYCLE_LABELS[cycle]}
+                      {cycles > 1 && ` · ${cycles} cycles`}
+                    </p>
+                  </div>
+                );
+              })()}
               {canSeePrices && (
                 <div className="sm:col-span-2">
-                  <p className="text-xs text-muted-foreground">Annual Amount (pre-GST)</p>
+                  <p className="text-xs text-muted-foreground">
+                    {(() => {
+                      const cycles = Number(pr.purchase_request_items?.[0]?.quantity ?? 1);
+                      return cycles > 1 ? "Total Contract Value (pre-GST)" : "Annual Amount (pre-GST)";
+                    })()}
+                  </p>
                   <p className="font-bold text-base">{formatCurrency(pr.total_estimated_amount ?? 0)}</p>
                 </div>
               )}

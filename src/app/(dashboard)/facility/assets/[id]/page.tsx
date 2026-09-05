@@ -17,6 +17,7 @@ import { AssetEventDialog, type OpenIssue } from "@/components/facility/asset-ev
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
+import { BILLING_CYCLE_LABELS, type ServicePoBillingCycle } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import type { FacilityAsset, FacilityIssue, FacilityAssetEvent, FacilityAssetEventType, FacilityLifecycleStage, CategoryCustomField, AmcStatus, AssetDocument, AssetDocumentTier } from "@/types";
@@ -97,6 +98,9 @@ interface AmcContract {
   total_ordered_amount: number;
   created_at: string;
   status: string; // PO status — needed to gate "Log Breakdown Visit"
+  billing_cycle: ServicePoBillingCycle | null;
+  cycle_count: number | null;
+  unit_cost_per_cycle: number | null;
   procurement_vendors: { id: string; name: string } | null;
 }
 
@@ -627,6 +631,12 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
                             <div className="text-xs text-muted-foreground">
                               {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
+                              {c.billing_cycle && (
+                                <>
+                                  {" · "}{BILLING_CYCLE_LABELS[c.billing_cycle]}
+                                  {c.cycle_count && c.cycle_count > 1 && ` (${c.cycle_count} cycles${c.unit_cost_per_cycle ? ` of ${formatCurrency(c.unit_cost_per_cycle)}` : ""})`}
+                                </>
+                              )}
                             </div>
                             {(c.amc_scope_covered || c.amc_scope_exclusions) && (
                               <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
@@ -888,6 +898,12 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
                             <div className="text-xs text-muted-foreground">
                               {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
+                              {c.billing_cycle && (
+                                <>
+                                  {" · "}{BILLING_CYCLE_LABELS[c.billing_cycle]}
+                                  {c.cycle_count && c.cycle_count > 1 && ` (${c.cycle_count} cycles${c.unit_cost_per_cycle ? ` of ${formatCurrency(c.unit_cost_per_cycle)}` : ""})`}
+                                </>
+                              )}
                             </div>
                           </div>
                           <div className="text-right shrink-0 space-y-1">

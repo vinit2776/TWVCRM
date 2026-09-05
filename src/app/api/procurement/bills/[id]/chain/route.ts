@@ -53,6 +53,7 @@ export async function GET(
       .select(`
         id, po_number, status, po_type, created_at, total_ordered_amount,
         expected_delivery_date, actual_delivery_date, notes,
+        billing_cycle, cycle_count, unit_cost_per_cycle,
         payment_terms, terms_and_conditions,
         advance_amount, advance_status, advance_payment_mode,
         advance_payment_reference, advance_payment_date,
