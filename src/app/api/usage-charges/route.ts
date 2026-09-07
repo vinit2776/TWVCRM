@@ -5,6 +5,115 @@ import { logAudit } from "@/lib/audit";
 import { isContractOperational, CHARGE_ALLOWED_ROLES } from "@/lib/constants";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
+// A charge/usage row normalized to one shared shape regardless of which
+// table it came from, so the existing usage_charges-shaped table UI (Qty,
+// Unit Price, Total, GST, Charge Date, Billing Period, Status) renders any
+// of the three sources without special-casing per column.
+interface NormalizedRow {
+  id: string;
+  source: "manual" | "print" | "facility";
+  description: string;
+  contract_id: string | null;
+  contract: { id: string; contract_number: string; billing_cycle?: string | null } | null;
+  booking_id?: string | null;
+  booking?: { id: string; booking_number: string; booking_date: string } | null;
+  lead: { first_name?: string | null; last_name?: string | null; company?: string | null } | null;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  gst_rate: number | null;
+  gst_amount: number | null;
+  total_with_gst: number | null;
+  charge_date: string;
+  status: "pending" | "billed" | "waived";
+  // null = not a meaningful distinction for this source (every manual
+  // charge is billable unless waived, which the status already shows).
+  billable: boolean | null;
+  notes: string | null;
+  created_at: string;
+}
+
+function lastDayOfMonth(year: number, month: number): string {
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeManual(r: any): NormalizedRow {
+  return {
+    id: r.id, source: "manual", description: r.description,
+    contract_id: r.contract_id, contract: r.contract ?? null,
+    booking_id: r.booking_id, booking: r.booking ?? null,
+    lead: r.lead ?? r.booking?.lead ?? null,
+    quantity: Number(r.quantity), unit_price: Number(r.unit_price), total: Number(r.total),
+    gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
+    charge_date: r.charge_date, status: r.status, billable: null,
+    notes: r.notes, created_at: r.created_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizePrint(r: any): NormalizedRow {
+  const overage = Number(r.overage_quantity);
+  const serviceName = r.service?.name ?? "Print usage";
+  return {
+    id: r.id, source: "print",
+    description: overage > 0
+      ? `${serviceName} — ${r.quantity_used} used, ${overage} over quota`
+      : `${serviceName} — ${r.quantity_used} used (within quota)`,
+    contract_id: r.contract_id, contract: r.contract ? { id: r.contract.id, contract_number: r.contract.contract_number, billing_cycle: r.contract.billing_cycle } : null,
+    lead: r.contract?.lead ?? null,
+    quantity: overage, unit_price: Number(r.overage_rate_snapshot), total: Number(r.amount),
+    gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
+    charge_date: lastDayOfMonth(r.period_year, r.period_month),
+    status: r.is_billed ? "billed" : "pending",
+    billable: Number(r.amount) > 0,
+    notes: r.notes, created_at: r.created_at,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeFacility(r: any): NormalizedRow {
+  const facilityName = r.contract_facility?.name ?? "Facility usage";
+  const unit = r.contract_facility?.unit ? ` ${r.contract_facility.unit}` : "";
+  const billable = Number(r.billable_quantity);
+  return {
+    id: r.id, source: "facility",
+    description: billable > 0
+      ? `${facilityName} — ${r.quantity_used}${unit} used, ${billable}${unit} billable`
+      : `${facilityName} — ${r.quantity_used}${unit} used (within quota)`,
+    contract_id: r.contract_id, contract: r.contract ? { id: r.contract.id, contract_number: r.contract.contract_number, billing_cycle: r.contract.billing_cycle } : null,
+    lead: r.contract?.lead ?? null,
+    quantity: billable, unit_price: Number(r.unit_price), total: Number(r.total_charge),
+    gst_rate: null, gst_amount: null, total_with_gst: null,
+    // No billing_statement_id/is_billed on this table (it predates the usage-
+    // statement flow) — the accounting period it was logged against is the
+    // closest proxy for "has this been billed": once locked, the period's
+    // statement is done, so anything logged for it is presumed billed.
+    charge_date: r.accounting_period ? lastDayOfMonth(r.accounting_period.year, r.accounting_period.month) : (r.created_at ?? "").slice(0, 10),
+    status: r.accounting_period?.status === "locked" ? "billed" : "pending",
+    billable: billable > 0,
+    notes: r.notes, created_at: r.created_at,
+  };
+}
+
+/**
+ * GET /api/usage-charges
+ *
+ * Merges three sources of logged usage into one list — ad-hoc charges
+ * (usage_charges), print-quota entries (service_usage_records), and
+ * facility/meeting-room entries (facility_usage_records) — so the Usage
+ * Charges tab shows everything captured this period, billable or not,
+ * instead of only the ad-hoc subset. Each source is fetched and normalized
+ * separately (see normalize* above), merged, sorted by date, then paginated
+ * in memory: three heterogeneous tables can't share one SQL query, and
+ * usage volume at this scale (one coworking business) doesn't need true
+ * cross-table pagination — a bounded per-source fetch is enough.
+ *
+ * Print/facility have no booking or lead concept of their own (only a
+ * contract), so a booking_id/lead_id filter — which only makes sense for
+ * ad-hoc charges — narrows the result to manual rows only. Same for
+ * status=waived, which print/facility rows can never be.
+ */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -20,37 +129,79 @@ export async function GET(request: NextRequest) {
   const dateFrom = searchParams.get("date_from");
   const dateTo = searchParams.get("date_to");
 
-  const offset = (page - 1) * limit;
+  // A safety cap per source — not true pagination, see doc comment above.
+  const SOURCE_CAP = 500;
 
-  let query = supabase
+  let manualQuery = supabase
     .from("usage_charges")
     .select(
-      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company), waived_by_user:users!usage_charges_waived_by_fkey(id, full_name, role)",
-      { count: "exact" }
+      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company), waived_by_user:users!usage_charges_waived_by_fkey(id, full_name, role)"
     );
-
-  if (contractId) query = query.eq("contract_id", contractId);
-  if (bookingId) query = query.eq("booking_id", bookingId);
-  if (leadId) query = query.eq("lead_id", leadId);
-  if (status) query = query.eq("status", status);
-  if (dateFrom) query = query.gte("charge_date", dateFrom);
-  if (dateTo) query = query.lte("charge_date", dateTo);
-
-  // charge_date is a DATE (no time component), so same-day charges tie on
-  // it — Postgres gives no ordering guarantee for ties without a
-  // tiebreaker. created_at is a real timestamp, so it breaks ties
-  // chronologically instead of leaving same-day order undefined.
-  query = query
+  if (contractId) manualQuery = manualQuery.eq("contract_id", contractId);
+  if (bookingId) manualQuery = manualQuery.eq("booking_id", bookingId);
+  if (leadId) manualQuery = manualQuery.eq("lead_id", leadId);
+  if (status) manualQuery = manualQuery.eq("status", status);
+  if (dateFrom) manualQuery = manualQuery.gte("charge_date", dateFrom);
+  if (dateTo) manualQuery = manualQuery.lte("charge_date", dateTo);
+  manualQuery = manualQuery
     .order("charge_date", { ascending: false })
     .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+    .limit(SOURCE_CAP);
 
-  const { data, error, count } = await query;
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Only meaningful for ad-hoc charges — narrow to manual-only when set.
+  const manualOnly = !!bookingId || !!leadId || status === "waived";
+
+  const [manualResult, printResult, facilityResult] = await Promise.all([
+    manualQuery,
+    manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
+      let q = supabase
+        .from("service_usage_records")
+        .select("id, contract_id, quantity_used, overage_quantity, overage_rate_snapshot, amount, gst_rate, gst_amount, total_with_gst, is_billed, period_year, period_month, notes, created_at, contract:contracts!service_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), service:service_catalog(name)")
+        .not("contract_id", "is", null)
+        .limit(SOURCE_CAP);
+      if (contractId) q = q.eq("contract_id", contractId);
+      if (status === "pending") q = q.eq("is_billed", false);
+      if (status === "billed") q = q.eq("is_billed", true);
+      return q;
+    })(),
+    manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
+      let q = supabase
+        .from("facility_usage_records")
+        .select("id, contract_id, quantity_used, billable_quantity, unit_price, total_charge, notes, created_at, contract:contracts!facility_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), contract_facility:contract_facilities(name, unit), accounting_period:accounting_periods(year, month, status)")
+        .limit(SOURCE_CAP);
+      if (contractId) q = q.eq("contract_id", contractId);
+      return q;
+    })(),
+  ]);
+
+  if (manualResult.error) return NextResponse.json({ error: manualResult.error.message }, { status: 500 });
+  if (printResult.error) return NextResponse.json({ error: printResult.error.message }, { status: 500 });
+  if (facilityResult.error) return NextResponse.json({ error: facilityResult.error.message }, { status: 500 });
+
+  let merged: NormalizedRow[] = [
+    ...(manualResult.data ?? []).map(normalizeManual),
+    ...(printResult.data ?? []).map(normalizePrint),
+    ...(facilityResult.data ?? []).map(normalizeFacility),
+  ];
+
+  // Print/facility status and date range couldn't be pushed into their SQL
+  // queries (status is derived, date comes from a joined period) — apply
+  // both post-merge instead.
+  if (status && status !== "waived") merged = merged.filter((r) => r.source === "manual" || r.status === status);
+  if (dateFrom) merged = merged.filter((r) => r.charge_date >= dateFrom);
+  if (dateTo) merged = merged.filter((r) => r.charge_date <= dateTo);
+
+  // charge_date has no time component, so tie-break same-day rows by
+  // created_at (a real timestamp) for stable, chronological ordering.
+  merged.sort((a, b) => b.charge_date.localeCompare(a.charge_date) || (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+
+  const total = merged.length;
+  const offset = (page - 1) * limit;
+  const data = merged.slice(offset, offset + limit);
 
   return NextResponse.json({
     data,
-    pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   });
 }
 
