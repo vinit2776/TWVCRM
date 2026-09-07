@@ -20,6 +20,7 @@ import {
   Send,
   FileCheck,
   Printer,
+  Building2,
   Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
+import { LogFacilityUsageDialog } from "@/components/accounting/log-facility-usage-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
 const ViewStatementDialog = dynamic(
   () => import("@/components/billing/view-statement-dialog").then(m => ({ default: m.ViewStatementDialog })),
@@ -410,6 +412,7 @@ export default function BillingPage() {
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
+  const [facilityUsageOpen, setFacilityUsageOpen]     = useState(false);
 
   // ── Billing Statements ────────────────────────────────────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
@@ -1065,6 +1068,11 @@ export default function BillingPage() {
                 <Printer className="mr-2 h-4 w-4" />Log Print Usage
               </Button>
             )}
+            {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+              <Button variant="outline" onClick={() => setFacilityUsageOpen(true)}>
+                <Building2 className="mr-2 h-4 w-4" />Log Facility Usage
+              </Button>
+            )}
             <Button onClick={() => setAddChargeOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />Add Charge
             </Button>
@@ -1248,6 +1256,7 @@ export default function BillingPage() {
         charge={editingCharge}
       />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
+      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
 
       <ViewStatementDialog
