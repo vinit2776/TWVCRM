@@ -573,6 +573,11 @@ export interface Contract {
   tenure_months: number;
   start_date: string;
   end_date: string;
+  /** Set when a watermark-free "Download for signature" copy is generated
+   * while start_date isn't confirmed yet. Compared against start_date to
+   * warn staff if the date drifted after that copy went out for signature. */
+  signature_copy_generated_at?: string | null;
+  signature_copy_start_date?: string | null;
   next_billing_date?: string;
   /** Cumulative days added via contract extension (lifetime cap: 60). */
   days_extended?: number;
