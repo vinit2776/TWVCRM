@@ -21,7 +21,7 @@ import {
   ArrowLeft, AlertTriangle, Loader2, MessageSquare, MapPin, User,
   Server, Clock, RefreshCw, CheckCircle2, Wrench, Star, ImagePlus,
   Phone, Mail, ExternalLink, ShieldAlert, Bell, Check, CheckCheck, X,
-  TimerReset, Trophy, MoreHorizontal,
+  TimerReset, Trophy, MoreHorizontal, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -149,6 +149,12 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [issue, setIssue] = useState<FacilityIssue | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [savingDescription, setSavingDescription] = useState(false);
   const [comment, setComment] = useState("");
   const [commentMentionIds, setCommentMentionIds] = useState<string[]>([]);
   const [mentionRoster, setMentionRoster] = useState<MentionUser[]>([]);
@@ -187,6 +193,48 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     if (res.ok) setIssue(json.data);
     else toast.error(json.error || "Failed to load issue");
     setLoading(false);
+  };
+
+  const saveTitle = async () => {
+    const trimmed = titleDraft.trim();
+    if (!trimmed) { toast.error("Title can't be empty"); return; }
+    if (trimmed === issue?.title) { setEditingTitle(false); return; }
+    setSavingTitle(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update title");
+      setEditingTitle(false);
+      await fetchIssue();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update title");
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const saveDescription = async () => {
+    if (descriptionDraft === (issue?.description || "")) { setEditingDescription(false); return; }
+    setSavingDescription(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: descriptionDraft.trim() || null }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update description");
+      setEditingDescription(false);
+      await fetchIssue();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update description");
+    } finally {
+      setSavingDescription(false);
+    }
   };
 
   const fetchCollaborators = async () => {
@@ -620,7 +668,36 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
               </span>
             )}
           </div>
-          <h1 className="text-base md:text-lg font-semibold mt-1 break-words">{issue.title}</h1>
+          {editingTitle ? (
+            <div className="mt-1">
+              <Input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); saveTitle(); }
+                  if (e.key === "Escape") { setEditingTitle(false); }
+                }}
+                onBlur={saveTitle}
+                autoFocus
+                disabled={savingTitle}
+                className="text-base md:text-lg font-semibold h-auto py-1"
+              />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Enter to save, Esc to cancel</p>
+            </div>
+          ) : (
+            <h1
+              className={cn(
+                "text-base md:text-lg font-semibold mt-1 break-words group",
+                canAct && "cursor-text hover:bg-muted/40 rounded px-1 -mx-1"
+              )}
+              onClick={() => { if (canAct) { setTitleDraft(issue.title); setEditingTitle(true); } }}
+            >
+              {issue.title}
+              {canAct && (
+                <Pencil className="h-3 w-3 inline-block ml-1.5 mb-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </h1>
+          )}
           <LifecycleStepper status={issue.status} />
         </div>
         <Button variant="ghost" size="icon" onClick={fetchIssue} disabled={loading} title="Refresh">
@@ -810,10 +887,43 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         <div className="md:col-span-2 space-y-4">
           {/* Description */}
           <section className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Description</div>
-            <p className="text-sm whitespace-pre-wrap">
-              {issue.description || <span className="text-muted-foreground italic">No description provided</span>}
-            </p>
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Description</div>
+              {canAct && !editingDescription && (
+                <button
+                  onClick={() => { setDescriptionDraft(issue.description || ""); setEditingDescription(true); }}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Edit description"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {editingDescription ? (
+              <div>
+                <Textarea
+                  value={descriptionDraft}
+                  onChange={(e) => setDescriptionDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") setEditingDescription(false); }}
+                  rows={4}
+                  autoFocus
+                  disabled={savingDescription}
+                  className="text-sm"
+                />
+                <div className="flex justify-end gap-2 mt-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => setEditingDescription(false)} disabled={savingDescription}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" onClick={saveDescription} disabled={savingDescription}>
+                    {savingDescription ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm whitespace-pre-wrap">
+                {issue.description || <span className="text-muted-foreground italic">No description provided</span>}
+              </p>
+            )}
           </section>
 
           {/* Photos */}

@@ -92,6 +92,12 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid priority" }, { status: 400 });
   }
 
+  if ("title" in updates) {
+    const trimmed = String(updates.title ?? "").trim();
+    if (!trimmed) return NextResponse.json({ error: "Title can't be empty" }, { status: 400 });
+    updates.title = trimmed;
+  }
+
   // Manual TAT override — reported_problem only (delegated tasks track TAT via due_date).
   if ("tat_hours" in body && body.tat_hours != null && body.tat_hours !== "" && existing.task_type === "reported_problem") {
     const hours = Number(body.tat_hours);
@@ -119,6 +125,26 @@ export async function PUT(
   const { data, error } = await supabase
     .from("facility_issues").update(updates).eq("id", id).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Note title/description edits in timeline — otherwise these are silent:
+  // logAudit below covers the admin-only audit trail, but this is the only
+  // trace visible on the issue page itself (e.g. to the assignee).
+  if (updates.title && updates.title !== existing.title) {
+    await logIssueEvent(supabase, {
+      issueId: id, eventType: "updated",
+      actorId: dbUser!.id, actorLabel: dbUser!.full_name,
+      message: `Title changed: "${existing.title}" → "${updates.title}"`,
+      payload: { field: "title", from: existing.title, to: updates.title },
+    });
+  }
+  if ("description" in updates && updates.description !== existing.description) {
+    await logIssueEvent(supabase, {
+      issueId: id, eventType: "updated",
+      actorId: dbUser!.id, actorLabel: dbUser!.full_name,
+      message: "Description updated",
+      payload: { field: "description", from: existing.description, to: updates.description },
+    });
+  }
 
   // Note priority change in timeline
   if (updates.priority && updates.priority !== existing.priority) {
