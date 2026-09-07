@@ -94,6 +94,7 @@ export default function FacilityTeamKpiPage() {
                 <th className="text-right px-3 py-2 font-medium">SLA Compliance</th>
                 <th className="text-right px-3 py-2 font-medium">Reopen Rate</th>
                 <th className="text-right px-3 py-2 font-medium">Satisfaction</th>
+                <th className="text-right px-3 py-2 font-medium">Hours Logged</th>
               </tr>
             </thead>
             <tbody>
@@ -131,6 +132,7 @@ export default function FacilityTeamKpiPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2 text-right font-medium">{formatDuration(r.minutes_logged)}</td>
                   </tr>
                 );
               })}

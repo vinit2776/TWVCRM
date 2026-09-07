@@ -66,6 +66,7 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `POST /api/facility/issues/[id]/assign` — `src/app/api/facility/issues/[id]/assign/route.ts`
 - `POST /api/facility/issues/[id]/comment` — `src/app/api/facility/issues/[id]/comment/route.ts`
 - `GET/POST/DELETE /api/facility/issues/[id]/collaborators` — `src/app/api/facility/issues/[id]/collaborators/route.ts`
+- `GET/POST /api/facility/issues/[id]/time-logs` — `src/app/api/facility/issues/[id]/time-logs/route.ts` (manual worklog; summed into `/facility/team-kpi`'s "Hours Logged" column)
 - `POST/DELETE /api/facility/issues/[id]/attachments` — `src/app/api/facility/issues/[id]/attachments/route.ts`
 - `GET/POST /api/facility/assets` — `src/app/api/facility/assets/route.ts` (supports `?search=` for asset search)
 - `GET/PUT/DELETE /api/facility/assets/[id]` — `src/app/api/facility/assets/[id]/route.ts`
@@ -345,6 +346,28 @@ Activity timeline per issue. Append-only.
 **Valid `event_type` values:** `created`, `status_changed`, `assigned`, `comment`, `photo_added`, `resolved`, `reopened`, `sla_breached`, `satisfaction`, `priority_changed`.
 
 **RLS:** SELECT — any `authenticated`. INSERT — any `authenticated`.
+
+### `facility_issue_time_logs`
+
+Manual worklog per issue (migration 00552). Append-only — no update/delete, same as `facility_issue_events` — so a report can sum entries over an arbitrary date range per user.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `issue_id` | UUID FK `facility_issues(id) ON DELETE CASCADE` | |
+| `logged_by` | UUID FK `users(id)` NOT NULL | who logged the entry |
+| `minutes` | INTEGER NOT NULL, CHECK > 0 | |
+| `note` | TEXT | nullable, free text |
+| `logged_at` | TIMESTAMPTZ DEFAULT NOW() | when the work happened — defaults to now, not backdateable via the current UI |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
+
+**RLS:** SELECT — any `authenticated`. INSERT — any `authenticated` (role gating happens in the API route, same pattern as `facility_issue_events`).
+
+`GET/POST /api/facility/issues/[id]/time-logs` — GET returns `{ data: entries[], total_minutes }` newest-first; POST requires `FACILITY_ROLES.workOnIssues` (same gate as `PUT /api/facility/issues/[id]`, not narrowed to the current assignee — a past assignee or collaborator can log time for work they already did) and body `{ minutes: number, note?: string, logged_at?: string }`.
+
+`parseDuration()` / `formatDuration()` in `src/lib/facility-ui.ts` are the input parser and display formatter — `parseDuration` accepts free text ("1h 30m", "45m", "3d", "1.5h", "0:30" as H:MM, or a bare number as minutes) and returns whole minutes or `null` if unparseable; the `/facility/issues/[id]` page's "Log time" dialog shows an inline error rather than submitting when parsing fails.
+
+Surfaced in two places: the issue detail page's "Time spent" section (running total + entry list, gated behind the same `canAct` check as the page's other mutating UI), and as an "Hours Logged" column on `/facility/team-kpi` (`GET /api/facility/team-kpi`), summed by `logged_at` within the report's date range — independent of which date range the underlying tickets were created in, so hours logged this week count even against a ticket opened last month.
 
 ### `facility_issue_collaborators`
 
@@ -662,13 +685,14 @@ Recurring issues: detected when the same asset (or same location+category combin
 
 Query params: `date_from`, `date_to`, `scope`, `format=csv`.
 
-Only includes users with roles `it_technician`, `it_manager`, `it_team` and `is_active = true`.
+Includes any active user who was an assignee in range, or who logged time in range — not restricted to a fixed IT role list (assignable roles were generalized beyond IT; a role-filtered pre-fetch of all active users doesn't scale once "assignable" isn't a small fixed set).
 
 KPI definitions:
 - **avg_ack_minutes** = mean of (`acknowledged_at` - `reported_at`) per assigned issue
 - **avg_resolution_minutes** = mean of (`resolved_at` - `acknowledged_at`) for resolved issues
 - **sla_compliance_pct** = resolved issues with `sla_target_at` that were NOT `sla_breached` / total eligible resolved × 100 (issues without `sla_target_at` excluded from denominator)
 - **reopen_rate_pct** = issues where `reopen_count > 0` / total assigned × 100
+- **minutes_logged** = sum of `facility_issue_time_logs.minutes` where `logged_by` = this user and `logged_at` falls in `[date_from, date_to]` — filtered by when the work was logged, independent of when the underlying ticket was created
 - **avg_satisfaction** = mean `satisfaction_rating` of resolved issues (null if none)
 
 SLA compliance thresholds in UI: ≥95% → green, 80–94% → amber, <80% → red.
