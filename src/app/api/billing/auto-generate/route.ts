@@ -215,7 +215,7 @@ async function notifyBillingRun(
         ${cycleSkippedHtml}
         ${usage.generated > 0 ? `
         <div style="text-align:center;margin:24px 0;">
-          <a href="${appUrl}/billing?tab=statements&type=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>
+          <a href="${appUrl}/billing?tab=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>
         </div>` : ""}
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">

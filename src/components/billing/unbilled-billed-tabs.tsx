@@ -1,18 +1,27 @@
 "use client";
 
 /**
- * Unbilled / Billed — replaces the old month-toggled Rent/Usage tabs.
+ * Unbilled / Billed for one statement type — rendered once by the Rentals
+ * tab (type="rent") and once by the Usage tab (type="usage"), each with its
+ * own batch-run card and its own Unbilled/Billed lists. The two tabs used to
+ * share one mixed "Statements" view where a usage row had no discovery path
+ * of its own (no card to generate a draft, current_cycle only ever showed
+ * what already had a statement) — splitting by type gives usage the same
+ * Preview → Generate Drafts flow rent already had.
  *
- * Unbilled is a single, persistent, cross-month list across four categories
- * (see src/lib/unbilled-queue.ts for the detection logic): this cycle's
- * ready-to-send statements, past rent gaps, drifting renewals, and expired
- * contracts with no renewal on file. Nothing here is scoped to whichever
- * month the page-level MonthPicker happens to show — that picker still
- * drives the other tabs on this page, just not this one.
+ * Unbilled is a single, persistent, cross-month list (see
+ * src/lib/unbilled-queue.ts for the detection logic): this cycle's
+ * ready-to-send statement of this type, plus — rent only — past rent gaps,
+ * drifting renewals, and expired contracts with no renewal on file. Nothing
+ * here is scoped to whichever month the page-level MonthPicker happens to
+ * show — that picker still drives the other tabs on this page, just not
+ * this one.
  *
- * Billed is the historical statements list, paginated via the same
- * GET /api/billing-statements endpoint and { page, limit, total, totalPages }
- * shape already used elsewhere on this page.
+ * Billed is the historical statements list for this type, paginated via the
+ * same GET /api/billing-statements endpoint and
+ * { page, limit, total, totalPages } shape already used elsewhere on this
+ * page. Rentals' Billed also includes "combined" statements (the legacy
+ * rent+usage-in-one-document type) since those are rent-bearing too.
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -23,7 +32,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
-import type { UnbilledCategory, UnbilledRow } from "@/lib/unbilled-queue";
+import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
 const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal"];
 const CATEGORY_TITLE: Record<UnbilledCategory, string> = {
@@ -55,12 +64,13 @@ interface BilledStatement {
 }
 
 interface Props {
+  type: UnbilledType;
   userRole?: string | null;
   onFinalized?: () => void | Promise<void>;
   onViewStatement?: (id: string) => void;
 }
 
-export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
+export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">("unbilled");
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
@@ -73,7 +83,7 @@ export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
   const loadUnbilled = useCallback(async () => {
     setUnbilledLoading(true);
     try {
-      const res = await fetch("/api/billing/unbilled");
+      const res = await fetch(`/api/billing/unbilled?type=${type}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setUnbilledRows(json.data || []);
@@ -83,7 +93,7 @@ export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
     } finally {
       setUnbilledLoading(false);
     }
-  }, []);
+  }, [type]);
 
   useEffect(() => { loadUnbilled(); }, [loadUnbilled]);
 
@@ -93,10 +103,14 @@ export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
   const [billedPage, setBilledPage] = useState(1);
   const [billedPagination, setBilledPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
 
+  // Rentals' Billed list includes "combined" statements too — the legacy
+  // rent+usage-in-one-document type is rent-bearing, so it belongs here.
+  const billedStatementTypes = type === "rent" ? "rent,combined" : "usage";
+
   const loadBilled = useCallback(async () => {
     setBilledLoading(true);
     try {
-      const res = await fetch(`/api/billing-statements?page=${billedPage}&limit=25`);
+      const res = await fetch(`/api/billing-statements?statement_type=${billedStatementTypes}&page=${billedPage}&limit=25`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setBilledRows(json.data || []);
@@ -106,13 +120,15 @@ export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
     } finally {
       setBilledLoading(false);
     }
-  }, [billedPage]);
+  }, [billedPage, billedStatementTypes]);
 
   useEffect(() => { if (tab === "billed") loadBilled(); }, [tab, loadBilled]);
 
-  // ── Rent batch-run card — unchanged, just relocated above the tabs since it
-  // operates on "next month" regardless of which tab is open. Usage keeps its
-  // existing per-row "Verify & Send" flow (no batch equivalent, by design). ──
+  // Rent bills a month in advance (this ops month -> next month's proforma);
+  // usage bills the current cycle itself, matching getCurrentCycleReady()'s
+  // window in unbilled-queue.ts so a freshly-generated draft immediately
+  // shows up under "Current cycle — ready to send" instead of falling
+  // outside the window it's being checked against.
   const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const opsMonth = nowIst.getUTCMonth() + 1;
   const opsYear = nowIst.getUTCFullYear();
@@ -125,13 +141,24 @@ export function UnbilledBilledTabs({ onFinalized, onViewStatement }: Props) {
 
   return (
     <div className="space-y-4">
-      <ProformaBillingCard
-        mode="rent"
-        periodLabel={monthLabel(nextYear, nextMonth)}
-        month={opsMonth}
-        year={opsYear}
-        onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
-      />
+      {type === "rent" ? (
+        <ProformaBillingCard
+          mode="rent"
+          periodLabel={monthLabel(nextYear, nextMonth)}
+          month={opsMonth}
+          year={opsYear}
+          onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+        />
+      ) : (
+        <ProformaBillingCard
+          mode="usage"
+          periodLabel={monthLabel(opsYear, opsMonth)}
+          month={opsMonth}
+          year={opsYear}
+          pendingDraftsCount={counts.current_cycle}
+          onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+        />
+      )}
 
       <div className="flex items-center gap-2 border-b pb-3">
         <button

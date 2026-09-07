@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   const aggregatorId  = searchParams.get("aggregator_id");
   const proposalId    = searchParams.get("proposal_id");
   const status        = searchParams.get("status");
-  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ...
+  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined' | 'vo_case' | ... — comma-separated for an IN filter, e.g. "rent,combined"
   // Widen a contract_id filter to the whole renewal chain. A renewal's opening
   // months are often billed on its parent while it awaits activation, so
   // "everything billed for this contract" is a chain question, not a row one.
@@ -47,7 +47,10 @@ export async function GET(request: NextRequest) {
   if (aggregatorId)  query = query.eq("aggregator_id", aggregatorId);
   if (proposalId)    query = query.eq("proposal_id", proposalId);
   if (status)        query = query.eq("status", status);
-  if (statementType) query = query.eq("statement_type", statementType);
+  if (statementType) {
+    const types = statementType.split(",").map((t) => t.trim()).filter(Boolean);
+    query = types.length > 1 ? query.in("statement_type", types) : query.eq("statement_type", types[0]);
+  }
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 

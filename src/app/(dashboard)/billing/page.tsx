@@ -335,26 +335,32 @@ export default function BillingPage() {
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== "undefined") {
-      const tab = new URLSearchParams(window.location.search).get("tab") ?? "statements";
-      // "contracts" was merged into "statements" — redirect legacy URLs
-      return tab === "contracts" ? "statements" : tab;
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab") ?? "rentals";
+      // Legacy redirects: "contracts" was merged into "statements" (2026),
+      // which itself later split back into "rentals" / "usage" — a link
+      // built for either era (including the ?tab=statements&type=usage
+      // deep link the billing-run email sends) still lands somewhere sane.
+      if (tab === "contracts") return "rentals";
+      if (tab === "statements") return params.get("type") === "usage" ? "usage" : "rentals";
+      return tab;
     }
-    return "statements";
+    return "rentals";
   });
 
   // ── Section grouping (Phase 3 finance consolidation) ─────────────────────
-  // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing)
-  // so the full billing workflow — usage entry, finalize, send proforma, record payment —
-  // lives in one unified view under Invoicing > Statements.
+  // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing),
+  // which itself later split into "rentals" and "usage" once usage needed its own
+  // discovery/generate flow instead of sharing one mixed view.
   const SECTION_TABS = {
     receivables: ["proposals", "usage-charges"],
     collections: ["walkin", "cash", "refunds"],
-    invoicing:   ["statements", "gst", "retained-payments", "electricity"],
+    invoicing:   ["rentals", "usage", "gst", "retained-payments", "electricity"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
-    // Legacy: "contracts" tab was merged into "statements" under invoicing
-    if (tab === "contracts") return "invoicing";
+    // Legacy: "contracts" and "statements" both live under invoicing now.
+    if (tab === "contracts" || tab === "statements") return "invoicing";
     for (const s of Object.keys(SECTION_TABS) as Section[]) {
       if ((SECTION_TABS[s] as readonly string[]).includes(tab)) return s;
     }
@@ -399,8 +405,6 @@ export default function BillingPage() {
   const [statementsLoading, setStatementsLoading]         = useState(true);
   const [statementsPage, setStatementsPage]               = useState(1);
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
-  // Filter: 'all' | 'rent' | 'usage'
-  const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
 
   // Manual monthly billing — handled by <ProformaBillingCard /> per-mode. Cards
   // own their own preview/run state; the page only computes the period labels.
@@ -425,10 +429,6 @@ export default function BillingPage() {
     const nearMonthEnd = now.getDate() >= lastWorkingDay - 2;
     return { label, nearMonthEnd, deadlineLabel, deadlineShifted };
   })();
-
-  // Current-month label (for the Usage Drafts card, which bills the month that just closed)
-  const currentMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth())
-    .toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
   // Refresh statements + monthly summary after a successful run from any card
   const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
@@ -577,10 +577,11 @@ export default function BillingPage() {
     }
   }, [statementsPage]);
 
-  // Only fire on the Statements tab — saves a round-trip on first load
-  // for users who land on contracts/cash/gst tabs.
+  // Only fire on the Rentals/Usage tabs (the old combined "Statements" tab,
+  // now split in two) — saves a round-trip on first load for users who land
+  // on contracts/cash/gst tabs.
   useEffect(() => {
-    if (activeTab !== "statements") return;
+    if (activeTab !== "rentals" && activeTab !== "usage") return;
     statementsControllerRef.current?.abort();
     const controller = new AbortController();
     statementsControllerRef.current = controller;
@@ -839,7 +840,7 @@ export default function BillingPage() {
       {section === "invoicing" && pipeline && (
         <BillingPipelineBar
           data={pipeline}
-          onStageClick={() => setActiveTab("statements")}
+          onStageClick={() => setActiveTab("rentals")}
         />
       )}
 
@@ -866,9 +867,10 @@ export default function BillingPage() {
             )}
             {section === "invoicing" && (
               <>
-                <TabsTrigger value="statements">
-                  Billing{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
+                <TabsTrigger value="rentals">
+                  Rentals{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
                 </TabsTrigger>
+                <TabsTrigger value="usage">Usage</TabsTrigger>
                 <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
                 <TabsTrigger value="electricity">Electricity</TabsTrigger>
@@ -1194,18 +1196,22 @@ export default function BillingPage() {
           <ElectricityBillsTab />
         </TabsContent>
 
-        {/* ── Billing Statements (Merged view: contract accordions + booking-only statements) ── */}
-        <TabsContent value="statements" className="space-y-6 mt-4">
-          {/* ── Unbilled | Billed — persistent, cross-month view. Replaces the
-              old month-toggled Rent/Usage tabs: anything from a month you
-              weren't looking at used to stay invisible. Not scoped to the
-              page-level MonthPicker above (that still drives the other tabs
-              on this page) — Unbilled computes its own "now", Billed is
-              unscoped. The legacy "Active Contract Billing" view further
-              down is preserved for cross-month / legacy combined statement
-              management. */}
-          <UnbilledBilledTabs userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+        {/* ── Rentals ───────────────────────────────────────────────────── */}
+        <TabsContent value="rentals" className="space-y-6 mt-4">
+          {/* Unbilled | Billed, rent-only — persistent, cross-month view. Not
+              scoped to the page-level MonthPicker above (that still drives
+              the other tabs on this page) — Unbilled computes its own "now",
+              Billed is unscoped. */}
+          <UnbilledBilledTabs type="rent" userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+        </TabsContent>
 
+        {/* ── Usage ─────────────────────────────────────────────────────── */}
+        <TabsContent value="usage" className="space-y-6 mt-4">
+          {/* Same Unbilled | Billed shape as Rentals, scoped to usage
+              statements — its own Generate Drafts card, its own queue. No
+              rent-gap/renewal-drift/no-renewal categories here; those audit
+              rent coverage specifically and don't apply to usage. */}
+          <UnbilledBilledTabs type="usage" userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
         </TabsContent>
       </Tabs>
 
