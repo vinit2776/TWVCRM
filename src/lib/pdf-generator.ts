@@ -1188,7 +1188,16 @@ export function generateMembershipAgreementPDF(
   contract: Contract,
   lead?: Partial<Lead>,
   location?: Partial<Location>,
-  options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }
+  options?: {
+    applyCompanyStamp?: boolean;
+    stampRef?: string;
+    watermarkDraft?: boolean;
+    /** Explicit, user-confirmed override for the "Download for signature"
+     * flow — produces a clean copy even before start_date is confirmed.
+     * Only handleDownloadForSignature() may pass this; every other caller
+     * must go through the normal forced-watermark gate below. */
+    forSignatureDownload?: boolean;
+  }
 ): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1783,8 +1792,16 @@ export function generateMembershipAgreementPDF(
   // "include watermark" toggle) — that option has no effect while
   // unconfirmed, it can only ever add the watermark back, never remove
   // the forced one. See supabase/migrations/00503_contract_start_date_confirmation.sql.
+  //
+  // forSignatureDownload is the one deliberate exception: the "Download for
+  // signature" action needs a clean copy to send for physical signature
+  // before start_date is confirmed. Callers must warn the admin that the
+  // date could still change (see handleDownloadForSignature) and the
+  // contract tracks signature_copy_start_date so the UI can flag drift.
   // ================================================================
-  const showWatermark = !contract.start_date_confirmed || !!options?.watermarkDraft;
+  const showWatermark = options?.forSignatureDownload
+    ? false
+    : !contract.start_date_confirmed || !!options?.watermarkDraft;
   if (showWatermark) {
     for (let i = 1; i <= totalPageCount; i++) {
       doc.setPage(i);

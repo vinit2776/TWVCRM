@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   XCircle,
   Download,
+  FileSignature,
   Loader2,
   Upload,
   FileText,
@@ -152,6 +153,8 @@ export default function ContractDetailPage({
   // once start_date is confirmed (see generateMembershipAgreementPDF). While
   // unconfirmed, the watermark is always forced on regardless of this value.
   const [includeDraftWatermark, setIncludeDraftWatermark] = useState(false);
+  const [downloadForSignatureOpen, setDownloadForSignatureOpen] = useState(false);
+  const [downloadingForSignature, setDownloadingForSignature] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
@@ -387,6 +390,38 @@ export default function ContractDetailPage({
       { watermarkDraft: includeDraftWatermark }
     );
     doc.save(`${contract.contract_number}.pdf`);
+  };
+
+  // Alternative to Download PDF for the pre-confirmation gap: start_date
+  // isn't locked yet, so the regular download is always watermarked — but
+  // staff often need a clean copy earlier than that, to send for physical
+  // signature. Explicit action + confirmation (not a silent toggle) because
+  // it deliberately bypasses the forced-watermark guard, and the date could
+  // still change before the contract activates.
+  const handleDownloadForSignature = async () => {
+    if (!contract) return;
+    setDownloadingForSignature(true);
+    try {
+      const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
+      const doc = generateMembershipAgreementPDF(
+        contract,
+        contract.lead || undefined,
+        contract.location || undefined,
+        { forSignatureDownload: true }
+      );
+      doc.save(`${contract.contract_number}-for-signature.pdf`);
+      const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Downloaded, but failed to record the signature-copy date");
+      }
+      setDownloadForSignatureOpen(false);
+      fetchContract(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate the signature copy");
+    } finally {
+      setDownloadingForSignature(false);
+    }
   };
 
   const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }): Promise<string> => {
@@ -1190,6 +1225,18 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {/* Alternative to the above while start_date isn't confirmed yet —
+              a clean copy to send for physical signature ahead of that
+              confirmation. Not shown once confirmed: the toggle below covers
+              that case already. */}
+          {!contract.start_date_confirmed &&
+            !contract.signed_document &&
+            ["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
+              <Button variant="outline" onClick={() => setDownloadForSignatureOpen(true)}>
+                <FileSignature className="mr-2 h-4 w-4" />
+                Download for signature
+              </Button>
+            )}
           {/* Watermark is forced on until start_date locks — this toggle only
               matters (and only appears) once it has, for Download PDF + Email. */}
           {contract.start_date_confirmed && (
@@ -1237,6 +1284,26 @@ export default function ContractDetailPage({
               onSuccess={() => fetchContract(false)}
             />
           )}
+
+          {/* Stale signature-copy warning — the start date changed since a
+              watermark-free copy went out for physical signature, so that
+              copy no longer matches and needs to be re-sent. */}
+          {contract.signature_copy_generated_at &&
+            contract.signature_copy_start_date !== contract.start_date && (
+              <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <div className="flex-1 text-sm text-amber-800">
+                  <span className="font-medium">Start date changed since a signature copy was sent</span>
+                  <span className="mx-1">—</span>
+                  the copy sent for signature had start date{" "}
+                  {contract.signature_copy_start_date
+                    ? formatDate(contract.signature_copy_start_date)
+                    : "unknown"}
+                  , it&apos;s now {formatDate(contract.start_date)}. Send an updated copy for
+                  signature.
+                </div>
+              </div>
+            )}
 
           {/* Renewal Chain Banner — visible on renewal contracts */}
           {contract.is_renewal && contract.parent_contract_id && (
@@ -2753,6 +2820,36 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Cancel sign & seal"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={downloadForSignatureOpen} onOpenChange={setDownloadForSignatureOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Download a clean copy for signature?</DialogTitle>
+            <DialogDescription>
+              {contract.contract_number}&apos;s start date isn&apos;t confirmed yet — it can
+              still change until the pro-rata invoice is paid. This downloads the agreement
+              without the DRAFT watermark so it can be sent for physical signature now. If the
+              start date changes afterward, you&apos;ll see a warning here so you know to send
+              an updated copy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDownloadForSignatureOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleDownloadForSignature} disabled={downloadingForSignature}>
+              {downloadingForSignature ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Downloading...
+                </>
+              ) : (
+                "Download clean copy"
               )}
             </Button>
           </DialogFooter>
