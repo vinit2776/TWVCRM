@@ -215,6 +215,33 @@ export async function GET(_req: NextRequest) {
     }
   }
 
+  // Pending deposit-adjustment requests per statement — surfaces on the row
+  // so accounts/admin don't see a plain "unpaid/partially paid" balance and
+  // conclude nothing is happening, when in fact an adjustment is already
+  // sitting in someone's approval queue for that exact amount (the confusion
+  // that motivated this: TWV-C-0079's two invoices looked untouched here
+  // even though Prema had already requested adjustments against both).
+  const depositAdjustmentsByStatement = new Map<string, Array<{
+    id: string; amount: number; requested_at: string; requested_by_name: string | null;
+  }>>();
+  if (statementIds.length > 0) {
+    const { data: adjustments } = await supabase
+      .from("deposit_adjustments")
+      .select("id, billing_statement_id, amount, requested_at, requester:users!deposit_adjustments_requested_by_fkey(full_name)")
+      .in("billing_statement_id", statementIds)
+      .eq("status", "pending_approval");
+    for (const a of adjustments || []) {
+      const sid = a.billing_statement_id as string;
+      if (!depositAdjustmentsByStatement.has(sid)) depositAdjustmentsByStatement.set(sid, []);
+      depositAdjustmentsByStatement.get(sid)!.push({
+        id: a.id as string,
+        amount: Number(a.amount),
+        requested_at: a.requested_at as string,
+        requested_by_name: (a.requester as unknown as { full_name: string } | null)?.full_name ?? null,
+      });
+    }
+  }
+
   // Today in IST as a YYYY-MM-DD anchor for daysOverdue.
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const todayIst = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -235,6 +262,7 @@ export async function GET(_req: NextRequest) {
       days_overdue: daysOverdue,
       open_query_count: openQueriesByStatement.get(s.id as string) ?? 0,
       payments: paymentsByStatement.get(s.id as string) ?? [],
+      pending_deposit_adjustments: depositAdjustmentsByStatement.get(s.id as string) ?? [],
     };
   });
 
