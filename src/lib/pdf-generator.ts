@@ -1197,8 +1197,28 @@ export function generateMembershipAgreementPDF(
      * Only handleDownloadForSignature() may pass this; every other caller
      * must go through the normal forced-watermark gate below. */
     forSignatureDownload?: boolean;
+    /** The date to print as the start date on this one signature copy,
+     * paired with forSignatureDownload. Never written back to the contract
+     * record — start_date there stays whatever the placeholder or the
+     * pro-rata-locked value is; this only changes what's rendered here. */
+    signatureStartDateOverride?: string;
   }
 ): jsPDF {
+  if (options?.signatureStartDateOverride) {
+    // Mirrors the same re-anchoring the pro-rata-payment lock-in does (see
+    // PATCH /api/contracts/[id]): only move phase_start_date (the rate-
+    // escalation clock anchor) along with it if it was never independently
+    // moved off start_date — otherwise a deliberate edit there gets clobbered.
+    const rebaseEscalationAnchor = contract.phase_start_date === contract.start_date;
+    contract = {
+      ...contract,
+      start_date: options.signatureStartDateOverride,
+      phase_start_date: rebaseEscalationAnchor
+        ? options.signatureStartDateOverride
+        : contract.phase_start_date,
+    };
+  }
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();

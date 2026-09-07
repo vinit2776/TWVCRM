@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 const CONTRACT_MANAGE_ROLES = ["admin", "manager", "sales_rep"];
+
+const bodySchema = z.object({
+  signatureStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
 
 /**
  * POST /api/contracts/[id]/mark-signature-copy
  *
  * Records that a watermark-free "Download for signature" copy was just
  * generated for this contract while start_date isn't confirmed yet, and
- * snapshots the start_date baked into that copy (read server-side, never
- * trusted from the client). If start_date later changes before the
- * contract activates, the UI compares it against this snapshot to warn
- * staff that the signed copy is now stale and needs to be re-sent.
+ * snapshots the date the admin entered to print on that copy — not
+ * contract.start_date, which stays whatever placeholder or pro-rata-locked
+ * value it already had; this route never touches it. If the real start_date
+ * later differs from this snapshot, the UI compares them to warn staff that
+ * the signed copy is now stale and needs to be re-sent.
  */
 export async function POST(
   request: NextRequest,
@@ -41,9 +47,15 @@ export async function POST(
     );
   }
 
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "signatureStartDate (YYYY-MM-DD) is required" }, { status: 400 });
+  }
+  const { signatureStartDate } = parsed.data;
+
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, start_date")
+    .select("id")
     .eq("id", contractId)
     .single();
 
@@ -56,7 +68,7 @@ export async function POST(
     .from("contracts")
     .update({
       signature_copy_generated_at: now,
-      signature_copy_start_date: contract.start_date,
+      signature_copy_start_date: signatureStartDate,
     })
     .eq("id", contractId)
     .select("signature_copy_generated_at, signature_copy_start_date")
@@ -73,7 +85,7 @@ export async function POST(
     performedBy: dbUser.id,
     changes: {
       action: { old: null, new: "signature_copy_downloaded" },
-      signature_copy_start_date: { old: null, new: contract.start_date },
+      signature_copy_start_date: { old: null, new: signatureStartDate },
     },
   });
 

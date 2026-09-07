@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   XCircle,
   Download,
-  FileSignature,
   Loader2,
   Upload,
   FileText,
@@ -149,11 +148,14 @@ export default function ContractDetailPage({
   const [stampExistingPageImageLoading, setStampExistingPageImageLoading] = useState(false);
   const [stampExistingClickRatio, setStampExistingClickRatio] = useState<{ x: number; y: number } | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
-  // Manual override for the agreement PDF's DRAFT watermark — only exposed
-  // once start_date is confirmed (see generateMembershipAgreementPDF). While
-  // unconfirmed, the watermark is always forced on regardless of this value.
+  // Manual override for the agreement PDF's DRAFT watermark. Freely
+  // togglable once start_date is confirmed (see generateMembershipAgreementPDF).
+  // While unconfirmed, the checkbox renders checked + soft-disabled — clicking
+  // it opens signatureStartDateDialogOpen instead of toggling directly (see
+  // handleWatermarkCheckboxClick).
   const [includeDraftWatermark, setIncludeDraftWatermark] = useState(false);
-  const [downloadForSignatureOpen, setDownloadForSignatureOpen] = useState(false);
+  const [signatureStartDateDialogOpen, setSignatureStartDateDialogOpen] = useState(false);
+  const [signatureStartDateInput, setSignatureStartDateInput] = useState("");
   const [downloadingForSignature, setDownloadingForSignature] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
@@ -392,14 +394,31 @@ export default function ContractDetailPage({
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  // Alternative to Download PDF for the pre-confirmation gap: start_date
-  // isn't locked yet, so the regular download is always watermarked — but
-  // staff often need a clean copy earlier than that, to send for physical
-  // signature. Explicit action + confirmation (not a silent toggle) because
-  // it deliberately bypasses the forced-watermark guard, and the date could
-  // still change before the contract activates.
-  const handleDownloadForSignature = async () => {
+  // The DRAFT-watermark checkbox stays visible pre-confirmation but is
+  // soft-disabled (styled disabled, not the native `disabled` attribute —
+  // that would swallow the click entirely). Clicking it while unconfirmed
+  // opens a prompt for the date to use on this one download instead of
+  // toggling includeDraftWatermark directly, since removing the watermark
+  // for real still requires knowing what date to print.
+  const handleWatermarkCheckboxClick = () => {
     if (!contract) return;
+    if (contract.start_date_confirmed) {
+      setIncludeDraftWatermark((v) => !v);
+      return;
+    }
+    setSignatureStartDateInput(contract.start_date || "");
+    setSignatureStartDateDialogOpen(true);
+  };
+
+  // Alternative to Download PDF for the pre-confirmation gap: start_date
+  // isn't locked yet, so the regular download is always watermarked. This
+  // generates a clean copy using an admin-entered date instead — for this
+  // one download only. It never writes contract.start_date or
+  // start_date_confirmed; that stays untouched until the real pro-rata
+  // payment locks it in. If the real date later differs from what's
+  // printed here, the contract page flags it as stale.
+  const handleDownloadForSignature = async () => {
+    if (!contract || !signatureStartDateInput) return;
     setDownloadingForSignature(true);
     try {
       const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
@@ -407,15 +426,19 @@ export default function ContractDetailPage({
         contract,
         contract.lead || undefined,
         contract.location || undefined,
-        { forSignatureDownload: true }
+        { forSignatureDownload: true, signatureStartDateOverride: signatureStartDateInput }
       );
       doc.save(`${contract.contract_number}-for-signature.pdf`);
-      const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, { method: "POST" });
+      const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signatureStartDate: signatureStartDateInput }),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || "Downloaded, but failed to record the signature-copy date");
       }
-      setDownloadForSignatureOpen(false);
+      setSignatureStartDateDialogOpen(false);
       fetchContract(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to generate the signature copy");
@@ -1225,25 +1248,24 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
-          {/* Alternative to the above while start_date isn't confirmed yet —
-              a clean copy to send for physical signature ahead of that
-              confirmation. Not shown once confirmed: the toggle below covers
-              that case already. */}
-          {!contract.start_date_confirmed &&
-            !contract.signed_document &&
-            ["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
-              <Button variant="outline" onClick={() => setDownloadForSignatureOpen(true)}>
-                <FileSignature className="mr-2 h-4 w-4" />
-                Download for signature
-              </Button>
-            )}
-          {/* Watermark is forced on until start_date locks — this toggle only
-              matters (and only appears) once it has, for Download PDF + Email. */}
-          {contract.start_date_confirmed && (
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground border rounded-md px-2.5 cursor-pointer select-none">
+          {/* Watermark is forced on until start_date locks. Always visible so
+              it's clear the watermark exists and why it can't be removed yet
+              — soft-disabled (not the native `disabled` attribute, which
+              would swallow the click) while unconfirmed: clicking it opens a
+              prompt for the date to print on a one-off signature copy
+              instead of toggling directly. Once confirmed, behaves as a
+              normal toggle for Download PDF + Email. */}
+          {["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
+            <label
+              className={`flex items-center gap-1.5 text-xs border rounded-md px-2.5 select-none ${
+                contract.start_date_confirmed
+                  ? "text-muted-foreground cursor-pointer"
+                  : "text-muted-foreground/70 cursor-not-allowed"
+              }`}
+            >
               <Checkbox
-                checked={includeDraftWatermark}
-                onCheckedChange={(v) => setIncludeDraftWatermark(!!v)}
+                checked={contract.start_date_confirmed ? includeDraftWatermark : true}
+                onCheckedChange={handleWatermarkCheckboxClick}
               />
               Include DRAFT watermark
             </label>
@@ -2826,23 +2848,37 @@ export default function ContractDetailPage({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={downloadForSignatureOpen} onOpenChange={setDownloadForSignatureOpen}>
+      <Dialog open={signatureStartDateDialogOpen} onOpenChange={setSignatureStartDateDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Download a clean copy for signature?</DialogTitle>
+            <DialogTitle>Enter the start date for this copy</DialogTitle>
             <DialogDescription>
               {contract.contract_number}&apos;s start date isn&apos;t confirmed yet — it can
-              still change until the pro-rata invoice is paid. This downloads the agreement
-              without the DRAFT watermark so it can be sent for physical signature now. If the
-              start date changes afterward, you&apos;ll see a warning here so you know to send
-              an updated copy.
+              still change until the pro-rata invoice is paid. This doesn&apos;t set the
+              contract&apos;s actual start date; it only decides what&apos;s printed on this
+              one watermark-free copy, for sending out for physical signature. If the real
+              date later differs from what you enter here, you&apos;ll see a warning on this
+              page so you know to send an updated copy.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-1">
+            <Label className="text-xs" htmlFor="signature-start-date">Start date to print</Label>
+            <Input
+              id="signature-start-date"
+              type="date"
+              value={signatureStartDateInput}
+              onChange={(e) => setSignatureStartDateInput(e.target.value)}
+              className="h-9"
+            />
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDownloadForSignatureOpen(false)}>
+            <Button variant="outline" onClick={() => setSignatureStartDateDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleDownloadForSignature} disabled={downloadingForSignature}>
+            <Button
+              onClick={handleDownloadForSignature}
+              disabled={downloadingForSignature || !signatureStartDateInput}
+            >
               {downloadingForSignature ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
