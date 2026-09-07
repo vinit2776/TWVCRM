@@ -1,18 +1,27 @@
 /**
- * Cross-contract billing queue for the /billing page's Unbilled tab.
+ * Cross-contract billing queue behind the Rentals and Usage tabs on /billing.
+ * `getUnbilledQueue(supabase, type)` takes "rent" or "usage" and returns only
+ * that type's rows — the two tabs each call this with their own type rather
+ * than sharing one mixed list.
  *
  * Four categories, computed batched (never N+1 per contract):
- *   1. current_cycle  — this cycle's already-generated rent/usage statements,
- *                        draft/finalized, not yet sent, not held. The routine
- *                        job the old Rent/Usage tabs existed for.
- *   2. rent_gap       — past months with no rent-bearing statement at all,
- *                        via the existing unbilledMonths() detector, run
- *                        across every contract's whole renewal chain.
- *   3. renewal_drift  — a renewal's start date has passed/is imminent while
- *                        the child contract isn't active yet. Same query
- *                        reportRenewalDrift() uses for its email report.
- *   4. no_renewal     — an expired contract with zero successor contracts,
- *                        in any status.
+ *   1. current_cycle  — this cycle's already-generated statement of the
+ *                        requested type, draft/finalized, not yet sent, not
+ *                        held. The routine job the old Rent/Usage tabs
+ *                        existed for.
+ *   2. rent_gap       — rent-only: past months with no rent-bearing statement
+ *                        at all, via the existing unbilledMonths() detector,
+ *                        run across every contract's whole renewal chain.
+ *   3. renewal_drift  — rent-only: a renewal's start date has passed/is
+ *                        imminent while the child contract isn't active yet.
+ *                        Same query reportRenewalDrift() uses for its email
+ *                        report.
+ *   4. no_renewal     — rent-only: an expired contract with zero successor
+ *                        contracts, in any status.
+ *
+ * Categories 2-4 are rent-specific audits (rent coverage, renewal timing) —
+ * usage has no equivalent, so a type="usage" call only ever populates
+ * current_cycle.
  *
  * Deliberately read-only: this module never writes anything. It surfaces
  * gaps for a person to act on, same philosophy as unbilledMonths() itself.
@@ -22,6 +31,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
 
 export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal";
+export type UnbilledType = "rent" | "usage";
 
 export interface UnbilledRow {
   /** Stable key: statement id for current_cycle, otherwise category:contractId:period. */
@@ -79,13 +89,17 @@ function customerNameOf(lead: { first_name?: string | null; last_name?: string |
 
 // ─── 1. Current cycle, ready to send ────────────────────────────────────────
 
-async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalRow[]> {
+async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType): Promise<InternalRow[]> {
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const cycleYear = todayIst.getUTCFullYear();
   const cycleMonth = todayIst.getUTCMonth() + 1;
   const firstOfCycle = `${cycleYear}-${String(cycleMonth).padStart(2, "0")}-01`;
   const daysInCycle = new Date(Date.UTC(cycleYear, cycleMonth, 0)).getUTCDate();
   const lastOfCycle = `${cycleYear}-${String(cycleMonth).padStart(2, "0")}-${String(daysInCycle).padStart(2, "0")}`;
+
+  const filter = type === "rent"
+    ? `and(statement_type.in.(rent,combined),prepaid_month.eq.${cycleMonth},prepaid_year.eq.${cycleYear})`
+    : `and(statement_type.eq.usage,period_start.gte.${firstOfCycle},period_start.lte.${lastOfCycle})`;
 
   const { data, error } = await supabase
     .from("billing_statements")
@@ -97,10 +111,7 @@ async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalR
     .is("proforma_sent_at", null)
     .is("held_at", null)
     .is("voided_at", null)
-    .or(
-      `and(statement_type.in.(rent,combined),prepaid_month.eq.${cycleMonth},prepaid_year.eq.${cycleYear}),` +
-      `and(statement_type.eq.usage,period_start.gte.${firstOfCycle},period_start.lte.${lastOfCycle})`,
-    );
+    .or(filter);
 
   if (error || !data) return [];
 
@@ -326,15 +337,18 @@ async function getNoRenewalOnFile(supabase: SupabaseClient): Promise<InternalRow
 
 // ─── Combined ────────────────────────────────────────────────────────────────
 
-export async function getUnbilledQueue(supabase: SupabaseClient): Promise<{
+export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledType = "rent"): Promise<{
   rows: UnbilledRow[];
   counts: Record<UnbilledCategory, number>;
 }> {
+  // rent_gap / renewal_drift / no_renewal are rent-only concepts (they audit
+  // rent coverage and renewal timing) — usage has no equivalent, so skip them
+  // rather than run three empty-for-usage queries.
   const [currentCycle, rentGaps, renewalDrift, noRenewal] = await Promise.all([
-    getCurrentCycleReady(supabase),
-    getRentGaps(supabase),
-    getRenewalDrift(supabase),
-    getNoRenewalOnFile(supabase),
+    getCurrentCycleReady(supabase, type),
+    type === "rent" ? getRentGaps(supabase) : Promise.resolve([]),
+    type === "rent" ? getRenewalDrift(supabase) : Promise.resolve([]),
+    type === "rent" ? getNoRenewalOnFile(supabase) : Promise.resolve([]),
   ]);
 
   const byCategory: Record<UnbilledCategory, InternalRow[]> = {
