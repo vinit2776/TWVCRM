@@ -238,7 +238,7 @@ export function ProformaBillingCard({
       {!isRent && pendingDraftsCount > 0 && (
         <div className="mb-3 rounded-md border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-900">
           <strong>⚠ {pendingDraftsCount} usage draft{pendingDraftsCount !== 1 ? "s" : ""} pending review</strong>
-          {" — finalize and send each in the Proforma Statements section below (Usage filter chip). Don&rsquo;t let them carry forward unsent."}
+          {" — open each one in Current cycle — ready to send, below, to finalize and send it. Don&rsquo;t let them carry forward unsent."}
         </div>
       )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
