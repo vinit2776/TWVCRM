@@ -49,7 +49,7 @@ export async function PATCH(
 
   const { data: adjustment } = await admin
     .from("deposit_adjustments")
-    .select("*, statement:billing_statements(id, total_amount, payment_status, statement_number), contract:contracts(contract_number)")
+    .select("*, statement:billing_statements(id, total_amount, payment_status, statement_number), contract:contracts!deposit_adjustments_contract_id_fkey(contract_number)")
     .eq("id", adjustmentId)
     .eq("contract_id", contractId)
     .single();
