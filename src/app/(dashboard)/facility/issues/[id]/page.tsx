@@ -315,6 +315,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   const isOverrideTier = OVERRIDE_ROLES.includes(currentUser?.role ?? "");
   const isOwner = !!currentUser && issue?.assigned_to === currentUser.id;
+  // A ticket's original reporter can always reassign it to anyone, same as
+  // override tier — matches the /assign API's own rule (see that route).
+  const isReporter = !!currentUser && !!issue?.reported_by && issue.reported_by === currentUser.id;
   const isUnowned = !!issue && !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
   const canAct = isOwner || isOverrideTier;
   // Nudging prompts the assignee for an update — never show it to the assignee
@@ -322,7 +325,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   // otherwise qualify via override tier or being the reporter.
   const isCollaborator = collaborators.some((c) => c.user_id === currentUser?.id);
   const canNudge = !!issue?.assigned_to && !!currentUser && !isOwner && !isCollaborator &&
-    (isOverrideTier || issue.reported_by === currentUser.id);
+    (isOverrideTier || isReporter);
   const canExtend = isOwner && open && (issue?.tat_extension_count ?? 0) < 2;
   // Narrower than isOverrideTier — flipping an extension's KPI-exempt flag
   // is admin/manager only, unlike the rest of the override tier.
@@ -339,7 +342,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     : (!isOwner && issue?.assigned_to && open)
     ? { type: "take_over", label: "Take over" }
     : null;
-  const showAssignAsPrimary = isOverrideTier && !!ownershipAction;
+  const canReassign = isOverrideTier || isReporter;
+  const showAssignAsPrimary = canReassign && !!ownershipAction;
   const assignLabel = issue?.assignee?.full_name ? "Reassign" : "Assign to…";
 
   // ---- transitions ---------------------------------------------------------
@@ -746,9 +750,10 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         )}
 
         {/* Overflow — everything else. Assign/Reassign still lives here for
-            override tier when it's NOT already shown as primary above (e.g.
-            they already own the ticket, or it's resolved/closed). */}
-        {(isOverrideTier || (canAct && overflowStatusActions.length > 0)) && (
+            override tier (or the ticket's reporter) when it's NOT already
+            shown as primary above (e.g. they already own the ticket, or
+            it's resolved/closed). */}
+        {(canReassign || (canAct && overflowStatusActions.length > 0)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline" disabled={busy} title="More actions">
@@ -764,7 +769,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                   {STATUS_ACTION_LABEL[s]}
                 </DropdownMenuItem>
               ))}
-              {isOverrideTier && !showAssignAsPrimary && (
+              {canReassign && !showAssignAsPrimary && (
                 <DropdownMenuItem onClick={() => setAssignOpen(true)}>
                   {assignLabel}
                 </DropdownMenuItem>

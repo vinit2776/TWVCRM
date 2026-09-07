@@ -15,7 +15,8 @@ function isOverrideTier(role: string | undefined | null): role is OverrideRole {
  *
  * Three paths:
  *  1. Claim (assignee_id = self, no current owner) — any authenticated user
- *  2. Assign-to-other (assignee_id != self or null) — override tier only
+ *  2. Assign-to-other (assignee_id != self or null) — override tier
+ *     (admin/manager/office_admin) or the ticket's own reporter
  *  3. Take-over (take_over: true, current owner exists) — any authenticated user
  *
  * Body: { assignee_id?: string | null, take_over?: boolean }
@@ -40,7 +41,7 @@ export async function POST(
   // Load current issue state
   const { data: prev, error: prevErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, category_id, assigned_to, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
+    .select("id, issue_number, title, status, category_id, assigned_to, reported_by, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
     .eq("id", id).single();
   if (prevErr || !prev) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -48,7 +49,11 @@ export async function POST(
   const prevAssigneeName = (prev.assignee as { full_name?: string } | null)?.full_name ?? null;
 
   const isSelf = assigneeId === dbUser.id;
-  const override = isOverrideTier(dbUser.role);
+  // A ticket's original reporter can always hand it to anyone, same as
+  // override tier — they created it, so they're trusted to route it, even
+  // once they're the current owner (e.g. self-took-over from someone else).
+  const isReporter = !!prev.reported_by && prev.reported_by === dbUser.id;
+  const override = isOverrideTier(dbUser.role) || isReporter;
 
   // ── Path 3: Take-over ────────────────────────────────────────────────────
   if (takeOver) {
@@ -136,7 +141,7 @@ export async function POST(
       // Self-assign when already owned: treat as take-over
       return NextResponse.json({ error: "Ticket already owned. Use take_over: true to take it over." }, { status: 400 });
     }
-    return NextResponse.json({ error: "Only managers and admins can assign tickets to others" }, { status: 403 });
+    return NextResponse.json({ error: "Only managers, admins, or this ticket's reporter can assign it to others" }, { status: 403 });
   }
 
   let assigneeName: string | null = null;

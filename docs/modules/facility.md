@@ -765,6 +765,14 @@ The UI's `nextStatusOptions()` is intentionally narrower than the server's `ALLO
 
 Pass `{ "assignee_id": null }` to unassign. Omitting `assignee_id` also unassigns (it defaults to `body.assignee_id ?? null`).
 
+### Who Can Assign a Ticket to a Third Party
+
+Three paths on `POST /api/facility/issues/[id]/assign`, each with a different bar:
+1. **Claim** (self, no current owner) and **3. Take-over** (self, ticket already owned by someone else) — any authenticated user, no role check.
+2. **Assign-to-other** (a different `assignee_id`, or unassigning someone else's ticket) — restricted to override tier (`admin`, `manager`, `office_admin`) **or** the ticket's own reporter (`reported_by === dbUser.id`). Everyone else gets 403 `"Only managers, admins, or this ticket's reporter can assign it to others"`.
+
+The reporter exception exists so a ticket's creator retains control of who works it even after handing ownership to themselves via take-over — otherwise self-taking-over your own ticket would permanently strand it with you, since a non-override-tier owner has no other path to move it to a third party. The `/facility/issues/[id]` page's Reassign button/menu item mirrors this exactly via `canReassign = isOverrideTier || isReporter` — don't gate it on `isOverrideTier` alone, or the reporter exception silently breaks in the UI while the API still allows it.
+
 ### Reporter vs Assignee
 
 Two different user concepts on an issue:
