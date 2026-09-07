@@ -97,6 +97,16 @@ const USAGE_STATUS_LABELS: Record<string, string> = {
   billed:  "Billed",
   waived:  "Waived",
 };
+const USAGE_SOURCE_COLORS: Record<string, string> = {
+  manual:   "bg-slate-50 text-slate-700 border-slate-300",
+  print:    "bg-blue-50 text-blue-800 border-blue-200",
+  facility: "bg-purple-50 text-purple-800 border-purple-200",
+};
+const USAGE_SOURCE_LABELS: Record<string, string> = {
+  manual:   "Manual charge",
+  print:    "Print log",
+  facility: "Facility usage",
+};
 
 // ── Types — billing ──────────────────────────────────────────────────────────
 
@@ -123,6 +133,13 @@ interface UsageCharge {
   charge_date: string;
   status: string;
   notes?: string;
+  // Present on every row returned by /api/usage-charges — it merges three
+  // tables (ad-hoc charges, print-quota entries, facility entries) into this
+  // shape. "manual" rows are the only ones Edit applies to; billable is only
+  // a meaningful yes/no distinction for print/facility (null = n/a, since a
+  // manual charge is always billable unless waived, which status already shows).
+  source?: "manual" | "print" | "facility";
+  billable?: boolean | null;
 }
 
 interface BillingStatement {
@@ -1077,6 +1094,7 @@ export default function BillingPage() {
                   <tr className="border-b bg-muted/50">
                     <th className="px-4 py-3 text-left font-medium">Description</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Source</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Qty</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Unit Price</th>
                     <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Subtotal</th>
@@ -1118,6 +1136,11 @@ export default function BillingPage() {
                           {!charge.contract?.contract_number && !charge.booking?.booking_number && "—"}
                         </div>
                       </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        <Badge variant="outline" className={USAGE_SOURCE_COLORS[charge.source ?? "manual"]}>
+                          {USAGE_SOURCE_LABELS[charge.source ?? "manual"]}
+                        </Badge>
+                      </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(charge.unit_price)}</td>
                       <td className="px-4 py-3 text-right hidden md:table-cell text-muted-foreground">{formatCurrency(charge.total)}</td>
@@ -1146,6 +1169,12 @@ export default function BillingPage() {
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
+                        {/* Only print/facility rows carry a real billable/non-billable
+                            distinction — a manual charge is always billable unless
+                            waived, which the status badge above already communicates. */}
+                        {charge.billable === false && (
+                          <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
@@ -1154,7 +1183,7 @@ export default function BillingPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
-                            {charge.status === "pending" && (
+                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
                               <DropdownMenuItem
                                 onClick={() => {
                                   setEditingCharge(charge);
