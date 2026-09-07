@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -179,6 +179,14 @@ interface ReceivableRow {
   days_overdue: number | null;
   /** Open query threads on this statement — drives the row's Query badge. */
   open_query_count?: number;
+  /** Deposit adjustments already requested against this statement and
+   *  awaiting admin/manager approval — see ContractDepositAdjustmentsSection. */
+  pending_deposit_adjustments?: Array<{
+    id: string;
+    amount: number;
+    requested_at: string;
+    requested_by_name: string | null;
+  }>;
   status: string;
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
@@ -1032,6 +1040,25 @@ export default function AccountsReceivablePage() {
                                   pi_cancelled_at={r.pi_cancelled_at}
                                   accounted={r.accounted}
                                 />
+                                {(r.pending_deposit_adjustments?.length ?? 0) > 0 && (() => {
+                                  const adjustments = r.pending_deposit_adjustments!;
+                                  const total = adjustments.reduce((s, a) => s + a.amount, 0);
+                                  const badge = (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] gap-1 border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                                      title={adjustments
+                                        .map((a) => `${formatCurrency(a.amount)} requested by ${a.requested_by_name ?? "—"} on ${formatDate(a.requested_at)}`)
+                                        .join(" · ")}
+                                    >
+                                      <Wallet className="h-3 w-3" />
+                                      {formatCurrency(total)} adjustment pending approval
+                                    </Badge>
+                                  );
+                                  return r.contract?.id ? (
+                                    <Link href={`/contracts/${r.contract.id}`}>{badge}</Link>
+                                  ) : badge;
+                                })()}
                               </div>
                             </div>
 
