@@ -26,13 +26,35 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, CalendarPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
+
+/** One rent line the backfill preview would bill. Mirrors CyclePreview in
+ *  contract-invoices-section.tsx — same /api/billing/auto-generate shape. */
+interface BackfillPreviewLine {
+  description: string;
+  amount: number;
+  qty?: number;
+  unit_price?: number;
+  note?: string;
+}
+interface BackfillPreview {
+  period_label: string;
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  line_items?: BackfillPreviewLine[];
+  note?: string;
+}
 
 const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
 const CATEGORY_TITLE: Record<UnbilledCategory, string> = {
@@ -72,8 +94,11 @@ interface Props {
   onViewStatement?: (id: string) => void;
 }
 
-export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props) {
+const BILLING_ROLES = ["admin", "manager", "accounts"];
+
+export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">("unbilled");
+  const canBill = !!userRole && BILLING_ROLES.includes(userRole);
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
@@ -98,6 +123,88 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
   }, [type]);
 
   useEffect(() => { loadUnbilled(); }, [loadUnbilled]);
+
+  // ── Rent-gap backfill (rent_gap rows with a backfillTarget only) ─────────
+  // Same preview-then-confirm flow as "Bill a missed month" on the contract
+  // page (contract-invoices-section.tsx) — kept as its own copy here rather
+  // than a shared component so this addition can't regress that already-
+  // working flow.
+  const [backfillRow, setBackfillRow] = useState<UnbilledRow | null>(null);
+  const [backfillPreviewing, setBackfillPreviewing] = useState(false);
+  const [backfillPreview, setBackfillPreview] = useState<BackfillPreview | null>(null);
+  const [backfillBlockedReason, setBackfillBlockedReason] = useState<string | null>(null);
+  const [backfillSending, setBackfillSending] = useState(false);
+
+  const openBackfillDialog = async (row: UnbilledRow) => {
+    if (!row.backfillTarget) return;
+    setBackfillRow(row);
+    setBackfillPreview(null);
+    setBackfillBlockedReason(null);
+    setBackfillPreviewing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true, mode: "rent", contract_id: row.contractId, ...row.backfillTarget }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setBackfillBlockedReason(json.error || "Preview failed");
+        return;
+      }
+      const rent = json.rent_proformas ?? {};
+      const item = (rent.preview ?? [])[0] as BackfillPreview | undefined;
+      if (item) {
+        setBackfillPreview(item);
+      } else if ((rent.already_sent ?? []).length > 0) {
+        setBackfillBlockedReason("This month's rent proforma has already been sent to the client.");
+      } else {
+        setBackfillBlockedReason("Nothing to bill for this month.");
+      }
+    } catch {
+      setBackfillBlockedReason("Preview failed");
+    } finally {
+      setBackfillPreviewing(false);
+    }
+  };
+
+  const confirmBackfill = async () => {
+    if (!backfillRow?.backfillTarget) return;
+    setBackfillSending(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: false, mode: "rent", contract_id: backfillRow.contractId, ...backfillRow.backfillTarget }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to generate the proforma");
+        return;
+      }
+      const noContact: string[] = json.rent_proformas?.no_contact ?? [];
+      const notDelivered: string[] = json.rent_proformas?.not_delivered ?? [];
+      const errors: string[] = json.errors ?? [];
+      if (errors.length > 0) {
+        toast.error(errors[0]);
+      } else if (noContact.length > 0) {
+        toast.error("Proforma raised but not sent — no email or phone on file for this client.");
+      } else if (notDelivered.length > 0) {
+        toast.error("Proforma raised but the send failed — resend it from the statement.", { duration: 10000 });
+      } else if ((json.rent_proformas?.generated ?? 0) > 0) {
+        toast.success("Proforma raised and sent to the client");
+      } else {
+        toast.info("Nothing was generated for this month");
+      }
+      setBackfillRow(null);
+      await loadUnbilled();
+      if (onFinalized) await onFinalized();
+    } catch {
+      toast.error("Failed to generate the proforma");
+    } finally {
+      setBackfillSending(false);
+    }
+  };
 
   // ── Billed (paginated) ───────────────────────────────────────────────────
   const [billedRows, setBilledRows] = useState<BilledStatement[]>([]);
@@ -216,6 +323,14 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
                           <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
                             Open contract
                           </Link>
+                          {row.backfillTarget && canBill && (
+                            <button
+                              onClick={() => openBackfillDialog(row)}
+                              className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
+                            >
+                              Send invoice
+                            </button>
+                          )}
                           {row.statementId && onViewStatement && (
                             <button
                               onClick={() => onViewStatement(row.statementId!)}
@@ -301,6 +416,96 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
           )}
         </div>
       )}
+
+      <Dialog open={!!backfillRow} onOpenChange={(open) => { if (!open) setBackfillRow(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarPlus className="h-4 w-4 shrink-0" />
+              Bill a missed month
+            </DialogTitle>
+            <DialogDescription>
+              {backfillRow && (
+                <>
+                  <span className="font-mono text-xs text-teal-700">{backfillRow.contractNumber}</span> → {backfillRow.customerName}: this contract&rsquo;s renewal hasn&rsquo;t been activated yet, and {backfillRow.periodLabel.split(" · ")[0]} never got a rent statement. Raises that missed month&rsquo;s rent proforma at the renewal&rsquo;s terms. Sending it creates the payment link and emails the client.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {backfillPreviewing ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Working out what&apos;s due…
+            </div>
+          ) : backfillBlockedReason ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {backfillBlockedReason}
+            </div>
+          ) : backfillPreview ? (
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm text-muted-foreground">Period</span>
+                <span className="text-sm font-medium">{backfillPreview.period_label}</span>
+              </div>
+              <div className="border rounded-md max-h-64 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40 text-xs text-muted-foreground sticky top-0">
+                    <tr>
+                      <th className="text-left font-medium py-2 px-3">Description</th>
+                      <th className="text-right font-medium py-2 px-3">Qty</th>
+                      <th className="text-right font-medium py-2 px-3">Rate</th>
+                      <th className="text-right font-medium py-2 px-3">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {(backfillPreview.line_items ?? []).map((li, i) => (
+                      <tr key={i}>
+                        <td className="py-2 px-3">
+                          {li.description}
+                          {li.note && <span className="block text-xs text-muted-foreground">{li.note}</span>}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{li.qty ?? "—"}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {li.unit_price != null ? formatCurrency(li.unit_price) : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(li.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="tabular-nums">{formatCurrency(backfillPreview.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>GST</span>
+                  <span className="tabular-nums">{formatCurrency(backfillPreview.tax_amount)}</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatCurrency(backfillPreview.total_amount)}</span>
+                </div>
+              </div>
+              {backfillPreview.note && (
+                <p className="text-xs text-muted-foreground">{backfillPreview.note}</p>
+              )}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBackfillRow(null)} disabled={backfillSending}>
+              Cancel
+            </Button>
+            <Button onClick={confirmBackfill} disabled={!backfillPreview || backfillSending}>
+              {backfillSending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Raise &amp; send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
