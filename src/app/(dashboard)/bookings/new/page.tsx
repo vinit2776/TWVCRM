@@ -15,6 +15,7 @@ import type { BookingCredit, BookingComplimentaryReason } from "@/types";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
 import { ContractQuotaBanner } from "@/components/bookings/new-booking/contract-quota-banner";
+import { SubstituteAllocationPanel } from "@/components/bookings/new-booking/substitute-allocation-panel";
 import {
   BookingFormProvider,
   RoomSelectionSection,
@@ -68,6 +69,12 @@ function NewBookingForm() {
     preselectedCustomerType === "contract_holder" ? "contract_holder" : "walk_in"
   );
   const [contractId, setContractId] = useState(preselectedContractId);
+  // Substitute allocation: attribute this booking's quota to a different
+  // contract_facilities row than the one that would be auto-matched by
+  // room name. Reset whenever the contract or room changes so a stale
+  // override can't silently follow onto an unrelated booking.
+  const [facilityOverrideId, setFacilityOverrideId] = useState("");
+  const [facilityOverrideReason, setFacilityOverrideReason] = useState("");
   const [leadId, setLeadId] = useState(preselectedLeadId);
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
@@ -120,6 +127,8 @@ function NewBookingForm() {
   const [appliedCredit, setAppliedCredit] = useState<AppliedCredit | null>(null);
 
   useEffect(() => { setAppliedCredit(null); }, [bookerPhone, locationId]);
+
+  useEffect(() => { setFacilityOverrideId(""); setFacilityOverrideReason(""); }, [contractId, spaceId]);
 
   // Complimentary
   const [complimentaryReason, setComplimentaryReason] = useState<BookingComplimentaryReason | "">("");
@@ -534,6 +543,9 @@ function NewBookingForm() {
       if (complimentaryReason === "other" && !complimentaryDetails.trim()) { toast.error('Add details — "Other" requires a reason'); return; }
     }
     if (customerType === "contract_holder" && !contractId) { toast.error("Please select a contract"); return; }
+    if (facilityOverrideId && !facilityOverrideReason.trim()) {
+      toast.error("Add a reason for the substitute allocation"); return;
+    }
     if (customerType === "walk_in" && !leadId && !guestName.trim()) { toast.error("Please select a lead or enter guest details"); return; }
     if (customerType === "walk_in" && !leadHasIdProof && !idProofFile) {
       toast.error("Government ID proof is mandatory. Please upload the customer's ID document."); return;
@@ -570,6 +582,8 @@ function NewBookingForm() {
         complimentary_details: totalAmountWithGst <= 0 ? (complimentaryDetails.trim() || undefined) : undefined,
         settle_charge_ids: selectedChargeIds.size > 0 ? Array.from(selectedChargeIds) : undefined,
         send_sms: sendSms, send_whatsapp: sendWhatsapp,
+        contract_facility_id_override: facilityOverrideId || undefined,
+        facility_override_reason: facilityOverrideId ? facilityOverrideReason.trim() || undefined : undefined,
       };
 
       const res = await fetch("/api/bookings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -620,6 +634,7 @@ function NewBookingForm() {
     advancePaymentMode, advancePaymentAmount, advancePaymentReference, usePrepaid,
     activePurchase, appliedCredit, selectedChargeIds, sendSms, sendWhatsapp,
     leadHasIdProof, idProofFile, router,
+    facilityOverrideId, facilityOverrideReason,
   ]);
 
   // ── Context value ───────────────────────────────────────────────────────────
@@ -716,6 +731,16 @@ function NewBookingForm() {
             contractId={contractId}
             durationHours={durationHours}
             bookingDate={bookingDate}
+          />
+        )}
+
+        {customerType === "contract_holder" && contractId && spaceId && !isConferenceOrMeetingRoom && (
+          <SubstituteAllocationPanel
+            contractId={contractId}
+            spaceName={selectedSpace?.name || ""}
+            facilityId={facilityOverrideId}
+            reason={facilityOverrideReason}
+            onChange={({ facilityId, reason }) => { setFacilityOverrideId(facilityId); setFacilityOverrideReason(reason); }}
           />
         )}
 

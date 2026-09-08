@@ -109,33 +109,56 @@ async function maybePostPooledUsageCharge(
     checkOutAt: Date;
     createdBy: string;
     bookedHours: number;
+    /** Staff-set substitute allocation from booking creation (see migration
+     *  00553) — when present, pool against this facility directly instead
+     *  of re-deriving one from the space name. Keeps checkout consistent
+     *  with whatever was decided when the booking was made. */
+    contractFacilityIdOverride?: string | null;
   }
 ): Promise<void> {
-  const { bookingId, contractId, spaceId, bookingDate, checkInAt, checkOutAt, createdBy, bookedHours } = params;
+  const { bookingId, contractId, spaceId, bookingDate, checkInAt, checkOutAt, createdBy, bookedHours, contractFacilityIdOverride } = params;
 
-  // Resolve the hour-based contract_facility for this space — the same
-  // name-match heuristic used at booking creation, promoted here to the
-  // only path since Model B never links a booking to a charge at
-  // creation time (there's no booking.usage_charge_id to originate from).
   const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
-  const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
-    supabase.from("spaces").select("name").eq("id", spaceId).maybeSingle(),
-    supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let facility: any;
+
+  if (contractFacilityIdOverride) {
+    const { data: overrideFacility } = await supabase
       .from("contract_facilities")
       .select("id, name, free_quota, cost_per_unit")
-      .eq("contract_id", contractId)
-      .in("unit", HOUR_UNITS),
-  ]);
-  if (!facilities || facilities.length === 0) return; // no hour-based quota on this contract — nothing to pool
+      .eq("id", contractFacilityIdOverride)
+      .maybeSingle();
+    if (!overrideFacility) return; // override facility deleted since booking — nothing to pool against
+    facility = overrideFacility;
+  } else {
+    // Resolve the hour-based contract_facility for this space — the same
+    // name-match heuristic used at booking creation, promoted here to the
+    // only path since Model B never links a booking to a charge at
+    // creation time (there's no booking.usage_charge_id to originate from).
+    const [{ data: spaceRow }, { data: facilities }] = await Promise.all([
+      supabase.from("spaces").select("name").eq("id", spaceId).maybeSingle(),
+      supabase
+        .from("contract_facilities")
+        .select("id, name, free_quota, cost_per_unit")
+        .eq("contract_id", contractId)
+        .in("unit", HOUR_UNITS),
+    ]);
+    if (!facilities || facilities.length === 0) return; // no hour-based quota on this contract — nothing to pool
 
-  const spaceLower = (spaceRow?.name || "").toLowerCase();
-  const facility =
-    facilities.length === 1
-      ? facilities[0]
-      : facilities.find(
-          (f: { name: string }) =>
-            spaceLower.includes(f.name.toLowerCase()) || f.name.toLowerCase().includes(spaceLower)
-        ) || facilities[0];
+    const spaceLower = (spaceRow?.name || "").toLowerCase();
+    // No "first row" fallback when ambiguous — mirrors the tightened logic
+    // at booking creation (see bookings/route.ts). An ambiguous booking's
+    // facility_resolution is already 'unresolved' from creation time, so
+    // there's nothing to pool here either; Accounts resolves it manually.
+    facility =
+      facilities.length === 1
+        ? facilities[0]
+        : facilities.find(
+            (f: { name: string }) =>
+              spaceLower.includes(f.name.toLowerCase()) || f.name.toLowerCase().includes(spaceLower)
+          ) || null;
+    if (!facility) return;
+  }
 
   const actualHours = roundedActualHours(checkInAt, checkOutAt);
   if (actualHours <= 0) return;
@@ -811,6 +834,7 @@ export async function PATCH(
             checkOutAt: now,
             createdBy: dbUser.id,
             bookedHours: Number(booking.duration_hours),
+            contractFacilityIdOverride: booking.contract_facility_id_override,
           });
         }
 
