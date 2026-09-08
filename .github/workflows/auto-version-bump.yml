@@ -76,9 +76,21 @@ jobs:
           git commit --quiet -m "$TITLE"
           git push --quiet --force-with-lease origin "$BRANCH"
 
-          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --title "$TITLE" --body "$BODY"
-            echo "Updated existing bump PR to ${NEW_VERSION}."
+          # `gh pr view "$BRANCH"` resolves to the most recent PR that ever
+          # used this branch name, in ANY state — including one already
+          # merged or closed. Once the standing bump PR gets merged, that
+          # command keeps "finding" the now-merged PR and `gh pr edit`
+          # happily rewrites its title/body without error, so this branch
+          # silently stops producing a mergeable PR at all: every run after
+          # a merge just re-decorates a closed PR nobody can act on, while
+          # commits keep piling onto the branch behind the scenes. Filtering
+          # to `--state open` is what actually answers "is there a PR to
+          # update", so a fresh one gets created once the last one merges.
+          OPEN_PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number')
+
+          if [ -n "$OPEN_PR" ]; then
+            gh pr edit "$OPEN_PR" --title "$TITLE" --body "$BODY"
+            echo "Updated existing bump PR #${OPEN_PR} to ${NEW_VERSION}."
           else
             gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
             echo "Opened bump PR for ${NEW_VERSION}."
