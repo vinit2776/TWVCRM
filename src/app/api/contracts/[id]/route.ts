@@ -226,17 +226,17 @@ export async function PATCH(
       // "Send Agreement" only renders while signed_document is unset (see
       // the contract detail page), so once a document is attached there's
       // otherwise no way to move the contract past draft at all. Restricted
-      // to admins since it bypasses the normal send/view acknowledgement
-      // steps.
+      // to admin/manager since it bypasses the normal send/view
+      // acknowledgement steps — same roles as contract termination.
       if (oldContract.status === "draft") {
         if (!oldContract.signed_document_id) {
           return NextResponse.json({
             error: "Cannot mark a draft contract accepted without a signed agreement attached first.",
           }, { status: 400 });
         }
-        if (dbUser?.role !== "admin") {
+        if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
           return NextResponse.json(
-            { error: "Only admins can mark a draft contract accepted directly." },
+            { error: "Only admins and managers can mark a draft contract accepted directly." },
             { status: 403 }
           );
         }
