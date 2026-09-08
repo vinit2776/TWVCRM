@@ -342,7 +342,7 @@ Activity timeline per issue. Append-only.
 | `payload` | JSONB DEFAULT `{}` | structured details |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
 
-**Valid `event_type` values:** `created`, `status_changed`, `assigned`, `comment`, `photo_added`, `resolved`, `reopened`, `sla_breached`, `satisfaction`, `priority_changed`.
+**Valid `event_type` values:** `created`, `status_changed`, `assigned`, `comment`, `photo_added`, `resolved`, `reopened`, `sla_breached`, `satisfaction`, `priority_changed`, `updated` (generic field edit — title/description; `payload.field` says which).
 
 **RLS:** SELECT — any `authenticated`. INSERT — any `authenticated`.
 
@@ -634,6 +634,10 @@ Response: `{ data: [{ month: "2025-03", cost: 12500 }, ...] }` sorted ascending 
 ### `PUT /api/facility/issues/[id]`
 
 Editable fields: `title`, `description`, `priority`, `category_id`, `location_id`, `floor_id`, `space_unit_id`, `asset_id`, `reporter_name`, `reporter_email`, `reporter_phone`, `parts_cost`, `parts_notes`, `resolution_notes`, `resolution_root_cause`.
+
+`title` is rejected with 400 if empty/whitespace-only after trim.
+
+Title and description changes log an `updated` event to `facility_issue_events` (not just the admin-only `logAudit` trail) so the change is visible on the issue's own timeline — same reasoning as `priority_changed` below. `/facility/issues/[id]` exposes both as click-to-edit inline fields (title: single-line, saves on blur/Enter/click-away, Esc to cancel; description: textarea with explicit Save/Cancel buttons), gated behind the same `canAct` check used for the page's other mutating actions (ticket owner or override-tier role — `admin`/`manager`/`office_admin`).
 
 Note: `location_id` is editable on issues but not on assets.
 
