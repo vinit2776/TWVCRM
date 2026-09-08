@@ -110,6 +110,17 @@ const USAGE_SOURCE_LABELS: Record<string, string> = {
   facility: "Facility usage",
 };
 
+// "Bills in: [month] [status]" tag — which billing cycle a charge belongs to,
+// and whether that cycle has already picked it up. See billingCycleOf() in
+// /api/usage-charges for how this is derived.
+const BILLING_CYCLE_TAG: Record<string, { text: string; className: string }> = {
+  cycle_open: { text: "cycle still open",      className: "bg-slate-50 text-slate-600 border-slate-200" },
+  ready:      { text: "ready",                 className: "bg-blue-50 text-blue-800 border-blue-200" },
+  overdue:    { text: "⚠ overdue, never billed", className: "bg-red-50 text-red-700 border-red-200" },
+  billed:     { text: "billed",                className: "bg-green-50 text-green-700 border-green-200" },
+  waived:     { text: "waived",                className: "bg-gray-50 text-gray-600 border-gray-200" },
+};
+
 // ── Types — billing ──────────────────────────────────────────────────────────
 
 interface ContractFilter {
@@ -142,6 +153,8 @@ interface UsageCharge {
   // manual charge is always billable unless waived, which status already shows).
   source?: "manual" | "print" | "facility";
   billable?: boolean | null;
+  billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived";
+  billing_cycle_label?: string;
 }
 
 interface BillingStatement {
@@ -1182,6 +1195,14 @@ export default function BillingPage() {
                             waived, which the status badge above already communicates. */}
                         {charge.billable === false && (
                           <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
+                        )}
+                        {charge.billing_cycle_status && charge.billing_cycle_label && (
+                          <Badge
+                            variant="outline"
+                            className={`block w-fit mt-1 text-[10px] ${BILLING_CYCLE_TAG[charge.billing_cycle_status]?.className ?? ""}`}
+                          >
+                            Bills in: {charge.billing_cycle_label} · {BILLING_CYCLE_TAG[charge.billing_cycle_status]?.text}
+                          </Badge>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">

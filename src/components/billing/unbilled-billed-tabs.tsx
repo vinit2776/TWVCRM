@@ -34,18 +34,20 @@ import { ProformaBillingCard } from "@/components/billing/proforma-billing-card"
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
 const CATEGORY_TITLE: Record<UnbilledCategory, string> = {
   current_cycle: "Current cycle — ready to send",
   rent_gap: "Rent gap",
   renewal_drift: "Renewal drift",
   no_renewal: "No renewal on file",
+  usage_gap: "Usage gap — captured but never billed",
 };
 const CATEGORY_BADGE_CLASS: Record<UnbilledCategory, string> = {
   current_cycle: "bg-blue-50 text-blue-900 border-blue-200",
   rent_gap: "bg-amber-50 text-amber-900 border-amber-200",
   renewal_drift: "bg-red-50 text-red-900 border-red-200",
   no_renewal: "bg-slate-100 text-slate-700 border-slate-300",
+  usage_gap: "bg-amber-50 text-amber-900 border-amber-200",
 };
 
 function monthLabel(year: number, month: number): string {
@@ -77,7 +79,7 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
   const [unbilledLoading, setUnbilledLoading] = useState(true);
   const [counts, setCounts] = useState<Record<UnbilledCategory, number>>({
-    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0,
+    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0,
   });
 
   const loadUnbilled = useCallback(async () => {
@@ -87,7 +89,7 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setUnbilledRows(json.data || []);
-      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0 });
+      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0 });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load unbilled queue");
     } finally {
@@ -124,16 +126,19 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
 
   useEffect(() => { if (tab === "billed") loadBilled(); }, [tab, loadBilled]);
 
-  // Rent bills a month in advance (this ops month -> next month's proforma);
-  // usage bills the current cycle itself, matching getCurrentCycleReady()'s
-  // window in unbilled-queue.ts so a freshly-generated draft immediately
-  // shows up under "Current cycle — ready to send" instead of falling
-  // outside the window it's being checked against.
+  // Rent bills a month in advance (this ops month -> next month's proforma).
+  // Usage bills in arrears instead: the last FULLY-CLOSED month, matching
+  // generateUsageStatements' own default and getCurrentCycleReady()'s window
+  // in unbilled-queue.ts, so a freshly-generated draft immediately shows up
+  // under "Current cycle — ready to send" instead of falling outside the
+  // window it's being checked against.
   const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const opsMonth = nowIst.getUTCMonth() + 1;
   const opsYear = nowIst.getUTCFullYear();
   const nextMonth = opsMonth === 12 ? 1 : opsMonth + 1;
   const nextYear = opsMonth === 12 ? opsYear + 1 : opsYear;
+  const closedMonth = opsMonth === 1 ? 12 : opsMonth - 1;
+  const closedYear = opsMonth === 1 ? opsYear - 1 : opsYear;
 
   const totalUnbilled = Object.values(counts).reduce((s, n) => s + n, 0);
 
@@ -152,9 +157,9 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
       ) : (
         <ProformaBillingCard
           mode="usage"
-          periodLabel={monthLabel(opsYear, opsMonth)}
-          month={opsMonth}
-          year={opsYear}
+          periodLabel={`${monthLabel(closedYear, closedMonth)} (closed)`}
+          month={closedMonth}
+          year={closedYear}
           pendingDraftsCount={counts.current_cycle}
           onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
         />

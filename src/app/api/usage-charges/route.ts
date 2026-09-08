@@ -31,14 +31,44 @@ interface NormalizedRow {
   billable: boolean | null;
   notes: string | null;
   created_at: string;
+  /** Which billing cycle this row's charge_date falls into, and whether that
+   *  cycle has already been picked up by a usage run. See billingCycleOf(). */
+  billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived";
+  /** "August 2026" — the month this charge belongs to, for the "Bills in: …" tag. */
+  billing_cycle_label: string;
 }
 
 function lastDayOfMonth(year: number, month: number): string {
   return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
 }
 
+/**
+ * Usage bills in arrears for the last FULLY-CLOSED month (see
+ * generateUsageStatements in src/lib/billing.ts) — a charge dated in the
+ * still-open current month can't be billed yet, one dated in the closed
+ * month is what the next "Generate Drafts" run will pick up, and one dated
+ * before that is stranded: no future run's single-month window will ever
+ * reach it again unless someone notices it here.
+ */
+function billingCycleOf(chargeDate: string, status: "pending" | "billed" | "waived"): { status: NormalizedRow["billing_cycle_status"]; label: string } {
+  const [y, m] = chargeDate.slice(0, 7).split("-").map(Number);
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "long", year: "numeric" });
+  if (status === "billed") return { status: "billed", label };
+  if (status === "waived") return { status: "waived", label };
+
+  const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const currentMonth = nowIst.getUTCMonth() + 1;
+  const currentYear = nowIst.getUTCFullYear();
+  const closed = currentMonth === 1 ? { month: 12, year: currentYear - 1 } : { month: currentMonth - 1, year: currentYear };
+
+  if (y === currentYear && m === currentMonth) return { status: "cycle_open", label };
+  if (y === closed.year && m === closed.month) return { status: "ready", label };
+  return { status: "overdue", label };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeManual(r: any): NormalizedRow {
+  const cycle = billingCycleOf(r.charge_date, r.status);
   return {
     id: r.id, source: "manual", description: r.description,
     contract_id: r.contract_id, contract: r.contract ?? null,
@@ -48,6 +78,7 @@ function normalizeManual(r: any): NormalizedRow {
     gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
     charge_date: r.charge_date, status: r.status, billable: null,
     notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
   };
 }
 
@@ -55,6 +86,9 @@ function normalizeManual(r: any): NormalizedRow {
 function normalizePrint(r: any): NormalizedRow {
   const overage = Number(r.overage_quantity);
   const serviceName = r.service?.name ?? "Print usage";
+  const chargeDate = lastDayOfMonth(r.period_year, r.period_month);
+  const status: "pending" | "billed" = r.is_billed ? "billed" : "pending";
+  const cycle = billingCycleOf(chargeDate, status);
   return {
     id: r.id, source: "print",
     description: overage > 0
@@ -64,10 +98,11 @@ function normalizePrint(r: any): NormalizedRow {
     lead: r.contract?.lead ?? null,
     quantity: overage, unit_price: Number(r.overage_rate_snapshot), total: Number(r.amount),
     gst_rate: r.gst_rate, gst_amount: r.gst_amount, total_with_gst: r.total_with_gst,
-    charge_date: lastDayOfMonth(r.period_year, r.period_month),
-    status: r.is_billed ? "billed" : "pending",
+    charge_date: chargeDate,
+    status,
     billable: Number(r.amount) > 0,
     notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
   };
 }
 
@@ -76,6 +111,13 @@ function normalizeFacility(r: any): NormalizedRow {
   const facilityName = r.contract_facility?.name ?? "Facility usage";
   const unit = r.contract_facility?.unit ? ` ${r.contract_facility.unit}` : "";
   const billable = Number(r.billable_quantity);
+  // No billing_statement_id/is_billed on this table (it predates the usage-
+  // statement flow) — the accounting period it was logged against is the
+  // closest proxy for "has this been billed": once locked, the period's
+  // statement is done, so anything logged for it is presumed billed.
+  const chargeDate = r.accounting_period ? lastDayOfMonth(r.accounting_period.year, r.accounting_period.month) : (r.created_at ?? "").slice(0, 10);
+  const status: "pending" | "billed" = r.accounting_period?.status === "locked" ? "billed" : "pending";
+  const cycle = billingCycleOf(chargeDate, status);
   return {
     id: r.id, source: "facility",
     description: billable > 0
@@ -85,14 +127,11 @@ function normalizeFacility(r: any): NormalizedRow {
     lead: r.contract?.lead ?? null,
     quantity: billable, unit_price: Number(r.unit_price), total: Number(r.total_charge),
     gst_rate: null, gst_amount: null, total_with_gst: null,
-    // No billing_statement_id/is_billed on this table (it predates the usage-
-    // statement flow) — the accounting period it was logged against is the
-    // closest proxy for "has this been billed": once locked, the period's
-    // statement is done, so anything logged for it is presumed billed.
-    charge_date: r.accounting_period ? lastDayOfMonth(r.accounting_period.year, r.accounting_period.month) : (r.created_at ?? "").slice(0, 10),
-    status: r.accounting_period?.status === "locked" ? "billed" : "pending",
+    charge_date: chargeDate,
+    status,
     billable: billable > 0,
     notes: r.notes, created_at: r.created_at,
+    billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
   };
 }
 
