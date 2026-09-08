@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -57,6 +58,7 @@ interface CaseLeaveAgreementTabProps {
 export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  const { enabled: leegalityEnabled } = useLeegalityEnabled();
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -823,7 +825,12 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             )}
 
             {["client_approved", "sent_to_client", "internally_approved"].includes(agreement.status) && (
-              <Button size="sm" onClick={handleInitiateSigning} disabled={acting}>
+              <Button
+                size="sm"
+                onClick={handleInitiateSigning}
+                disabled={acting || !leegalityEnabled}
+                title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing."}
+              >
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Stamping & Signing
               </Button>

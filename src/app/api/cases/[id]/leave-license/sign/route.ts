@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import {
   uploadForEStampAndSigning,
   getSigningStatus,
+  isLeegalitySigningEnabled,
 } from "@/lib/leegality";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
 import { advanceCaseOnAgreementExecuted } from "@/lib/case-status-events";
@@ -64,6 +65,13 @@ export async function POST(
       if (!["client_approved"].includes(agreement.status)) {
         return NextResponse.json(
           { error: "Agreement must be client approved before initiating e-signing" },
+          { status: 400 }
+        );
+      }
+
+      if (!(await isLeegalitySigningEnabled(adminSupabase))) {
+        return NextResponse.json(
+          { error: "E-signing via Leegality is currently turned off. Use company stamp or upload a manually signed document instead." },
           { status: 400 }
         );
       }

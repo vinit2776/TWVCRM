@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
 import {
   uploadForEStampAndSigning,
   getSigningStatus,
+  cancelSigningRequest,
+  isLeegalitySigningEnabled,
 } from "@/lib/leegality";
 
 /**
@@ -62,7 +64,7 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
@@ -87,6 +89,14 @@ export async function POST(
       if (["rejected", "terminated", "completed"].includes(contract.status)) {
         return NextResponse.json(
           { error: "Cannot initiate e-signing on a rejected, terminated, or completed contract" },
+          { status: 400 }
+        );
+      }
+
+      const adminSupabase = await createAdminClient();
+      if (!(await isLeegalitySigningEnabled(adminSupabase))) {
+        return NextResponse.json(
+          { error: "E-signing via Leegality is currently turned off. Use company stamp or upload a manually signed document instead." },
           { status: 400 }
         );
       }
@@ -237,9 +247,66 @@ export async function POST(
       return NextResponse.json({ data: status });
     }
 
+    case "cancel": {
+      if (dbUser?.role !== "admin") {
+        return NextResponse.json(
+          { error: "Only admins can cancel an e-signing request" },
+          { status: 403 }
+        );
+      }
+
+      const docId = contract.leegality_document_id as string;
+      if (!docId) {
+        return NextResponse.json(
+          { error: "No Leegality document ID found — nothing to cancel" },
+          { status: 400 }
+        );
+      }
+      if (contract.leegality_status === "COMPLETED") {
+        return NextResponse.json(
+          { error: "This agreement has already been fully signed — cannot cancel a completed request" },
+          { status: 400 }
+        );
+      }
+
+      try {
+        await cancelSigningRequest(docId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ error: `Leegality error: ${message}` }, { status: 502 });
+      }
+
+      const previousStatus = contract.leegality_status;
+      await supabase
+        .from("contracts")
+        .update({
+          leegality_document_id: null,
+          leegality_sign_url: null,
+          leegality_lessee_sign_url: null,
+          leegality_status: "CANCELLED",
+        })
+        .eq("id", contractId);
+
+      if (dbUser?.id) {
+        logAudit(supabase, {
+          entityType: "contract",
+          entityId: contractId,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: {
+            action: { old: null, new: "cancel_leegality_signing" },
+            leegality_document_id: { old: docId, new: null },
+            leegality_status: { old: previousStatus, new: "CANCELLED" },
+          },
+        });
+      }
+
+      return NextResponse.json({ data: { status: "CANCELLED" } });
+    }
+
     default:
       return NextResponse.json(
-        { error: "Invalid action. Valid: initiate, check_status" },
+        { error: "Invalid action. Valid: initiate, check_status, cancel" },
         { status: 400 }
       );
   }
