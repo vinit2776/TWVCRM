@@ -385,9 +385,13 @@ export default function BillingPage() {
   // which itself later split into "rentals" and "usage" once usage needed its own
   // discovery/generate flow instead of sharing one mixed view.
   const SECTION_TABS = {
-    receivables: ["proposals", "usage-charges"],
+    // Order matters here beyond membership: handleSectionChange lands on
+    // index [0] when switching into a section, so the two visible tabs come
+    // first — "proposals" stays reachable by deep link (sectionForTab still
+    // maps it here) but is no longer a landing tab or a visible trigger.
+    receivables: ["usage-charges", "usage", "proposals"],
     collections: ["walkin", "cash", "refunds"],
-    invoicing:   ["rentals", "usage", "gst", "retained-payments", "electricity"],
+    invoicing:   ["rentals", "gst", "retained-payments", "electricity"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
@@ -832,20 +836,24 @@ export default function BillingPage() {
       )}
 
       {/* ── Section selector (Phase 3) ─────────────────────────────────────
-          Three finance-centric buckets above the tab list so the screen
-          tells finance "what owes me / what came in / what goes out"
-          before forcing them to pick a sub-view.
-            • Billing for usage  — Proposals (awaiting deposit), Usage Charges (queued for next statement)
-            • Collections        — Walk-in, Cash Handovers (button hidden for now — not useful yet;
-              the section and its tabs still work via deep link, see sectionForTab)
-            • Billing for rental — Rentals, Usage, GST Invoices, Retained Payments, Electricity
+          Two working sections — everything else that used to compete for
+          space here (Proposals, GST Invoices, Retained Payments, Electricity,
+          Collections) is hidden as noise, not deleted: each tab's code and
+          content stay reachable by deep link (?tab=...), see sectionForTab
+          and SECTION_TABS above.
+            • Billing for usage  — Usage Charges (capture) + Generate & Send
+              (bill it) — one workflow, split into two steps of the same job.
+            • Billing for rental — Rentals only. No sub-tab bar renders here
+              since there's exactly one thing to show (see the Tabs block
+              below) — GST Invoices/Retained Payments/Electricity/Collections
+              stay mapped to "invoicing" for routing but aren't offered here.
           Renamed from "Receivables" so it no longer collides with the
           accounting-true /accounting/receivables page (invoiced-but-unpaid
           billing statements). This bucket is pre-invoice work-in-progress.
       */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {([
-          { key: "receivables", label: "Billing for usage", hint: "Proposals & charges awaiting invoicing" },
+          { key: "receivables", label: "Billing for usage", hint: "Usage charges & billing" },
           { key: "invoicing",   label: "Billing for rental", hint: "Billing & statements" },
         ] as const).map((s) => {
           const isActive = section === s.key;
@@ -877,40 +885,34 @@ export default function BillingPage() {
         />
       )}
 
-      {/* Sub-tabs — only the ones inside the active section render. */}
+      {/* Sub-tabs — only the ones inside the active section render. "invoicing"
+          renders no TabsList at all: with GST/Retained Payments/Electricity
+          hidden, Rentals is the only thing left, so a one-item tab bar would
+          just be noise above its own content. */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="overflow-x-auto pb-1">
-          <TabsList className="w-max">
-            {section === "receivables" && (
-              <>
-                <TabsTrigger value="proposals">Proposals</TabsTrigger>
-                <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
-              </>
-            )}
-            {section === "collections" && (
-              <>
-                <TabsTrigger value="walkin">
-                  Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="cash">
-                  Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="refunds">Refunds</TabsTrigger>
-              </>
-            )}
-            {section === "invoicing" && (
-              <>
-                <TabsTrigger value="rentals">
-                  Rentals{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
-                </TabsTrigger>
-                <TabsTrigger value="usage">Usage</TabsTrigger>
-                <TabsTrigger value="gst">GST Invoices</TabsTrigger>
-                <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
-                <TabsTrigger value="electricity">Electricity</TabsTrigger>
-              </>
-            )}
-          </TabsList>
-        </div>
+        {section !== "invoicing" && (
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="w-max">
+              {section === "receivables" && (
+                <>
+                  <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
+                  <TabsTrigger value="usage">Generate &amp; Send</TabsTrigger>
+                </>
+              )}
+              {section === "collections" && (
+                <>
+                  <TabsTrigger value="walkin">
+                    Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
+                  </TabsTrigger>
+                  <TabsTrigger value="cash">
+                    Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
+                  </TabsTrigger>
+                  <TabsTrigger value="refunds">Refunds</TabsTrigger>
+                </>
+              )}
+            </TabsList>
+          </div>
+        )}
 
         {/* ── Contracts ─────────────────────────────────────────────────── */}
         <TabsContent value="contracts" className="space-y-3 mt-4">
