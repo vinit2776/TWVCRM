@@ -220,6 +220,27 @@ export async function PATCH(
       allowedFields.viewed_at = body.viewed_at || now;
       allowedFields.viewed_by = actorId;
     } else if (body.status === "accepted") {
+      // draft → accepted (skipping sent/viewed) is only for a draft that
+      // already has a signed agreement attached — e.g. a customer-signed
+      // scan uploaded off-band before Send Agreement was ever clicked.
+      // "Send Agreement" only renders while signed_document is unset (see
+      // the contract detail page), so once a document is attached there's
+      // otherwise no way to move the contract past draft at all. Restricted
+      // to admins since it bypasses the normal send/view acknowledgement
+      // steps.
+      if (oldContract.status === "draft") {
+        if (!oldContract.signed_document_id) {
+          return NextResponse.json({
+            error: "Cannot mark a draft contract accepted without a signed agreement attached first.",
+          }, { status: 400 });
+        }
+        if (dbUser?.role !== "admin") {
+          return NextResponse.json(
+            { error: "Only admins can mark a draft contract accepted directly." },
+            { status: 403 }
+          );
+        }
+      }
       allowedFields.accepted_at = body.accepted_at || now;
       allowedFields.accepted_by = actorId;
     } else if (body.status === "rejected") {
