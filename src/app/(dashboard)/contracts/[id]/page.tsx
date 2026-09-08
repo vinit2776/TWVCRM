@@ -1038,6 +1038,17 @@ export default function ContractDetailPage({
               Send Agreement
             </Button>
           )}
+          {/* A draft with a signed agreement already attached (e.g. uploaded
+              off-band before Send Agreement was ever clicked) has no other
+              path forward — Send Agreement only shows while signed_document
+              is unset. Let an admin jump straight to Accepted so Activate
+              becomes reachable. */}
+          {contract.status === "draft" && contract.signed_document && userRole === "admin" && (
+            <Button variant="outline" onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Mark Accepted (Signed)
+            </Button>
+          )}
           {contract.status === "sent" && (
             <>
               <Button variant="outline" onClick={() => handleStatusUpdate("viewed")} disabled={statusUpdating}>

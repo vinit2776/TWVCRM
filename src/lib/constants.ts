@@ -434,9 +434,14 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
  *   - `draft → active` is intentionally removed — contracts must go
  *     through sent → viewed/accepted first to ensure the customer
  *     has seen and agreed to the terms.
+ *   - `draft → accepted` exists only for a draft that already has a signed
+ *     agreement attached (e.g. uploaded off-band before Send/View/Accept was
+ *     ever walked through) — the PATCH handler further restricts this one to
+ *     admins and requires signed_document_id to already be set. It's not a
+ *     general shortcut around the send/view steps.
  */
 export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
-  draft:                 ["sent", "terminated"],
+  draft:                 ["sent", "accepted", "terminated"],
   sent:                  ["viewed", "accepted", "rejected"],
   viewed:                ["accepted", "rejected"],
   accepted:              ["active", "rejected"],
