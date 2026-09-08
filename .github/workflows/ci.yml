@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # Not filtered to `main` as a base. A PR stacked on another feature branch
+  # (base: feat/whatever) matched no filter at all, so `lint-and-build` never
+  # ran on it — the PR showed no failing check, it showed *no check*, which
+  # reads as "nothing to see" rather than "nothing was verified". PR #675 sat
+  # that way until its base merged. Every PR gets built, whatever it targets.
   pull_request:
-    branches: [main]
 
 env:
   NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}

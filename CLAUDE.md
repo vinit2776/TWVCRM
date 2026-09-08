@@ -278,6 +278,58 @@ GMAIL_WATCH_EMAIL / GMAIL_PUBSUB_TOPIC
 GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
 ```
 
+---
+
+## Staging — Develop Against This, Not Production
+
+There are **two** Supabase projects. Local dev and every Vercel Preview should
+point at staging; production credentials belong only to the production Vercel
+deployment.
+
+| | Project ref | What's in it |
+|---|---|---|
+| **Staging** | `vmxugqfglajqpskazpdc` | Fake seed data — safe to click anything |
+| **Production** | `zlbvadtajetylacxevsm` | Real customers. Never a development target. |
+
+**How to tell which one you're on, at a glance:** every non-production
+environment renders an amber `🧪 STAGING — this is test data` banner across the
+top of every page (`src/components/shared/environment-banner.tsx`). It keys on
+the production project ref and fails *visible* — an unrecognised or misconfigured
+Supabase URL still shows the banner, so a bad env var reads as a warning rather
+than passing for production.
+
+**If you do not see that banner, stop.** You are pointed at real customer data,
+and nothing you are about to click is safe.
+
+### Setting it up
+
+1. Ask Vinit for the staging credentials — Supabase URL, anon key, service role
+   key. They are never committed; `.env.example` documents shape only.
+2. Point your `.env.local` at the **staging** project for day-to-day work.
+3. Seed it (idempotent, safe to re-run):
+
+   ```bash
+   node scripts/seed-staging.mjs
+   ```
+
+   It reads `.env.staging.local` — deliberately a **different file** from
+   `.env.local`, so the seeder can never be pointed at production by picking up
+   the wrong env. It also refuses to run if the target project ref matches
+   production's. `scripts/seed-facility-demo.mjs` and
+   `scripts/seed-staging-queries.mjs` add module-specific fixtures.
+
+Seed data uses reserved-fake addresses (`@example.com`) and obviously fake phone
+numbers, so even a bug that triggers a live send against it reaches nobody real.
+
+### What this means for verification
+
+"Tested locally" means **tested against staging, through the browser**. Driving
+the real UI on staging is the verification the checklists below ask for. A
+hand-rolled `fetch()` or `curl` against an API route is not a substitute — see
+"Critical Rules → NEVER" for why that shortcut once emailed 20 real customers.
+
+Staging is exactly what makes clicking through freely safe. Use it.
+
 ## Module Map
 
 | Menu | Route prefix | Purpose |
@@ -317,7 +369,7 @@ GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
 
 - [ ] `npm run lint` passes
 - [ ] `npm run build` succeeds
-- [ ] Manually tested the full user flow locally
+- [ ] Manually tested the full user flow **against staging, in a browser** — with the amber STAGING banner visible on screen (see "Staging" above)
 - [ ] No `console.log` debug statements left behind
 - [ ] No commented-out code
 - [ ] No secrets in the diff (`git diff` and look)
@@ -327,7 +379,7 @@ GMAIL_PUBSUB_AUDIENCE / GMAIL_PUBSUB_SA_EMAIL
 
 - [ ] PR description explains why, not just what
 - [ ] Migration rollback noted (if applicable)
-- [ ] Tested on staging (for anything touching auth, payments, or data)
+- [ ] Tested on staging (for anything touching auth, payments, or data) — see "Staging" above for how
 - [ ] Reviewed by at least one other person (once team is in place)
 
 ---
@@ -402,7 +454,9 @@ Steps to verify the change works.
 (If schema changes or destructive operations)
 
 ## Screenshots / screen recordings
-(For UI changes)
+(For UI changes. Capture them against staging with the amber STAGING banner
+visible in frame — that is the reviewer's proof of which database the change
+was exercised against.)
 ```
 
 Keep PRs small. If it's bigger than ~400 lines of diff, consider splitting.
