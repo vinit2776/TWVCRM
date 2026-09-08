@@ -289,6 +289,19 @@ export function canRecordPayments(role: string | null | undefined): boolean {
   return !!role && (PAYMENT_RECORDING_ROLES as readonly string[]).includes(role);
 }
 
+// Roles allowed to mark a booking as a "substitute allocation" — i.e. attribute
+// a booking's hour-based quota consumption to a different contract_facilities
+// row than the one auto-matched by room name (see bookings/route.ts and
+// maybePostPooledUsageCharge in bookings/[id]/route.ts). This directly moves
+// money against a customer's billed quota, so it's kept to the roles who
+// actually run day-to-day bookings and are accountable for them — not every
+// role that can create a booking at all.
+export const BOOKING_FACILITY_OVERRIDE_ROLES = ["admin", "manager", "floor_manager"] as const;
+
+export function canOverrideBookingFacility(role: string | null | undefined): boolean {
+  return !!role && (BOOKING_FACILITY_OVERRIDE_ROLES as readonly string[]).includes(role);
+}
+
 export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {

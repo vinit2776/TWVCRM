@@ -421,6 +421,12 @@ export const createBookingSchema = z.object({
   num_attendees: z.number().int().positive().optional(),
   // Number of day-pass seats — for daily-priced spaces; quantity × day_rate = total
   num_seats: z.number().int().min(1).optional(),
+  // Substitute allocation: attribute this booking's hour-based quota to a
+  // different contract_facilities row than the one auto-matched by room
+  // name — e.g. a cabin standing in for an occupied conference room. See
+  // migration 00553. Gated server-side to BOOKING_FACILITY_OVERRIDE_ROLES.
+  contract_facility_id_override: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  facility_override_reason: z.string().trim().max(500).optional().or(z.literal("")).transform(v => v || undefined),
 }).refine(data => {
   if (data.customer_type === "contract_holder" && !data.contract_id) return false;
   return true;
@@ -432,7 +438,11 @@ export const createBookingSchema = z.object({
 .refine(data => {
   if (data.customer_type === "guest" && !data.contract_id) return false;
   return true;
-}, { message: "Contract ID required for guest bookings", path: ["contract_id"] });
+}, { message: "Contract ID required for guest bookings", path: ["contract_id"] })
+.refine(data => {
+  if (data.contract_facility_id_override && !data.facility_override_reason) return false;
+  return true;
+}, { message: "A reason is required when overriding the facility quota", path: ["facility_override_reason"] });
 
 export type CreateBookingInput = z.input<typeof createBookingSchema>;
 

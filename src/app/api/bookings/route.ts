@@ -4,7 +4,7 @@ import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
-import { isContractOperational } from "@/lib/constants";
+import { isContractOperational, canOverrideBookingFacility } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 30;
@@ -106,6 +106,7 @@ export async function GET(request: NextRequest) {
   const dateTo = searchParams.get("date_to");
   const bookingDate = searchParams.get("booking_date");
   const search = searchParams.get("search");
+  const facilityResolution = searchParams.get("facility_resolution");
 
   const includeHistory = searchParams.get("include_history") === "true";
   const offset = (page - 1) * limit;
@@ -114,7 +115,7 @@ export async function GET(request: NextRequest) {
   // "All Bookings" history section). The dashboard view fetches limit=200
   // with date_from=today and never paginates — skipping the count saves a
   // full table scan on every page load.
-  const needsCount = includeHistory || page > 1 || !!status || !!customerType || !!dateFrom || !!dateTo || !!search;
+  const needsCount = includeHistory || page > 1 || !!status || !!customerType || !!dateFrom || !!dateTo || !!search || !!facilityResolution;
 
   // Explicit column whitelist — `select("*")` was pulling 50+ booking columns
   // (legacy printer_*, payment tokens, refund metadata, original_*, etc.) on
@@ -131,6 +132,7 @@ export async function GET(request: NextRequest) {
     "payment_status", "payment_mode",
     "status", "check_in_at", "check_out_at",
     "no_show_detected_at", "refund_status",
+    "facility_resolution", "contract_facility_id_override", "facility_override_reason",
     "created_at",
   ].join(", ");
 
@@ -157,6 +159,7 @@ export async function GET(request: NextRequest) {
   if (contractId) query = query.eq("contract_id", contractId);
   if (leadId) query = query.eq("lead_id", leadId);
   if (bookingDate) query = query.eq("booking_date", bookingDate);
+  if (facilityResolution) query = query.eq("facility_resolution", facilityResolution);
   if (dateFrom) query = query.gte("booking_date", dateFrom);
   if (dateTo) query = query.lte("booking_date", dateTo);
   if (search?.trim()) {
@@ -211,6 +214,13 @@ export async function POST(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
   if (spaceErr || !space) return NextResponse.json({ error: "Space not found" }, { status: 404 });
   if (!space.is_active) return NextResponse.json({ error: "Space is not active" }, { status: 400 });
+
+  if (input.contract_facility_id_override && !canOverrideBookingFacility(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Your role can't mark a booking as a substitute allocation" },
+      { status: 403 }
+    );
+  }
 
   // 2. Availability check
   const dayOfWeek = DAYS_OF_WEEK[new Date(input.booking_date + "T00:00:00").getDay()];
@@ -454,6 +464,7 @@ export async function POST(request: NextRequest) {
   let leadId: string | undefined;
   let usageChargeId: string | undefined;
   let paymentStatus = "pending";
+  let facilityResolution: "auto_matched" | "override" | "unresolved" | null = null;
 
   if (input.customer_type === "contract_holder" || input.customer_type === "guest") {
     // Fetch contract
@@ -515,7 +526,32 @@ export async function POST(request: NextRequest) {
       free_quota: number; cost_per_unit: number;
     } | null = null;
 
-    if (!isDaily) {
+    if (!isDaily && input.contract_facility_id_override) {
+      // Substitute allocation: staff explicitly chose which quota this
+      // booking counts against (e.g. cabin standing in for the occupied
+      // conference room) — skip name-matching entirely.
+      const { data: overrideFacility } = await supabase
+        .from("contract_facilities")
+        .select("id, name, unit, free_quota, cost_per_unit, contract_id")
+        .eq("id", input.contract_facility_id_override)
+        .single();
+
+      if (!overrideFacility || overrideFacility.contract_id !== contract.id) {
+        return NextResponse.json(
+          { error: "Selected facility does not belong to this contract" },
+          { status: 400 }
+        );
+      }
+      if (!HOUR_UNITS.includes(overrideFacility.unit.toLowerCase())) {
+        return NextResponse.json(
+          { error: "Selected facility isn't hour-based — substitute allocation only applies to hourly quotas" },
+          { status: 400 }
+        );
+      }
+
+      contractFacilityForQuota = overrideFacility;
+      facilityResolution = "override";
+    } else if (!isDaily) {
       const { data: contractFacilities } = await supabase
         .from("contract_facilities")
         .select("id, name, unit, free_quota, cost_per_unit")
@@ -525,15 +561,24 @@ export async function POST(request: NextRequest) {
       if (contractFacilities && contractFacilities.length > 0) {
         if (contractFacilities.length === 1) {
           contractFacilityForQuota = contractFacilities[0];
+          facilityResolution = "auto_matched";
         } else {
-          // Multiple hour-based facilities — name-match against the space being booked
+          // Multiple hour-based facilities — name-match against the space being booked.
+          // No fallback to "first row" when nothing matches: guessing which quota to
+          // draw against can silently drain the wrong one. Leave it unresolved instead
+          // and flag it for Accounts to sort out (see facility_resolution column).
           const spaceLower = space.name.toLowerCase();
-          contractFacilityForQuota =
-            contractFacilities.find(
-              (f: { name: string }) =>
-                spaceLower.includes(f.name.toLowerCase()) ||
-                f.name.toLowerCase().includes(spaceLower)
-            ) || contractFacilities[0]; // fallback to first
+          const matched = contractFacilities.find(
+            (f: { name: string }) =>
+              spaceLower.includes(f.name.toLowerCase()) ||
+              f.name.toLowerCase().includes(spaceLower)
+          );
+          if (matched) {
+            contractFacilityForQuota = matched;
+            facilityResolution = "auto_matched";
+          } else {
+            facilityResolution = "unresolved";
+          }
         }
       }
     }
@@ -700,6 +745,9 @@ export async function POST(request: NextRequest) {
       loi_number: input.loi_number || null,
       access_provided_by: input.access_provided_by || null,
       num_attendees: input.num_attendees ? Number(input.num_attendees) : null,
+      contract_facility_id_override: input.contract_facility_id_override || null,
+      facility_override_reason: input.contract_facility_id_override ? input.facility_override_reason : null,
+      facility_resolution: facilityResolution,
       created_by: dbUser.id,
     })
     .select("*")
@@ -835,6 +883,24 @@ export async function POST(request: NextRequest) {
     performedBy: dbUser.id,
     changes: { record: { old: null, new: booking } },
   });
+
+  // 9a. Separate, dedicated audit entry for substitute allocation — kept
+  // apart from the generic "create" entry above so Accounts can find every
+  // override with one query (entity_type=booking, action=booking_facility_override)
+  // instead of grepping through full booking-create diffs.
+  if (input.contract_facility_id_override) {
+    logAudit(supabase, {
+      entityType: "booking",
+      entityId: booking.id,
+      action: "booking_facility_override",
+      performedBy: dbUser.id,
+      changes: {
+        space: { old: null, new: space.name },
+        contract_facility_id: { old: null, new: input.contract_facility_id_override },
+        reason: { old: null, new: input.facility_override_reason },
+      },
+    });
+  }
 
   // 11. Settle past dues
   if (input.settle_charge_ids && Array.isArray(input.settle_charge_ids) && input.settle_charge_ids.length > 0) {

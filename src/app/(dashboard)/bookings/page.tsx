@@ -336,6 +336,16 @@ function BookingTable({
                             ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
                             : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
                         )}
+                        {b.facility_resolution === "unresolved" && (
+                          <span title="Multiple facility quotas on this contract, none matched the room booked — needs manual review to attribute the right quota">
+                            <AlertTriangle className="h-3 w-3 text-amber-500" />
+                          </span>
+                        )}
+                        {b.facility_resolution === "override" && (
+                          <span title={`Substitute allocation${b.facility_override_reason ? `: ${b.facility_override_reason}` : ""}`}>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-purple-50 text-purple-700 border-purple-200">Substitute</Badge>
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -830,6 +840,16 @@ export default function BookingsPage() {
                                   Array.isArray(b.feedback) && b.feedback.length > 0
                                     ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
                                     : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                                )}
+                                {b.facility_resolution === "unresolved" && (
+                                  <span title="Multiple facility quotas on this contract, none matched the room booked — needs manual review to attribute the right quota">
+                                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                                  </span>
+                                )}
+                                {b.facility_resolution === "override" && (
+                                  <span title={`Substitute allocation${b.facility_override_reason ? `: ${b.facility_override_reason}` : ""}`}>
+                                    <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-purple-50 text-purple-700 border-purple-200">Substitute</Badge>
+                                  </span>
                                 )}
                               </div>
                             </td>
