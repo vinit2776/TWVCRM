@@ -40,7 +40,7 @@ import {
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
-  REPORTED_VIA_LABEL, formatDuration, parseDuration, timeAgo, timeUntil, nextStatusOptions,
+  REPORTED_VIA_LABEL, formatDuration, parseDuration, MAX_TIME_LOG_MINUTES, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
   STATUS_ACTION_PRIORITY, getTatStatus, SCOPE_LABEL,
 } from "@/lib/facility-ui";
@@ -228,6 +228,10 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     const minutes = parseDuration(timeInput);
     if (!minutes) {
       setTimeInputError("Enter a duration like 45m, 1h 30m, or 2d");
+      return;
+    }
+    if (minutes > MAX_TIME_LOG_MINUTES) {
+      setTimeInputError(`That's over ${MAX_TIME_LOG_MINUTES / (24 * 60)} days — log it as separate entries.`);
       return;
     }
     setTimeInputError("");

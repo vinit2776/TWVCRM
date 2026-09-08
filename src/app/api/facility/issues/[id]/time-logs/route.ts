@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { hasRole, FACILITY_ROLES } from "@/lib/facility";
+import { MAX_TIME_LOG_MINUTES } from "@/lib/facility-ui";
 
 /**
  * GET /api/facility/issues/[id]/time-logs
@@ -53,6 +54,15 @@ export async function POST(
   const minutes = Number(body.minutes);
   if (!Number.isFinite(minutes) || minutes <= 0) {
     return NextResponse.json({ error: "minutes must be a positive number" }, { status: 400 });
+  }
+  // Upper bound as well as lower: the column is a Postgres INTEGER, so a
+  // large enough value fails at the DB and surfaces as a raw 500, and even
+  // values that fit silently skew the Team KPI hours used for appraisals.
+  if (minutes > MAX_TIME_LOG_MINUTES) {
+    return NextResponse.json(
+      { error: `A single entry can't exceed ${MAX_TIME_LOG_MINUTES / (24 * 60)} days — split it across entries.` },
+      { status: 400 },
+    );
   }
 
   const { data: issue } = await supabase
