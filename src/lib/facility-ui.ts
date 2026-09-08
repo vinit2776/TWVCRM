@@ -126,6 +126,67 @@ export function formatDuration(minutes: number | null | undefined): string {
   return h === 0 ? `${d}d` : `${d}d ${h}h`;
 }
 
+const DURATION_UNIT_MINUTES: Record<string, number> = {
+  d: 1440, day: 1440, days: 1440,
+  h: 60, hr: 60, hrs: 60, hour: 60, hours: 60,
+  m: 1, min: 1, mins: 1, minute: 1, minutes: 1,
+};
+
+/**
+ * The most a single worklog entry may record: 30 days. Generous enough for
+ * "3d" and for someone catching up on a long job retroactively, while
+ * keeping a fat-fingered "1000d" out of the Team KPI report — that report
+ * feeds appraisal reviews, so a silently inflated total is worse than a
+ * rejected entry. Also keeps the value inside a Postgres INTEGER, which
+ * "9999999d" would otherwise overflow into a 500.
+ */
+export const MAX_TIME_LOG_MINUTES = 30 * 24 * 60;
+
+/**
+ * Parse a free-text duration into whole minutes. Accepts "1h 30m", "45m",
+ * "3d", "1.5h", "1hr 30min", "0:30" (H:MM), or a bare number (minutes).
+ * Returns null if nothing parseable, or the result is <= 0.
+ *
+ * Deliberately does NOT enforce MAX_TIME_LOG_MINUTES — "too long" is a
+ * different answer from "not a duration", and callers word the two errors
+ * differently. Check the bound separately.
+ */
+export function parseDuration(input: string): number | null {
+  const s = input.trim().toLowerCase();
+  // Reject negatives outright — the unit regex below doesn't capture a
+  // leading "-", so "-5m" would otherwise silently parse as +5.
+  if (!s || s.includes("-")) return null;
+
+  const hhmm = s.match(/^(\d+):([0-5]?\d)$/);
+  if (hhmm) {
+    const total = Number(hhmm[1]) * 60 + Number(hhmm[2]);
+    return total > 0 ? total : null;
+  }
+
+  const unitPattern = /(\d+(?:\.\d+)?)\s*(d|days?|h|hrs?|hours?|m|mins?|minutes?)\b/g;
+  let total = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = unitPattern.exec(s)) !== null) {
+    matched = true;
+    total += parseFloat(m[1]) * DURATION_UNIT_MINUTES[m[2]];
+  }
+  if (matched) {
+    // Round *before* the test: "0.4m" is 0 minutes once rounded, and the doc
+    // comment above promises null rather than 0 for that.
+    const rounded = Math.round(total);
+    return rounded > 0 ? rounded : null;
+  }
+
+  // Bare number, no unit — treat as minutes.
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Math.round(parseFloat(s));
+    return n > 0 ? n : null;
+  }
+
+  return null;
+}
+
 /** Preferred order for picking the single "primary" action button out of several valid next statuses. */
 export const STATUS_ACTION_PRIORITY: FacilityIssueStatus[] = ["in_progress", "resolved", "reopened"];
 

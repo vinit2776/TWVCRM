@@ -3414,6 +3414,14 @@ export interface FacilityIssueTatExtension {
   created_at: string;
 }
 
+export interface FacilityIssueTimeLog {
+  id: string;
+  minutes: number;
+  note?: string | null;
+  logged_at: string;
+  logger?: { id: string; full_name: string } | null;
+}
+
 export interface FacilityIssueEvent {
   id: string;
   issue_id: string;
@@ -3554,6 +3562,7 @@ export interface FacilityTechnicianKpi {
   reopen_rate_pct: number;
   avg_satisfaction: number | null;
   satisfaction_responses: number;
+  minutes_logged: number;
 }
 
 // ==========================================

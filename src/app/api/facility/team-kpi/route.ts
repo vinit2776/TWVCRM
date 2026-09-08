@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { formatDuration } from "@/lib/facility-ui";
 import type { FacilityTechnicianKpi } from "@/types";
 
 /**
@@ -49,6 +50,23 @@ export async function GET(request: NextRequest) {
   const { data: issues, error: iErr } = await issuesQ;
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 });
 
+  // Time logged is its own timeline — filtered by when the work was logged,
+  // not by when the underlying ticket was created, so a task from last month
+  // still counts hours logged against it this week. A failure here (e.g. the
+  // table's migration hasn't landed on this environment yet) shouldn't take
+  // down the rest of an otherwise-working report — degrade to 0 instead.
+  const { data: timeLogRows, error: tlErr } = await supabase
+    .from("facility_issue_time_logs")
+    .select("logged_by, minutes")
+    .gte("logged_at", dateFrom)
+    .lte("logged_at", dateTo);
+  if (tlErr) console.error("[team-kpi] time-logs query failed:", tlErr.message);
+
+  const minutesByTech = new Map<string, number>();
+  for (const r of timeLogRows ?? []) {
+    minutesByTech.set(r.logged_by as string, (minutesByTech.get(r.logged_by as string) ?? 0) + (r.minutes as number));
+  }
+
   type IssueRow = {
     id: string; status: string; assigned_to: string | null;
     acknowledged_at: string | null; resolved_at: string | null; reported_at: string;
@@ -64,8 +82,10 @@ export async function GET(request: NextRequest) {
     byTech.set(i.assigned_to, arr);
   }
 
-  // 2) Fetch only the users who showed up as an assignee above.
-  const assigneeIds = [...byTech.keys()];
+  // 2) Fetch only the users who showed up as an assignee above, plus anyone
+  // who logged time in range but has no in-window assigned tickets (e.g. all
+  // their assigned tickets predate dateFrom, but they logged hours this week).
+  const assigneeIds = [...new Set([...byTech.keys(), ...minutesByTech.keys()])];
   const { data: techs, error: tErr } = assigneeIds.length === 0
     ? { data: [] as { id: string; full_name: string; role: string; is_active: boolean }[], error: null }
     : await supabase
@@ -113,6 +133,7 @@ export async function GET(request: NextRequest) {
       reopen_rate_pct: reopenPct,
       avg_satisfaction: avgSat,
       satisfaction_responses: sats.length,
+      minutes_logged: minutesByTech.get(t.id) ?? 0,
     };
   });
 
@@ -121,6 +142,7 @@ export async function GET(request: NextRequest) {
     const header = [
       "Technician", "Assigned", "Resolved", "Avg Ack (min)", "Avg Resolution (min)",
       "SLA Compliance %", "Reopen Rate %", "Avg Satisfaction", "Satisfaction Responses",
+      "Hours Logged",
     ].join(",");
     const lines = rows.map((r) =>
       [
@@ -128,6 +150,7 @@ export async function GET(request: NextRequest) {
         r.assigned, r.resolved, r.avg_ack_minutes, r.avg_resolution_minutes,
         r.sla_compliance_pct, r.reopen_rate_pct,
         r.avg_satisfaction ?? "", r.satisfaction_responses,
+        `"${formatDuration(r.minutes_logged)}"`,
       ].join(",")
     );
     const csv = [header, ...lines].join("\n");

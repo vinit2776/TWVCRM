@@ -40,7 +40,7 @@ import {
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import {
   PRIORITY_STYLES, STATUS_STYLES, ROOT_CAUSE_LIST, ROOT_CAUSE_LABEL,
-  REPORTED_VIA_LABEL, formatDuration, timeAgo, timeUntil, nextStatusOptions,
+  REPORTED_VIA_LABEL, formatDuration, parseDuration, MAX_TIME_LOG_MINUTES, timeAgo, timeUntil, nextStatusOptions,
   TAT_REASON_LABEL, TAT_REASON_LIST_EXEMPT, TAT_REASON_LIST_CONTROLLABLE, kpiPointsStyle,
   STATUS_ACTION_PRIORITY, getTatStatus, SCOPE_LABEL,
 } from "@/lib/facility-ui";
@@ -49,6 +49,7 @@ import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
 import { MentionTextarea, type MentionUser } from "@/components/facility/mention-textarea";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
+  FacilityIssueTimeLog,
 } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -177,6 +178,13 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   // the hint never flashes on for a user who already dismissed it.
   const [extendHintDismissed, setExtendHintDismissed] = useState(true);
   const assetFetchedRef = useRef<string | null>(null);
+  const [timeLogs, setTimeLogs] = useState<FacilityIssueTimeLog[]>([]);
+  const [timeLogTotal, setTimeLogTotal] = useState(0);
+  const [logTimeOpen, setLogTimeOpen] = useState(false);
+  const [timeInput, setTimeInput] = useState("");
+  const [timeNote, setTimeNote] = useState("");
+  const [timeInputError, setTimeInputError] = useState("");
+  const [loggingTime, setLoggingTime] = useState(false);
 
   useEffect(() => {
     setExtendHintDismissed(localStorage.getItem("facility_extend_hint_dismissed") === "1");
@@ -255,11 +263,52 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     if (res.ok) setExtensions(json.data ?? []);
   };
 
+  const fetchTimeLogs = async () => {
+    const res = await fetch(`/api/facility/issues/${id}/time-logs`);
+    const json = await res.json();
+    if (res.ok) {
+      setTimeLogs(json.data ?? []);
+      setTimeLogTotal(json.total_minutes ?? 0);
+    }
+  };
+
+  const submitTimeLog = async () => {
+    const minutes = parseDuration(timeInput);
+    if (!minutes) {
+      setTimeInputError("Enter a duration like 45m, 1h 30m, or 2d");
+      return;
+    }
+    if (minutes > MAX_TIME_LOG_MINUTES) {
+      setTimeInputError(`That's over ${MAX_TIME_LOG_MINUTES / (24 * 60)} days — log it as separate entries.`);
+      return;
+    }
+    setTimeInputError("");
+    setLoggingTime(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${id}/time-logs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutes, note: timeNote.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to log time");
+      setLogTimeOpen(false);
+      setTimeInput("");
+      setTimeNote("");
+      await fetchTimeLogs();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to log time");
+    } finally {
+      setLoggingTime(false);
+    }
+  };
+
   useEffect(() => {
     fetchIssue();
     fetchCollaborators();
     fetchNudges();
     fetchExtensions();
+    fetchTimeLogs();
     fetch("/api/me")
       .then((r) => r.json())
       .then((j) => setCurrentUser(j ?? null))
@@ -931,6 +980,41 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             )}
           </section>
 
+          {/* Time spent */}
+          <section className="rounded-lg border bg-card p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Time spent</div>
+              {canAct && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setTimeInput(""); setTimeNote(""); setTimeInputError(""); setLogTimeOpen(true); }}
+                >
+                  <Clock className="h-3.5 w-3.5 mr-1" /> Log time
+                </Button>
+              )}
+            </div>
+            <div className="text-lg font-semibold">
+              {formatDuration(timeLogTotal)}
+              <span className="text-xs text-muted-foreground font-normal ml-1.5">total logged</span>
+            </div>
+            {timeLogs.length > 0 && (
+              <div className="divide-y">
+                {timeLogs.map((t) => (
+                  <div key={t.id} className="flex items-start justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      {t.note && <p className="text-sm truncate">{t.note}</p>}
+                      <p className="text-xs text-muted-foreground">
+                        {t.logger?.full_name ?? "—"} · {timeAgo(t.logged_at)}
+                      </p>
+                    </div>
+                    <span className="text-sm font-medium whitespace-nowrap">{formatDuration(t.minutes)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* Photos */}
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="flex items-center justify-between">
@@ -1380,6 +1464,46 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             <Button onClick={submitExtend} disabled={extending || !extendReason || !extendExplanation.trim() || !extendHours}>
               {extending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Extend
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ───── Log time dialog ─────────────────────────────────────────────── */}
+      <Dialog open={logTimeOpen} onOpenChange={setLogTimeOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Log time on {issue.issue_number}</DialogTitle>
+            <DialogDescription>How long did this take?</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Time spent</Label>
+              <Input
+                value={timeInput}
+                onChange={(e) => { setTimeInput(e.target.value); setTimeInputError(""); }}
+                placeholder="e.g. 45m, 1h 30m, 2d"
+                autoFocus
+                className="mt-1"
+              />
+              {timeInputError && <p className="text-xs text-destructive mt-1">{timeInputError}</p>}
+            </div>
+            <div>
+              <Label className="text-xs">Note (optional)</Label>
+              <Textarea
+                value={timeNote}
+                onChange={(e) => setTimeNote(e.target.value)}
+                placeholder="What did you work on?"
+                rows={2}
+                className="mt-1"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setLogTimeOpen(false)} disabled={loggingTime}>Cancel</Button>
+            <Button onClick={submitTimeLog} disabled={loggingTime}>
+              {loggingTime && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
