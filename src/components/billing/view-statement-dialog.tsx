@@ -122,6 +122,11 @@ interface Statement {
   voided_at?: string | null;
   /** Set when this draft was created by voiding an earlier statement. */
   voided_statement_id?: string | null;
+  /** Usage only. Set when this statement is a SUPPLEMENT — a second,
+   *  smaller statement topping up an already-sent/paid original for the
+   *  same contract+period (see generateUsageStatements in billing.ts). */
+  supplements_statement_id?: string | null;
+  supplements?: { statement_number: string } | null;
   /** Hold — blocks send/GST-issuance only; held_at set = currently on hold. */
   held_at?: string | null;
   hold_reason?: string | null;
@@ -800,6 +805,16 @@ export function ViewStatementDialog({
           </div>
         ) : statement ? (
           <div className="space-y-5">
+            {/* Supplemental cross-reference — this statement tops up an
+                already-sent/paid original for the same contract+period. The
+                original itself is never reopened or edited; this banner is
+                the only place that relationship surfaces on this view. */}
+            {statement.supplements_statement_id && (
+              <div className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-900">
+                🔗 Supplements <span className="font-mono font-semibold">{statement.supplements?.statement_number ?? statement.supplements_statement_id}</span> — that original statement was already billed and is untouched by this one.
+              </div>
+            )}
+
             {/* Universal handoff lifecycle (visible on every statement,
                 regardless of tally_handoff_v2 state — the panel reads from
                 /api/accounting/inbox?id=… and gracefully degrades). */}
