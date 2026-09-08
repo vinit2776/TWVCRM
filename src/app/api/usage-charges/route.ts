@@ -33,7 +33,7 @@ interface NormalizedRow {
   created_at: string;
   /** Which billing cycle this row's charge_date falls into, and whether that
    *  cycle has already been picked up by a usage run. See billingCycleOf(). */
-  billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived";
+  billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   /** "August 2026" — the month this charge belongs to, for the "Bills in: …" tag. */
   billing_cycle_label: string;
 }
@@ -50,11 +50,21 @@ function lastDayOfMonth(year: number, month: number): string {
  * before that is stranded: no future run's single-month window will ever
  * reach it again unless someone notices it here.
  */
-function billingCycleOf(chargeDate: string, status: "pending" | "billed" | "waived"): { status: NormalizedRow["billing_cycle_status"]; label: string } {
+function billingCycleOf(
+  chargeDate: string,
+  status: "pending" | "billed" | "waived",
+  /** True when a covering (sent/paid) usage/combined statement already
+   *  exists for this exact contract+month — see the post-merge pass in GET
+   *  below, which is the only caller that ever passes true. A pending charge
+   *  in that state needs a SUPPLEMENTAL statement (generateUsageStatements
+   *  in billing.ts), not the ordinary next "Generate Drafts" run. */
+  hasCoveringStatement = false,
+): { status: NormalizedRow["billing_cycle_status"]; label: string } {
   const [y, m] = chargeDate.slice(0, 7).split("-").map(Number);
   const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "long", year: "numeric" });
   if (status === "billed") return { status: "billed", label };
   if (status === "waived") return { status: "waived", label };
+  if (hasCoveringStatement) return { status: "supplemental_needed", label };
 
   const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const currentMonth = nowIst.getUTCMonth() + 1;
@@ -64,6 +74,38 @@ function billingCycleOf(chargeDate: string, status: "pending" | "billed" | "waiv
   if (y === currentYear && m === currentMonth) return { status: "cycle_open", label };
   if (y === closed.year && m === closed.month) return { status: "ready", label };
   return { status: "overdue", label };
+}
+
+/**
+ * Contract+month pairs (as "contractId:YYYY-MM") that already have a
+ * covering usage/combined statement sent to the client, paid, or GST-issued
+ * — same "wasSentOrPaid" test generateUsageStatements uses to decide
+ * alreadySent vs supersedable. A pending charge landing in one of these
+ * needs a supplemental statement, not the ordinary next-run pickup.
+ */
+async function fetchCoveringPeriods(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  contractIds: string[],
+): Promise<Set<string>> {
+  const covering = new Set<string>();
+  if (contractIds.length === 0) return covering;
+
+  const { data } = await supabase
+    .from("billing_statements")
+    .select("contract_id, period_start, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
+    .in("contract_id", contractIds)
+    .in("statement_type", ["usage", "combined"])
+    .is("voided_at", null);
+
+  for (const s of (data ?? []) as Array<{
+    contract_id: string; period_start: string;
+    proforma_sent_at: string | null; gst_invoice_number: string | null;
+    billing_payments: { id: string }[];
+  }>) {
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    if (wasSentOrPaid) covering.add(`${s.contract_id}:${s.period_start.slice(0, 7)}`);
+  }
+  return covering;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,6 +280,23 @@ export async function GET(request: NextRequest) {
   const offset = (page - 1) * limit;
   const data = merged.slice(offset, offset + limit);
 
+  // Only the page actually being returned needs the covering-statement check
+  // — cheap even though it's a second round trip, since it's scoped to just
+  // this page's contracts.
+  const pendingContractIds = [...new Set(data.filter((r) => r.status === "pending" && r.contract_id).map((r) => r.contract_id as string))];
+  const coveringPeriods = await fetchCoveringPeriods(supabase, pendingContractIds);
+  if (coveringPeriods.size > 0) {
+    for (const row of data) {
+      if (row.status !== "pending" || !row.contract_id) continue;
+      const hasCovering = coveringPeriods.has(`${row.contract_id}:${row.charge_date.slice(0, 7)}`);
+      if (hasCovering) {
+        const cycle = billingCycleOf(row.charge_date, row.status, true);
+        row.billing_cycle_status = cycle.status;
+        row.billing_cycle_label = cycle.label;
+      }
+    }
+  }
+
   return NextResponse.json({
     data,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
@@ -332,24 +391,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
     }
 
-    // Check if a finalized/exported statement already exists for this contract+period
-    const { data: existingStatement } = await supabase
-      .from("billing_statements")
-      .select("id, status, statement_number")
-      .eq("contract_id", result.data.contract_id)
-      .gte("period_start", periodFirst)
-      .lte("period_start", periodLast)
-      .in("status", ["finalized", "exported"])
-      .maybeSingle();
-
-    if (existingStatement) {
-      const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
-      return NextResponse.json(
-        { error: `The ${monthLabel} bill (${existingStatement.statement_number}) is already finalized. Charges cannot be added to a finalized bill.` },
-        { status: 400 },
-      );
-    }
-
+    // A finalized/exported statement already covering this contract+period no
+    // longer blocks the charge outright — it saves normally (pending, unlinked)
+    // and the next "Generate Drafts" run picks it up as a SUPPLEMENTAL
+    // statement topping up the original, instead of it having nowhere to go.
+    // See generateUsageStatements in src/lib/billing.ts for the generation
+    // side of this. The accounting-period lock above is unaffected — that's
+    // a deliberate whole-month freeze, unrelated to this per-statement check.
     leadId = contract.lead_id;
     contractTaxPercentage = contract.tax_percentage != null ? Number(contract.tax_percentage) : null;
     contractNumber = contract.contract_number ?? null;

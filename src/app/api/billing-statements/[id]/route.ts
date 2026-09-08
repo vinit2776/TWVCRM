@@ -165,9 +165,24 @@ export async function GET(
     await logView(supabase, { entityType: "billing_statement", entityId: id, performedBy: dbUser.id });
   }
 
+  // supplements_statement_id -> statement_number: a plain follow-up query
+  // rather than a PostgREST embed, since billing_statements self-references
+  // via two FKs (this one and voided_statement_id) and the embed syntax
+  // can't disambiguate which relationship "billing_statements!..." means.
+  let supplementsOriginal: { statement_number: string } | null = null;
+  if (statement.supplements_statement_id) {
+    const { data: original } = await supabase
+      .from("billing_statements")
+      .select("statement_number")
+      .eq("id", statement.supplements_statement_id)
+      .maybeSingle();
+    supplementsOriginal = original ?? null;
+  }
+
   return NextResponse.json({
     data: {
       ...statement,
+      supplements: supplementsOriginal,
       usage_charges: usageCharges || [],
       facility_charges: facilityCharges,
       service_charges: serviceCharges,

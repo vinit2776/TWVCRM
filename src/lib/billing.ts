@@ -71,6 +71,14 @@ export interface PreviewItem {
    * statement (e.g., "TWV-BS-0070"). Used to surface the cutover to the operator.
    */
   supersedes?: string;
+  /**
+   * Usage only. If set, this generation would create a SUPPLEMENTAL statement
+   * topping up an already-sent/paid usage statement (e.g., "TWV-BS-0009") —
+   * new usage_charges/service_usage_records surfaced after the original went
+   * out. The original is never reopened; this is a second, smaller statement
+   * cross-referenced to it via supplements_statement_id.
+   */
+  supplements?: string;
 }
 
 export interface GenerateResult {
@@ -99,6 +107,13 @@ export interface GenerateResult {
   /** Contracts skipped because a covering statement was already SENT to the
    *  client (proforma_sent_at set) or paid or GST-issued — never replaced. */
   alreadySent: string[];
+  /** Usage only. Contract numbers for which a SUPPLEMENTAL statement was
+   *  created — new usage found after the covering statement was already
+   *  sent/paid. See PreviewItem.supplements and the generator's own
+   *  doc comment for the full picture (why this exists, and why it's
+   *  deliberately limited to ad-hoc charges + print/service usage, never
+   *  facility usage or bookings). */
+  supplemental: string[];
   /** Populated only in dryRun mode: what each contract WOULD be billed. */
   preview: PreviewItem[];
 }
@@ -702,7 +717,7 @@ export async function generateRentProformas(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], supplemental: [], preview: [],
   };
 
   // Fetch active contracts: include any contract that starts before/during the prepaid month
@@ -1227,6 +1242,18 @@ export async function generateRentProformas(
  * Statements are created as draft — admin reviews and sends via the billing page.
  * Carry-forward: charges already linked to a draft statement (billing_statement_id set)
  * are NOT picked up again. The old draft persists indefinitely until admin sends it.
+ *
+ * Supplemental statements: if a contract's covering statement for the period
+ * was already sent/paid, but NEW ad-hoc charges or print/service overage have
+ * since appeared (logged after the fact — see POST /api/usage-charges, which
+ * no longer blocks this), this generates a second SUPPLEMENTAL statement
+ * referencing the original via supplements_statement_id, instead of skipping
+ * the contract outright. The original is never reopened or edited. Deliberately
+ * limited to at most one live supplement per original (a second attempt is a
+ * no-op until the first is voided) and to ad-hoc charges + print/service usage
+ * only — facility_usage_records and bookings have no per-record "already
+ * billed" tracking, so re-fetching them for an already-covered contract would
+ * double-count whatever the original statement already included.
  */
 export async function generateUsageStatements(
   supabase: SupabaseClient,
@@ -1246,7 +1273,7 @@ export async function generateUsageStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], supplemental: [], preview: [],
   };
 
   // Fetch active contracts
@@ -1272,28 +1299,47 @@ export async function generateUsageStatements(
   const contractIds = contracts.map((c) => c.id as string);
 
   // Idempotency partition (same model as the rent generator):
-  //   alreadySent  → covering usage/combined statement has been dispatched/paid → SKIP
+  //   alreadySent  → covering usage/combined statement has been dispatched/paid
+  //                  → SKIP, unless new usage has since appeared, in which case
+  //                    generate a SUPPLEMENTAL statement instead (see below).
   //   supersedable → unsent covering combined/usage draft → VOID + replace fresh
   // Note: a covering statement for usage is type usage|combined with
   // period_start = first-of-current-month (the month whose usage we're billing).
+  //
+  // supplements_statement_id distinguishes an ORIGINAL covering statement from
+  // a statement that is ITSELF a supplement — a supplement never blocks or
+  // gets superseded by a later run; it only marks its original as already
+  // topped up, so a run doesn't stack a second automatic supplement on top.
   const { data: coveringStmts } = await supabase
     .from("billing_statements")
-    .select("id, contract_id, statement_number, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
+    .select("id, contract_id, statement_number, proforma_sent_at, gst_invoice_number, supplements_statement_id, billing_payments:billing_payments(id)")
     .in("contract_id", contractIds)
     .eq("period_start", firstOfMonth)
     .in("statement_type", ["usage", "combined"])
     .is("voided_at", null);
 
   const alreadySent = new Set<string>();
+  const alreadySentCovering = new Map<string, { id: string; statement_number: string }>();
   const supersedable = new Map<string, { id: string; statement_number: string }>();
+  const originalsWithLiveSupplement = new Set<string>();
   for (const s of (coveringStmts || []) as Array<{
     id: string; contract_id: string; statement_number: string;
     proforma_sent_at: string | null; gst_invoice_number: string | null;
+    supplements_statement_id: string | null;
     billing_payments: { id: string }[];
   }>) {
+    if (s.supplements_statement_id) {
+      // This row is itself a supplement, not an original covering statement.
+      originalsWithLiveSupplement.add(s.supplements_statement_id);
+      continue;
+    }
     const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
-    if (wasSentOrPaid) alreadySent.add(s.contract_id);
-    else if (!supersedable.has(s.contract_id)) supersedable.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+    if (wasSentOrPaid) {
+      alreadySent.add(s.contract_id);
+      if (!alreadySentCovering.has(s.contract_id)) alreadySentCovering.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+    } else if (!supersedable.has(s.contract_id)) {
+      supersedable.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+    }
   }
   for (const cid of alreadySent) supersedable.delete(cid);
 
@@ -1326,7 +1372,19 @@ export async function generateUsageStatements(
   }
 
   const billable = contractIds.filter((id) => !alreadySent.has(id));
-  if (billable.length === 0) return result;
+  // Contracts eligible for a SUPPLEMENTAL statement: already sent/paid, but
+  // don't already have a live (non-voided) supplement — see the "one
+  // automatic supplement per original" note above the main loop below.
+  const supplementable = [...alreadySent].filter(
+    (cid) => !originalsWithLiveSupplement.has(alreadySentCovering.get(cid)?.id ?? "")
+  );
+  // Everything usageRes/serviceRes needs to check — both freshly-billable
+  // contracts AND ones that might have new, still-unlinked usage worth
+  // supplementing. facilityRes/bookingsRes deliberately stay scoped to
+  // `billable` only — see the doc comment on generateUsageStatements for why
+  // supplements can't safely include facility usage or bookings.
+  const supplementCandidates = [...billable, ...supplementable];
+  if (supplementCandidates.length === 0) return result;
 
   // Pre-fetch usage data in batch. In dryRun mode (supersede pass was a no-op),
   // also include records still linked to a supersedable statement — those would
@@ -1349,33 +1407,48 @@ export async function generateUsageStatements(
     supabase
       .from("usage_charges")
       .select("id, contract_id, description, quantity, unit_price, total")
-      .in("contract_id", billable)
+      .in("contract_id", supplementCandidates)
       .or(usageOrFilter)
       .gte("charge_date", firstOfMonth)
       .lte("charge_date", lastOfMonth),
 
-    supabase
-      .from("facility_usage_records")
-      .select("contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
-      .in("contract_id", billable)
-      .eq("accounting_period_id", periodId ?? ""),
+    // Scoped to `billable` only (never supplementable contracts): this table
+    // has no billing_statement_id/is_billed link (see the earlier comment
+    // where it's fetched below), so there is no query-level way to tell
+    // "already on the original statement" apart from "new since then" — the
+    // whole period's rows always come back. Safe for a first-time contract;
+    // would double-count for one that's already been billed. Facility usage
+    // is therefore never supplemented in this version.
+    billable.length > 0
+      ? supabase
+          .from("facility_usage_records")
+          .select("contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
+          .in("contract_id", billable)
+          .eq("accounting_period_id", periodId ?? "")
+      : Promise.resolve({ data: [], error: null }),
 
     supabase
       .from("service_usage_records")
       .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed, service:service_catalog(name, printer_column)")
-      .in("contract_id", billable)
+      .in("contract_id", supplementCandidates)
       .eq("period_year", targetYear)
       .eq("period_month", targetMonth)
       .or(serviceOrFilter),
 
-    supabase
-      .from("bookings")
-      .select("id, booking_number, contract_id, space_id, booking_date, start_time, end_time, duration_hours, pricing_model, hourly_rate, total_amount, quantity, payment_status, status, space:spaces!bookings_space_id_fkey(name)")
-      .in("contract_id", billable)
-      .eq("customer_type", "contract_holder")
-      .in("status", ["confirmed", "checked_in", "checked_out"])
-      .gte("booking_date", firstOfMonth)
-      .lte("booking_date", lastOfMonth),
+    // Scoped to `billable` only, same reasoning as facility_usage_records
+    // above — no billing_statement_id filter is applied here, so it always
+    // returns every matching booking in the period; safe only for a
+    // contract that has no covering statement yet.
+    billable.length > 0
+      ? supabase
+          .from("bookings")
+          .select("id, booking_number, contract_id, space_id, booking_date, start_time, end_time, duration_hours, pricing_model, hourly_rate, total_amount, quantity, payment_status, status, space:spaces!bookings_space_id_fkey(name)")
+          .in("contract_id", billable)
+          .eq("customer_type", "contract_holder")
+          .in("status", ["confirmed", "checked_in", "checked_out"])
+          .gte("booking_date", firstOfMonth)
+          .lte("booking_date", lastOfMonth)
+      : Promise.resolve({ data: [], error: null }),
   ]);
 
   type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
@@ -1412,12 +1485,18 @@ export async function generateUsageStatements(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead           = contract.lead as any;
 
-    if (alreadySent.has(cid)) {
+    const toSupersede = supersedable.get(cid); // already voided above in LIVE mode
+    // Set only when this contract is already sent/paid for the period AND
+    // doesn't already have a live supplement — the one case where new usage
+    // still gets billed, as a second statement rather than a skip.
+    const toSupplement = alreadySent.has(cid) ? alreadySentCovering.get(cid) : undefined;
+    if (alreadySent.has(cid) && !toSupplement) {
+      // Already sent/paid, and already has a live supplement covering
+      // anything new — deliberately not stacking a second one automatically.
       result.alreadySent.push(contractNumber);
       result.skipped++;
       continue;
     }
-    const toSupersede = supersedable.get(cid); // already voided above in LIVE mode
 
     try {
       const usageCharges   = usageByContract.get(cid)    ?? [];
@@ -1456,8 +1535,11 @@ export async function generateUsageStatements(
 
       const totalUsage = adHocSubtotal + facilitySubtotal + serviceSubtotal + bookingSubtotal;
 
-      // Zero gate — skip if nothing chargeable
+      // Zero gate — skip if nothing chargeable. For a toSupplement contract
+      // this is the ordinary "nothing new since the original went out" case —
+      // report it the same way a never-billed contract's zero-usage month is.
       if (totalUsage <= 0 && usageCharges.length === 0 && facilityRecs.filter(f => Number(f.billable_quantity) > 0).length === 0 && serviceRecs.filter(s => Number(s.overage_quantity) > 0).length === 0) {
+        if (toSupplement) result.alreadySent.push(contractNumber);
         result.skipped++;
         continue;
       }
@@ -1485,8 +1567,9 @@ export async function generateUsageStatements(
           subtotal: totalUsage,
           tax_amount: taxAmount,
           total_amount: totalAmount,
-          note: `${cats || "usage"} · ${isInterstate ? "IGST" : "CGST+SGST"} · draft for review`,
+          note: `${cats || "usage"} · ${isInterstate ? "IGST" : "CGST+SGST"} · draft for review${toSupplement ? " · supplemental" : ""}`,
           supersedes: toSupersede?.statement_number,
+          supplements: toSupplement?.statement_number,
         });
         result.generated++;
         continue;
@@ -1572,6 +1655,7 @@ export async function generateUsageStatements(
           line_items:           lineItems,
           prepaid_month:        null,
           prepaid_year:         null,
+          supplements_statement_id: toSupplement?.id ?? null,
         })
         .select("id")
         .single();
@@ -1608,6 +1692,7 @@ export async function generateUsageStatements(
 
       result.generated++;
       result.statementIds.push(stmtId);
+      if (toSupplement) result.supplemental.push(contractNumber);
 
     } catch (err) {
       result.errors.push(`${contractNumber}: ${String(err)}`);

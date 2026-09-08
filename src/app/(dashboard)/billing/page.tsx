@@ -114,11 +114,12 @@ const USAGE_SOURCE_LABELS: Record<string, string> = {
 // and whether that cycle has already picked it up. See billingCycleOf() in
 // /api/usage-charges for how this is derived.
 const BILLING_CYCLE_TAG: Record<string, { text: string; className: string }> = {
-  cycle_open: { text: "cycle still open",      className: "bg-slate-50 text-slate-600 border-slate-200" },
-  ready:      { text: "ready",                 className: "bg-blue-50 text-blue-800 border-blue-200" },
-  overdue:    { text: "⚠ overdue, never billed", className: "bg-red-50 text-red-700 border-red-200" },
-  billed:     { text: "billed",                className: "bg-green-50 text-green-700 border-green-200" },
-  waived:     { text: "waived",                className: "bg-gray-50 text-gray-600 border-gray-200" },
+  cycle_open:          { text: "cycle still open",      className: "bg-slate-50 text-slate-600 border-slate-200" },
+  ready:               { text: "ready",                 className: "bg-blue-50 text-blue-800 border-blue-200" },
+  overdue:             { text: "⚠ overdue, never billed", className: "bg-red-50 text-red-700 border-red-200" },
+  billed:              { text: "billed",                className: "bg-green-50 text-green-700 border-green-200" },
+  waived:              { text: "waived",                className: "bg-gray-50 text-gray-600 border-gray-200" },
+  supplemental_needed: { text: "supplemental needed",   className: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
 // ── Types — billing ──────────────────────────────────────────────────────────
@@ -153,7 +154,7 @@ interface UsageCharge {
   // manual charge is always billable unless waived, which status already shows).
   source?: "manual" | "print" | "facility";
   billable?: boolean | null;
-  billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived";
+  billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   billing_cycle_label?: string;
 }
 

@@ -34,13 +34,14 @@ import { ProformaBillingCard } from "@/components/billing/proforma-billing-card"
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "supplemental", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
 const CATEGORY_TITLE: Record<UnbilledCategory, string> = {
   current_cycle: "Current cycle — ready to send",
   rent_gap: "Rent gap",
   renewal_drift: "Renewal drift",
   no_renewal: "No renewal on file",
   usage_gap: "Usage gap — captured but never billed",
+  supplemental: "Supplemental — already billed, new charges found",
 };
 const CATEGORY_BADGE_CLASS: Record<UnbilledCategory, string> = {
   current_cycle: "bg-blue-50 text-blue-900 border-blue-200",
@@ -48,6 +49,7 @@ const CATEGORY_BADGE_CLASS: Record<UnbilledCategory, string> = {
   renewal_drift: "bg-red-50 text-red-900 border-red-200",
   no_renewal: "bg-slate-100 text-slate-700 border-slate-300",
   usage_gap: "bg-amber-50 text-amber-900 border-amber-200",
+  supplemental: "bg-purple-50 text-purple-900 border-purple-200",
 };
 
 function monthLabel(year: number, month: number): string {
@@ -79,7 +81,7 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
   const [unbilledLoading, setUnbilledLoading] = useState(true);
   const [counts, setCounts] = useState<Record<UnbilledCategory, number>>({
-    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0,
+    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0, supplemental: 0,
   });
 
   const loadUnbilled = useCallback(async () => {
@@ -89,7 +91,7 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setUnbilledRows(json.data || []);
-      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0 });
+      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0, supplemental: 0 });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load unbilled queue");
     } finally {
@@ -98,6 +100,37 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
   }, [type]);
 
   useEffect(() => { loadUnbilled(); }, [loadUnbilled]);
+
+  // ── Generate supplemental (usage only) ──────────────────────────────────
+  // Usage drafts never auto-dispatch to a client (unlike rent's Run & Send),
+  // so this runs directly on click — no separate preview/confirm dialog,
+  // consistent with the low-stakes-until-Finalize nature of every usage draft.
+  const [generatingSupplementKey, setGeneratingSupplementKey] = useState<string | null>(null);
+  const generateSupplemental = async (row: UnbilledRow) => {
+    if (!row.supplementTarget) return;
+    setGeneratingSupplementKey(row.id);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: false, mode: "usage", contract_id: row.contractId, ...row.supplementTarget }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to generate supplemental statement"); return; }
+      const generated = json.usage_statements?.generated ?? 0;
+      if (generated > 0) {
+        toast.success(`Supplemental statement created — supplements ${row.supplementsStatementNumber}`);
+      } else {
+        toast.info("Nothing to generate — it may already exist");
+      }
+      await loadUnbilled();
+      if (onFinalized) await onFinalized();
+    } catch {
+      toast.error("Failed to generate supplemental statement");
+    } finally {
+      setGeneratingSupplementKey(null);
+    }
+  };
 
   // ── Billed (paginated) ───────────────────────────────────────────────────
   const [billedRows, setBilledRows] = useState<BilledStatement[]>([]);
@@ -216,6 +249,16 @@ export function UnbilledBilledTabs({ type, onFinalized, onViewStatement }: Props
                           <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
                             Open contract
                           </Link>
+                          {row.supplementTarget && (
+                            <button
+                              onClick={() => generateSupplemental(row)}
+                              disabled={generatingSupplementKey === row.id}
+                              className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
+                            >
+                              {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                              Generate supplemental
+                            </button>
+                          )}
                           {row.statementId && onViewStatement && (
                             <button
                               onClick={() => onViewStatement(row.statementId!)}

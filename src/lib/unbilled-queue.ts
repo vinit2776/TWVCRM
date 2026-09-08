@@ -29,10 +29,18 @@
  *                        otherwise silently skipped by every future run —
  *                        this is what lets the admin "include it in the next
  *                        available billing cycle" per the billing model.
+ *   6. supplemental   — usage-only: a contract already has a SENT/PAID usage
+ *                        statement for a month, but new ad-hoc charges or
+ *                        print/service overage have since appeared for that
+ *                        same month. Distinct from usage_gap (nothing billed
+ *                        at all yet) — here the month was billed correctly at
+ *                        the time, something just turned up afterward. See
+ *                        generateUsageStatements' supplemental-statement
+ *                        support in billing.ts.
  *
  * Categories 2-4 are rent-specific audits (rent coverage, renewal timing);
- * category 5 is the usage-specific equivalent. A type="rent" call never
- * populates usage_gap and a type="usage" call never populates 2-4.
+ * categories 5-6 are the usage-specific equivalents. A type="rent" call never
+ * populates usage_gap/supplemental and a type="usage" call never populates 2-4.
  *
  * Deliberately read-only: this module never writes anything. It surfaces
  * gaps for a person to act on, same philosophy as unbilledMonths() itself.
@@ -41,7 +49,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
 
-export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal" | "usage_gap";
+export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal" | "usage_gap" | "supplemental";
 export type UnbilledType = "rent" | "usage";
 
 export interface UnbilledRow {
@@ -59,6 +67,16 @@ export interface UnbilledRow {
   statementId?: string;
   /** Secondary text, e.g. "12 days late", "starts in 2 days". */
   detail?: string;
+  /**
+   * supplemental rows only. The month/year to pass to
+   * POST /api/billing/auto-generate (mode: "usage") to generate the
+   * supplemental statement — unlike rent's backfillTarget, this is the
+   * period itself, not a month offset (generateUsageStatements' target
+   * month IS the month being billed).
+   */
+  supplementTarget?: { month: number; year: number };
+  /** supplemental rows only — the original statement this would top up. */
+  supplementsStatementNumber?: string;
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -66,13 +84,14 @@ export interface UnbilledRow {
  *  sorted lexicographically ("September" < "August"). Stripped before return. */
 type InternalRow = UnbilledRow & { sortKey: string };
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "supplemental", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
 const STATUS_WORD: Record<UnbilledCategory, string> = {
   current_cycle: "current cycle",
   rent_gap: "gap",
   renewal_drift: "drift",
   no_renewal: "no renewal",
   usage_gap: "gap",
+  supplemental: "supplemental",
 };
 
 function monthLabel(month: number, year: number): string {
@@ -492,6 +511,103 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   return rows;
 }
 
+// ─── 6. Supplemental — already billed, new charges found ───────────────────
+
+async function getUsageSupplements(supabase: SupabaseClient): Promise<InternalRow[]> {
+  const [{ data: pendingCharges }, { data: pendingService }] = await Promise.all([
+    supabase.from("usage_charges").select("contract_id, charge_date, total").eq("status", "pending").is("billing_statement_id", null),
+    supabase.from("service_usage_records").select("contract_id, period_year, period_month, amount, overage_quantity").eq("is_billed", false).is("billing_statement_id", null).gt("overage_quantity", 0),
+  ]);
+  if ((pendingCharges?.length ?? 0) === 0 && (pendingService?.length ?? 0) === 0) return [];
+
+  const contractIds = [...new Set([
+    ...(pendingCharges ?? []).map((c) => c.contract_id as string),
+    ...(pendingService ?? []).map((s) => s.contract_id as string),
+  ])];
+  if (contractIds.length === 0) return [];
+
+  // Covering statements (sent/paid, non-voided, usage/combined) for those
+  // contracts, keyed by contract+month — same "wasSentOrPaid" test
+  // generateUsageStatements uses for its own alreadySent partition.
+  const { data: coveringStmts } = await supabase
+    .from("billing_statements")
+    .select("id, contract_id, statement_number, period_start, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
+    .in("contract_id", contractIds)
+    .in("statement_type", ["usage", "combined"])
+    .is("voided_at", null);
+
+  const coveringByKey = new Map<string, { id: string; statement_number: string }>();
+  for (const s of (coveringStmts ?? []) as Array<{
+    id: string; contract_id: string; statement_number: string; period_start: string;
+    proforma_sent_at: string | null; gst_invoice_number: string | null;
+    billing_payments: { id: string }[];
+  }>) {
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    if (!wasSentOrPaid) continue;
+    const key = `${s.contract_id}:${s.period_start.slice(0, 7)}`;
+    if (!coveringByKey.has(key)) coveringByKey.set(key, { id: s.id, statement_number: s.statement_number });
+  }
+  if (coveringByKey.size === 0) return [];
+
+  // A covering statement that already has a live (non-voided) supplement
+  // isn't actionable again here — generateUsageStatements only ever
+  // maintains one automatic supplement per original (see its doc comment).
+  const coveringIds = [...new Set([...coveringByKey.values()].map((c) => c.id))];
+  const { data: existingSupplements } = await supabase
+    .from("billing_statements")
+    .select("supplements_statement_id")
+    .in("supplements_statement_id", coveringIds)
+    .is("voided_at", null);
+  const alreadySupplemented = new Set((existingSupplements ?? []).map((s) => s.supplements_statement_id as string));
+
+  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string>; covering: { id: string; statement_number: string } }>();
+  const addToBucket = (contractId: string, monthKey: string, amount: number, source: string) => {
+    const key = `${contractId}:${monthKey}`;
+    const covering = coveringByKey.get(key);
+    if (!covering || alreadySupplemented.has(covering.id)) return;
+    const bucket = buckets.get(key) ?? { contractId, monthKey, amount: 0, sources: new Set<string>(), covering };
+    bucket.amount += amount;
+    bucket.sources.add(source);
+    buckets.set(key, bucket);
+  };
+  for (const c of (pendingCharges ?? []) as Array<{ contract_id: string; charge_date: string; total: number }>) {
+    addToBucket(c.contract_id, c.charge_date.slice(0, 7), Number(c.total || 0), "Ad-hoc charge");
+  }
+  for (const s of (pendingService ?? []) as Array<{ contract_id: string; period_year: number; period_month: number; amount: number }>) {
+    addToBucket(s.contract_id, `${s.period_year}-${String(s.period_month).padStart(2, "0")}`, Number(s.amount || 0), "Print usage");
+  }
+  if (buckets.size === 0) return [];
+
+  const bucketContractIds = [...new Set([...buckets.values()].map((b) => b.contractId))];
+  const { data: contracts } = await supabase
+    .from("contracts")
+    .select("id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
+    .in("id", bucketContractIds);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const contractById = new Map((contracts ?? []).map((c: any) => [c.id as string, c]));
+
+  const rows: InternalRow[] = [];
+  for (const bucket of buckets.values()) {
+    const contract = contractById.get(bucket.contractId);
+    if (!contract) continue;
+    const [year, month] = bucket.monthKey.split("-").map(Number);
+    rows.push({
+      id: `supplemental:${bucket.contractId}:${bucket.monthKey}`,
+      category: "supplemental",
+      contractId: bucket.contractId,
+      contractNumber: contract.contract_number,
+      customerName: customerNameOf(contract.lead),
+      periodLabel: periodLabel(month, year, "supplemental"),
+      amount: bucket.amount,
+      detail: `${[...bucket.sources].join(", ")} — supplements ${bucket.covering.statement_number}`,
+      sortKey: `${bucket.monthKey}-01`,
+      supplementTarget: { month, year },
+      supplementsStatementNumber: bucket.covering.statement_number,
+    });
+  }
+  return rows;
+}
+
 // ─── Combined ────────────────────────────────────────────────────────────────
 
 export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledType = "rent"): Promise<{
@@ -502,12 +618,13 @@ export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledT
   // rent coverage and renewal timing); usage_gap is the usage-specific
   // equivalent. Each call only runs the three queries relevant to its type
   // rather than five, four of them empty.
-  const [currentCycle, rentGaps, renewalDrift, noRenewal, usageGaps] = await Promise.all([
+  const [currentCycle, rentGaps, renewalDrift, noRenewal, usageGaps, supplements] = await Promise.all([
     getCurrentCycleReady(supabase, type),
     type === "rent" ? getRentGaps(supabase) : Promise.resolve([]),
     type === "rent" ? getRenewalDrift(supabase) : Promise.resolve([]),
     type === "rent" ? getNoRenewalOnFile(supabase) : Promise.resolve([]),
     type === "usage" ? getUsageGaps(supabase) : Promise.resolve([]),
+    type === "usage" ? getUsageSupplements(supabase) : Promise.resolve([]),
   ]);
 
   const byCategory: Record<UnbilledCategory, InternalRow[]> = {
@@ -516,6 +633,7 @@ export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledT
     renewal_drift: renewalDrift,
     no_renewal: noRenewal,
     usage_gap: usageGaps,
+    supplemental: supplements,
   };
 
   const rows = CATEGORY_ORDER.flatMap((cat) =>

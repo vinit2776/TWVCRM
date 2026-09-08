@@ -28,7 +28,7 @@ async function runGenerators(
   const mode: GenMode = opts.mode ?? "both";
   const empty = (err?: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: err ? [err] : [],
-    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], preview: [],
+    statementIds: [], noContact: [], notDelivered: [], cycleSkipped: [], superseded: [], alreadySent: [], supplemental: [], preview: [],
   });
 
   let rent: GenerateResult = empty();
