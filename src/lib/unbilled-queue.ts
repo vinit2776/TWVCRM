@@ -77,6 +77,21 @@ export interface UnbilledRow {
   supplementTarget?: { month: number; year: number };
   /** supplemental rows only — the original statement this would top up. */
   supplementsStatementNumber?: string;
+  /**
+   * Present only on rent_gap rows safe to bill directly from this list —
+   * a renewal_in_progress contract, for a gap month after ITS OWN end_date
+   * (the same rule contract-invoices-section.tsx's backfillableMonths uses).
+   * An ordinary active contract's gap never gets this: per that file's own
+   * reasoning, a gap inside a normal term may mean rent was collected
+   * outside the CRM, or a different bug — auto-offering to bill it there
+   * risks double-charging the customer or masking the real cause, so it's
+   * deliberately left to manual investigation instead.
+   *
+   * Carries the /api/billing/auto-generate TARGET month/year — one behind
+   * the prepaid month this gap actually owes, since a rent run always bills
+   * the month after the one it targets.
+   */
+  backfillTarget?: { month: number; year: number };
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -205,6 +220,15 @@ interface EligibleContract {
   end_date: string;
   created_at: string;
   lead_id: string | null;
+  billing_cycle: string | null;
+}
+
+/** Converts a PREPAID month (what's actually owed, e.g. September) into the
+ *  auto-generate API's TARGET month (September's proforma is raised by a run
+ *  whose target is August) — a rent run always bills the month after the one
+ *  it targets. Mirrors prepaidToApiTarget in contract-invoices-section.tsx. */
+function prepaidToApiTarget(m: BillingMonth): { month: number; year: number } {
+  return m.month === 1 ? { month: 12, year: m.year - 1 } : { month: m.month - 1, year: m.year };
 }
 
 /** Builds each contract's renewal chain (nearest-first) from an in-memory parent map — no per-contract query. */
@@ -229,7 +253,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // an audit of history, so expired/terminated contracts must be included.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, start_date, end_date, created_at, lead_id")
+    .select("id, contract_number, status, start_date, end_date, created_at, lead_id, billing_cycle")
     .in("status", ["active", "renewal_in_progress", "renewed", "expired", "terminated"]);
 
   if (!contracts || contracts.length === 0) return [];
@@ -281,7 +305,18 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       contractId: c.id,
       contractStatus: c.status,
     });
+    // A gap is safe to bill directly from this list only for a
+    // renewal_in_progress, monthly contract, and only for a month AFTER its
+    // own end_date — the exact case contract-invoices-section.tsx already
+    // trusts (see backfillTarget's own doc comment for why the rest aren't).
+    let endKey: number | null = null;
+    if (c.billing_cycle === "monthly" && c.status === "renewal_in_progress" && c.end_date) {
+      const [endY, endM] = c.end_date.split("-").map(Number);
+      if (endY && endM) endKey = endY * 12 + endM;
+    }
+
     for (const m of missing) {
+      const backfillable = endKey != null && (m.year * 12 + m.month) > endKey;
       rows.push({
         id: `rent_gap:${c.id}:${m.year}-${m.month}`,
         category: "rent_gap",
@@ -292,6 +327,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         amount: null,
         detail: "No rent statement of any kind",
         sortKey: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
+        ...(backfillable ? { backfillTarget: prepaidToApiTarget(m) } : {}),
       });
     }
   }
@@ -549,15 +585,18 @@ async function getUsageSupplements(supabase: SupabaseClient): Promise<InternalRo
   }
   if (coveringByKey.size === 0) return [];
 
-  // A covering statement that already has a live (non-voided) supplement
-  // isn't actionable again here — generateUsageStatements only ever
-  // maintains one automatic supplement per original (see its doc comment).
+  // A covering statement that already has a live supplement isn't
+  // actionable again here — generateUsageStatements only ever maintains one
+  // automatic supplement per original (see its doc comment). A discarded
+  // supplement keeps voided_at NULL (same gap 00432 fixed for the
+  // void/regenerate path), so it's excluded by status too, not voided_at alone.
   const coveringIds = [...new Set([...coveringByKey.values()].map((c) => c.id))];
   const { data: existingSupplements } = await supabase
     .from("billing_statements")
     .select("supplements_statement_id")
     .in("supplements_statement_id", coveringIds)
-    .is("voided_at", null);
+    .is("voided_at", null)
+    .neq("status", "discarded");
   const alreadySupplemented = new Set((existingSupplements ?? []).map((s) => s.supplements_statement_id as string));
 
   const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string>; covering: { id: string; statement_number: string } }>();

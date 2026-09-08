@@ -1316,7 +1316,12 @@ export async function generateUsageStatements(
     .in("contract_id", contractIds)
     .eq("period_start", firstOfMonth)
     .in("statement_type", ["usage", "combined"])
-    .is("voided_at", null);
+    .is("voided_at", null)
+    // A discarded draft keeps voided_at NULL (see 00432's own fix for the
+    // same gap on the void/regenerate path) — exclude it explicitly so a
+    // discarded supplement doesn't permanently block its original from ever
+    // getting a real one.
+    .neq("status", "discarded");
 
   const alreadySent = new Set<string>();
   const alreadySentCovering = new Map<string, { id: string; statement_number: string }>();
