@@ -450,8 +450,8 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
  *   - `draft → accepted` exists only for a draft that already has a signed
  *     agreement attached (e.g. uploaded off-band before Send/View/Accept was
  *     ever walked through) — the PATCH handler further restricts this one to
- *     admins and requires signed_document_id to already be set. It's not a
- *     general shortcut around the send/view steps.
+ *     admin/manager and requires signed_document_id to already be set. It's
+ *     not a general shortcut around the send/view steps.
  */
 export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
   draft:                 ["sent", "accepted", "terminated"],
