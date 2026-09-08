@@ -835,18 +835,18 @@ export default function BillingPage() {
           Three finance-centric buckets above the tab list so the screen
           tells finance "what owes me / what came in / what goes out"
           before forcing them to pick a sub-view.
-            • Pre-invoice — Proposals (awaiting deposit), Usage Charges (queued for next statement)
-            • Collections — Walk-in, Cash Handovers
-            • Invoicing   — GST Invoices, Statements
+            • Billing for usage  — Proposals (awaiting deposit), Usage Charges (queued for next statement)
+            • Collections        — Walk-in, Cash Handovers (button hidden for now — not useful yet;
+              the section and its tabs still work via deep link, see sectionForTab)
+            • Billing for rental — Rentals, Usage, GST Invoices, Retained Payments, Electricity
           Renamed from "Receivables" so it no longer collides with the
           accounting-true /accounting/receivables page (invoiced-but-unpaid
           billing statements). This bucket is pre-invoice work-in-progress.
       */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {([
-          { key: "receivables", label: "Pre-invoice", hint: "Proposals & charges awaiting invoicing" },
-          { key: "collections", label: "Collections", hint: "Cash that came in" },
-          { key: "invoicing",   label: "Invoicing",   hint: "Billing & statements" },
+          { key: "receivables", label: "Billing for usage", hint: "Proposals & charges awaiting invoicing" },
+          { key: "invoicing",   label: "Billing for rental", hint: "Billing & statements" },
         ] as const).map((s) => {
           const isActive = section === s.key;
           return (
