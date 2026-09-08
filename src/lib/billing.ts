@@ -581,6 +581,11 @@ function nextMonth(month: number, year: number): { month: number; year: number }
   return month === 12 ? { month: 1, year: year + 1 } : { month: month + 1, year };
 }
 
+/** Go back 1 month, wrapping year */
+function previousMonth(month: number, year: number): { month: number; year: number } {
+  return month === 1 ? { month: 12, year: year - 1 } : { month: month - 1, year };
+}
+
 /** Longest supported advance cycle (yearly), in months. */
 const MAX_BILLING_CYCLE_MONTHS = Math.max(...Object.values(BILLING_CYCLE_MONTHS));
 
@@ -1205,7 +1210,13 @@ export async function generateRentProformas(
 }
 
 /**
- * Generate DRAFT usage statements for the CURRENT (target) month.
+ * Generate DRAFT usage statements for the last FULLY-CLOSED month.
+ *
+ * Usage bills one level behind rent: rent is charged in advance for the
+ * upcoming month, usage is charged in arrears for the month that just ended.
+ * e.g. run in September, this bills August's usage — never the still-open
+ * current month, so a charge logged mid-month can't be billed before the
+ * month it belongs to has actually finished.
  *
  * Only created when chargeable usage exists:
  *   - Ad-hoc usage charges (status=pending, billing_statement_id IS NULL)
@@ -1222,8 +1233,9 @@ export async function generateUsageStatements(
   opts: GenerateOptions = {},
 ): Promise<GenerateResult> {
   const now = istNow();
-  const targetMonth = opts.month ?? now.getMonth() + 1;
-  const targetYear  = opts.year  ?? now.getFullYear();
+  const closedMonth = previousMonth(now.getMonth() + 1, now.getFullYear());
+  const targetMonth = opts.month ?? closedMonth.month;
+  const targetYear  = opts.year  ?? closedMonth.year;
 
   const daysInMonth  = new Date(targetYear, targetMonth, 0).getDate();
   const firstOfMonth = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
