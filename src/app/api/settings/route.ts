@@ -66,6 +66,7 @@ export async function PATCH(request: NextRequest) {
     "tally_sync_enabled",
     "facility_classifier_ui_enabled",
     "facility_category_autofill_enabled",
+    "leegality_enabled",
   ];
 
   const updates: { key: string; value: string }[] = [];

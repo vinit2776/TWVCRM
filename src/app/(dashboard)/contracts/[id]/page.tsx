@@ -97,6 +97,7 @@ import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import { QueryButton } from "@/components/queries/query-button";
+import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -125,6 +126,9 @@ export default function ContractDetailPage({
   const [cancelStampOpen, setCancelStampOpen] = useState(false);
   const [cancellingStamp, setCancellingStamp] = useState(false);
   const [stampError, setStampError] = useState<string | null>(null);
+  const [cancelSigningOpen, setCancelSigningOpen] = useState(false);
+  const [cancellingSigning, setCancellingSigning] = useState(false);
+  const [signCancelError, setSignCancelError] = useState<string | null>(null);
   // "generate" regenerates the agreement fresh (stamp-sign-seal); "existing"
   // overlays the stamp onto an already-uploaded signed document instead —
   // same preview dialog, different source PDF and commit endpoint.
@@ -178,6 +182,7 @@ export default function ContractDetailPage({
 
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  const { enabled: leegalityEnabled } = useLeegalityEnabled();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   // Ad-hoc invoices (proforma_invoices) attributed/attributable to this
@@ -911,6 +916,31 @@ export default function ContractDetailPage({
     setCheckingSigningStatus(false);
   };
 
+  const handleCancelSigning = async () => {
+    if (!contract) return;
+    setCancellingSigning(true);
+    setSignCancelError(null);
+    try {
+      const res = await fetch(`/api/contracts/${id}/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      if (res.ok) {
+        toast.success("E-signing request cancelled — the customer's signing link no longer works");
+        setCancelSigningOpen(false);
+        fetchContract(false);
+      } else {
+        const err = await res.json().catch(() => null);
+        setSignCancelError(err?.error || "Failed to cancel the e-signing request");
+      }
+    } catch (e) {
+      setSignCancelError(e instanceof Error ? e.message : "Failed to cancel the e-signing request");
+    } finally {
+      setCancellingSigning(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -979,7 +1009,11 @@ export default function ContractDetailPage({
           {/* Send for e-Signing — available on any pre-terminal status while signing hasn't started */}
           {!contract.leegality_document_id &&
             !["rejected", "terminated", "completed"].includes(contract.status) && (
-              <Button onClick={handleInitiateSigning} disabled={initiatingSigning}>
+              <Button
+                onClick={handleInitiateSigning}
+                disabled={initiatingSigning || !leegalityEnabled}
+                title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead."}
+              >
                 {initiatingSigning ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
@@ -2392,6 +2426,21 @@ export default function ContractDetailPage({
                   </Button>
                 )}
 
+                {/* Withdraws the request from Leegality outright — the customer's
+                    signing link stops working. Only offered while something is
+                    actually live to cancel. */}
+                {!["COMPLETED", "EXPIRED", "CANCELLED"].includes(contract.leegality_status || "") && userRole === "admin" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-destructive hover:text-destructive"
+                    onClick={() => { setSignCancelError(null); setCancelSigningOpen(true); }}
+                  >
+                    <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                    Cancel e-Signing Request
+                  </Button>
+                )}
+
                 {/* Re-initiate option if expired/cancelled */}
                 {(contract.leegality_status === "EXPIRED" || contract.leegality_status === "CANCELLED") && (
                   <Button
@@ -2399,7 +2448,8 @@ export default function ContractDetailPage({
                     variant="outline"
                     className="w-full"
                     onClick={handleInitiateSigning}
-                    disabled={initiatingSigning}
+                    disabled={initiatingSigning || !leegalityEnabled}
+                    title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing."}
                   >
                     {initiatingSigning ? (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -2853,6 +2903,40 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Cancel sign & seal"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelSigningOpen} onOpenChange={(open) => { setCancelSigningOpen(open); if (!open) setSignCancelError(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel e-signing request?</DialogTitle>
+            <DialogDescription>
+              This withdraws the request from Leegality for {contract.contract_number} —
+              the customer&apos;s signing link (already emailed to them) stops working
+              immediately, and any signature collected so far is discarded. Use company
+              stamp or upload a manually signed document to proceed afterward.
+            </DialogDescription>
+          </DialogHeader>
+          {signCancelError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {signCancelError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCancelSigningOpen(false); setSignCancelError(null); }}>
+              Keep it
+            </Button>
+            <Button variant="destructive" onClick={handleCancelSigning} disabled={cancellingSigning}>
+              {cancellingSigning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel e-signing request"
               )}
             </Button>
           </DialogFooter>

@@ -63,6 +63,7 @@ import { ContractMoratoriumSection } from "@/components/contracts/contract-morat
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { generateStampReference } from "@/lib/company-stamp";
@@ -205,6 +206,7 @@ function ContractOnboardingWizard() {
 
   const { user: currentUser } = useCurrentUser();
   const userRole = currentUser?.role ?? null;
+  const { enabled: leegalityEnabled } = useLeegalityEnabled();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12>(1);
 
@@ -2130,8 +2132,10 @@ function ContractOnboardingWizard() {
                           disabled={
                             signSending ||
                             !!fullContract.leegality_document_id ||
+                            !leegalityEnabled ||
                             ["rejected", "terminated", "completed"].includes(fullContract.status)
                           }
+                          title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead."}
                         >
                           {signSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           {fullContract.leegality_document_id ? "Already sent for e-Signing" : "Send for e-Signing"}
