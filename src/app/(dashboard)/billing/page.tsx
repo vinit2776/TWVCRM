@@ -122,6 +122,14 @@ const BILLING_CYCLE_TAG: Record<string, { text: string; className: string }> = {
   supplemental_needed: { text: "supplemental needed",   className: "bg-purple-50 text-purple-700 border-purple-200" },
 };
 
+/** Company name if set, else the contact's full name, else "—" — same
+ *  fallback order unbilled-queue.ts's customerNameOf uses, so a charge's
+ *  customer reads the same way here as it does in the Unbilled queue. */
+function customerNameOf(lead?: { first_name?: string; last_name?: string; company?: string } | null): string {
+  if (!lead) return "—";
+  return lead.company || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() || "—";
+}
+
 // ── Types — billing ──────────────────────────────────────────────────────────
 
 interface ContractFilter {
@@ -1117,6 +1125,7 @@ export default function BillingPage() {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="px-4 py-3 text-left font-medium">Description</th>
+                    <th className="px-4 py-3 text-left font-medium">Customer</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
                     <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Source</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Qty</th>
@@ -1134,6 +1143,7 @@ export default function BillingPage() {
                   {filteredCharges.map((charge) => (
                     <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
+                      <td className="px-4 py-3 max-w-[160px] truncate" title={customerNameOf(charge.lead)}>{customerNameOf(charge.lead)}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                         {/* Show both contract + booking when present (a posted-
                             to-bill booking has both). Each is clickable —
