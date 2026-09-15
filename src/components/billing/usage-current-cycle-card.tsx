@@ -77,18 +77,21 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
   const [waivingId, setWaivingId] = useState<string | null>(null);
   const [waiveReasonKey, setWaiveReasonKey] = useState<string | null>(null);
   const [waiveReasonText, setWaiveReasonText] = useState("");
+  const [waiveReasonError, setWaiveReasonError] = useState(false);
 
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [addDesc, setAddDesc] = useState("");
   const [addQty, setAddQty] = useState(1);
   const [addUnitPrice, setAddUnitPrice] = useState(0);
   const [savingCharge, setSavingCharge] = useState(false);
+  const [unsavedChargeWarning, setUnsavedChargeWarning] = useState(false);
 
   const [dialogStep, setDialogStep] = useState<"confirm" | "preview" | "sending" | "sent" | null>(null);
   const [previewTab, setPreviewTab] = useState<"email" | "invoice">("email");
   const [previewEmail, setPreviewEmail] = useState<PreviewEmail | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sendResultMsg, setSendResultMsg] = useState("");
+  const [sendNoContact, setSendNoContact] = useState(false);
   const [sent, setSent] = useState(false);
 
   const statementId = row.statementId!;
@@ -129,10 +132,12 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
   const startWaive = (chargeId: string) => {
     setWaiveReasonKey(chargeId);
     setWaiveReasonText("");
+    setWaiveReasonError(false);
   };
 
   const applyWaive = async (charge: UsageCharge, willWaive: boolean, reason?: string) => {
-    if (willWaive && !reason?.trim()) { toast.error("A reason is required to waive a charge"); return; }
+    if (willWaive && !reason?.trim()) { setWaiveReasonError(true); return; }
+    setWaiveReasonError(false);
     setWaivingId(charge.id);
     try {
       const res = await fetch(`/api/billing-statements/${statementId}/waive-charge`, {
@@ -175,6 +180,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
       await loadDetail();
       toast.success("Charge added");
       setShowAddCharge(false);
+      setUnsavedChargeWarning(false);
       setAddDesc(""); setAddQty(1); setAddUnitPrice(0);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to add charge");
@@ -184,11 +190,24 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
   };
 
   const openFinalizeDialog = async () => {
+    // Don't silently lose a half-typed charge — surface it instead of
+    // opening the send dialog underneath it.
+    if (showAddCharge) {
+      if (!expanded) setExpanded(true);
+      setUnsavedChargeWarning(true);
+      return;
+    }
     setDialogStep("confirm");
     setPreviewEmail(null);
     setPreviewTab("email");
     if (!expanded) setExpanded(true);
     if (!detail) await loadDetail();
+  };
+
+  const discardUnsavedCharge = () => {
+    setShowAddCharge(false);
+    setAddDesc(""); setAddQty(1); setAddUnitPrice(0);
+    setUnsavedChargeWarning(false);
   };
 
   const openPreview = async () => {
@@ -214,8 +233,13 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
   // statement is sent via send-proforma instead — same dispatchProforma()
   // under the hood, just skipping the (already-done) finalize step.
   const alreadyFinalized = detail?.status === "finalized";
+  // Every item waived (or nothing generated at all) — nothing left to bill.
+  // finalize-and-send/send-proforma would reject this server-side anyway;
+  // catching it here means the user sees why before they even try.
+  const nothingToBill = !!detail && detail.total_amount <= 0;
 
   const confirmFinalize = async () => {
+    if (nothingToBill) return;
     setDialogStep("sending");
     try {
       const endpoint = alreadyFinalized ? "send-proforma" : "finalize-and-send";
@@ -224,12 +248,20 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
       if (!res.ok) throw new Error(json.error || "Failed to send");
       const emailedTo = json.emailed_to ?? json.emailedTo;
       const noContact = json.no_contact ?? json.noContact;
+      setSendNoContact(!!noContact);
       setSendResultMsg(
         noContact
-          ? "Finalized — customer has no contact info on file, so nothing was sent."
+          ? "This customer has no email on file, so nothing went out. Add one on the contract, then use Send on this row to try again — it's already finalized, no need to redo the review."
           : `Sent to ${emailedTo || "customer"}.`,
       );
-      setSent(true);
+      // A no-contact finalize is still genuinely unsent (proforma_sent_at
+      // stays null) — keep the row interactive so Send is retryable here,
+      // rather than marking it done like a real send.
+      if (noContact) {
+        await loadDetail();
+      } else {
+        setSent(true);
+      }
       setDialogStep("sent");
       await onSent();
     } catch (e) {
@@ -316,19 +348,24 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
                       </div>
                     </div>
                     {waiveReasonKey === it.charge?.id && (
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <Input
-                          autoFocus
-                          placeholder="Reason for waiving (required)"
-                          value={waiveReasonText}
-                          onChange={(e) => setWaiveReasonText(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter" && it.charge) void applyWaive(it.charge, true, waiveReasonText); }}
-                          className="h-7 text-xs flex-1"
-                        />
-                        <Button size="sm" className="h-7 text-xs bg-red-600 hover:bg-red-700" onClick={() => it.charge && applyWaive(it.charge, true, waiveReasonText)} disabled={waivingId === it.charge?.id}>
-                          {waivingId === it.charge?.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm waive"}
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setWaiveReasonKey(null)}>Cancel</Button>
+                      <div>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <Input
+                            autoFocus
+                            placeholder="Reason for waiving (required)"
+                            value={waiveReasonText}
+                            onChange={(e) => { setWaiveReasonText(e.target.value); if (waiveReasonError) setWaiveReasonError(false); }}
+                            onKeyDown={(e) => { if (e.key === "Enter" && it.charge) void applyWaive(it.charge, true, waiveReasonText); }}
+                            className={`h-7 text-xs flex-1 ${waiveReasonError ? "border-red-400 bg-red-50 focus-visible:ring-red-400" : ""}`}
+                          />
+                          <Button size="sm" className="h-7 text-xs bg-red-600 hover:bg-red-700" onClick={() => it.charge && applyWaive(it.charge, true, waiveReasonText)} disabled={waivingId === it.charge?.id}>
+                            {waivingId === it.charge?.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm waive"}
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setWaiveReasonKey(null)}>Cancel</Button>
+                        </div>
+                        {waiveReasonError && (
+                          <p className="text-[11px] text-red-600 mt-1">⚠ Enter a reason before confirming — it shows up on the customer&rsquo;s statement history.</p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -338,7 +375,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
 
               {canBill && detail.status === "draft" && (
                 showAddCharge ? (
-                  <div className="rounded-md border border-teal-200 bg-teal-50/50 p-2.5 space-y-2 mb-2">
+                  <div className={`rounded-md border border-teal-200 bg-teal-50/50 p-2.5 space-y-2 mb-2 ${unsavedChargeWarning ? "ring-2 ring-amber-300" : ""}`}>
                     <Input placeholder="Description" value={addDesc} onChange={(e) => setAddDesc(e.target.value)} className="h-7 text-sm" />
                     <div className="flex items-center gap-2">
                       <Input type="number" min="1" className="h-7 w-16 text-sm" value={addQty} onChange={(e) => setAddQty(Math.max(1, Number(e.target.value)))} />
@@ -347,11 +384,23 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
                       <span className="text-sm font-semibold w-20 text-right">{formatCurrency(addQty * addUnitPrice)}</span>
                     </div>
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => setShowAddCharge(false)} disabled={savingCharge}>Cancel</Button>
+                      <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => { setShowAddCharge(false); setUnsavedChargeWarning(false); }} disabled={savingCharge}>Cancel</Button>
                       <Button size="sm" className="h-6 text-xs bg-teal-700 hover:bg-teal-800" onClick={saveCharge} disabled={savingCharge}>
                         {savingCharge ? <Loader2 className="h-3 w-3 animate-spin" /> : "Add"}
                       </Button>
                     </div>
+                    {unsavedChargeWarning && (
+                      <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 flex gap-2">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          You have an unsaved charge above —{" "}
+                          <button className="underline font-semibold" onClick={() => setUnsavedChargeWarning(false)}>finish adding it</button>
+                          {" "}or{" "}
+                          <button className="underline font-semibold" onClick={discardUnsavedCharge}>discard it</button>
+                          {" "}before sending, so it isn&rsquo;t lost.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <button className="flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900" onClick={() => setShowAddCharge(true)}>
@@ -389,25 +438,34 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
               </div>
               <div className="flex items-center justify-between border-t pt-2 text-sm">
                 <span className="font-semibold uppercase text-xs text-muted-foreground">Total</span>
-                <span className="font-mono font-bold">{formatCurrency(detail.total_amount)}</span>
+                <span className={`font-mono font-bold ${nothingToBill ? "text-red-600" : ""}`}>{formatCurrency(detail.total_amount)}</span>
               </div>
-              <button
-                onClick={openPreview}
-                className="w-full flex items-center justify-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 text-teal-800 text-xs font-semibold py-2 hover:bg-teal-100"
-              >
-                <Eye className="h-3.5 w-3.5" />Preview invoice &amp; email — exactly as the customer will receive it
-              </button>
-              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 flex gap-2">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>
-                  {alreadyFinalized
-                    ? "This statement is already finalized — sending emails the customer a payment link. This can’t be undone from here — void it from the statement view if needed."
-                    : "This creates a finalized statement and emails the customer a payment link. This can’t be undone from here — void it from the statement view if needed."}
-                </span>
-              </div>
+              {nothingToBill ? (
+                <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-800 flex gap-2">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span>Nothing left to bill — every item is waived. Un-waive at least one item, or skip this contract for this cycle.</span>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={openPreview}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 text-teal-800 text-xs font-semibold py-2 hover:bg-teal-100"
+                  >
+                    <Eye className="h-3.5 w-3.5" />Preview invoice &amp; email — exactly as the customer will receive it
+                  </button>
+                  <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 flex gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      {alreadyFinalized
+                        ? "This statement is already finalized — sending emails the customer a payment link. This can’t be undone from here — void it from the statement view if needed."
+                        : "This creates a finalized statement and emails the customer a payment link. This can’t be undone from here — void it from the statement view if needed."}
+                    </span>
+                  </div>
+                </>
+              )}
               <DialogFooter>
                 <Button variant="outline" onClick={closeDialog}>Cancel</Button>
-                <Button className="bg-teal-700 hover:bg-teal-800" onClick={confirmFinalize}>
+                <Button className="bg-teal-700 hover:bg-teal-800" onClick={confirmFinalize} disabled={nothingToBill} title={nothingToBill ? "Nothing to bill after waivers" : undefined}>
                   <Send className="h-4 w-4 mr-2" />Confirm &amp; Send
                 </Button>
               </DialogFooter>
@@ -452,7 +510,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDialogStep("confirm")}>← Back</Button>
-                <Button className="bg-teal-700 hover:bg-teal-800" onClick={confirmFinalize}>
+                <Button className="bg-teal-700 hover:bg-teal-800" onClick={confirmFinalize} disabled={nothingToBill}>
                   <Send className="h-4 w-4 mr-2" />Confirm &amp; Send
                 </Button>
               </DialogFooter>
@@ -469,8 +527,17 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
           {dialogStep === "sent" && (
             <>
               <div className="flex flex-col items-center text-center gap-2 py-4">
-                <div className="h-10 w-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-lg">✓</div>
-                <h3 className="text-sm font-bold">Sent</h3>
+                {sendNoContact ? (
+                  <>
+                    <div className="h-10 w-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-lg">!</div>
+                    <h3 className="text-sm font-bold">Finalized — not sent</h3>
+                  </>
+                ) : (
+                  <>
+                    <div className="h-10 w-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-lg">✓</div>
+                    <h3 className="text-sm font-bold">Sent</h3>
+                  </>
+                )}
                 <p className="text-xs text-muted-foreground max-w-xs">{sendResultMsg}</p>
               </div>
               <DialogFooter>

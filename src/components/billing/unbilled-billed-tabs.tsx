@@ -37,6 +37,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import { UsageCurrentCycleCard } from "@/components/billing/usage-current-cycle-card";
+import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
 /** One rent line the backfill preview would bill. Mirrors CyclePreview in
@@ -306,19 +307,38 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         />
       )}
 
-      <div className="flex items-center gap-2 border-b pb-3">
-        <button
-          onClick={() => setTab("unbilled")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
-        >
-          Unbilled <span className="ml-1 opacity-80">({totalUnbilled})</span>
-        </button>
-        <button
-          onClick={() => setTab("billed")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "billed" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
-        >
-          Billed
-        </button>
+      {type === "usage" && (
+        <FinanceGuideCard
+          guideKey="usage-review-worklist"
+          accentColor="blue"
+          title="Reviewing a usage draft — how this works"
+          subtitle="Each row under Current cycle is one contract's usage statement for the closed month, ready for you to review before it goes out."
+          steps={[
+            { number: 1, title: "Expand a row", description: "See every charge for that contract — print, facility, ad-hoc, all mixed together." },
+            { number: 2, title: "Waive or add a charge", description: "Waive anything that shouldn't be billed, or + Add Charge for anything missing. The total updates live." },
+            { number: 3, title: "Preview invoice & email", description: "Before you commit, see exactly what the customer will get — same PDF, same email." },
+            { number: 4, title: "Confirm & Send", description: "This is real. It emails the customer a payment link and can't be undone from here." },
+          ]}
+          tip="Only ad-hoc/print charges can be waived — facility and booking usage are locked in once the draft is generated."
+        />
+      )}
+
+      <div className="flex items-center justify-between gap-2 border-b pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTab("unbilled")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+          >
+            Unbilled <span className="ml-1 opacity-80">({totalUnbilled})</span>
+          </button>
+          <button
+            onClick={() => setTab("billed")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "billed" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+          >
+            Billed
+          </button>
+        </div>
+        {type === "usage" && <GuideReopenButton guideKey="usage-review-worklist" label="How this works" />}
       </div>
 
       {tab === "unbilled" && (
