@@ -748,8 +748,11 @@ export async function PATCH(
     })();
   }
 
-  // On termination: release all active space allocations so units are available for re-allocation
-  if (body.status === "terminated" && oldContract.status !== "terminated") {
+  // On termination/expiry: release all active space allocations so units are available for re-allocation
+  if (
+    (body.status === "terminated" || body.status === "expired") &&
+    oldContract.status === "active"
+  ) {
     (async () => {
       try {
         const admin = createAdminClient();
