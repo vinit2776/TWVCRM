@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
+import { UsageCurrentCycleCard } from "@/components/billing/usage-current-cycle-card";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
 /** One rent line the backfill preview would bill. Mirrors CyclePreview in
@@ -336,55 +337,66 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                     <Badge className={`${CATEGORY_BADGE_CLASS[cat]} text-[11px]`}>{CATEGORY_TITLE[cat]}</Badge>
                     <span className="text-xs text-muted-foreground">{rows.length}</span>
                   </div>
-                  <div className="rounded-md border divide-y">
-                    {rows.map((row) => (
-                      <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            <span className="font-mono text-xs text-teal-700">{row.contractNumber}</span>
-                            {" → "}{row.customerName}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {row.periodLabel}
-                            {row.detail ? <span className="ml-1.5">· {row.detail}</span> : null}
-                          </p>
+                  <div className={cat === "current_cycle" && type === "usage" ? "rounded-md border" : "rounded-md border divide-y"}>
+                    {cat === "current_cycle" && type === "usage" ? (
+                      rows.map((row) => (
+                        <UsageCurrentCycleCard
+                          key={row.id}
+                          row={row}
+                          canBill={canBill}
+                          onSent={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+                        />
+                      ))
+                    ) : (
+                      rows.map((row) => (
+                        <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              <span className="font-mono text-xs text-teal-700">{row.contractNumber}</span>
+                              {" → "}{row.customerName}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {row.periodLabel}
+                              {row.detail ? <span className="ml-1.5">· {row.detail}</span> : null}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-sm font-mono">
+                              {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
+                            </span>
+                            <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
+                              Open contract
+                            </Link>
+                            {row.supplementTarget && (
+                              <button
+                                onClick={() => generateSupplemental(row)}
+                                disabled={generatingSupplementKey === row.id}
+                                className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
+                              >
+                                {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                Generate supplemental
+                              </button>
+                            )}
+                            {row.backfillTarget && canBill && (
+                              <button
+                                onClick={() => openBackfillDialog(row)}
+                                className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
+                              >
+                                Send invoice
+                              </button>
+                            )}
+                            {row.statementId && onViewStatement && (
+                              <button
+                                onClick={() => onViewStatement(row.statementId!)}
+                                className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
+                              >
+                                Open statement
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className="text-sm font-mono">
-                            {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
-                          </span>
-                          <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
-                            Open contract
-                          </Link>
-                          {row.supplementTarget && (
-                            <button
-                              onClick={() => generateSupplemental(row)}
-                              disabled={generatingSupplementKey === row.id}
-                              className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
-                            >
-                              {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
-                              Generate supplemental
-                            </button>
-                          )}
-                          {row.backfillTarget && canBill && (
-                            <button
-                              onClick={() => openBackfillDialog(row)}
-                              className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
-                            >
-                              Send invoice
-                            </button>
-                          )}
-                          {row.statementId && onViewStatement && (
-                            <button
-                              onClick={() => onViewStatement(row.statementId!)}
-                              className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
-                            >
-                              Open statement
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </div>
               );
