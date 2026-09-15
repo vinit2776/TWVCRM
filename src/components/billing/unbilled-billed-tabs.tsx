@@ -103,6 +103,9 @@ const BILLING_ROLES = ["admin", "manager", "accounts"];
 export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">("unbilled");
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
+  // Matches waive-zero's own server-side gate (same as the statement-level
+  // waive-charge route) — narrower than canBill, which also allows accounts.
+  const canWaive = !!userRole && ["admin", "manager"].includes(userRole);
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
@@ -156,6 +159,32 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
       toast.error("Failed to generate supplemental statement");
     } finally {
       setGeneratingSupplementKey(null);
+    }
+  };
+
+  // ── Waive a zero-amount usage gap (usage only) ──────────────────────────
+  // Same low-stakes reasoning as generateSupplemental above — nothing is
+  // being billed here, so no confirm dialog: it just flips the underlying
+  // complimentary charge(s) from pending to waived.
+  const [waivingKey, setWaivingKey] = useState<string | null>(null);
+  const waiveZeroCharge = async (row: UnbilledRow) => {
+    if (!row.waiveTarget) return;
+    setWaivingKey(row.id);
+    try {
+      const res = await fetch("/api/usage-charges/waive-zero", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: row.contractId, ...row.waiveTarget }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to waive"); return; }
+      toast.success(json.waived === 1 ? "Charge waived" : `${json.waived} charges waived`);
+      await loadUnbilled();
+      if (onFinalized) await onFinalized();
+    } catch {
+      toast.error("Failed to waive");
+    } finally {
+      setWaivingKey(null);
     }
   };
 
@@ -403,6 +432,16 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                                 className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
                               >
                                 Send invoice
+                              </button>
+                            )}
+                            {row.waiveTarget && canWaive && (
+                              <button
+                                onClick={() => waiveZeroCharge(row)}
+                                disabled={waivingKey === row.id}
+                                className="inline-flex items-center gap-1 rounded-md bg-slate-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                {waivingKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                Waive
                               </button>
                             )}
                             {row.statementId && onViewStatement && (

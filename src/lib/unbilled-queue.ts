@@ -92,6 +92,15 @@ export interface UnbilledRow {
    * the month after the one it targets.
    */
   backfillTarget?: { month: number; year: number };
+  /**
+   * usage_gap rows only, and only when the whole bucket nets to ₹0 — a
+   * complimentary/courtesy ad-hoc charge (or several) with nothing left to
+   * bill. Passed to POST /api/usage-charges/waive-zero to flip every
+   * matching pending, zero-total ad-hoc charge for this contract+month to
+   * status="waived" directly from the queue, instead of leaving it stuck at
+   * "pending" forever or making someone dig into the contract to fix it.
+   */
+  waiveTarget?: { month: number; year: number };
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -440,18 +449,20 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // Ad-hoc usage charges dated before the window generateUsageStatements is
   // currently targeting — a future run will only ever look inside its own
   // month's window, so these are otherwise skipped forever.
-  // total > 0 excludes complimentary/courtesy charges (quantity x price = 0)
-  // — nothing to bill, so they don't belong in a queue of billing gaps to
-  // act on. usage-charges/route.ts now stores these as status="waived" at
-  // creation time (mirroring the facility-quota "within free quota" case),
-  // but this filter also covers any pre-existing zero-total rows still
-  // sitting at status="pending" from before that fix.
+  // usage-charges/route.ts now stores a complimentary/courtesy charge
+  // (quantity x price = 0) as status="waived" at creation time (mirroring
+  // the facility-quota "within free quota" case), so this query normally
+  // only ever sees nonzero pending charges going forward. It's still
+  // included with no total filter here (rather than excluded) so any
+  // zero-total row already sitting at status="pending" from before that fix
+  // surfaces with a one-click Waive action below instead of vanishing —
+  // there's nothing to bill on it, but it shouldn't stay "pending" forever
+  // either.
   const { data: staleCharges } = await supabase
     .from("usage_charges")
     .select("contract_id, charge_date, total")
     .eq("status", "pending")
     .is("billing_statement_id", null)
-    .gt("total", 0)
     .lt("charge_date", firstOfClosedMonth);
 
   // Print/service overage — same idea, keyed by period_year/period_month
@@ -541,6 +552,12 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     const contract = contractById.get(bucket.contractId);
     if (!contract) continue; // contract deleted/inaccessible since the usage was captured
     const [year, month] = bucket.monthKey.split("-").map(Number);
+    // A bucket can only land on exactly 0 here via zero-total ad-hoc charges
+    // — service/facility contributions are pre-filtered to amount > 0 above,
+    // so this is never a partial/mixed sum landing on zero by coincidence.
+    // Those are the only source with a "waived" status to flip to, so this
+    // is also the only case Waive-in-place (below) can safely handle.
+    const isZeroOnly = bucket.amount === 0;
     rows.push({
       id: `usage_gap:${bucket.contractId}:${bucket.monthKey}`,
       category: "usage_gap",
@@ -549,8 +566,11 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       customerName: customerNameOf(contract.lead),
       periodLabel: periodLabel(month, year, "usage_gap"),
       amount: bucket.amount,
-      detail: `${[...bucket.sources].join(", ")} — captured, not yet billed`,
+      detail: isZeroOnly
+        ? "Complimentary charge — nothing to bill"
+        : `${[...bucket.sources].join(", ")} — captured, not yet billed`,
       sortKey: `${bucket.monthKey}-01`,
+      ...(isZeroOnly ? { waiveTarget: { month, year } } : {}),
     });
   }
   return rows;
