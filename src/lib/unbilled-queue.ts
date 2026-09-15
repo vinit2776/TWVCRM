@@ -440,11 +440,18 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // Ad-hoc usage charges dated before the window generateUsageStatements is
   // currently targeting — a future run will only ever look inside its own
   // month's window, so these are otherwise skipped forever.
+  // total > 0 excludes complimentary/courtesy charges (quantity x price = 0)
+  // — nothing to bill, so they don't belong in a queue of billing gaps to
+  // act on. usage-charges/route.ts now stores these as status="waived" at
+  // creation time (mirroring the facility-quota "within free quota" case),
+  // but this filter also covers any pre-existing zero-total rows still
+  // sitting at status="pending" from before that fix.
   const { data: staleCharges } = await supabase
     .from("usage_charges")
     .select("contract_id, charge_date, total")
     .eq("status", "pending")
     .is("billing_statement_id", null)
+    .gt("total", 0)
     .lt("charge_date", firstOfClosedMonth);
 
   // Print/service overage — same idea, keyed by period_year/period_month
@@ -455,6 +462,7 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     .eq("is_billed", false)
     .is("billing_statement_id", null)
     .gt("overage_quantity", 0)
+    .gt("amount", 0)
     .or(`period_year.lt.${closed.year},and(period_year.eq.${closed.year},period_month.lt.${closed.month})`);
 
   // Facility overage has no billing_statement_id to filter on (the table
@@ -475,6 +483,7 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         .select("contract_id, accounting_period_id, billable_quantity, total_charge")
         .in("accounting_period_id", [...oldPeriodById.keys()])
         .gt("billable_quantity", 0)
+        .gt("total_charge", 0)
     : { data: [] };
 
   const facilityContractIds = [...new Set((staleFacility ?? []).map((f) => f.contract_id as string))];
@@ -550,9 +559,11 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
 // ─── 6. Supplemental — already billed, new charges found ───────────────────
 
 async function getUsageSupplements(supabase: SupabaseClient): Promise<InternalRow[]> {
+  // total/amount > 0 excludes complimentary/courtesy charges with nothing to
+  // bill — same reasoning as the identical filter in getUsageGaps above.
   const [{ data: pendingCharges }, { data: pendingService }] = await Promise.all([
-    supabase.from("usage_charges").select("contract_id, charge_date, total").eq("status", "pending").is("billing_statement_id", null),
-    supabase.from("service_usage_records").select("contract_id, period_year, period_month, amount, overage_quantity").eq("is_billed", false).is("billing_statement_id", null).gt("overage_quantity", 0),
+    supabase.from("usage_charges").select("contract_id, charge_date, total").eq("status", "pending").is("billing_statement_id", null).gt("total", 0),
+    supabase.from("service_usage_records").select("contract_id, period_year, period_month, amount, overage_quantity").eq("is_billed", false).is("billing_statement_id", null).gt("overage_quantity", 0).gt("amount", 0),
   ]);
   if ((pendingCharges?.length ?? 0) === 0 && (pendingService?.length ?? 0) === 0) return [];
 
