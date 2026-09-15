@@ -465,6 +465,7 @@ export function ProformaBillingCard({
               setActiveRunId(null);
               if (onSuccess) void onSuccess();
             }}
+            onTerminal={() => { if (onSuccess) void onSuccess(); }}
           />
         </div>
       )}

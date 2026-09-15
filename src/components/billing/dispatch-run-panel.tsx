@@ -41,6 +41,11 @@ interface DispatchRun {
 interface Props {
   runId: string;
   onClose?: () => void;
+  /** Fires once, as soon as the run reaches a terminal status — while the
+   *  panel is still open, before the user clicks Close. Lets the parent
+   *  refresh its lists (e.g. the Billed table) as soon as the data is
+   *  actually there, instead of only on manual dismiss. */
+  onTerminal?: () => void;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -142,7 +147,7 @@ function JobRow({ job, onRetry }: { job: DispatchJob; onRetry: (jobId: string) =
   );
 }
 
-export function DispatchRunPanel({ runId, onClose }: Props) {
+export function DispatchRunPanel({ runId, onClose, onTerminal }: Props) {
   const [run, setRun] = useState<DispatchRun | null>(null);
   const [jobs, setJobs] = useState<DispatchJob[]>([]);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
@@ -178,6 +183,20 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
       pollRef.current = null;
     }
   }, [run]);
+
+  // Let the parent refresh its lists (e.g. the Billed table) as soon as the
+  // run finishes, rather than only when the user manually clicks Close —
+  // the underlying statements already exist at this point, but nothing
+  // that fetched them earlier knows to look again. Depending on run.status
+  // (not the whole run object) means this fires once per terminal
+  // transition — including a second time after a Retry brings a
+  // partial/failed run back to "running" and then terminal again.
+  useEffect(() => {
+    if (run && TERMINAL_STATUSES.has(run.status)) {
+      onTerminal?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.status]);
 
   const handleRetry = async (jobId: string) => {
     setRetrying((prev) => new Set([...prev, jobId]));

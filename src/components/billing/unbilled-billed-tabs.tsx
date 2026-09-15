@@ -292,7 +292,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
           periodLabel={monthLabel(nextYear, nextMonth)}
           month={opsMonth}
           year={opsYear}
-          onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+          onSuccess={async () => { await Promise.all([loadUnbilled(), loadBilled()]); if (onFinalized) await onFinalized(); }}
         />
       ) : (
         <ProformaBillingCard
@@ -301,7 +301,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
           month={closedMonth}
           year={closedYear}
           pendingDraftsCount={counts.current_cycle}
-          onSuccess={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+          onSuccess={async () => { await Promise.all([loadUnbilled(), loadBilled()]); if (onFinalized) await onFinalized(); }}
         />
       )}
 
