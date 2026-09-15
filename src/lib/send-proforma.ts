@@ -102,7 +102,7 @@ export async function dispatchProforma(
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
     `)
     .eq("id", statementId)
     .single();
@@ -181,7 +181,18 @@ export async function dispatchProforma(
   // (the same data the table below is built from) so the totals box can
   // never drift from what's printed. Falls back to the legacy per-field sum
   // only for statements predating the structured line_items JSONB.
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  //
+  // Ad-hoc charges are the one exception: add-charge/waive-charge
+  // (POST .../add-charge, .../waive-charge) update usage_charges and the
+  // statement's flat total_amount atomically, but never touch this frozen
+  // line_items snapshot — so a charge added (or waived) after generation
+  // would otherwise silently vanish from (or wrongly stay on) what actually
+  // gets billed and printed. The live usage_charges table, filtered to
+  // non-waived, is the source of truth for that section; every other
+  // section type (facility/service/booking usage) has no post-generation
+  // edit path, so the frozen snapshot is safe to trust as-is.
+  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+    .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -189,8 +200,9 @@ export async function dispatchProforma(
   const structuredSections = (statement.line_items || []) as Array<{
     type: string; label: string; items: Record<string, unknown>[]; subtotal: number
   }>;
+  const nonAdHocSections = structuredSections.filter((sec) => sec.type !== "ad_hoc_charges");
   const subtotal = structuredSections.length > 0
-    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    ? nonAdHocSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0) + usageAmount
     : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
@@ -290,7 +302,7 @@ export async function dispatchProforma(
   const lineItems: GstInvoiceData["lineItems"] = [];
 
   if (structuredSections.length > 0) {
-    for (const section of structuredSections) {
+    for (const section of nonAdHocSections) {
       for (const item of section.items) {
         const desc = item.description || item.booking_number || section.label;
         let label = String(desc);
@@ -306,13 +318,11 @@ export async function dispatchProforma(
         });
       }
     }
-  } else {
-    if (fixedAmount > 0) {
-      lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
-    }
-    for (const charge of usageCharges) {
-      lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
-    }
+  } else if (fixedAmount > 0) {
+    lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+  }
+  for (const charge of usageCharges) {
+    lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
   }
 
   // ── Generate PDF ─────────────────────────────────────────────────────────
@@ -584,7 +594,7 @@ export async function dispatchGstDirect(
         start_date, end_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
     `)
     .eq("id", statementId)
     .single();
@@ -652,7 +662,12 @@ export async function dispatchGstDirect(
   // data the table below is built from) so the totals box can never drift
   // from what's printed. Falls back to the legacy per-field sum only for
   // statements predating the structured line_items JSONB. ───────────────────
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  // Ad-hoc charges are the one exception — see dispatchProforma's matching
+  // comment above: add-charge/waive-charge never update this frozen
+  // snapshot, so the live usage_charges table (filtered to non-waived) is
+  // the source of truth for that section specifically.
+  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+    .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -660,8 +675,9 @@ export async function dispatchGstDirect(
   const structuredSections = (statement.line_items || []) as Array<{
     type: string; label: string; items: Record<string, unknown>[]; subtotal: number
   }>;
+  const nonAdHocSections = structuredSections.filter((sec) => sec.type !== "ad_hoc_charges");
   const subtotal = structuredSections.length > 0
-    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    ? nonAdHocSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0) + usageAmount
     : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
   const isInterstate = false;
@@ -751,7 +767,7 @@ export async function dispatchGstDirect(
   // ── Build PDF line items ──────────────────────────────────────────────────
   const lineItems: GstInvoiceData["lineItems"] = [];
   if (structuredSections.length > 0) {
-    for (const section of structuredSections) {
+    for (const section of nonAdHocSections) {
       for (const item of section.items) {
         const desc = item.description || item.booking_number || section.label;
         let label = String(desc);
@@ -761,10 +777,10 @@ export async function dispatchGstDirect(
         lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
-  } else {
-    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+  } else if (fixedAmount > 0) {
+    lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
   }
+  for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
 
   // ── Generate PDF (actual GST invoice, not proforma) ───────────────────────
   let razorpayQrBase64: string | undefined;

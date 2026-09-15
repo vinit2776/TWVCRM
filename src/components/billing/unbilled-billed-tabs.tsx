@@ -36,6 +36,8 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
+import { UsageCurrentCycleCard } from "@/components/billing/usage-current-cycle-card";
+import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
 /** One rent line the backfill preview would bill. Mirrors CyclePreview in
@@ -305,19 +307,38 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         />
       )}
 
-      <div className="flex items-center gap-2 border-b pb-3">
-        <button
-          onClick={() => setTab("unbilled")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
-        >
-          Unbilled <span className="ml-1 opacity-80">({totalUnbilled})</span>
-        </button>
-        <button
-          onClick={() => setTab("billed")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "billed" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
-        >
-          Billed
-        </button>
+      {type === "usage" && (
+        <FinanceGuideCard
+          guideKey="usage-review-worklist"
+          accentColor="blue"
+          title="Reviewing a usage draft — how this works"
+          subtitle="Each row under Current cycle is one contract's usage statement for the closed month, ready for you to review before it goes out."
+          steps={[
+            { number: 1, title: "Expand a row", description: "See every charge for that contract — print, facility, ad-hoc, all mixed together." },
+            { number: 2, title: "Waive or add a charge", description: "Waive anything that shouldn't be billed, or + Add Charge for anything missing. The total updates live." },
+            { number: 3, title: "Preview invoice & email", description: "Before you commit, see exactly what the customer will get — same PDF, same email." },
+            { number: 4, title: "Confirm & Send", description: "This is real. It emails the customer a payment link and can't be undone from here." },
+          ]}
+          tip="Only ad-hoc/print charges can be waived — facility and booking usage are locked in once the draft is generated."
+        />
+      )}
+
+      <div className="flex items-center justify-between gap-2 border-b pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTab("unbilled")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+          >
+            Unbilled <span className="ml-1 opacity-80">({totalUnbilled})</span>
+          </button>
+          <button
+            onClick={() => setTab("billed")}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "billed" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+          >
+            Billed
+          </button>
+        </div>
+        {type === "usage" && <GuideReopenButton guideKey="usage-review-worklist" label="How this works" />}
       </div>
 
       {tab === "unbilled" && (
@@ -336,55 +357,66 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                     <Badge className={`${CATEGORY_BADGE_CLASS[cat]} text-[11px]`}>{CATEGORY_TITLE[cat]}</Badge>
                     <span className="text-xs text-muted-foreground">{rows.length}</span>
                   </div>
-                  <div className="rounded-md border divide-y">
-                    {rows.map((row) => (
-                      <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            <span className="font-mono text-xs text-teal-700">{row.contractNumber}</span>
-                            {" → "}{row.customerName}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {row.periodLabel}
-                            {row.detail ? <span className="ml-1.5">· {row.detail}</span> : null}
-                          </p>
+                  <div className={cat === "current_cycle" && type === "usage" ? "rounded-md border" : "rounded-md border divide-y"}>
+                    {cat === "current_cycle" && type === "usage" ? (
+                      rows.map((row) => (
+                        <UsageCurrentCycleCard
+                          key={row.id}
+                          row={row}
+                          canBill={canBill}
+                          onSent={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
+                        />
+                      ))
+                    ) : (
+                      rows.map((row) => (
+                        <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              <span className="font-mono text-xs text-teal-700">{row.contractNumber}</span>
+                              {" → "}{row.customerName}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {row.periodLabel}
+                              {row.detail ? <span className="ml-1.5">· {row.detail}</span> : null}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-sm font-mono">
+                              {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
+                            </span>
+                            <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
+                              Open contract
+                            </Link>
+                            {row.supplementTarget && (
+                              <button
+                                onClick={() => generateSupplemental(row)}
+                                disabled={generatingSupplementKey === row.id}
+                                className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
+                              >
+                                {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                Generate supplemental
+                              </button>
+                            )}
+                            {row.backfillTarget && canBill && (
+                              <button
+                                onClick={() => openBackfillDialog(row)}
+                                className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
+                              >
+                                Send invoice
+                              </button>
+                            )}
+                            {row.statementId && onViewStatement && (
+                              <button
+                                onClick={() => onViewStatement(row.statementId!)}
+                                className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
+                              >
+                                Open statement
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className="text-sm font-mono">
-                            {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
-                          </span>
-                          <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
-                            Open contract
-                          </Link>
-                          {row.supplementTarget && (
-                            <button
-                              onClick={() => generateSupplemental(row)}
-                              disabled={generatingSupplementKey === row.id}
-                              className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
-                            >
-                              {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
-                              Generate supplemental
-                            </button>
-                          )}
-                          {row.backfillTarget && canBill && (
-                            <button
-                              onClick={() => openBackfillDialog(row)}
-                              className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
-                            >
-                              Send invoice
-                            </button>
-                          )}
-                          {row.statementId && onViewStatement && (
-                            <button
-                              onClick={() => onViewStatement(row.statementId!)}
-                              className="text-xs font-semibold text-teal-700 hover:text-teal-900 underline underline-offset-2"
-                            >
-                              Open statement
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </div>
               );
