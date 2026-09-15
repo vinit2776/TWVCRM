@@ -206,7 +206,12 @@ export async function GET(request: NextRequest) {
   const contractId = searchParams.get("contract_id");
   const bookingId = searchParams.get("booking_id");
   const leadId = searchParams.get("lead_id");
+  // Comma-separated to support "everything but pending" (billed,waived) for
+  // the Billed History view — filtering that in SQL, before pagination,
+  // avoids a client-side post-filter silently shrinking a page below its
+  // stated size.
   const status = searchParams.get("status");
+  const statuses = status ? status.split(",").filter(Boolean) : null;
   const dateFrom = searchParams.get("date_from");
   const dateTo = searchParams.get("date_to");
 
@@ -221,7 +226,7 @@ export async function GET(request: NextRequest) {
   if (contractId) manualQuery = manualQuery.eq("contract_id", contractId);
   if (bookingId) manualQuery = manualQuery.eq("booking_id", bookingId);
   if (leadId) manualQuery = manualQuery.eq("lead_id", leadId);
-  if (status) manualQuery = manualQuery.eq("status", status);
+  if (statuses) manualQuery = manualQuery.in("status", statuses);
   if (dateFrom) manualQuery = manualQuery.gte("charge_date", dateFrom);
   if (dateTo) manualQuery = manualQuery.lte("charge_date", dateTo);
   manualQuery = manualQuery
@@ -229,8 +234,10 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .limit(SOURCE_CAP);
 
-  // Only meaningful for ad-hoc charges — narrow to manual-only when set.
-  const manualOnly = !!bookingId || !!leadId || status === "waived";
+  // Only meaningful for ad-hoc charges — narrow to manual-only when the
+  // requested set is exclusively "waived", since print/facility usage can
+  // never be waived (nothing there to fetch).
+  const manualOnly = !!bookingId || !!leadId || (statuses?.length === 1 && statuses[0] === "waived");
 
   const [manualResult, printResult, facilityResult] = await Promise.all([
     manualQuery,
@@ -241,8 +248,12 @@ export async function GET(request: NextRequest) {
         .not("contract_id", "is", null)
         .limit(SOURCE_CAP);
       if (contractId) q = q.eq("contract_id", contractId);
-      if (status === "pending") q = q.eq("is_billed", false);
-      if (status === "billed") q = q.eq("is_billed", true);
+      // "waived" is meaningless here (see manualOnly above) — only weigh in
+      // on is_billed when the requested set names exactly one of the two
+      // states this table actually has; a set naming both (or neither) is
+      // "show any," so no is_billed filter at all.
+      const nonWaived = statuses?.filter((s) => s !== "waived");
+      if (nonWaived?.length === 1) q = q.eq("is_billed", nonWaived[0] === "billed");
       return q;
     })(),
     manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
@@ -268,7 +279,7 @@ export async function GET(request: NextRequest) {
   // Print/facility status and date range couldn't be pushed into their SQL
   // queries (status is derived, date comes from a joined period) — apply
   // both post-merge instead.
-  if (status && status !== "waived") merged = merged.filter((r) => r.source === "manual" || r.status === status);
+  if (statuses) merged = merged.filter((r) => r.source === "manual" || statuses.includes(r.status));
   if (dateFrom) merged = merged.filter((r) => r.charge_date >= dateFrom);
   if (dateTo) merged = merged.filter((r) => r.charge_date <= dateTo);
 

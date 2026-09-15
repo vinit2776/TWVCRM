@@ -738,7 +738,10 @@ export async function generateRentProformas(
     // "renewed" parents (early renewal) stay billable for their own remaining
     // days only — gated by end_date.gte like "active" — so a parent whose own
     // term already lapsed before the child activated doesn't get rebilled.
-    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`);
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`)
+    // A contract-wide billing hold (see 00556_contract_billing_hold.sql)
+    // skips it entirely — no new proforma until the hold is released.
+    .is("billing_hold_at", null);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
   const { data: contracts } = await contractsQuery;
@@ -1290,7 +1293,10 @@ export async function generateUsageStatements(
     // original end_date lapses — see generateRentProformas for rationale.
     // "renewed" parents (early renewal) stay billable for their own remaining
     // days only — gated by end_date.gte like "active".
-    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`)
+    // A contract-wide billing hold (see 00556_contract_billing_hold.sql)
+    // skips it entirely — no new usage statement until the hold is released.
+    .is("billing_hold_at", null);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
   const { data: contracts } = await contractsQuery;
