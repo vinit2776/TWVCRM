@@ -460,6 +460,15 @@ export async function POST(request: NextRequest) {
     leadId = booking.lead_id ?? null;
   }
 
+  // A charge that nets to zero (e.g. a complimentary/courtesy booking add-on
+  // entered at quantity x price = 0) has nothing to bill — treat it the same
+  // as the facility-quota "within free quota" case above: waived, not
+  // pending, so it doesn't sit in the usage-gap queue forever waiting for a
+  // statement it will never need (see getUsageGaps in unbilled-queue.ts).
+  if (facilityStatus === "pending" && facilityTotal === 0) {
+    facilityStatus = "waived";
+  }
+
   // GST: server is the source of truth for the computed fields.
   // For contract-based charges, force gst_rate to match the contract's
   // tax_percentage so every line item on the billing statement uses the
