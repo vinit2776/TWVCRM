@@ -93,12 +93,14 @@ export interface UnbilledRow {
    */
   backfillTarget?: { month: number; year: number };
   /**
-   * usage_gap rows only, and only when the whole bucket nets to ₹0 — a
-   * complimentary/courtesy ad-hoc charge (or several) with nothing left to
-   * bill. Passed to POST /api/usage-charges/waive-zero to flip every
-   * matching pending, zero-total ad-hoc charge for this contract+month to
-   * status="waived" directly from the queue, instead of leaving it stuck at
-   * "pending" forever or making someone dig into the contract to fix it.
+   * usage_gap rows only, and only when the bucket includes at least one
+   * ad-hoc charge — the only usage source with a "waived" status to flip.
+   * Passed to POST /api/usage-charges/waive-gap to waive every matching
+   * pending ad-hoc charge for this contract+month directly from the queue,
+   * whether it's a complimentary ₹0 entry with nothing to bill or a real,
+   * billable charge someone decides not to collect. On a bucket mixing
+   * ad-hoc with print/facility usage, only the ad-hoc share is cleared —
+   * the row still shows the remainder afterward.
    */
   waiveTarget?: { month: number; year: number };
 }
@@ -528,11 +530,15 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   if (contributions.length === 0) return [];
 
   // Bucket by contract + month so multiple stale records collapse into one row.
-  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string> }>();
+  // adHocAmount is tracked separately from the bucket total: it's the only
+  // source with a "waived" status to flip, so it's also the only portion
+  // Waive-in-place (below) can act on when a bucket mixes sources.
+  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; adHocAmount: number; sources: Set<string> }>();
   for (const c of contributions) {
     const key = `${c.contractId}:${c.monthKey}`;
-    const bucket = buckets.get(key) ?? { contractId: c.contractId, monthKey: c.monthKey, amount: 0, sources: new Set<string>() };
+    const bucket = buckets.get(key) ?? { contractId: c.contractId, monthKey: c.monthKey, amount: 0, adHocAmount: 0, sources: new Set<string>() };
     bucket.amount += c.amount;
+    if (c.source === "Ad-hoc charge") bucket.adHocAmount += c.amount;
     bucket.sources.add(c.source);
     buckets.set(key, bucket);
   }
@@ -552,12 +558,11 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     const contract = contractById.get(bucket.contractId);
     if (!contract) continue; // contract deleted/inaccessible since the usage was captured
     const [year, month] = bucket.monthKey.split("-").map(Number);
-    // A bucket can only land on exactly 0 here via zero-total ad-hoc charges
-    // — service/facility contributions are pre-filtered to amount > 0 above,
+    // A bucket lands on exactly 0 only via zero-total ad-hoc charges —
+    // service/facility contributions are pre-filtered to amount > 0 above,
     // so this is never a partial/mixed sum landing on zero by coincidence.
-    // Those are the only source with a "waived" status to flip to, so this
-    // is also the only case Waive-in-place (below) can safely handle.
     const isZeroOnly = bucket.amount === 0;
+    const hasAdHoc = bucket.sources.has("Ad-hoc charge");
     rows.push({
       id: `usage_gap:${bucket.contractId}:${bucket.monthKey}`,
       category: "usage_gap",
@@ -570,7 +575,12 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         ? "Complimentary charge — nothing to bill"
         : `${[...bucket.sources].join(", ")} — captured, not yet billed`,
       sortKey: `${bucket.monthKey}-01`,
-      ...(isZeroOnly ? { waiveTarget: { month, year } } : {}),
+      // Ad-hoc is the only source with a "waived" status to flip, so it's
+      // the only portion Waive-in-place can act on — offered whenever a
+      // bucket includes any ad-hoc contribution, billable or not. On a
+      // mixed bucket, waiving only clears the ad-hoc share; the row still
+      // shows the print/facility remainder afterward.
+      ...(hasAdHoc ? { waiveTarget: { month, year } } : {}),
     });
   }
   return rows;
