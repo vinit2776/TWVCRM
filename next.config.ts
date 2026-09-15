@@ -26,6 +26,10 @@ function computeShortSha(): string {
 }
 
 const nextConfig: NextConfig = {
+  // DEBUG ONLY — enabling to decode a production hydration error's real stack
+  // trace on the preview deploy. Revert before merging.
+  productionBrowserSourceMaps: true,
+
   turbopack: {
     root: path.resolve(__dirname),
   },

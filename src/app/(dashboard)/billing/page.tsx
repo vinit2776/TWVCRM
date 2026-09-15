@@ -447,27 +447,6 @@ export default function BillingPage() {
   // Manual monthly billing — handled by <ProformaBillingCard /> per-mode. Cards
   // own their own preview/run state; the page only computes the period labels.
 
-  // Next-month label + working-day awareness. At The WorkVilla Sunday is the only
-  // non-working day (Saturday is working). If the last calendar day of the current
-  // month falls on a Sunday, the operational deadline for sending proformas shifts
-  // to the preceding Saturday — the banner and copy reflect that so the team isn't
-  // told to ship on a non-working day.
-  const nextMonthInfo = (() => {
-    const now = new Date();
-    const nm = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
-    const ny = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
-    const label = new Date(ny, nm).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-    const daysInThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const lastDayDow = new Date(now.getFullYear(), now.getMonth(), daysInThis).getDay(); // 0=Sun
-    const lastWorkingDay = lastDayDow === 0 ? daysInThis - 1 : daysInThis;
-    const deadlineShifted = lastWorkingDay !== daysInThis;
-    const deadlineLabel = new Date(now.getFullYear(), now.getMonth(), lastWorkingDay)
-      .toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
-    // Show banner from 3 days before the last working day, up to (and including) the actual month-end
-    const nearMonthEnd = now.getDate() >= lastWorkingDay - 2;
-    return { label, nearMonthEnd, deadlineLabel, deadlineShifted };
-  })();
-
   // Refresh statements + monthly summary after a successful run from any card
   const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
 
