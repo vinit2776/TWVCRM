@@ -98,8 +98,12 @@ export function ContractSpaceManager({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
 
-  // Locked once the contract is fully closed out — client has left
-  const isLocked = ["renewed", "completed", "terminated", "expired"].includes(contractStatus);
+  // Locked once the contract is fully closed out — client has left.
+  // "expired" is deliberately excluded: expiry auto-releases active
+  // allocations going forward (see /api/cron/contract-expiry), but a
+  // contract that expired before that existed can still have a stale
+  // active row — admins/managers need to be able to unlink it by hand.
+  const isLocked = ["renewed", "completed", "terminated"].includes(contractStatus);
   // Editable during pre-activation AND while the contract is live (client is in the space)
   const isEditable = ["draft", "sent", "viewed", "accepted", "active", "renewal_in_progress"].includes(contractStatus);
   // Whether the contract is currently live (used to style the card as "still open")
