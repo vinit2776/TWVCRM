@@ -17,8 +17,10 @@ import { withCronHealth } from "@/lib/cron-ping";
  *   3. No existing renewal (parent_contract_id pointing to it) in
  *      draft/active status
  *
- * The cron only marks the status; it does NOT create renewal drafts
- * or block anything. That's handled by the renewal flow.
+ * Besides the status flip, it releases the contract's active space
+ * allocations (so the cabin/desk becomes available for re-allocation) and
+ * revokes WiFi/access. It does NOT create renewal drafts — that's handled
+ * by the renewal flow.
  */
 async function handler(request: NextRequest) {
   // Verify cron secret (Vercel sets this header)
@@ -82,6 +84,20 @@ async function handler(request: NextRequest) {
   if (updateErr) {
     console.error("[contract-expiry] update error:", updateErr);
     return NextResponse.json({ error: updateErr.message }, { status: 500 });
+  }
+
+  // ── Release space allocations so units are available for re-allocation ────
+  // Mirrors the termination path in /api/contracts/[id] — expiry must free up
+  // the space the same way termination does, or a cabin/desk stays blocked
+  // indefinitely after its contract lapses.
+  const { error: releaseErr } = await admin
+    .from("contract_space_allocations")
+    .update({ status: "ended", updated_at: new Date().toISOString() })
+    .in("contract_id", expireIds)
+    .eq("status", "active");
+
+  if (releaseErr) {
+    console.error("[contract-expiry] space allocation release failed:", releaseErr);
   }
 
   // ── Voucher revocation for expired contracts ──────────────────────────────
