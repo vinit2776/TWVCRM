@@ -15,12 +15,20 @@ export const maxDuration = 30;
  * Returns the proforma invoice as a downloadable PDF.
  * Rebuilds the PDF on-the-fly using stored statement data.
  * Includes QR code if a Razorpay payment link exists.
+ *
+ * ?preview=1 additionally allows this on a DRAFT statement — used by the
+ * Generate & Send review row to show "exactly what the customer will get"
+ * before Finalize & Send. Still read-only (no mutation, no email, no
+ * Razorpay call); a draft has no payment link yet, so the preview simply
+ * renders without the Pay Now / QR section, same as a real send would look
+ * before that link exists.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const isPreview = req.nextUrl.searchParams.get("preview") === "1";
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -55,7 +63,7 @@ export async function GET(
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
     `)
     .eq("id", id)
     .single();
@@ -63,7 +71,7 @@ export async function GET(
   if (fetchErr || !statement) {
     return NextResponse.json({ error: "Statement not found" }, { status: 404 });
   }
-  if (statement.status === "draft") {
+  if (statement.status === "draft" && !isPreview) {
     return NextResponse.json({ error: "Statement is not yet finalized" }, { status: 400 });
   }
   if (statement.status === "voided") {
@@ -119,14 +127,25 @@ export async function GET(
   // same data the table below is built from) so the totals box can never
   // drift from what's printed. Falls back to the legacy per-field sum only
   // for statements predating the structured line_items JSONB.
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  //
+  // The "ad_hoc_charges" section is the one exception: add-charge/waive-charge
+  // (POST .../add-charge, .../waive-charge) update usage_charges and the
+  // statement's flat total_amount atomically, but never touch this frozen
+  // line_items snapshot — so for ad-hoc charges specifically, the LIVE
+  // usage_charges table (already fetched above, filtered to non-waived) is
+  // the source of truth, not the section captured at generation time. Every
+  // other section type (facility/service/booking usage) has no post-
+  // generation edit path, so the frozen snapshot is safe to trust as-is.
+  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+    .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
   const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
   const structuredSections = (statement.line_items || []) as Array<{ type: string; label: string; items: Record<string, unknown>[]; subtotal: number }>;
+  const nonAdHocSections = structuredSections.filter((sec) => sec.type !== "ad_hoc_charges");
   const subtotal = structuredSections.length > 0
-    ? structuredSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0)
+    ? nonAdHocSections.reduce((s, sec) => s + Number(sec.subtotal || 0), 0) + usageAmount
     : fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
@@ -147,7 +166,7 @@ export async function GET(
   const lineItems: GstInvoiceData["lineItems"] = [];
 
   if (structuredSections.length > 0) {
-    for (const section of structuredSections) {
+    for (const section of nonAdHocSections) {
       for (const item of section.items) {
         const desc = item.description || item.booking_number || section.label;
         let label = String(desc);
@@ -163,13 +182,11 @@ export async function GET(
         });
       }
     }
-  } else {
-    if (fixedAmount > 0) {
-      lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
-    }
-    for (const charge of usageCharges) {
-      lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
-    }
+  } else if (fixedAmount > 0) {
+    lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+  }
+  for (const charge of usageCharges) {
+    lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
   }
 
   // Payment link + QR
