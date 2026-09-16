@@ -123,16 +123,6 @@ const USAGE_SOURCE_LABELS: Record<string, string> = {
 // "Bills in: [month] [status]" tag — which billing cycle a charge belongs to,
 // and whether that cycle has already picked it up. See billingCycleOf() in
 // /api/usage-charges for how this is derived.
-// "Bills in" pill under Logged on the Unbilled list — see usage-next-run.ts.
-const NEXT_RUN_CLASS: Record<string, string> = {
-  ready: "bg-green-50 text-green-800 border border-green-200",
-  supplement: "bg-blue-50 text-blue-800 border border-blue-200",
-  later: "bg-slate-50 text-slate-700 border border-slate-200",
-  review: "bg-red-50 text-red-700 border border-red-200",
-  held: "bg-white text-slate-600 border border-dashed border-slate-300",
-  none: "bg-slate-100 text-slate-600 border border-slate-300",
-};
-
 const BILLING_CYCLE_TAG: Record<string, { text: string; className: string }> = {
   cycle_open:          { text: "cycle still open",      className: "bg-slate-50 text-slate-600 border-slate-200" },
   ready:               { text: "ready",                 className: "bg-blue-50 text-blue-800 border-blue-200" },
@@ -191,7 +181,6 @@ interface UsageCharge {
   waive_reason?: string | null;
   waived_at?: string | null;
   waived_by_name?: string | null;
-  next_run?: { kind: "ready" | "supplement" | "later" | "review" | "held" | "none"; label: string; note: string } | null;
   /** Set by "Bill anyway" on a stale charge — see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS. */
   reviewed_at?: string | null;
 }
@@ -742,11 +731,11 @@ export default function BillingPage() {
   // ── Get user role ────────────────────────────────────────────────────────
   // Via /api/me (server-to-server) rather than a browser→supabase.co query:
   // when that direct call is blocked, userRole stayed null and silently hid
-  // every role-gated control on this page (Print/Facility usage, Send).
+  // every role-gated control on this page (Print/Facility usage, Send, …).
   useEffect(() => {
     fetch("/api/me")
       .then((r) => r.json())
-      .then((j: { role: string | null }) => { if (j.role) setUserRole(j.role); })
+      .then((j: { role: string | null }) => { setUserRole(j.role || "sales_rep"); })
       .catch(() => toast.error("Couldn't load your role — some actions may be hidden. Refresh to retry."));
   }, []);
 
@@ -1574,14 +1563,7 @@ export default function BillingPage() {
                         </td>
                         <td className="px-4 py-3 hidden md:table-cell">
                           <span className={`text-sm ${age.className}`}>{age.text}</span>
-                          {charge.next_run ? (
-                            <span className="block mt-1" title={charge.next_run.note}>
-                              <span className={`inline-block rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ${NEXT_RUN_CLASS[charge.next_run.kind]}`}>
-                                {charge.next_run.label}
-                              </span>
-                              <span className="block text-[11px] text-muted-foreground mt-0.5">{charge.next_run.note}</span>
-                            </span>
-                          ) : stale && <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>}
+                          {stale && <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1.5 flex-wrap">

@@ -26,7 +26,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, ChevronRight, CalendarPlus, Send, AlertCircle } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, CalendarPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +36,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
-import { UsageCurrentCycleCard, RouteBadge, type UsageCycleRowState } from "@/components/billing/usage-current-cycle-card";
+import { UsageCurrentCycleCard } from "@/components/billing/usage-current-cycle-card";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
 
@@ -157,88 +157,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
     } finally {
       setGeneratingSupplementKey(null);
     }
-  };
-
-  // ── Bulk send (usage current_cycle only) ────────────────────────────────
-  // One "Send N invoices" over every ready usage draft. Each row keeps its own
-  // expand/waive/add-charge/single-send controls; this just runs the same
-  // per-statement endpoints UsageCurrentCycleCard uses, one at a time, and
-  // keeps going past a failure so one bad contract can't block the rest.
-  const [rowState, setRowState] = useState<Record<string, UsageCycleRowState>>({});
-  const handleRowState = useCallback((statementId: string, state: UsageCycleRowState) => {
-    setRowState((prev) => {
-      const cur = prev[statementId];
-      if (cur && cur.total === state.total && cur.status === state.status && cur.hasUnsavedCharge === state.hasUnsavedCharge) return prev;
-      return { ...prev, [statementId]: state };
-    });
-  }, []);
-
-  type BulkOutcome = { kind: "sent"; to: string | null } | { kind: "no_contact" } | { kind: "failed"; error: string };
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState(0);
-  const [bulkResults, setBulkResults] = useState<Record<string, BulkOutcome> | null>(null);
-  const [bulkSentIds, setBulkSentIds] = useState<Set<string>>(new Set());
-  /** Frozen at Confirm — the list being sent can't shift under a reload mid-run. */
-  const [bulkQueue, setBulkQueue] = useState<Array<{ row: UnbilledRow; total: number }> | null>(null);
-
-  const usageReadyRows = type === "usage"
-    ? unbilledRows.filter((r) => r.category === "current_cycle" && r.statementId && !bulkSentIds.has(r.statementId))
-    : [];
-  const stateOf = (r: UnbilledRow): UsageCycleRowState =>
-    rowState[r.statementId!] ?? { total: Number(r.amount ?? 0), status: r.statementStatus ?? "draft", hasUnsavedCharge: false };
-  const sendableRows = usageReadyRows.filter((r) => stateOf(r).total > 0);
-  const zeroRows = usageReadyRows.filter((r) => stateOf(r).total <= 0);
-  const unsavedRows = sendableRows.filter((r) => stateOf(r).hasUnsavedCharge);
-  const sendableTotal = sendableRows.reduce((sum, r) => sum + stateOf(r).total, 0);
-
-  const openBulkDialog = () => {
-    setBulkResults(null);
-    setBulkQueue(null);
-    setBulkProgress(0);
-    setBulkOpen(true);
-  };
-
-  const runBulkSend = async () => {
-    const queue = sendableRows.map((row) => ({ row, total: stateOf(row).total, status: stateOf(row).status }));
-    if (queue.length === 0) return;
-    setBulkQueue(queue.map(({ row, total }) => ({ row, total })));
-    setBulkResults({});
-    setBulkRunning(true);
-    const results: Record<string, BulkOutcome> = {};
-    const sentIds: string[] = [];
-    for (let i = 0; i < queue.length; i++) {
-      const id = queue[i].row.statementId!;
-      const endpoint = queue[i].status === "finalized" ? "send-proforma" : "finalize-and-send";
-      try {
-        const res = await fetch(`/api/billing-statements/${id}/${endpoint}`, { method: "POST" });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          results[id] = { kind: "failed", error: json.error || `HTTP ${res.status}` };
-        } else if (json.no_contact ?? json.noContact) {
-          // Finalized but not dispatched — stays in the queue as a Send retry.
-          results[id] = { kind: "no_contact" };
-        } else {
-          results[id] = { kind: "sent", to: json.emailed_to ?? json.emailedTo ?? null };
-          sentIds.push(id);
-        }
-      } catch (e) {
-        results[id] = { kind: "failed", error: e instanceof Error ? e.message : "Network error" };
-      }
-      setBulkProgress(i + 1);
-      setBulkResults({ ...results });
-    }
-    setBulkSentIds((prev) => new Set([...prev, ...sentIds]));
-    setBulkRunning(false);
-    await loadUnbilled();
-    if (onFinalized) await onFinalized();
-  };
-
-  const closeBulkDialog = () => {
-    if (bulkRunning) return;
-    setBulkOpen(false);
-    setBulkResults(null);
-    setBulkQueue(null);
   };
 
   // ── Rent-gap backfill (rent_gap rows with a backfillTarget only) ─────────
@@ -399,7 +317,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             { number: 1, title: "Expand a row", description: "See every charge for that contract — print, facility, ad-hoc, all mixed together." },
             { number: 2, title: "Waive or add a charge", description: "Waive anything that shouldn't be billed, or + Add Charge for anything missing. The total updates live." },
             { number: 3, title: "Preview invoice & email", description: "Before you commit, see exactly what the customer will get — same PDF, same email." },
-            { number: 4, title: "Send", description: "Finalize & Send on one row, or Send N invoices to send every ready contract at once. This is real — it emails customers and can't be undone from here." },
+            { number: 4, title: "Confirm & Send", description: "This is real. It emails the customer a payment link and can't be undone from here." },
           ]}
           tip="Ad-hoc, print, and facility charges can all be waived from here. Booking usage is locked in once the draft is generated."
         />
@@ -435,24 +353,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
               if (rows.length === 0) return null;
               return (
                 <div key={cat} className="space-y-2">
-                  {cat === "current_cycle" && type === "usage" && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-teal-50 border border-teal-200 px-4 py-2.5">
-                      <div className="text-sm text-teal-900">
-                        Ready to send
-                        <span className="font-semibold ml-2">
-                          {sendableRows.length} contract{sendableRows.length === 1 ? "" : "s"} · {formatCurrency(sendableTotal)}
-                        </span>
-                        {zeroRows.length > 0 && (
-                          <span className="block text-[11px] text-teal-800/80">{zeroRows.length} with nothing left to bill after waivers — skipped</span>
-                        )}
-                      </div>
-                      {canBill && sendableRows.length > 0 && (
-                        <Button size="sm" className="bg-teal-700 hover:bg-teal-800" onClick={openBulkDialog} disabled={bulkRunning}>
-                          <Send className="h-3.5 w-3.5 mr-1.5" />Send {sendableRows.length} invoice{sendableRows.length === 1 ? "" : "s"}
-                        </Button>
-                      )}
-                    </div>
-                  )}
                   <div className="flex items-center gap-2">
                     <Badge className={`${CATEGORY_BADGE_CLASS[cat]} text-[11px]`}>{CATEGORY_TITLE[cat]}</Badge>
                     <span className="text-xs text-muted-foreground">{rows.length}</span>
@@ -465,9 +365,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                           row={row}
                           canBill={canBill}
                           onSent={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
-                          onStateChange={handleRowState}
-                          sentExternally={bulkSentIds.has(row.statementId!)}
-                          locked={bulkRunning}
                         />
                       ))
                     ) : (
@@ -594,99 +491,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
           )}
         </div>
       )}
-
-      <Dialog open={bulkOpen} onOpenChange={(open) => { if (!open) closeBulkDialog(); }}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <Send className="h-4 w-4 shrink-0" />
-              {bulkQueue && !bulkRunning ? "Send results" : bulkQueue ? "Sending…" : `Send ${sendableRows.length} usage invoice${sendableRows.length === 1 ? "" : "s"}?`}
-            </DialogTitle>
-            <DialogDescription>
-              {bulkRunning
-                ? `${bulkProgress} of ${bulkQueue?.length ?? 0} done — keep this window open.`
-                : bulkQueue
-                  ? "Sent one at a time. Anything not sent stays in the list below to retry."
-                  : "Each contract goes out through its own route — a proforma with a payment link, or a GST invoice directly."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto rounded-md border divide-y text-sm">
-            {(bulkQueue ?? sendableRows.map((row) => ({ row, total: stateOf(row).total }))).map(({ row: r, total }) => {
-              const outcome = bulkResults?.[r.statementId!];
-              return (
-                <div key={r.id} className="px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate">
-                      <span className="font-mono text-xs text-teal-700">{r.contractNumber}</span> · {r.customerName}
-                    </span>
-                    <span className="flex items-center gap-2 shrink-0">
-                      <RouteBadge mode={r.billingMode} />
-                      <span className="font-mono text-xs">{formatCurrency(total)}</span>
-                    </span>
-                  </div>
-                  {outcome?.kind === "sent" && <p className="text-[11px] text-green-700 mt-0.5">✓ Sent{outcome.to ? ` to ${outcome.to}` : ""}</p>}
-                  {outcome?.kind === "no_contact" && <p className="text-[11px] text-amber-700 mt-0.5">Finalized, not sent — no email on file. Add one on the contract, then Send from the row.</p>}
-                  {outcome?.kind === "failed" && <p className="text-[11px] text-red-600 mt-0.5">Not sent — {outcome.error}</p>}
-                </div>
-              );
-            })}
-          </div>
-
-          {!bulkQueue && (
-            <>
-              <div className="flex items-center justify-between border-t pt-2 text-sm">
-                <span className="font-semibold uppercase text-xs text-muted-foreground">Total</span>
-                <span className="font-mono font-bold">{formatCurrency(sendableTotal)}</span>
-              </div>
-              {unsavedRows.length > 0 && (
-                <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-800 flex gap-2">
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  <span>
-                    {unsavedRows.map((r) => r.contractNumber).join(", ")} {unsavedRows.length === 1 ? "has" : "have"} a half-typed charge that isn&rsquo;t saved. Add or discard it first, so it isn&rsquo;t left off the invoice.
-                  </span>
-                </div>
-              )}
-              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 flex gap-2">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>
-                  This finalizes every statement above and emails each customer. It can&rsquo;t be undone from here — void a statement from its own view if needed. To check one first, cancel and use Finalize &amp; Send → Preview on that row.
-                </span>
-              </div>
-            </>
-          )}
-
-          {bulkQueue && bulkResults && !bulkRunning && (() => {
-            const vals = Object.values(bulkResults);
-            const sentN = vals.filter((v) => v.kind === "sent").length;
-            const noContactN = vals.filter((v) => v.kind === "no_contact").length;
-            const failedN = vals.filter((v) => v.kind === "failed").length;
-            return (
-              <p className="text-xs text-muted-foreground">
-                {sentN} sent{noContactN > 0 ? ` · ${noContactN} finalized without a contact` : ""}{failedN > 0 ? ` · ${failedN} failed` : ""}
-              </p>
-            );
-          })()}
-
-          <DialogFooter>
-            {bulkQueue && !bulkRunning ? (
-              <Button className="bg-teal-700 hover:bg-teal-800" onClick={closeBulkDialog}>Done</Button>
-            ) : (
-              <>
-                <Button variant="outline" onClick={closeBulkDialog} disabled={bulkRunning}>Cancel</Button>
-                <Button
-                  className="bg-teal-700 hover:bg-teal-800"
-                  onClick={runBulkSend}
-                  disabled={bulkRunning || sendableRows.length === 0 || unsavedRows.length > 0}
-                >
-                  {bulkRunning ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-                  {bulkRunning ? `Sending ${bulkProgress}/${bulkQueue?.length ?? 0}…` : `Confirm & send ${sendableRows.length}`}
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!backfillRow} onOpenChange={(open) => { if (!open) setBackfillRow(null); }}>
         <DialogContent className="max-w-2xl">

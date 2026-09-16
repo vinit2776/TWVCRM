@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createUsageChargeSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
-import { isContractOperational, CHARGE_ALLOWED_ROLES, USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
-import { nextUsageRun, type NextRun, type MonthCoverage, type NextRunContract } from "@/lib/usage-next-run";
+import { isContractOperational, CHARGE_ALLOWED_ROLES } from "@/lib/constants";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 // A charge/usage row normalized to one shared shape regardless of which
@@ -49,9 +48,6 @@ interface NormalizedRow {
    *  USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS) charge — lets the frontend
    *  suppress its own "needs review" flag once someone has acknowledged it. */
   reviewed_at: string | null;
-  /** Pending, billable rows only: which Generate & Send run this charge
-   *  lands in, for the "Bills in" line under Logged. See usage-next-run.ts. */
-  next_run?: NextRun | null;
 }
 
 function lastDayOfMonth(year: number, month: number): string {
@@ -205,59 +201,6 @@ function normalizeFacility(r: any): NormalizedRow {
   };
 }
 
-/** Fills row.next_run for this page's pending, billable contract rows —
- *  two batched queries (contracts, usage/combined statements), never per row. */
-async function attachNextRun(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  rows: NormalizedRow[],
-): Promise<void> {
-  const targets = rows.filter((r) => r.status === "pending" && r.billable !== false && r.contract_id);
-  const contractIds = [...new Set(targets.map((r) => r.contract_id as string))];
-  if (contractIds.length === 0) return;
-
-  const [contractsRes, stmtsRes] = await Promise.all([
-    supabase.from("contracts").select("id, status, start_date, end_date").in("id", contractIds),
-    supabase
-      .from("billing_statements")
-      .select("id, contract_id, period_start, proforma_sent_at, gst_invoice_number, supplements_statement_id, billing_payments:billing_payments(id)")
-      .in("contract_id", contractIds)
-      .in("statement_type", ["usage", "combined"])
-      .is("voided_at", null)
-      .neq("status", "discarded"),
-  ]);
-
-  const contractById = new Map((contractsRes.data ?? []).map((c) => [c.id as string, c as NextRunContract]));
-
-  // Same partition generateUsageStatements uses: only period_start = 1st of
-  // the month counts as covering; a supplement marks its original topped up.
-  type Stmt = { id: string; contract_id: string; period_start: string; proforma_sent_at: string | null; gst_invoice_number: string | null; supplements_statement_id: string | null; billing_payments: { id: string }[] };
-  const stmts = (stmtsRes.data ?? []) as Stmt[];
-  const supplementedIds = new Set(stmts.map((st) => st.supplements_statement_id).filter((id): id is string => !!id));
-  const coverage = new Map<string, MonthCoverage>();
-  for (const st of stmts) {
-    if (st.supplements_statement_id || !st.period_start.endsWith("-01")) continue;
-    const sent = !!st.proforma_sent_at || !!st.gst_invoice_number || (st.billing_payments?.length ?? 0) > 0;
-    if (!sent) continue;
-    const key = `${st.contract_id}:${Number(st.period_start.slice(0, 4))}-${Number(st.period_start.slice(5, 7))}`;
-    const prev = coverage.get(key);
-    coverage.set(key, { sent: true, supplemented: (prev?.supplemented ?? false) || supplementedIds.has(st.id) });
-  }
-
-  const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  for (const r of targets) {
-    const cid = r.contract_id as string;
-    r.next_run = nextUsageRun({
-      chargeDate: r.charge_date,
-      held: !!r.held_at,
-      reviewed: !!r.reviewed_at,
-      contract: contractById.get(cid) ?? null,
-      today,
-      reviewAfterDays: USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS,
-      coverageFor: (ym) => coverage.get(`${cid}:${ym.year}-${ym.month}`) ?? null,
-    });
-  }
-}
-
 /**
  * GET /api/usage-charges
  *
@@ -394,8 +337,6 @@ export async function GET(request: NextRequest) {
       }
     }
   }
-
-  await attachNextRun(supabase, data);
 
   return NextResponse.json({
     data,

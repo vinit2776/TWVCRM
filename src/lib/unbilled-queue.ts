@@ -93,20 +93,6 @@ export interface UnbilledRow {
    * the month after the one it targets.
    */
   backfillTarget?: { month: number; year: number };
-  /**
-   * Usage current_cycle rows only — lets Generate & Send show what's on a
-   * draft (and how it will be dispatched) without expanding every row.
-   * "proforma_first" | "gst_direct", read off the contract.
-   */
-  billingMode?: string | null;
-  /** Manual + print + facility charges linked to the draft (bookings excluded). */
-  chargeCount?: number;
-  /** Earliest charge date on the draft, YYYY-MM-DD (print/facility use their period's last day). */
-  oldestChargeDate?: string | null;
-  /** Pending charges on this contract that are held — excluded from the draft. */
-  heldCount?: number;
-  /** current_cycle rows only — "draft" or "finalized"; decides finalize-and-send vs send-proforma. */
-  statementStatus?: string;
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -186,8 +172,8 @@ async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType
   const { data, error } = await supabase
     .from("billing_statements")
     .select(`
-      id, statement_type, status, total_amount, prepaid_month, prepaid_year, period_start,
-      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(first_name, last_name, company))
+      id, statement_type, total_amount, prepaid_month, prepaid_year, period_start,
+      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company))
     `)
     .in("status", ["draft", "finalized"])
     .is("proforma_sent_at", null)
@@ -199,7 +185,7 @@ async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType
 
   const rows: InternalRow[] = [];
   for (const s of data as unknown as Array<{
-    id: string; statement_type: string; status: string; total_amount: number | null;
+    id: string; statement_type: string; total_amount: number | null;
     prepaid_month: number | null; prepaid_year: number | null; period_start: string;
     contract_id: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -218,72 +204,11 @@ async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType
       periodLabel: periodLabel(month, year, "current_cycle"),
       amount: s.total_amount ?? null,
       statementId: s.id,
-      statementStatus: s.status,
       detail: isUsage ? "Usage statement" : "Rent statement",
       sortKey: `${year}-${String(month).padStart(2, "0")}-01`,
-      ...(isUsage ? { billingMode: s.contract.billing_mode ?? null } : {}),
     });
   }
-  if (type === "usage" && rows.length > 0) await attachUsageDraftSummary(supabase, rows);
   return rows;
-}
-
-function lastDayOfMonthYmd(year: number, month: number): string {
-  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(days).padStart(2, "0")}`;
-}
-
-/** Batched (one query per source, never per row) charge count / oldest date /
- *  held count for usage current_cycle rows. Mutates rows in place. */
-async function attachUsageDraftSummary(supabase: SupabaseClient, rows: InternalRow[]): Promise<void> {
-  const statementIds = rows.map((r) => r.statementId!).filter(Boolean);
-  const contractIds = [...new Set(rows.map((r) => r.contractId))];
-
-  const [manualRes, serviceRes, facilityRes, heldManualRes, heldServiceRes, heldFacilityRes] = await Promise.all([
-    supabase.from("usage_charges").select("billing_statement_id, charge_date").in("billing_statement_id", statementIds),
-    supabase.from("service_usage_records").select("billing_statement_id, period_year, period_month").in("billing_statement_id", statementIds),
-    supabase.from("facility_usage_records").select("billing_statement_id, accounting_period_id").in("billing_statement_id", statementIds),
-    supabase.from("usage_charges").select("contract_id").in("contract_id", contractIds).eq("status", "pending").is("billing_statement_id", null).not("held_at", "is", null),
-    supabase.from("service_usage_records").select("contract_id").in("contract_id", contractIds).eq("is_billed", false).is("billing_statement_id", null).not("held_at", "is", null),
-    supabase.from("facility_usage_records").select("contract_id").in("contract_id", contractIds).is("billing_statement_id", null).not("held_at", "is", null),
-  ]);
-
-  const count = new Map<string, number>();
-  const oldest = new Map<string, string>();
-  const note = (stmtId: string | null, ymd: string | null) => {
-    if (!stmtId) return;
-    count.set(stmtId, (count.get(stmtId) ?? 0) + 1);
-    if (ymd && (!oldest.has(stmtId) || ymd < oldest.get(stmtId)!)) oldest.set(stmtId, ymd);
-  };
-  for (const c of (manualRes.data ?? []) as Array<{ billing_statement_id: string | null; charge_date: string | null }>) {
-    note(c.billing_statement_id, c.charge_date);
-  }
-  for (const s of (serviceRes.data ?? []) as Array<{ billing_statement_id: string | null; period_year: number; period_month: number }>) {
-    note(s.billing_statement_id, lastDayOfMonthYmd(s.period_year, s.period_month));
-  }
-  const facilityRows = (facilityRes.data ?? []) as Array<{ billing_statement_id: string | null; accounting_period_id: string | null }>;
-  const periodIds = [...new Set(facilityRows.map((f) => f.accounting_period_id).filter((id): id is string => !!id))];
-  const { data: periods } = periodIds.length
-    ? await supabase.from("accounting_periods").select("id, year, month").in("id", periodIds)
-    : { data: [] };
-  const periodById = new Map((periods ?? []).map((p) => [p.id as string, p as { year: number; month: number }]));
-  for (const f of facilityRows) {
-    const p = f.accounting_period_id ? periodById.get(f.accounting_period_id) : undefined;
-    note(f.billing_statement_id, p ? lastDayOfMonthYmd(p.year, p.month) : null);
-  }
-
-  const held = new Map<string, number>();
-  for (const res of [heldManualRes, heldServiceRes, heldFacilityRes]) {
-    for (const h of (res.data ?? []) as Array<{ contract_id: string }>) {
-      held.set(h.contract_id, (held.get(h.contract_id) ?? 0) + 1);
-    }
-  }
-
-  for (const r of rows) {
-    r.chargeCount = count.get(r.statementId!) ?? 0;
-    r.oldestChargeDate = oldest.get(r.statementId!) ?? null;
-    r.heldCount = held.get(r.contractId) ?? 0;
-  }
 }
 
 // ─── 2. Rent gap ─────────────────────────────────────────────────────────────

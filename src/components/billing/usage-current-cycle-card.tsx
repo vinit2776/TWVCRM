@@ -17,7 +17,7 @@
  * per-record billed flag of its own.
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { Loader2, ChevronRight, Send, Plus, Eye, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,39 +70,13 @@ interface PreviewEmail {
   no_contact: boolean;
 }
 
-/** What the parent's "Send N invoices" summary needs to stay in sync with
- *  edits made inside an expanded row (waive / add charge / single send). */
-export interface UsageCycleRowState {
-  total: number;
-  status: string;
-  hasUnsavedCharge: boolean;
-}
-
 interface Props {
   row: UnbilledRow;
   canBill: boolean;
   onSent: () => void | Promise<void>;
-  onStateChange?: (statementId: string, state: UsageCycleRowState) => void;
-  /** Set by the parent's bulk send once this row has gone out. */
-  sentExternally?: boolean;
-  /** True while the parent's bulk send is running — freezes edits and single send. */
-  locked?: boolean;
 }
 
-export function RouteBadge({ mode }: { mode: string | null | undefined }) {
-  if (!mode) return null;
-  return (
-    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded whitespace-nowrap ${mode === "gst_direct" ? "bg-green-50 text-green-800 border border-green-200" : "bg-blue-50 text-blue-800 border border-blue-200"}`}>
-      {mode === "gst_direct" ? "GST direct" : "Proforma first"}
-    </span>
-  );
-}
-
-function daysSince(ymd: string): number {
-  return Math.max(0, Math.floor((Date.now() - new Date(ymd + "T00:00:00").getTime()) / 86400000));
-}
-
-export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sentExternally, locked }: Props) {
+export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<StatementDetail | null>(null);
@@ -127,7 +101,6 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
   const [sent, setSent] = useState(false);
 
   const statementId = row.statementId!;
-  const isSent = sent || !!sentExternally;
 
   const loadDetail = useCallback(async (): Promise<StatementDetail | null> => {
     setLoading(true);
@@ -154,15 +127,6 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
       setLoading(false);
     }
   }, [statementId]);
-
-  useEffect(() => {
-    if (!onStateChange) return;
-    onStateChange(statementId, {
-      total: detail ? detail.total_amount : Number(row.amount ?? 0),
-      status: detail ? detail.status : (row.statementStatus ?? "draft"),
-      hasUnsavedCharge: showAddCharge,
-    });
-  }, [onStateChange, statementId, detail, row.amount, row.statementStatus, showAddCharge]);
 
   const toggle = () => {
     const next = !expanded;
@@ -334,7 +298,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
 
   return (
     <div className="border-b last:border-b-0">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-4 py-2.5 cursor-pointer hover:bg-muted/30" onClick={toggle}>
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 cursor-pointer hover:bg-muted/30" onClick={toggle}>
         <div className="flex items-center gap-2 min-w-0">
           <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
           <div className="min-w-0">
@@ -343,35 +307,21 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
               {" → "}{row.customerName}
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {(() => {
-                const n = detail ? items.length : (row.chargeCount ?? 0);
-                const parts = [row.periodLabel];
-                if (n > 0) parts.push(`${n} charge${n === 1 ? "" : "s"}`);
-                return parts.join(" · ");
-              })()}
-              {(row.heldCount ?? 0) > 0 && (
-                <span className="text-amber-700"> · {row.heldCount} on hold (excluded)</span>
-              )}
-              {row.oldestChargeDate && (() => {
-                const d = daysSince(row.oldestChargeDate);
-                return <span className={d > 60 ? "text-red-600" : d > 30 ? "text-amber-700" : ""}> · oldest {d} day{d === 1 ? "" : "s"}</span>;
-              })()}
+              {row.periodLabel}{items.length > 0 ? ` · ${items.length} item${items.length > 1 ? "s" : ""}` : ""}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0 ml-auto">
-          <RouteBadge mode={detail?.billing_mode ?? row.billingMode} />
+        <div className="flex items-center gap-3 shrink-0">
           <span className="text-sm font-mono">
-            {isSent ? formatCurrency(detail?.total_amount ?? row.amount ?? 0) : (detail ? formatCurrency(detail.total_amount) : (row.amount != null ? formatCurrency(row.amount) : "—"))}
+            {sent ? formatCurrency(detail?.total_amount ?? row.amount ?? 0) : (detail ? formatCurrency(detail.total_amount) : (row.amount != null ? formatCurrency(row.amount) : "—"))}
           </span>
-          {isSent ? (
+          {sent ? (
             <span className="inline-flex items-center gap-1 rounded-md bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 text-xs font-semibold">✓ Sent</span>
           ) : canBill ? (
             <Button
               size="sm"
               className="h-7 bg-teal-700 hover:bg-teal-800 text-xs"
               onClick={(e) => { e.stopPropagation(); void openFinalizeDialog(); }}
-              disabled={locked}
             >
               <Send className="h-3 w-3 mr-1" />{detail?.status === "finalized" ? "Send" : "Finalize & Send"}
             </Button>
@@ -379,17 +329,24 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
         </div>
       </div>
 
-      {expanded && !isSent && (
+      {expanded && !sent && (
         <div className="px-4 pb-3">
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-3"><Loader2 className="h-3 w-3 animate-spin" /> Loading items…</div>
           ) : detail ? (
             <>
-              {detail.status === "finalized" && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5 mb-2">
-                  Already finalized — items are locked. Click Send to dispatch it.
-                </p>
-              )}
+              <div className="flex items-center gap-2 mb-2">
+                {detail.billing_mode && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${detail.billing_mode === "gst_direct" ? "bg-green-50 text-green-800 border border-green-200" : "bg-blue-50 text-blue-800 border border-blue-200"}`}>
+                    {detail.billing_mode === "gst_direct" ? "GST direct" : "Proforma first"}
+                  </span>
+                )}
+                {detail.status === "finalized" && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+                    Already finalized — items are locked. Click Send to dispatch it.
+                  </p>
+                )}
+              </div>
               <div className="rounded-md border divide-y text-sm mb-2">
                 {items.map((it) => (
                   <div key={it.key} className="px-3 py-2">
@@ -403,7 +360,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className={`font-mono text-xs ${it.waived ? "text-muted-foreground line-through" : ""}`}>{formatCurrency(it.amount)}</span>
-                        {it.waivable && canBill && !locked && detail.status === "draft" && (
+                        {it.waivable && canBill && detail.status === "draft" && (
                           <button
                             className={`text-[11px] font-semibold underline underline-offset-2 ${it.waived ? "text-slate-500 hover:text-slate-700" : "text-red-600 hover:text-red-800"}`}
                             onClick={() => it.chargeId && it.source && (it.waived ? applyWaive(it.chargeId, it.source, false) : startWaive(it.chargeId))}
@@ -440,7 +397,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent, onStateChange, sen
                 {items.length === 0 && <p className="text-xs text-muted-foreground px-3 py-3 text-center">No line items.</p>}
               </div>
 
-              {canBill && !locked && detail.status === "draft" && (
+              {canBill && detail.status === "draft" && (
                 showAddCharge ? (
                   <div className={`rounded-md border border-teal-200 bg-teal-50/50 p-2.5 space-y-2 mb-2 ${unsavedChargeWarning ? "ring-2 ring-amber-300" : ""}`}>
                     <Input placeholder="Description" value={addDesc} onChange={(e) => setAddDesc(e.target.value)} className="h-7 text-sm" />
