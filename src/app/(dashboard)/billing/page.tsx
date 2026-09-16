@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   Receipt,
   MoreHorizontal,
@@ -1376,6 +1377,7 @@ export default function BillingPage() {
                   {filteredCharges.length} of {charges.length} charges match &ldquo;{chargesSearchQuery}&rdquo;
                 </p>
               )}
+              {chargesView === "history" ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -1389,32 +1391,15 @@ export default function BillingPage() {
                     <th className="px-4 py-3 text-right font-medium hidden md:table-cell">GST</th>
                     <th className="px-4 py-3 text-right font-medium">Total (incl. GST)</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Charge Date</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      {chargesView === "unbilled" ? "Logged" : "Billing Period"}
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Billing Period</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredCharges.map((charge) => (
-                    <tr
-                      key={charge.id}
-                      className={`border-b transition-colors ${charge.held_at ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-muted/30"}`}
-                    >
-                      <td className="px-4 py-3 font-medium max-w-[200px]">
-                        <div className="flex items-center gap-1.5">
-                          {charge.held_at && (
-                            <span
-                              title={`Held${charge.hold_reason ? ` — ${charge.hold_reason}` : ""}`}
-                              className="shrink-0"
-                            >
-                              <PauseCircle className="h-3.5 w-3.5 text-amber-600" aria-label="Held" />
-                            </span>
-                          )}
-                          <span className="truncate">{charge.description}</span>
-                        </div>
-                      </td>
+                    <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
                       <td className="px-4 py-3 max-w-[160px] truncate" title={customerNameOf(charge.lead)}>{customerNameOf(charge.lead)}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                         {/* Show both contract + booking when present (a posted-
@@ -1458,9 +1443,7 @@ export default function BillingPage() {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(charge.charge_date)}</td>
                       <td className="px-4 py-3 hidden md:table-cell">
-                        {chargesView === "unbilled" ? (
-                          <span className={`text-sm ${chargeAgeLabel(charge).className}`}>{chargeAgeLabel(charge).text}</span>
-                        ) : (() => {
+                        {(() => {
                           const d = new Date(charge.charge_date + "T00:00:00");
                           const monthLabel = d.toLocaleString("en-IN", { month: "short", year: "numeric" });
                           const cycleLabels: Record<string, string> = { monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-Yearly", yearly: "Yearly" };
@@ -1477,29 +1460,13 @@ export default function BillingPage() {
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
-                        {charge.held_at && (
-                          <Badge
-                            variant="outline"
-                            className="block w-fit mt-1 text-[10px] bg-amber-50 text-amber-800 border-amber-300"
-                            title={charge.hold_reason ?? undefined}
-                          >
-                            Held{charge.hold_reason ? ` — ${charge.hold_reason}` : ""}
-                          </Badge>
-                        )}
                         {/* Only print/facility rows carry a real billable/non-billable
                             distinction — a manual charge is always billable unless
                             waived, which the status badge above already communicates. */}
                         {charge.billable === false && (
                           <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
                         )}
-                        {charge.status === "pending" && isChargeStale(charge) && (
-                          <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>
-                        )}
-                        {/* History already shows a resolved status (Billed/Waived)
-                            above — the "Bills in: ..." cycle tag only earns its
-                            keep on Unbilled, and only for the pending states the
-                            Logged/needs-review columns don't already cover. */}
-                        {chargesView === "history" && charge.billing_cycle_status && charge.billing_cycle_label && (
+                        {charge.billing_cycle_status && charge.billing_cycle_label && (
                           <Badge
                             variant="outline"
                             className={`block w-fit mt-1 text-[10px] ${BILLING_CYCLE_TAG[charge.billing_cycle_status]?.className ?? ""}`}
@@ -1522,60 +1489,6 @@ export default function BillingPage() {
                             >
                               <Eye className="mr-2 h-4 w-4" />View Details
                             </DropdownMenuItem>
-                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setEditingCharge(charge);
-                                  setEditChargeOpen(true);
-                                }}
-                              >
-                                <Pencil className="mr-2 h-4 w-4" />Edit
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && charge.billable !== false && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setWaiveChargeTarget(charge);
-                                  setWaiveChargeReason("");
-                                  setWaiveChargeReasonError(false);
-                                }}
-                              >
-                                <Ban className="mr-2 h-4 w-4" />Waive fully
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && charge.total > 0 && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setReduceChargeTarget(charge);
-                                  setReduceChargeAmount("");
-                                  setReduceChargeReason("");
-                                  setReduceChargeError(null);
-                                }}
-                              >
-                                <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && !charge.held_at && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setHoldChargeTarget(charge);
-                                  setHoldChargeReason("");
-                                  setHoldChargeReasonError(false);
-                                }}
-                              >
-                                <PauseCircle className="mr-2 h-4 w-4" />Hold this charge
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && charge.held_at && (
-                              <DropdownMenuItem onClick={() => releaseChargeHold(charge)}>
-                                <PlayCircle className="mr-2 h-4 w-4" />Release hold
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && isChargeStale(charge) && (
-                              <DropdownMenuItem onClick={() => submitReviewCharge(charge)}>
-                                <CheckCircle className="mr-2 h-4 w-4" />Bill anyway
-                              </DropdownMenuItem>
-                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -1583,6 +1496,158 @@ export default function BillingPage() {
                   ))}
                 </tbody>
               </table>
+              ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-4 py-3 text-left font-medium">Charge</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Source</th>
+                    <th className="px-4 py-3 text-right font-medium">Amount</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Logged</th>
+                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCharges.map((charge) => {
+                    const stale = charge.status === "pending" && isChargeStale(charge);
+                    const age = chargeAgeLabel(charge);
+                    return (
+                      <tr
+                        key={charge.id}
+                        className={`border-b transition-colors ${charge.held_at ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-muted/30"}`}
+                      >
+                        <td className="px-4 py-3 font-medium max-w-[280px]">
+                          <div className="flex items-center gap-1.5">
+                            {charge.held_at && (
+                              <span title={`Held${charge.hold_reason ? ` — ${charge.hold_reason}` : ""}`} className="shrink-0">
+                                <PauseCircle className="h-3.5 w-3.5 text-amber-600" aria-label="Held" />
+                              </span>
+                            )}
+                            <span className="truncate">{charge.description}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                            {customerNameOf(charge.lead)}
+                            {charge.contract?.contract_number && (
+                              <> · <Link href={`/contracts/${charge.contract_id}`} target="_blank" rel="noopener" className="text-primary hover:underline" title="Open contract">{charge.contract.contract_number}</Link></>
+                            )}
+                            {charge.booking?.booking_number && (
+                              <> · <Link href={`/bookings/${charge.booking_id}`} target="_blank" rel="noopener" className="text-blue-600 hover:underline" title={`Open booking — ${formatDate(charge.booking.booking_date)}`}>{charge.booking.booking_number}</Link></>
+                            )}
+                          </p>
+                          {charge.held_at && (
+                            <p className="text-[11px] text-amber-700 mt-0.5">Held{charge.hold_reason ? ` — ${charge.hold_reason}` : ""}</p>
+                          )}
+                          {charge.billable === false && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 hidden sm:table-cell">
+                          <Badge variant="outline" className={USAGE_SOURCE_COLORS[charge.source ?? "manual"]}>
+                            {USAGE_SOURCE_LABELS[charge.source ?? "manual"]}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold">
+                          {formatCurrency(charge.total_with_gst ?? charge.total)}
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell">
+                          <span className={`text-sm ${age.className}`}>{age.text}</span>
+                          {stale && <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {charge.held_at ? (
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => releaseChargeHold(charge)}>
+                                <PlayCircle className="mr-1 h-3.5 w-3.5" />Release
+                              </Button>
+                            ) : charge.status === "pending" && charge.billable === false ? (
+                              // Within-quota print/facility rows have nothing to
+                              // bill, waive, or hold — the "Non-billable" note
+                              // under the description already says so.
+                              <span className="text-[11px] text-muted-foreground px-1.5">—</span>
+                            ) : charge.status === "pending" && (
+                              <>
+                                {stale ? (
+                                  <Button size="sm" className="h-7 text-xs bg-teal-700 hover:bg-teal-800" onClick={() => submitReviewCharge(charge)}>
+                                    <CheckCircle className="mr-1 h-3.5 w-3.5" />Bill anyway
+                                  </Button>
+                                ) : (
+                                  <span className="text-[11px] font-medium text-muted-foreground px-1.5">Billable</span>
+                                )}
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button size="sm" variant="outline" className="h-7 text-xs">Waive<ChevronDown className="ml-1 h-3 w-3" /></Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        setWaiveChargeTarget(charge);
+                                        setWaiveChargeReason("");
+                                        setWaiveChargeReasonError(false);
+                                      }}
+                                    >
+                                      <Ban className="mr-2 h-4 w-4" />Waive fully
+                                    </DropdownMenuItem>
+                                    {charge.total > 0 && (
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setReduceChargeTarget(charge);
+                                          setReduceChargeAmount("");
+                                          setReduceChargeReason("");
+                                          setReduceChargeError(null);
+                                        }}
+                                      >
+                                        <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs"
+                                  onClick={() => {
+                                    setHoldChargeTarget(charge);
+                                    setHoldChargeReason("");
+                                    setHoldChargeReasonError(false);
+                                  }}
+                                >
+                                  <PauseCircle className="mr-1 h-3.5 w-3.5" />Hold
+                                </Button>
+                              </>
+                            )}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><MoreHorizontal className="h-4 w-4" /></Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setViewingCharge(charge);
+                                    setViewChargeOpen(true);
+                                  }}
+                                >
+                                  <Eye className="mr-2 h-4 w-4" />View Details
+                                </DropdownMenuItem>
+                                {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setEditingCharge(charge);
+                                      setEditChargeOpen(true);
+                                    }}
+                                  >
+                                    <Pencil className="mr-2 h-4 w-4" />Edit
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              )}
             </div>
           )}
 
