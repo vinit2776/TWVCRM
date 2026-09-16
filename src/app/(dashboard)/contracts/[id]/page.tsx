@@ -405,16 +405,27 @@ export default function ContractDetailPage({
       { watermarkDraft: includeDraftWatermark }
     );
     doc.save(`${contract.contract_number}.pdf`);
-    // A clean copy before start_date is confirmed can go out for physical
-    // signature — snapshot the printed date so the page can flag drift later.
-    if (!includeDraftWatermark && !contract.start_date_confirmed && contract.start_date) {
-      const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signatureStartDate: contract.start_date }),
-      });
-      if (res.ok) fetchContract(false);
+    if (await recordSignatureCopyIfClean()) fetchContract(false);
+  };
+
+  // A clean copy (downloaded or emailed) before start_date is confirmed can go
+  // out for physical signature — snapshot the printed date so the page can
+  // flag drift later. Returns true when a snapshot was recorded.
+  const recordSignatureCopyIfClean = async (): Promise<boolean> => {
+    if (!contract || includeDraftWatermark || contract.start_date_confirmed || !contract.start_date) {
+      return false;
     }
+    const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signatureStartDate: contract.start_date }),
+    });
+    return res.ok;
+  };
+
+  const handleEmailSent = async () => {
+    await recordSignatureCopyIfClean();
+    fetchContract();
   };
 
   const handleGeneratePDFBase64 = async (options?: { applyCompanyStamp?: boolean; stampRef?: string; watermarkDraft?: boolean }): Promise<string> => {
@@ -2934,7 +2945,7 @@ export default function ContractDetailPage({
         leadEmail={contract.lead?.email}
         contractIsRenewal={!!(contract.is_renewal && contract.parent_contract_id)}
         onGeneratePDF={handleGeneratePDFForEmail}
-        onSuccess={fetchContract}
+        onSuccess={handleEmailSent}
       />
 
       {/* Renewal Dialog */}

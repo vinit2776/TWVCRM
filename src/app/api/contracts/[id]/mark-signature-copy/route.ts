@@ -12,8 +12,8 @@ const bodySchema = z.object({
 /**
  * POST /api/contracts/[id]/mark-signature-copy
  *
- * Records that a watermark-free copy was just downloaded (DRAFT watermark
- * unticked) while start_date isn't confirmed yet, and snapshots the start
+ * Records that a watermark-free copy was just downloaded or emailed (DRAFT
+ * watermark unticked) while start_date isn't confirmed yet, and snapshots the start
  * date printed on it. This route never touches contract.start_date. If the
  * real start_date
  * later differs from this snapshot, the UI compares them to warn staff that
