@@ -508,6 +508,21 @@ export default function BillingPage() {
     return charge.charge_date < cutoff.toISOString().slice(0, 10);
   };
 
+  // Replaces the "Bills in: [month] · [cycle state]" tag on the Unbilled
+  // view with a plain age — the cycle-status vocabulary (cycle_open / ready
+  // / overdue / supplemental_needed) is implementation detail now that
+  // generateUsageStatements sweeps anything outstanding regardless of month
+  // (see the usage-billing-engine PR); all that actually matters to someone
+  // reviewing this list is "how long has this been sitting here."
+  const chargeAgeLabel = (charge: UsageCharge): { text: string; className: string } => {
+    const days = Math.floor((Date.now() - new Date(charge.charge_date + "T00:00:00").getTime()) / 86400000);
+    const text = days <= 0 ? "Today" : days === 1 ? "1 day ago" : `${days} days ago`;
+    const className = days > USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS ? "text-red-600 font-medium"
+      : days > 30 ? "text-amber-600"
+      : "text-muted-foreground";
+    return { text, className };
+  };
+
   const submitWaiveCharge = async () => {
     if (!waiveChargeTarget) return;
     if (!waiveChargeReason.trim()) { setWaiveChargeReasonError(true); return; }
@@ -1322,19 +1337,26 @@ export default function BillingPage() {
                 </Button>
               )}
             </div>
-            {["admin", "accounts", "manager"].includes(userRole ?? "") && (
-              <Button variant="outline" onClick={() => setPrintEntryOpen(true)}>
-                <Printer className="mr-2 h-4 w-4" />Log Print Usage
-              </Button>
-            )}
-            {["admin", "accounts", "manager"].includes(userRole ?? "") && (
-              <Button variant="outline" onClick={() => setFacilityUsageOpen(true)}>
-                <Building2 className="mr-2 h-4 w-4" />Log Facility Usage
-              </Button>
-            )}
-            <Button onClick={() => setAddChargeOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />Add Charge
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button><Plus className="mr-2 h-4 w-4" />Add usage</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setAddChargeOpen(true)}>
+                  <Receipt className="mr-2 h-4 w-4" />Manual charge
+                </DropdownMenuItem>
+                {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+                  <DropdownMenuItem onClick={() => setPrintEntryOpen(true)}>
+                    <Printer className="mr-2 h-4 w-4" />Print usage
+                  </DropdownMenuItem>
+                )}
+                {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+                  <DropdownMenuItem onClick={() => setFacilityUsageOpen(true)}>
+                    <Building2 className="mr-2 h-4 w-4" />Facility usage
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
           {chargesLoading ? (
@@ -1367,7 +1389,9 @@ export default function BillingPage() {
                     <th className="px-4 py-3 text-right font-medium hidden md:table-cell">GST</th>
                     <th className="px-4 py-3 text-right font-medium">Total (incl. GST)</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Charge Date</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Billing Period</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
+                      {chargesView === "unbilled" ? "Logged" : "Billing Period"}
+                    </th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
@@ -1434,7 +1458,9 @@ export default function BillingPage() {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(charge.charge_date)}</td>
                       <td className="px-4 py-3 hidden md:table-cell">
-                        {(() => {
+                        {chargesView === "unbilled" ? (
+                          <span className={`text-sm ${chargeAgeLabel(charge).className}`}>{chargeAgeLabel(charge).text}</span>
+                        ) : (() => {
                           const d = new Date(charge.charge_date + "T00:00:00");
                           const monthLabel = d.toLocaleString("en-IN", { month: "short", year: "numeric" });
                           const cycleLabels: Record<string, string> = { monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-Yearly", yearly: "Yearly" };
@@ -1467,11 +1493,13 @@ export default function BillingPage() {
                           <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
                         )}
                         {charge.status === "pending" && isChargeStale(charge) && (
-                          <span className="block text-[11px] font-medium text-red-600 mt-0.5">
-                            {Math.floor((Date.now() - new Date(charge.charge_date).getTime()) / 86400000)} days · needs review
-                          </span>
+                          <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>
                         )}
-                        {charge.billing_cycle_status && charge.billing_cycle_label && (
+                        {/* History already shows a resolved status (Billed/Waived)
+                            above — the "Bills in: ..." cycle tag only earns its
+                            keep on Unbilled, and only for the pending states the
+                            Logged/needs-review columns don't already cover. */}
+                        {chargesView === "history" && charge.billing_cycle_status && charge.billing_cycle_label && (
                           <Badge
                             variant="outline"
                             className={`block w-fit mt-1 text-[10px] ${BILLING_CYCLE_TAG[charge.billing_cycle_status]?.className ?? ""}`}

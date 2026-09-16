@@ -48,6 +48,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
+import { USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 
 export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal" | "usage_gap" | "supplemental";
 export type UnbilledType = "rent" | "usage";
@@ -434,12 +435,21 @@ interface GapContribution {
 }
 
 async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
-  const closed = lastClosedMonth();
-  const firstOfClosedMonth = `${closed.year}-${String(closed.month).padStart(2, "0")}-01`;
+  // "Gap" now means the same thing generateUsageStatements' own review gate
+  // does (see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS in src/lib/constants.ts):
+  // older than the review window and never explicitly reviewed. Everything
+  // more recent than that gets swept automatically by the next Generate
+  // Drafts run regardless of which month it's dated in (usage-billing-engine
+  // PR broadened that sweep from "exactly this month" to "on or before it"),
+  // so flagging it here as a stranded "gap" would be actively misleading —
+  // it isn't stuck, it just hasn't billed yet. A held charge is excluded
+  // too: that's a deliberate, already-visible choice, not an accidental gap.
+  const reviewCutoff = new Date();
+  reviewCutoff.setDate(reviewCutoff.getDate() - USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS);
+  const reviewCutoffDate = reviewCutoff.toISOString().slice(0, 10);
+  const cutoffYear = reviewCutoff.getFullYear();
+  const cutoffMonth = reviewCutoff.getMonth() + 1;
 
-  // Ad-hoc usage charges dated before the window generateUsageStatements is
-  // currently targeting — a future run will only ever look inside its own
-  // month's window, so these are otherwise skipped forever.
   // total > 0 excludes complimentary/courtesy charges (quantity x price = 0)
   // — nothing to bill, so they don't belong in a queue of billing gaps to
   // act on. usage-charges/route.ts now stores these as status="waived" at
@@ -451,8 +461,10 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     .select("contract_id, charge_date, total")
     .eq("status", "pending")
     .is("billing_statement_id", null)
+    .is("held_at", null)
+    .is("reviewed_at", null)
     .gt("total", 0)
-    .lt("charge_date", firstOfClosedMonth);
+    .lt("charge_date", reviewCutoffDate);
 
   // Print/service overage — same idea, keyed by period_year/period_month
   // instead of a date column.
@@ -461,18 +473,19 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     .select("contract_id, period_year, period_month, amount, overage_quantity")
     .eq("is_billed", false)
     .is("billing_statement_id", null)
+    .is("held_at", null)
+    .is("reviewed_at", null)
     .gt("overage_quantity", 0)
     .gt("amount", 0)
-    .or(`period_year.lt.${closed.year},and(period_year.eq.${closed.year},period_month.lt.${closed.month})`);
+    .or(`period_year.lt.${cutoffYear},and(period_year.eq.${cutoffYear},period_month.lt.${cutoffMonth})`);
 
-  // Facility overage has no billing_statement_id to filter on (the table
-  // predates that link — see 00012_accounting_module.sql) — detect via
-  // period instead: any old period's billable usage not covered by a
-  // non-voided usage/combined statement for that contract is a gap.
+  // Facility overage — scoped by billing_statement_id (see
+  // 00563_usage_billing_engine.sql) now that the column exists, same as the
+  // other two sources, instead of the old period+covering-statement proxy.
   const { data: oldPeriods } = await supabase
     .from("accounting_periods")
     .select("id, year, month")
-    .or(`year.lt.${closed.year},and(year.eq.${closed.year},month.lt.${closed.month})`);
+    .or(`year.lt.${cutoffYear},and(year.eq.${cutoffYear},month.lt.${cutoffMonth})`);
   const oldPeriodById = new Map(
     (oldPeriods ?? []).map((p) => [p.id as string, p as { id: string; year: number; month: number }]),
   );
@@ -482,22 +495,12 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         .from("facility_usage_records")
         .select("contract_id, accounting_period_id, billable_quantity, total_charge")
         .in("accounting_period_id", [...oldPeriodById.keys()])
+        .is("billing_statement_id", null)
+        .is("held_at", null)
+        .is("reviewed_at", null)
         .gt("billable_quantity", 0)
         .gt("total_charge", 0)
     : { data: [] };
-
-  const facilityContractIds = [...new Set((staleFacility ?? []).map((f) => f.contract_id as string))];
-  const { data: coveringStatements } = facilityContractIds.length
-    ? await supabase
-        .from("billing_statements")
-        .select("contract_id, period_start")
-        .in("contract_id", facilityContractIds)
-        .in("statement_type", ["usage", "combined"])
-        .is("voided_at", null)
-    : { data: [] };
-  const covered = new Set(
-    (coveringStatements ?? []).map((s) => `${s.contract_id}:${(s.period_start as string).slice(0, 7)}`),
-  );
 
   const contributions: GapContribution[] = [];
   for (const c of (staleCharges ?? []) as Array<{ contract_id: string; charge_date: string; total: number }>) {
@@ -510,7 +513,6 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     const period = oldPeriodById.get(f.accounting_period_id);
     if (!period) continue;
     const monthKey = `${period.year}-${String(period.month).padStart(2, "0")}`;
-    if (covered.has(`${f.contract_id}:${monthKey}`)) continue; // already billed for that month
     contributions.push({ contractId: f.contract_id, monthKey, amount: Number(f.total_charge || 0), source: "Facility usage" });
   }
 

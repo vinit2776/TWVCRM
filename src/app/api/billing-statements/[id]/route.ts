@@ -46,9 +46,15 @@ export async function GET(
     billable_quantity: number;
     unit_price: number;
     total_charge: number;
+    waived_at: string | null;
+    waive_reason: string | null;
   }> = [];
 
-  if (statement.accounting_period_id && statement.contract_id) {
+  // Scoped by billing_statement_id (see 00563_usage_billing_engine.sql) —
+  // previously this had to fall back to accounting_period_id + contract_id
+  // since there was no direct link, which could pull in rows belonging to a
+  // different statement for the same period (e.g. a supplemental).
+  {
     const { data: facRecords } = await supabase
       .from("facility_usage_records")
       .select(`
@@ -58,10 +64,11 @@ export async function GET(
         billable_quantity,
         unit_price,
         total_charge,
+        waived_at,
+        waive_reason,
         contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(name, unit)
       `)
-      .eq("accounting_period_id", statement.accounting_period_id)
-      .eq("contract_id", statement.contract_id)
+      .eq("billing_statement_id", id)
       .gt("total_charge", 0)
       .order("created_at", { ascending: true });
 
@@ -77,6 +84,8 @@ export async function GET(
         billable_quantity: Number(r.billable_quantity || 0),
         unit_price: Number(r.unit_price || 0),
         total_charge: Number(r.total_charge || 0),
+        waived_at: r.waived_at ?? null,
+        waive_reason: r.waive_reason ?? null,
       };
     });
   }
@@ -90,22 +99,17 @@ export async function GET(
     overage: number;
     rate: number;
     amount: number;
+    waived_at: string | null;
+    waive_reason: string | null;
   }> = [];
 
   if (statement.contract_id) {
-    const periodStart = new Date(statement.period_start);
-    const pYear = periodStart.getFullYear();
-    const pMonth = periodStart.getMonth() + 1;
-
     const { data: svcRecords } = await supabase
       .from("service_usage_records")
       .select(`
-        id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount,
+        id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, waived_at, waive_reason,
         service:service_catalog!service_usage_records_service_id_fkey(name)
       `)
-      .eq("contract_id", statement.contract_id)
-      .eq("period_year", pYear)
-      .eq("period_month", pMonth)
       .eq("billing_statement_id", id);
 
     serviceCharges = (svcRecords || []).map((r) => {
@@ -119,6 +123,8 @@ export async function GET(
         overage: Number(r.overage_quantity || 0),
         rate: Number(r.overage_rate_snapshot || 0),
         amount: Number(r.amount || 0),
+        waived_at: r.waived_at ?? null,
+        waive_reason: r.waive_reason ?? null,
       };
     });
   }
