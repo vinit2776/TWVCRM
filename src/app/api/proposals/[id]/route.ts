@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { updateProposalSchema } from "@/lib/validations";
 import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
+import { validateCommitmentTerms } from "@/lib/proposal-terms";
 
 const CONTENT_FIELDS = [
   "items",
@@ -17,6 +18,9 @@ const CONTENT_FIELDS = [
   "complimentary_items",
   "security_deposit_months",
   "security_deposit_amount",
+  "tenure_months",
+  "lock_in_months",
+  "notice_period_months",
 ] as const;
 
 export async function GET(
@@ -94,6 +98,19 @@ export async function PATCH(
 
     // service_quotas lives in proposal_service_quotas, not a proposals column
     // (same split POST /api/proposals makes) — pulled out and persisted below.
+    // Commitment terms are validated against the merged result, not the partial
+    // body. Any content edit must leave the proposal with a complete, consistent
+    // set — this is how a legacy proposal (created before these fields existed)
+    // gets them the next time it's edited, before it can be re-sent.
+    const commitmentError = validateCommitmentTerms({
+      tenure_months: result.data.tenure_months ?? oldProposal.tenure_months,
+      lock_in_months: result.data.lock_in_months ?? oldProposal.lock_in_months,
+      notice_period_months: result.data.notice_period_months ?? oldProposal.notice_period_months,
+    });
+    if (commitmentError) {
+      return NextResponse.json({ error: commitmentError }, { status: 400 });
+    }
+
     const { service_quotas, ...contentUpdates } = result.data;
     Object.assign(allowedFields, contentUpdates);
 

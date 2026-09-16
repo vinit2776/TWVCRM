@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ACCOUNTING_HEADS } from "@/lib/constants";
+import { PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
   const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>;
@@ -201,7 +202,7 @@ export const lineItemSchema = z.object({
   total: z.number(),
 });
 
-export const createProposalSchema = z.object({
+const proposalBaseSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
@@ -225,9 +226,20 @@ export const createProposalSchema = z.object({
   })).optional(),
   security_deposit_months: z.number().min(0).max(6).optional(),
   security_deposit_amount: z.number().min(0).optional(),
+  tenure_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
+  lock_in_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
+  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_TENURE_MONTHS),
 });
 
-export const updateProposalSchema = createProposalSchema.partial();
+export const createProposalSchema = proposalBaseSchema.superRefine((d, ctx) => {
+  const error = validateCommitmentTerms(d);
+  if (error) ctx.addIssue({ code: "custom", message: error, path: ["lock_in_months"] });
+});
+
+// Cross-field commitment rules are re-checked in PATCH /api/proposals/[id]
+// against the merged (stored + incoming) values, since a partial body alone
+// can't be validated.
+export const updateProposalSchema = proposalBaseSchema.partial();
 
 export type CreateProposalInput = z.input<typeof createProposalSchema>;
 
