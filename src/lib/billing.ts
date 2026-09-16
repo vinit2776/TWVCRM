@@ -1467,7 +1467,18 @@ export async function generateUsageStatements(
   const serviceByContract  = new Map<string, ServiceRow[]>();
   const bookingsByContract = new Map<string, BookingRow[]>();
 
+  // Per-charge hold (see usage_charges.held_at) — excludes just this one
+  // charge from the sweep, not the whole contract. A separate, tolerant
+  // lookup rather than a filter chained onto usageRes's own query: if this
+  // errors (e.g. its migration hasn't been applied to this environment
+  // yet), it fails soft to "nothing is held" instead of taking the whole
+  // generation run down with it — same reasoning as every other query in
+  // this file whose result isn't error-checked.
+  const { data: heldCharges, error: heldChargeErr } = await supabase.from("usage_charges").select("id").not("held_at", "is", null);
+  const heldChargeIds = new Set(heldChargeErr ? [] : (heldCharges ?? []).map((c) => c.id));
+
   for (const u of (usageRes.data ?? []) as UsageRow[]) {
+    if (heldChargeIds.has(u.id)) continue;
     const list = usageByContract.get(u.contract_id) ?? [];
     list.push(u); usageByContract.set(u.contract_id, list);
   }

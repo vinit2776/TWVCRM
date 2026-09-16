@@ -2735,3 +2735,8 @@ export const ELECTRICITY_MARKUP_TYPE_LABELS: Record<string, string> = {
 // floor managers can submit charges but cannot remove them.
 export const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
 
+// Holding or waiving a specific charge — same admin/manager gate the
+// PATCH /api/usage-charges/[id] waive branch already uses (narrower than
+// CHARGE_ALLOWED_ROLES, which also covers everyday charge entry).
+export const CHARGE_HOLD_ALLOWED_ROLES = ["admin", "manager"];
+

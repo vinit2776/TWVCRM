@@ -22,6 +22,11 @@ import {
   Printer,
   Building2,
   Search,
+  Ban,
+  MinusCircle,
+  PauseCircle,
+  PlayCircle,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +47,9 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
 import { UsageChargeDetailsDialog } from "@/components/billing/usage-charge-details-dialog";
@@ -165,6 +173,10 @@ interface UsageCharge {
   billable?: boolean | null;
   billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   billing_cycle_label?: string;
+  // Manual rows only — non-null excludes this charge from the next Generate
+  // Drafts sweep without changing `status`, which stays "pending" throughout.
+  held_at?: string | null;
+  hold_reason?: string | null;
   waive_reason?: string | null;
   waived_at?: string | null;
   waived_by_name?: string | null;
@@ -440,6 +452,13 @@ export default function BillingPage() {
   const [chargesLoading, setChargesLoading]           = useState(true);
   const [chargesPage, setChargesPage]                 = useState(1);
   const [chargesContractFilter, setChargesContractFilter] = useState("");
+  // Unbilled is the working view — always status=pending, no status picker
+  // (there's nothing to choose). History is the reference view for what's
+  // already resolved; chargesStatusFilter there narrows within it
+  // (""=Billed+Waived combined, or a single status) but can never include
+  // pending — that's what makes it "history" rather than a second copy of
+  // Unbilled.
+  const [chargesView, setChargesView]                 = useState<"unbilled" | "history">("unbilled");
   const [chargesStatusFilter, setChargesStatusFilter] = useState("");
   const [chargesDateFrom, setChargesDateFrom]         = useState("");
   const [chargesDateTo, setChargesDateTo]             = useState("");
@@ -451,6 +470,140 @@ export default function BillingPage() {
   const [viewingCharge, setViewingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
   const [facilityUsageOpen, setFacilityUsageOpen]     = useState(false);
+
+  // ── Per-charge review actions: waive fully, reduce (waive partly), hold ──
+  const [waiveChargeTarget, setWaiveChargeTarget]       = useState<UsageCharge | null>(null);
+  const [waiveChargeReason, setWaiveChargeReason]       = useState("");
+  const [waiveChargeReasonError, setWaiveChargeReasonError] = useState(false);
+  const [waiveChargeSubmitting, setWaiveChargeSubmitting]   = useState(false);
+
+  const [reduceChargeTarget, setReduceChargeTarget]     = useState<UsageCharge | null>(null);
+  const [reduceChargeAmount, setReduceChargeAmount]     = useState("");
+  const [reduceChargeReason, setReduceChargeReason]     = useState("");
+  const [reduceChargeError, setReduceChargeError]       = useState<string | null>(null);
+  const [reduceChargeSubmitting, setReduceChargeSubmitting] = useState(false);
+
+  const [holdChargeTarget, setHoldChargeTarget]         = useState<UsageCharge | null>(null);
+  const [holdChargeReason, setHoldChargeReason]         = useState("");
+  const [holdChargeReasonError, setHoldChargeReasonError]   = useState(false);
+  const [holdChargeSubmitting, setHoldChargeSubmitting]     = useState(false);
+
+  const submitWaiveCharge = async () => {
+    if (!waiveChargeTarget) return;
+    if (!waiveChargeReason.trim()) { setWaiveChargeReasonError(true); return; }
+    setWaiveChargeSubmitting(true);
+    try {
+      const res = await fetch(`/api/usage-charges/${waiveChargeTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "waived", waive_reason: waiveChargeReason.trim() }),
+      });
+      if (res.ok) {
+        toast.success("Charge waived");
+        setWaiveChargeTarget(null);
+        setWaiveChargeReason("");
+        setWaiveChargeReasonError(false);
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to waive charge");
+      }
+    } finally {
+      setWaiveChargeSubmitting(false);
+    }
+  };
+
+  const submitReduceCharge = async () => {
+    if (!reduceChargeTarget) return;
+    const newTotal = Number(reduceChargeAmount);
+    if (!reduceChargeAmount || Number.isNaN(newTotal) || newTotal < 0) {
+      setReduceChargeError("Enter a valid amount.");
+      return;
+    }
+    if (newTotal >= reduceChargeTarget.total) {
+      setReduceChargeError(`Enter an amount less than the current total (${formatCurrency(reduceChargeTarget.total)}).`);
+      return;
+    }
+    if (!reduceChargeReason.trim()) {
+      setReduceChargeError("Enter a reason for the reduction.");
+      return;
+    }
+    setReduceChargeSubmitting(true);
+    try {
+      // Keep quantity fixed and recompute unit_price from it, so Qty x Unit
+      // Price still equals the new Total exactly — never let total drift
+      // from that identity (see the CREATE route's own doc comment on why).
+      const newUnitPrice = reduceChargeTarget.quantity
+        ? parseFloat((newTotal / reduceChargeTarget.quantity).toFixed(2))
+        : newTotal;
+      const res = await fetch(`/api/usage-charges/${reduceChargeTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          total: newTotal,
+          unit_price: newUnitPrice,
+          reduction_reason: reduceChargeReason.trim(),
+        }),
+      });
+      if (res.ok) {
+        toast.success("Charge amount reduced");
+        setReduceChargeTarget(null);
+        setReduceChargeAmount("");
+        setReduceChargeReason("");
+        setReduceChargeError(null);
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        setReduceChargeError(err?.error || "Failed to reduce charge");
+      }
+    } finally {
+      setReduceChargeSubmitting(false);
+    }
+  };
+
+  const submitHoldCharge = async () => {
+    if (!holdChargeTarget) return;
+    if (!holdChargeReason.trim()) { setHoldChargeReasonError(true); return; }
+    setHoldChargeSubmitting(true);
+    try {
+      const res = await fetch(`/api/usage-charges/${holdChargeTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold: true, hold_reason: holdChargeReason.trim() }),
+      });
+      if (res.ok) {
+        toast.success("Charge held — it won't be swept into the next Generate Drafts run");
+        setHoldChargeTarget(null);
+        setHoldChargeReason("");
+        setHoldChargeReasonError(false);
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to hold charge");
+      }
+    } finally {
+      setHoldChargeSubmitting(false);
+    }
+  };
+
+  const releaseChargeHold = async (charge: UsageCharge) => {
+    try {
+      const res = await fetch(`/api/usage-charges/${charge.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold: false }),
+      });
+      if (res.ok) {
+        toast.success("Hold released");
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to release hold");
+      }
+    } catch {
+      toast.error("Failed to release hold");
+    }
+  };
 
   // ── Billing Statements ────────────────────────────────────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
@@ -575,7 +728,11 @@ export default function BillingPage() {
     try {
       const params = new URLSearchParams({ page: String(chargesPage), limit: "25" });
       if (chargesContractFilter) params.set("contract_id", chargesContractFilter);
-      if (chargesStatusFilter)   params.set("status", chargesStatusFilter);
+      // Unbilled is always exactly "pending". History is anything but —
+      // narrowed to one status if chosen, otherwise both non-pending
+      // statuses combined (see the comma-separated `status` support in
+      // GET /api/usage-charges).
+      params.set("status", chargesView === "unbilled" ? "pending" : (chargesStatusFilter || "billed,waived"));
       if (chargesDateFrom)       params.set("date_from", chargesDateFrom);
       if (chargesDateTo)         params.set("date_to", chargesDateTo);
       const res = await fetch(`/api/usage-charges?${params}`, { signal });
@@ -591,7 +748,7 @@ export default function BillingPage() {
     } finally {
       if (!signal?.aborted) setChargesLoading(false);
     }
-  }, [chargesPage, chargesContractFilter, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
+  }, [chargesPage, chargesContractFilter, chargesView, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
 
   // Only fire on the Usage Charges tab — saves a round-trip on first load
   // for users who never open it.
@@ -757,7 +914,9 @@ export default function BillingPage() {
     setChargesSearchQuery("");
   };
 
-  const hasChargesFilters = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo || chargesSearchQuery;
+  // chargesStatusFilter only counts as an active filter in History view —
+  // in Unbilled it's unused (status is implicitly, always "pending").
+  const hasChargesFilters = chargesContractFilter || (chargesView === "history" && chargesStatusFilter) || chargesDateFrom || chargesDateTo || chargesSearchQuery;
 
   // Client-side text search over already-fetched charges
   const filteredCharges = chargesSearchQuery.trim()
@@ -1030,6 +1189,22 @@ export default function BillingPage() {
 
         {/* ── Usage Charges ─────────────────────────────────────────────── */}
         <TabsContent value="usage-charges" className="space-y-4 mt-4">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setChargesView("unbilled"); setChargesStatusFilter(""); setChargesPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-sm font-semibold border transition-all ${chargesView === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+            >
+              Unbilled
+            </button>
+            <button
+              type="button"
+              onClick={() => { setChargesView("history"); setChargesStatusFilter(""); setChargesPage(1); }}
+              className={`px-3 py-1.5 rounded-md text-sm font-semibold border transition-all ${chargesView === "history" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
+            >
+              Billed &amp; Waived History
+            </button>
+          </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
               {/* Free-text search — description, contract#, booking#, customer, status */}
@@ -1063,18 +1238,24 @@ export default function BillingPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Select
-                value={chargesStatusFilter}
-                onValueChange={(val) => { setChargesStatusFilter(val === "all" ? "" : val); setChargesPage(1); }}
-              >
-                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  {Object.entries(USAGE_STATUS_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Unbilled is always exactly "pending" — nothing to choose.
+                  History defaults to Billed+Waived combined; this narrows to
+                  just one. Pending is deliberately absent as an option here
+                  — that's what keeps History from becoming a second copy of
+                  Unbilled. */}
+              {chargesView === "history" && (
+                <Select
+                  value={chargesStatusFilter}
+                  onValueChange={(val) => { setChargesStatusFilter(val === "all" ? "" : val); setChargesPage(1); }}
+                >
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Billed + Waived" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Billed + Waived</SelectItem>
+                    <SelectItem value="billed">Billed</SelectItem>
+                    <SelectItem value="waived">Waived</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Input
                 type="date"
                 value={chargesDateFrom}
@@ -1209,6 +1390,15 @@ export default function BillingPage() {
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
+                        {charge.held_at && (
+                          <Badge
+                            variant="outline"
+                            className="block w-fit mt-1 text-[10px] bg-amber-50 text-amber-800 border-amber-300"
+                            title={charge.hold_reason ?? undefined}
+                          >
+                            Held{charge.hold_reason ? ` — ${charge.hold_reason}` : ""}
+                          </Badge>
+                        )}
                         {/* Only print/facility rows carry a real billable/non-billable
                             distinction — a manual charge is always billable unless
                             waived, which the status badge above already communicates. */}
@@ -1246,6 +1436,45 @@ export default function BillingPage() {
                                 }}
                               >
                                 <Pencil className="mr-2 h-4 w-4" />Edit
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setWaiveChargeTarget(charge);
+                                  setWaiveChargeReason("");
+                                  setWaiveChargeReasonError(false);
+                                }}
+                              >
+                                <Ban className="mr-2 h-4 w-4" />Waive fully
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && charge.total > 0 && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setReduceChargeTarget(charge);
+                                  setReduceChargeAmount("");
+                                  setReduceChargeReason("");
+                                  setReduceChargeError(null);
+                                }}
+                              >
+                                <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && !charge.held_at && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setHoldChargeTarget(charge);
+                                  setHoldChargeReason("");
+                                  setHoldChargeReasonError(false);
+                                }}
+                              >
+                                <PauseCircle className="mr-2 h-4 w-4" />Hold this charge
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && charge.held_at && (
+                              <DropdownMenuItem onClick={() => releaseChargeHold(charge)}>
+                                <PlayCircle className="mr-2 h-4 w-4" />Release hold
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
@@ -1315,6 +1544,117 @@ export default function BillingPage() {
       />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} />
+
+      {/* Waive fully */}
+      <Dialog open={!!waiveChargeTarget} onOpenChange={(open) => { if (!open) setWaiveChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Ban className="h-4 w-4" />Waive this charge</DialogTitle>
+            <DialogDescription>
+              {waiveChargeTarget && (
+                <>&ldquo;{waiveChargeTarget.description}&rdquo; ({formatCurrency(waiveChargeTarget.total_with_gst ?? waiveChargeTarget.total)}) will be waived in full — the customer won&rsquo;t be billed for it.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="waive-charge-reason">Reason <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="waive-charge-reason"
+              value={waiveChargeReason}
+              onChange={(e) => { setWaiveChargeReason(e.target.value); if (waiveChargeReasonError) setWaiveChargeReasonError(false); }}
+              placeholder="Why is this being waived?"
+              rows={3}
+              className={waiveChargeReasonError ? "border-destructive" : ""}
+            />
+            {waiveChargeReasonError && <p className="text-xs text-destructive">Enter a reason first.</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWaiveChargeTarget(null)} disabled={waiveChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitWaiveCharge} disabled={waiveChargeSubmitting}>
+              {waiveChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Waive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Waive partly — reduce the amount, keep it as one pending line */}
+      <Dialog open={!!reduceChargeTarget} onOpenChange={(open) => { if (!open) setReduceChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><MinusCircle className="h-4 w-4" />Reduce this charge</DialogTitle>
+            <DialogDescription>
+              {reduceChargeTarget && (
+                <>&ldquo;{reduceChargeTarget.description}&rdquo; is currently {formatCurrency(reduceChargeTarget.total)}. Enter the new (lower) amount — it stays pending and billable at that reduced amount.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="reduce-charge-amount">New amount <span className="text-destructive">*</span></Label>
+              <Input
+                id="reduce-charge-amount"
+                type="number"
+                min="0"
+                value={reduceChargeAmount}
+                onChange={(e) => { setReduceChargeAmount(e.target.value); if (reduceChargeError) setReduceChargeError(null); }}
+                placeholder="0"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reduce-charge-reason">Reason <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="reduce-charge-reason"
+                value={reduceChargeReason}
+                onChange={(e) => { setReduceChargeReason(e.target.value); if (reduceChargeError) setReduceChargeError(null); }}
+                placeholder="Why is this being reduced?"
+                rows={3}
+              />
+            </div>
+            {reduceChargeError && <p className="text-xs text-destructive">{reduceChargeError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReduceChargeTarget(null)} disabled={reduceChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitReduceCharge} disabled={reduceChargeSubmitting}>
+              {reduceChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Reduce
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hold the charge's contract — pauses ALL future billing for it */}
+      <Dialog open={!!holdChargeTarget} onOpenChange={(open) => { if (!open) setHoldChargeTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-4 w-4" />Hold this charge</DialogTitle>
+            <DialogDescription>
+              {holdChargeTarget && (
+                <>&ldquo;{holdChargeTarget.description}&rdquo; won&rsquo;t be swept into the next Generate Drafts run — it stays pending. Every other charge on <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> bills normally. Release the hold whenever it&rsquo;s ready.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="hold-charge-reason">Reason <span className="text-destructive">*</span></Label>
+            <Textarea
+              id="hold-charge-reason"
+              value={holdChargeReason}
+              onChange={(e) => { setHoldChargeReason(e.target.value); if (holdChargeReasonError) setHoldChargeReasonError(false); }}
+              placeholder="Why is this charge being held?"
+              rows={3}
+              className={holdChargeReasonError ? "border-destructive" : ""}
+            />
+            {holdChargeReasonError && <p className="text-xs text-destructive">Enter a reason first.</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHoldChargeTarget(null)} disabled={holdChargeSubmitting}>Cancel</Button>
+            <Button onClick={submitHoldCharge} disabled={holdChargeSubmitting}>
+              {holdChargeSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Place Hold
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
 
       <ViewStatementDialog
