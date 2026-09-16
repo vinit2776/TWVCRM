@@ -5,6 +5,7 @@ import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
 import { drawCompanyStamp } from "@/lib/company-stamp";
+import { composeProposalTerms } from "@/lib/proposal-terms";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -898,7 +899,8 @@ export function generateProposalPDF(
       ? `${proposal.title}\n${proposal.description}`
       : undefined,
     descriptionLabel: "Complimentary Services Offered",
-    termsAndConditions: proposal.terms_and_conditions,
+    // Generated deposit/term/lock-in/notice lines + free text — see proposal-terms.ts.
+    termsAndConditions: composeProposalTerms(proposal) || undefined,
     notes: proposal.notes,
     notesLabel: "Customer Notes",
     qrCodeBase64: paymentOptions?.qrCodeBase64,

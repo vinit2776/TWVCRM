@@ -71,6 +71,7 @@ import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { canRecordPayments } from "@/lib/constants";
+import { composeProposalTerms } from "@/lib/proposal-terms";
 
 export default function ProposalDetailPage({
   params,
@@ -1139,7 +1140,7 @@ export default function ProposalDetailPage({
           )}
 
           {/* Terms & Conditions */}
-          {proposal.terms_and_conditions && (
+          {composeProposalTerms(proposal) && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">
@@ -1148,7 +1149,7 @@ export default function ProposalDetailPage({
               </CardHeader>
               <CardContent>
                 <p className="text-sm whitespace-pre-wrap">
-                  {proposal.terms_and_conditions}
+                  {composeProposalTerms(proposal)}
                 </p>
               </CardContent>
             </Card>

@@ -327,7 +327,14 @@ export interface Proposal {
   discount_amount: number;
   total_amount: number;
   valid_until?: string;
+  /** Free-text terms only. Deposit/term/lock-in/notice lines are generated from
+   *  the fields below — see composeProposalTerms in src/lib/proposal-terms.ts. */
   terms_and_conditions?: string;
+  // Commitment terms offered to the customer (null on proposals created before
+  // these were captured — their terms live only in terms_and_conditions text).
+  tenure_months?: number | null;
+  lock_in_months?: number | null;
+  notice_period_months?: number | null;
   notes?: string;
   sent_at?: string;
   viewed_at?: string;

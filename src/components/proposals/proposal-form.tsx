@@ -13,12 +13,21 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { syncDepositTerm } from "@/lib/proposal-deposit-terms";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
+import {
+  PROPOSAL_MAX_TENURE_MONTHS,
+  buildCommitmentTermLines,
+  hasCommitmentTerms,
+  maxNoticePeriodMonths,
+  mentionsCommitmentTerms,
+  stripLegacyCommitmentLines,
+  validateCommitmentTerms,
+} from "@/lib/proposal-terms";
 import type { ServiceCatalogItem, Proposal } from "@/types";
 
 interface ServiceQuotaRow {
@@ -69,6 +78,11 @@ export function ProposalForm({
   const [depositMonths, setDepositMonths] = useState(0);
   const [depositAmount, setDepositAmount] = useState(0);
   const [depositOverridden, setDepositOverridden] = useState(false);
+  // No defaults on purpose: the commitment offered must be a deliberate choice,
+  // since it's carried into the contract.
+  const [tenureMonths, setTenureMonths] = useState<number | null>(null);
+  const [lockInMonths, setLockInMonths] = useState<number | null>(null);
+  const [noticePeriodMonths, setNoticePeriodMonths] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Load service catalog once on mount
@@ -112,7 +126,13 @@ export function ProposalForm({
       setTaxPercentage(initialProposal.tax_percentage ?? 18);
       setDiscountPercentage(initialProposal.discount_percentage ?? 0);
       setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
-      setTermsAndConditions(initialProposal.terms_and_conditions ?? DEFAULT_PROPOSAL_TERMS);
+      const storedTerms = initialProposal.terms_and_conditions ?? DEFAULT_PROPOSAL_TERMS;
+      // A legacy proposal's text still carries the old hardcoded deposit/term/
+      // notice lines; drop them so they don't contradict the generated ones.
+      setTermsAndConditions(hasCommitmentTerms(initialProposal) ? storedTerms : stripLegacyCommitmentLines(storedTerms));
+      setTenureMonths(initialProposal.tenure_months ?? null);
+      setLockInMonths(initialProposal.lock_in_months ?? null);
+      setNoticePeriodMonths(initialProposal.notice_period_months ?? null);
       setNotes(initialProposal.notes ?? "");
       const confRoom = (initialProposal.complimentary_items || []).find((i) => i.name === "Conference Room");
       setConfRoomHours(confRoom?.quantity ?? 0);
@@ -187,6 +207,9 @@ export function ProposalForm({
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
+    setTenureMonths(null);
+    setLockInMonths(null);
+    setNoticePeriodMonths(null);
     // Reset quotas to defaults
     setServiceQuotas(prev => prev.map(sq => ({
       ...sq,
@@ -194,6 +217,35 @@ export function ProposalForm({
       overage_rate: sq.default_overage_rate,
     })));
   };
+
+  const handleTenureChange = (val: string) => {
+    const tenure = parseInt(val);
+    setTenureMonths(tenure);
+    const lockIn = lockInMonths != null ? Math.min(lockInMonths, tenure) : null;
+    setLockInMonths(lockIn);
+    if (lockIn != null && noticePeriodMonths != null) {
+      setNoticePeriodMonths(Math.min(noticePeriodMonths, maxNoticePeriodMonths(tenure, lockIn)));
+    }
+  };
+
+  const handleLockInChange = (val: string) => {
+    const lockIn = parseInt(val);
+    setLockInMonths(lockIn);
+    if (tenureMonths != null && noticePeriodMonths != null) {
+      setNoticePeriodMonths(Math.min(noticePeriodMonths, maxNoticePeriodMonths(tenureMonths, lockIn)));
+    }
+  };
+
+  const maxNotice = tenureMonths != null && lockInMonths != null
+    ? maxNoticePeriodMonths(tenureMonths, lockInMonths)
+    : null;
+
+  const generatedTermLines = buildCommitmentTermLines({
+    tenure_months: tenureMonths,
+    lock_in_months: lockInMonths,
+    notice_period_months: noticePeriodMonths,
+    security_deposit_months: depositMonths,
+  });
 
   const updateQuota = (serviceId: string, field: "monthly_quota" | "overage_rate", value: number) => {
     setServiceQuotas(prev => prev.map(sq =>
@@ -218,6 +270,16 @@ export function ProposalForm({
     const invalidQty = validItems.find((item) => item.quantity <= 0);
     if (invalidQty) {
       toast.error("Each line item must have a quantity of at least 1");
+      return;
+    }
+
+    const commitmentError = validateCommitmentTerms({
+      tenure_months: tenureMonths,
+      lock_in_months: lockInMonths,
+      notice_period_months: noticePeriodMonths,
+    });
+    if (commitmentError) {
+      toast.error(commitmentError);
       return;
     }
 
@@ -258,6 +320,9 @@ export function ProposalForm({
       }] : undefined,
       security_deposit_months: depositMonths,
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
+      tenure_months: tenureMonths,
+      lock_in_months: lockInMonths,
+      notice_period_months: noticePeriodMonths,
     };
 
     const res = await fetch(isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals", {
@@ -436,12 +501,78 @@ export function ProposalForm({
             </div>
           </div>
 
-          {/* Security Deposit */}
+          {/* Commitment & Security Deposit */}
           <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
-            <Label className="text-sm font-semibold">Security Deposit</Label>
+            <div>
+              <Label className="text-sm font-semibold">Commitment & Security Deposit</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                What the customer is offered. These are printed in the proposal terms and carried into the contract.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="tenure-months" className="text-xs text-muted-foreground">
+                  Term <span className="text-destructive">*</span>
+                </Label>
+                <Select value={tenureMonths != null ? String(tenureMonths) : ""} onValueChange={handleTenureChange}>
+                  <SelectTrigger id="tenure-months">
+                    <SelectValue placeholder="Select term" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lock-in-months" className="text-xs text-muted-foreground">
+                  Lock-in Period <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={lockInMonths != null ? String(lockInMonths) : ""}
+                  onValueChange={handleLockInChange}
+                  disabled={tenureMonths == null}
+                >
+                  <SelectTrigger id="lock-in-months">
+                    <SelectValue placeholder={tenureMonths == null ? "Select term first" : "Select lock-in"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: tenureMonths ?? 0 }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="notice-period-months" className="text-xs text-muted-foreground">
+                  Notice Period <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={noticePeriodMonths != null ? String(noticePeriodMonths) : ""}
+                  onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}
+                  disabled={maxNotice == null}
+                >
+                  <SelectTrigger id="notice-period-months">
+                    <SelectValue placeholder={maxNotice == null ? "Select lock-in first" : "Select notice"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: (maxNotice ?? -1) + 1 }, (_, i) => i).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="deposit-months" className="text-xs text-muted-foreground">Number of Months</Label>
+                <Label htmlFor="deposit-months" className="text-xs text-muted-foreground">Security Deposit (months)</Label>
                 <Select
                   value={String(depositMonths)}
                   onValueChange={(v) => {
@@ -508,6 +639,16 @@ export function ProposalForm({
 
           <div className="space-y-2">
             <Label htmlFor="terms">Terms & Conditions</Label>
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                <Lock className="h-3 w-3" /> Generated from Commitment & Security Deposit — updates as you change them
+              </p>
+              {generatedTermLines.length > 0 ? (
+                <div className="whitespace-pre-line">{generatedTermLines.join("\n")}</div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Select term, lock-in and notice period to generate these lines.</p>
+              )}
+            </div>
             <Textarea
               id="terms"
               value={termsAndConditions}
@@ -515,8 +656,13 @@ export function ProposalForm({
               placeholder="Add terms and conditions..."
               rows={3}
             />
+            {mentionsCommitmentTerms(termsAndConditions) && (
+              <p className="text-xs text-amber-700">
+                These terms mention lock-in, notice period or security deposit. Those lines are generated above — remove them here so the proposal doesn&apos;t state conflicting terms.
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">
-              List legal and commercial terms here only. Set amenity quotas (conference rooms, prints, etc.) in the <span className="font-medium">Service Quotas</span> section above.
+              List other legal and commercial terms here. Set amenity quotas (conference rooms, prints, etc.) in the <span className="font-medium">Service Quotas</span> section above.
             </p>
           </div>
 

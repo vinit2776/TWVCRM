@@ -581,11 +581,11 @@ export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
 // ==========================================
 // Default Terms & Conditions
 // ==========================================
+// Deposit, term/lock-in and notice period lines are deliberately absent — they
+// are generated from the proposal's own fields (src/lib/proposal-terms.ts) so
+// the printed terms can never disagree with what was selected.
 export const DEFAULT_PROPOSAL_TERMS = `• Taxes as applicable
-• 3 months rent payable as an interest free refundable security deposit
 • Advance monthly rent payable on or before 5th of every month
-• Term 1 year (Lock-in 11 months)
-• Notice period 2 months post lock-in
 • Center timing Monday - Saturday 9AM to 7PM
 • This proposal is valid upto 10 days only from the date of issue.`;
 
