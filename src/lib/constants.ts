@@ -453,11 +453,30 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
  *     admin/manager and requires signed_document_id to already be set. It's
  *     not a general shortcut around the send/view steps.
  */
+// A contract that never reached activation can be "withdrawn" — stored as
+// `terminated`, but opened up to sales reps too, since abandoned and superseded
+// drafts otherwise sit in the list forever with no way to close them.
+export const CONTRACT_PRE_ACTIVATION_STATUSES: readonly ContractStatus[] = ["draft", "sent", "viewed", "accepted"];
+export const CONTRACT_WITHDRAW_ROLES = ["admin", "manager", "sales_rep"] as const;
+
+export function canWithdrawContract(
+  contract: { status: string; is_renewal?: boolean | null },
+  role: string | null | undefined,
+): boolean {
+  return (
+    (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(contract.status) &&
+    // A renewal draft is closed via Cancel Renewal on its parent, which also
+    // restores the parent from renewal_in_progress back to active.
+    !contract.is_renewal &&
+    !!role && (CONTRACT_WITHDRAW_ROLES as readonly string[]).includes(role)
+  );
+}
+
 export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
   draft:                 ["sent", "accepted", "terminated"],
-  sent:                  ["viewed", "accepted", "rejected"],
-  viewed:                ["accepted", "rejected"],
-  accepted:              ["active", "rejected"],
+  sent:                  ["viewed", "accepted", "rejected", "terminated"],
+  viewed:                ["accepted", "rejected", "terminated"],
+  accepted:              ["active", "rejected", "terminated"],
   rejected:              [],           // terminal — clone to new draft instead
   active:                ["renewal_in_progress", "expired", "terminated"],
   renewal_in_progress:   ["renewed", "active", "terminated"],

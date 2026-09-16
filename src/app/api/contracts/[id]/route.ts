@@ -3,7 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE } from "@/lib/constants";
+import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE, CONTRACT_PRE_ACTIVATION_STATUSES, canWithdrawContract } from "@/lib/constants";
 import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { setUserActive } from "@/lib/cosec";
@@ -200,6 +200,9 @@ export async function PATCH(
   // pro-rata payment at activation. Merged into the audit entry below, which is
   // built after this block.
   let prorataSatisfiedByInvoice: string | null = null;
+  // Set when a never-activated contract is closed via Withdraw (stored as
+  // `terminated`), so the audit trail distinguishes it from a live termination.
+  let withdrawnBeforeActivation = false;
 
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
@@ -416,8 +419,23 @@ export async function PATCH(
       allowedFields.activated_at = now;
       allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {
-      // Only admin or manager may terminate a contract
-      if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+      const isWithdrawal = (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(oldContract.status);
+      if (isWithdrawal) {
+        if (oldContract.is_renewal) {
+          return NextResponse.json(
+            { error: "A renewal draft can't be withdrawn — use Cancel Renewal on the original contract instead" },
+            { status: 400 }
+          );
+        }
+        if (!canWithdrawContract(oldContract, dbUser?.role)) {
+          return NextResponse.json(
+            { error: "Only admins, managers and sales reps can withdraw a contract" },
+            { status: 403 }
+          );
+        }
+        withdrawnBeforeActivation = true;
+      } else if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+        // Only admin or manager may terminate a live contract
         return NextResponse.json(
           { error: "Only admins and managers can terminate a contract" },
           { status: 403 }
@@ -453,6 +471,9 @@ export async function PATCH(
     }
     if (prorataSatisfiedByInvoice) {
       auditChanges["prorata_satisfied_by_invoice"] = { old: null, new: prorataSatisfiedByInvoice };
+    }
+    if (withdrawnBeforeActivation) {
+      auditChanges["withdrawn_before_activation"] = { old: null, new: true };
     }
     logAudit(supabase, {
       entityType: "contract",
