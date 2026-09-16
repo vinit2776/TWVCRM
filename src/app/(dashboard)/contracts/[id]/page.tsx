@@ -954,13 +954,16 @@ export default function ContractDetailPage({
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        {/* shrink-0 + nowrap: the wide action-button group beside this must
+            wrap onto more rows, not squeeze the contract number into a
+            one-word-per-line column. */}
+        <div className="flex items-center gap-3 shrink-0">
           <Button variant="ghost" size="icon" onClick={() => router.push("/contracts")}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold font-mono">{contract.contract_number}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold font-mono whitespace-nowrap">{contract.contract_number}</h1>
               <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contract.status]}>
                 {CONTRACT_STATUS_LABELS[contract.status]}
               </Badge>
@@ -981,7 +984,7 @@ export default function ContractDetailPage({
             </div>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-1 min-w-0 flex-wrap gap-2 sm:justify-end">
           {/* Status-based action buttons */}
           {/* Send for e-Signing — available on any pre-terminal status while signing hasn't started */}
           {!contract.leegality_document_id &&
