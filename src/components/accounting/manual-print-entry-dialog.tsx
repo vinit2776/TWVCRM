@@ -80,6 +80,9 @@ interface Props {
   defaultContractId?: string;
   /** Scope contract list to a specific lead (e.g. opened from the lead page) */
   filterLeadId?: string;
+  /** Period to pre-select on open — e.g. the month picked on the Billing
+   *  page — instead of the real current month. Still editable. */
+  defaultPeriod?: { year: number; month: number };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -103,7 +106,7 @@ function contractLabel(c: ContractOption) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ManualPrintEntryDialog({
-  open, onOpenChange, onSuccess, defaultContractId, filterLeadId,
+  open, onOpenChange, onSuccess, defaultContractId, filterLeadId, defaultPeriod,
 }: Props) {
   const now = new Date();
   const [contracts, setContracts]             = useState<ContractOption[]>([]);
@@ -111,6 +114,13 @@ export function ManualPrintEntryDialog({
   const [contractId, setContractId]           = useState(defaultContractId ?? "");
   const [periodYear, setPeriodYear]           = useState(now.getFullYear());
   const [periodMonth, setPeriodMonth]         = useState(now.getMonth() + 1);
+  const defaultYear = defaultPeriod?.year;
+  const defaultMonth = defaultPeriod?.month;
+  useEffect(() => {
+    if (!open || !defaultYear || !defaultMonth) return;
+    setPeriodYear(defaultYear);
+    setPeriodMonth(defaultMonth);
+  }, [open, defaultYear, defaultMonth]);
   const [bwUsed, setBwUsed]                   = useState("");
   const [colourUsed, setColourUsed]           = useState("");
   const [notes, setNotes]                     = useState("");
@@ -268,7 +278,7 @@ export function ManualPrintEntryDialog({
   };
 
   // ── Year options (current year ± 1) ──────────────────────────────────────
-  const yearOptions = [now.getFullYear() - 1, now.getFullYear()];
+  const yearOptions = [...new Set([periodYear, now.getFullYear() - 1, now.getFullYear()])].sort();
 
   // ── Render ────────────────────────────────────────────────────────────────
 

@@ -99,6 +99,11 @@ export function AddUsageChargeDialog({
   const [chargeDate, setChargeDate] = useState(
     defaultChargeDate || new Date().toISOString().split("T")[0]
   );
+  // The dialog stays mounted between opens, so the initial useState value
+  // alone would freeze on whatever month was selected at first render.
+  useEffect(() => {
+    if (open && defaultChargeDate) setChargeDate(defaultChargeDate);
+  }, [open, defaultChargeDate]);
   const [notes, setNotes] = useState("");
   const [hsnSacCode, setHsnSacCode] = useState("999799");
   const [submitting, setSubmitting] = useState(false);
