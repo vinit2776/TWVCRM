@@ -223,7 +223,7 @@ export function ProformaBillingCard({
   const title = isRent ? `Monthly Rent Proforma — ${periodLabel}` : `Monthly Usage Drafts — ${periodLabel}`;
   const blurb = isRent
     ? "Auto-finalizes and sends rent proformas to clients with payment links. Run on the last working day before month-end."
-    : "Creates usage drafts in the Pending Review queue. No client dispatch — admin reviews each draft and sends individually. Run after month-end so all charges are captured.";
+    : "Creates usage drafts in the Pending Review queue. No client dispatch — admin reviews the drafts below, then sends them one by one or all at once. Run after month-end so all charges are captured.";
   const runLabel = isRent ? "Run & Send" : "Generate Drafts";
   const runDisabledTitle = !previewed ? "Preview first to enable" : (isRent ? "Generate, finalize, and send proformas" : "Create draft usage statements");
 
@@ -421,7 +421,7 @@ export function ProformaBillingCard({
                 ) : (
                   <>
                     This will create <strong>{previewItems.length} draft usage statement{previewItems.length !== 1 ? "s" : ""}</strong> in the Pending Review queue.
-                    <br />No client dispatch — admin reviews each draft and sends individually.
+                    <br />No client dispatch — admin reviews the drafts below, then sends them one by one or all at once.
                     <br />Total usage value (after review): ₹{rentTotal.toLocaleString("en-IN")}
                   </>
                 )}

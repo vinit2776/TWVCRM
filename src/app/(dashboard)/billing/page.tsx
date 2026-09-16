@@ -998,6 +998,20 @@ export default function BillingPage() {
     : charges;
   const isLocked      = summary?.period?.status === "locked";
   const selectedMonth = `${year}-${String(month).padStart(2, "0")}`;
+  // Add-usage dialogs pre-fill to the month picked above, not the real
+  // current date — a charge for a past month you're reviewing otherwise
+  // silently lands in this month. Current month → today; past → its last
+  // day; future → its first day.
+  const defaultChargeDate = (() => {
+    const today = new Date();
+    const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    if (todayYmd.startsWith(selectedMonth)) return todayYmd;
+    if (selectedMonth < todayYmd.slice(0, 7)) {
+      const last = new Date(year, month, 0).getDate();
+      return `${selectedMonth}-${String(last).padStart(2, "0")}`;
+    }
+    return `${selectedMonth}-01`;
+  })();
   const pendingHandover = cashHandovers.filter((c) => c.cash_handover_status === "pending_handover");
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1694,7 +1708,7 @@ export default function BillingPage() {
 
       {/* ── Dialogs ─────────────────────────────────────────────────────── */}
       <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
-      <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
+      <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} defaultChargeDate={defaultChargeDate} />
       <EditUsageChargeDialog
         open={editChargeOpen}
         onOpenChange={setEditChargeOpen}
@@ -1706,8 +1720,8 @@ export default function BillingPage() {
         onOpenChange={setViewChargeOpen}
         charge={viewingCharge}
       />
-      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
-      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} />
+      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} defaultPeriod={{ year, month }} />
+      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} defaultPeriod={{ year, month }} />
 
       {/* Waive fully */}
       <Dialog open={!!waiveChargeTarget} onOpenChange={(open) => { if (!open) setWaiveChargeTarget(null); }}>
