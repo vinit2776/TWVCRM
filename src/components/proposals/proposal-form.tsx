@@ -16,6 +16,7 @@ import { LineItemsEditor, type LineItemData } from "@/components/shared/line-ite
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
+import { syncDepositTerm } from "@/lib/proposal-deposit-terms";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import type { ServiceCatalogItem, Proposal } from "@/types";
@@ -118,9 +119,17 @@ export function ProposalForm({
       setConfRoomOverageRate(confRoom?.price_per_unit ?? 0);
       setDepositMonths(initialProposal.security_deposit_months ?? 0);
       setDepositAmount(initialProposal.security_deposit_amount ?? 0);
-      // Preserve the exact stored deposit rather than silently recalculating
-      // it off the (possibly just-edited) subtotal.
-      setDepositOverridden((initialProposal.security_deposit_months ?? 0) > 0);
+      // Only lock the stored deposit if it was a custom figure. A deposit that
+      // was months × rent keeps following the months selector, so changing
+      // "2 months" to "3 months" doesn't leave the old amount behind.
+      const storedMonths = initialProposal.security_deposit_months ?? 0;
+      const storedSubtotal = (initialProposal.items ?? []).reduce(
+        (sum, item) => sum + Math.max(1, item.quantity) * item.unit_price,
+        0
+      );
+      setDepositOverridden(
+        storedMonths > 0 && (initialProposal.security_deposit_amount ?? 0) !== storedMonths * storedSubtotal
+      );
     } else {
       resetForm();
     }
@@ -150,6 +159,18 @@ export function ProposalForm({
   const computedSubtotal = items
     .filter((item) => item.description.trim())
     .reduce((sum, item) => sum + Math.max(1, item.quantity) * item.unit_price, 0);
+
+  // Keep the auto-calculated deposit following the rent, and the deposit line
+  // in the terms following the deposit — otherwise the PDF quotes a deposit
+  // that doesn't match what was selected.
+  const effectiveDepositAmount = depositOverridden ? depositAmount : depositMonths * computedSubtotal;
+  useEffect(() => {
+    if (!open) return;
+    if (!depositOverridden && depositAmount !== effectiveDepositAmount) {
+      setDepositAmount(effectiveDepositAmount);
+    }
+    setTermsAndConditions((prev) => syncDepositTerm(prev, depositMonths, effectiveDepositAmount));
+  }, [open, depositMonths, depositAmount, depositOverridden, effectiveDepositAmount]);
 
   const resetForm = () => {
     setTitle("");
