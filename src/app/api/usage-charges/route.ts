@@ -41,8 +41,6 @@ interface NormalizedRow {
    *  doc comment (00558_usage_charge_hold.sql). */
   held_at: string | null;
   hold_reason: string | null;
-  // Only ever set on "manual" rows — print/facility charges can never be
-  // waived (see doc comment on GET below), so these stay null for them.
   waive_reason: string | null;
   waived_at: string | null;
   waived_by_name: string | null;
@@ -142,7 +140,7 @@ function normalizePrint(r: any): NormalizedRow {
   const overage = Number(r.overage_quantity);
   const serviceName = r.service?.name ?? "Print usage";
   const chargeDate = lastDayOfMonth(r.period_year, r.period_month);
-  const status: "pending" | "billed" = r.is_billed ? "billed" : "pending";
+  const status: "pending" | "billed" | "waived" = r.waived_at ? "waived" : (r.is_billed ? "billed" : "pending");
   const cycle = billingCycleOf(chargeDate, status);
   return {
     id: r.id, source: "print",
@@ -159,7 +157,7 @@ function normalizePrint(r: any): NormalizedRow {
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
     held_at: null, hold_reason: null,
-    waive_reason: null, waived_at: null, waived_by_name: null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null, waived_by_name: r.waived_by_user?.full_name ?? null,
   };
 }
 
@@ -173,7 +171,7 @@ function normalizeFacility(r: any): NormalizedRow {
   // closest proxy for "has this been billed": once locked, the period's
   // statement is done, so anything logged for it is presumed billed.
   const chargeDate = r.accounting_period ? lastDayOfMonth(r.accounting_period.year, r.accounting_period.month) : (r.created_at ?? "").slice(0, 10);
-  const status: "pending" | "billed" = r.accounting_period?.status === "locked" ? "billed" : "pending";
+  const status: "pending" | "billed" | "waived" = r.waived_at ? "waived" : (r.accounting_period?.status === "locked" ? "billed" : "pending");
   const cycle = billingCycleOf(chargeDate, status);
   return {
     id: r.id, source: "facility",
@@ -190,7 +188,7 @@ function normalizeFacility(r: any): NormalizedRow {
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
     held_at: null, hold_reason: null,
-    waive_reason: null, waived_at: null, waived_by_name: null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null, waived_by_name: r.waived_by_user?.full_name ?? null,
   };
 }
 
@@ -209,8 +207,7 @@ function normalizeFacility(r: any): NormalizedRow {
  *
  * Print/facility have no booking or lead concept of their own (only a
  * contract), so a booking_id/lead_id filter — which only makes sense for
- * ad-hoc charges — narrows the result to manual rows only. Same for
- * status=waived, which print/facility rows can never be.
+ * ad-hoc charges — narrows the result to manual rows only.
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -254,31 +251,41 @@ export async function GET(request: NextRequest) {
   // Only meaningful for ad-hoc charges — narrow to manual-only when the
   // requested set is exclusively "waived", since print/facility usage can
   // never be waived (nothing there to fetch).
-  const manualOnly = !!bookingId || !!leadId || (statuses?.length === 1 && statuses[0] === "waived");
+  // Print/facility usage can now be waived too (see
+  // 00559_service_facility_charge_waive.sql) — only a booking/lead filter
+  // narrows to manual rows, since print/facility have no booking or lead
+  // concept of their own.
+  const manualOnly = !!bookingId || !!leadId;
 
   const [manualResult, printResult, facilityResult] = await Promise.all([
     manualQuery,
     manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
       let q = supabase
         .from("service_usage_records")
-        .select("id, contract_id, quantity_used, overage_quantity, overage_rate_snapshot, amount, gst_rate, gst_amount, total_with_gst, is_billed, period_year, period_month, notes, created_at, contract:contracts!service_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), service:service_catalog(name)")
+        .select("id, contract_id, quantity_used, overage_quantity, overage_rate_snapshot, amount, gst_rate, gst_amount, total_with_gst, is_billed, period_year, period_month, notes, created_at, waived_at, waive_reason, contract:contracts!service_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), service:service_catalog(name), waived_by_user:users!service_usage_records_waived_by_fkey(id, full_name, role)")
         .not("contract_id", "is", null)
         .limit(SOURCE_CAP);
       if (contractId) q = q.eq("contract_id", contractId);
-      // "waived" is meaningless here (see manualOnly above) — only weigh in
-      // on is_billed when the requested set names exactly one of the two
-      // states this table actually has; a set naming both (or neither) is
-      // "show any," so no is_billed filter at all.
-      const nonWaived = statuses?.filter((s) => s !== "waived");
-      if (nonWaived?.length === 1) q = q.eq("is_billed", nonWaived[0] === "billed");
+      // Only weigh in on is_billed/waived_at when the requested set names
+      // exactly one status this table actually has; a set naming several
+      // (or neither) is "show any," so no filter at all — the post-merge
+      // filter below is the safety net either way.
+      if (statuses?.length === 1 && statuses[0] === "waived") {
+        q = q.not("waived_at", "is", null);
+      } else if (statuses?.length === 1 && statuses[0] === "pending") {
+        q = q.eq("is_billed", false).is("waived_at", null);
+      } else if (statuses?.length === 1 && statuses[0] === "billed") {
+        q = q.eq("is_billed", true);
+      }
       return q;
     })(),
     manualOnly ? Promise.resolve({ data: [], error: null }) : (async () => {
       let q = supabase
         .from("facility_usage_records")
-        .select("id, contract_id, quantity_used, billable_quantity, unit_price, total_charge, notes, created_at, contract:contracts!facility_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), contract_facility:contract_facilities(name, unit), accounting_period:accounting_periods(year, month, status)")
+        .select("id, contract_id, quantity_used, billable_quantity, unit_price, total_charge, notes, created_at, waived_at, waive_reason, contract:contracts!facility_usage_records_contract_id_fkey(id, contract_number, billing_cycle, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)), contract_facility:contract_facilities(name, unit), accounting_period:accounting_periods(year, month, status), waived_by_user:users!facility_usage_records_waived_by_fkey(id, full_name, role)")
         .limit(SOURCE_CAP);
       if (contractId) q = q.eq("contract_id", contractId);
+      if (statuses?.length === 1 && statuses[0] === "waived") q = q.not("waived_at", "is", null);
       return q;
     })(),
   ]);

@@ -1427,7 +1427,7 @@ export async function generateUsageStatements(
     billable.length > 0
       ? supabase
           .from("facility_usage_records")
-          .select("contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
+          .select("id, contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
           .in("contract_id", billable)
           .eq("accounting_period_id", periodId ?? "")
       : Promise.resolve({ data: [], error: null }),
@@ -1457,7 +1457,7 @@ export async function generateUsageStatements(
   ]);
 
   type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
-  type FacilityRow = { contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
+  type FacilityRow = { id: string; contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number; service?: any };
   type BookingRow = { id: string; booking_number: string; contract_id: string; booking_date: string; start_time: string; end_time: string; duration_hours: number; pricing_model: string; total_amount: number; quantity: number; payment_status: string; space: { name: string }[] | { name: string } | null };
@@ -1477,16 +1477,28 @@ export async function generateUsageStatements(
   const { data: heldCharges, error: heldChargeErr } = await supabase.from("usage_charges").select("id").not("held_at", "is", null);
   const heldChargeIds = new Set(heldChargeErr ? [] : (heldCharges ?? []).map((c) => c.id));
 
+  // Waived print/facility rows (see 00559_service_facility_charge_waive.sql)
+  // — same tolerant, separate-query pattern as heldChargeIds above, so a
+  // waived overage that would otherwise be permanently stranded (its
+  // covering statement already sent, no future run ever revisits that
+  // month) doesn't get swept into a supplemental statement anyway.
+  const { data: waivedService, error: waivedServiceErr } = await supabase.from("service_usage_records").select("id").not("waived_at", "is", null);
+  const waivedServiceIds = new Set(waivedServiceErr ? [] : (waivedService ?? []).map((s) => s.id));
+  const { data: waivedFacility, error: waivedFacilityErr } = await supabase.from("facility_usage_records").select("id").not("waived_at", "is", null);
+  const waivedFacilityIds = new Set(waivedFacilityErr ? [] : (waivedFacility ?? []).map((f) => f.id));
+
   for (const u of (usageRes.data ?? []) as UsageRow[]) {
     if (heldChargeIds.has(u.id)) continue;
     const list = usageByContract.get(u.contract_id) ?? [];
     list.push(u); usageByContract.set(u.contract_id, list);
   }
   for (const f of (facilityRes.data ?? []) as FacilityRow[]) {
+    if (waivedFacilityIds.has(f.id)) continue;
     const list = facilityByContract.get(f.contract_id) ?? [];
     list.push(f); facilityByContract.set(f.contract_id, list);
   }
   for (const s of (serviceRes.data ?? []) as ServiceRow[]) {
+    if (waivedServiceIds.has(s.id)) continue;
     const list = serviceByContract.get(s.contract_id) ?? [];
     list.push(s); serviceByContract.set(s.contract_id, list);
   }
