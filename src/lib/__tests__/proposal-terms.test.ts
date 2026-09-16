@@ -67,6 +67,13 @@ describe("composeProposalTerms", () => {
     );
   });
 
+  it("drops the old static lines once agreed terms are recorded on a legacy proposal", () => {
+    const legacy = "• Taxes as applicable\n• 3 months rent payable as an interest free refundable security deposit\n• Term 1 year (Lock-in 11 months)\n• Notice period 2 months post lock-in";
+    expect(composeProposalTerms({ ...standard, terms_and_conditions: legacy })).toBe(
+      [...buildCommitmentTermLines(standard), "• Taxes as applicable"].join("\n")
+    );
+  });
+
   it("leaves a legacy proposal's stored text exactly as sent", () => {
     const legacy = "• Term 1 year (Lock-in 11 months)\n• Taxes as applicable";
     expect(composeProposalTerms({ terms_and_conditions: legacy })).toBe(legacy);

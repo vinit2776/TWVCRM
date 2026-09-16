@@ -77,11 +77,18 @@ export function buildCommitmentTermLines(terms: ProposalCommitmentTerms): string
   ];
 }
 
-/** Full T&C as the customer sees it: generated lines first, then the free-text terms. */
+/**
+ * Full T&C as the customer sees it: generated lines first, then the free-text
+ * terms. Once structured terms exist, the old standard deposit/term/notice
+ * lines are dropped from the free text — a legacy proposal whose agreed terms
+ * were recorded later would otherwise print both versions side by side.
+ */
 export function composeProposalTerms(
   terms: ProposalCommitmentTerms & { terms_and_conditions?: string | null }
 ): string {
-  return [...buildCommitmentTermLines(terms), terms.terms_and_conditions?.trim()]
+  const generated = buildCommitmentTermLines(terms);
+  const freeText = terms.terms_and_conditions?.trim() ?? "";
+  return [...generated, generated.length > 0 ? stripLegacyCommitmentLines(freeText).trim() : freeText]
     .filter(Boolean)
     .join("\n");
 }
