@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { CHARGE_HOLD_ALLOWED_ROLES } from "@/lib/constants";
 
 export async function PATCH(
   request: NextRequest,
@@ -56,6 +57,78 @@ export async function PATCH(
       changes: { waived_at: { old: null, new: updated.waived_at }, waive_reason: { old: null, new: waiveReason } },
     });
 
+    return NextResponse.json({ data: updated });
+  }
+
+  // Partial waiver — override the billed amount directly rather than
+  // recomputing from quantity (that's the default path below). Same "why"
+  // accountability as usage_charges'/print's reduce path.
+  if (body.total_charge !== undefined && Number(body.total_charge) < Number(record.total_charge ?? 0)) {
+    if (Number(body.total_charge) < 0) return NextResponse.json({ error: "Amount cannot be negative" }, { status: 400 });
+    const reductionReason = (body.reduction_reason as string | undefined)?.trim();
+    if (!reductionReason) return NextResponse.json({ error: "A reason is required when reducing a charge's amount" }, { status: 400 });
+    const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+    const newTotal = Number(body.total_charge);
+    const noteLine = `Reduced from ₹${record.total_charge} to ₹${newTotal} — ${reductionReason}`;
+
+    const { data: updated, error: updateError } = await supabase
+      .from("facility_usage_records")
+      .update({ total_charge: newTotal, notes: record.notes ? `${record.notes}\n${noteLine}` : noteLine })
+      .eq("id", id)
+      .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(*)")
+      .single();
+    if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+    if (dbUser?.id) {
+      logAudit(supabase, {
+        entityType: "facility_usage_record", entityId: id, action: "update", performedBy: dbUser.id,
+        changes: { total_charge: { old: record.total_charge, new: newTotal } },
+      });
+    }
+    return NextResponse.json({ data: updated });
+  }
+
+  // Hold / release — pauses (or resumes) this row's eligibility for the
+  // next Generate & Send sweep. See 00563_usage_billing_engine.sql.
+  if (body.hold === true || body.hold === false) {
+    const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+    if (!dbUser || !CHARGE_HOLD_ALLOWED_ROLES.includes(dbUser.role)) {
+      return NextResponse.json({ error: `Only admin and managers can ${body.hold ? "hold" : "release"} charges` }, { status: 403 });
+    }
+    let allowedFields: Record<string, unknown>;
+    if (body.hold === true) {
+      if (record.held_at) return NextResponse.json({ error: "Already on hold" }, { status: 400 });
+      const holdReason = (body.hold_reason as string | undefined)?.trim();
+      if (!holdReason) return NextResponse.json({ error: "A reason is required when placing a hold" }, { status: 400 });
+      allowedFields = { held_at: new Date().toISOString(), held_by: dbUser.id, hold_reason: holdReason };
+    } else {
+      allowedFields = { held_at: null, held_by: null, hold_reason: null };
+    }
+    const { data: updated, error: updateError } = await supabase
+      .from("facility_usage_records")
+      .update(allowedFields)
+      .eq("id", id)
+      .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(*)")
+      .single();
+    if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+    logAudit(supabase, {
+      entityType: "facility_usage_record", entityId: id, action: "update", performedBy: dbUser.id,
+      changes: Object.fromEntries(Object.entries(allowedFields).map(([k, v]) => [k, { old: null, new: v }])),
+    });
+    return NextResponse.json({ data: updated });
+  }
+
+  // "Bill anyway" for a stale row (see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS).
+  if (body.review === true) {
+    const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+    const { data: updated, error: updateError } = await supabase
+      .from("facility_usage_records")
+      .update({ reviewed_at: new Date().toISOString(), reviewed_by: dbUser?.id ?? null })
+      .eq("id", id)
+      .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(*)")
+      .single();
+    if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
     return NextResponse.json({ data: updated });
   }
 
