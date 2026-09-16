@@ -96,7 +96,6 @@ function TabLoading({ label }: { label: string }) {
     </div>
   );
 }
-import { createClient } from "@/lib/supabase/client";
 
 // ── Status maps ──────────────────────────────────────────────────────────────
 
@@ -730,15 +729,14 @@ export default function BillingPage() {
 
 
   // ── Get user role ────────────────────────────────────────────────────────
+  // Via /api/me (server-to-server) rather than a browser→supabase.co query:
+  // when that direct call is blocked, userRole stayed null and silently hid
+  // every role-gated control on this page (Print/Facility usage, Send).
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data } = await supabase
-          .from("users").select("role").eq("auth_id", user.id).single();
-        setUserRole(data?.role || "sales_rep");
-      }
-    });
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j: { role: string | null }) => { if (j.role) setUserRole(j.role); })
+      .catch(() => toast.error("Couldn't load your role — some actions may be hidden. Refresh to retry."));
   }, []);
 
   // ── Fetch monthly summary (with AbortController for cleanup) ─────────────
