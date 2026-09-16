@@ -493,10 +493,17 @@ export default function BillingPage() {
     if (!waiveChargeReason.trim()) { setWaiveChargeReasonError(true); return; }
     setWaiveChargeSubmitting(true);
     try {
-      const res = await fetch(`/api/usage-charges/${waiveChargeTarget.id}`, {
+      const url =
+        waiveChargeTarget.source === "print"    ? `/api/accounting/print-usage/${waiveChargeTarget.id}` :
+        waiveChargeTarget.source === "facility" ? `/api/accounting/facility-usage/${waiveChargeTarget.id}` :
+        `/api/usage-charges/${waiveChargeTarget.id}`;
+      const body = waiveChargeTarget.source === "print" || waiveChargeTarget.source === "facility"
+        ? { waive: true, waive_reason: waiveChargeReason.trim() }
+        : { status: "waived", waive_reason: waiveChargeReason.trim() };
+      const res = await fetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "waived", waive_reason: waiveChargeReason.trim() }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         toast.success("Charge waived");
@@ -1474,6 +1481,17 @@ export default function BillingPage() {
                                 }}
                               >
                                 <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && (charge.source === "print" || charge.source === "facility") && charge.billable !== false && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setWaiveChargeTarget(charge);
+                                  setWaiveChargeReason("");
+                                  setWaiveChargeReasonError(false);
+                                }}
+                              >
+                                <Ban className="mr-2 h-4 w-4" />Waive fully
                               </DropdownMenuItem>
                             )}
                             {charge.status === "pending" && (!charge.source || charge.source === "manual") && !charge.held_at && (

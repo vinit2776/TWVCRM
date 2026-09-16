@@ -27,6 +27,38 @@ export async function PATCH(
   }
 
   const body = await request.json();
+
+  // Waive — the only mutation a "stuck" facility overage needs when its
+  // covering statement already went out and no future billing sweep will
+  // ever revisit it. See 00559_service_facility_charge_waive.sql.
+  if (body.waive === true) {
+    if (record.waived_at) return NextResponse.json({ error: "Already waived" }, { status: 400 });
+    const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+    if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin and managers can waive charges" }, { status: 403 });
+    }
+    const waiveReason = (body.waive_reason as string | undefined)?.trim();
+    if (!waiveReason) return NextResponse.json({ error: "A reason is required when waiving a charge" }, { status: 400 });
+
+    const { data: updated, error: updateError } = await supabase
+      .from("facility_usage_records")
+      .update({ waived_at: new Date().toISOString(), waived_by: dbUser.id, waive_reason: waiveReason })
+      .eq("id", id)
+      .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(*)")
+      .single();
+    if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+    logAudit(supabase, {
+      entityType: "facility_usage_record",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: { waived_at: { old: null, new: updated.waived_at }, waive_reason: { old: null, new: waiveReason } },
+    });
+
+    return NextResponse.json({ data: updated });
+  }
+
   const quantityUsed = body.quantity_used;
 
   if (quantityUsed === undefined || quantityUsed < 0) {
