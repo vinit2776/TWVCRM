@@ -738,14 +738,22 @@ export async function generateRentProformas(
     // "renewed" parents (early renewal) stay billable for their own remaining
     // days only — gated by end_date.gte like "active" — so a parent whose own
     // term already lapsed before the child activated doesn't get rebilled.
-    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`)
-    // A contract-wide billing hold (see 00556_contract_billing_hold.sql)
-    // skips it entirely — no new proforma until the hold is released.
-    .is("billing_hold_at", null);
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
-  const { data: contracts } = await contractsQuery;
-  if (!contracts || contracts.length === 0) return result;
+  const { data: rawContracts } = await contractsQuery;
+  if (!rawContracts || rawContracts.length === 0) return result;
+
+  // Contract-wide billing hold (00556_contract_billing_hold.sql) — a
+  // deliberately separate, tolerant lookup rather than chaining onto the
+  // query above: if this errors (e.g. the migration hasn't been applied to
+  // this environment yet), it fails soft to "nothing is held" instead of
+  // taking the whole generation run down with it, the way a hard failure in
+  // the main query would (that query's own result isn't error-checked).
+  const { data: heldContracts, error: heldErr } = await supabase.from("contracts").select("id").not("billing_hold_at", "is", null);
+  const heldIds = new Set(heldErr ? [] : (heldContracts ?? []).map((c) => c.id));
+  const contracts = rawContracts.filter((c) => !heldIds.has(c.id));
+  if (contracts.length === 0) return result;
 
   const contractIds = contracts.map((c) => c.id as string);
 
@@ -1293,14 +1301,23 @@ export async function generateUsageStatements(
     // original end_date lapses — see generateRentProformas for rationale.
     // "renewed" parents (early renewal) stay billable for their own remaining
     // days only — gated by end_date.gte like "active".
-    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`)
-    // A contract-wide billing hold (see 00556_contract_billing_hold.sql)
-    // skips it entirely — no new usage statement until the hold is released.
-    .is("billing_hold_at", null);
+    .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
-  const { data: contracts } = await contractsQuery;
-  if (!contracts || contracts.length === 0) return result;
+  const { data: rawContracts } = await contractsQuery;
+  if (!rawContracts || rawContracts.length === 0) return result;
+
+  // Contract-wide billing hold (00556_contract_billing_hold.sql) — a
+  // deliberately separate, tolerant lookup rather than chaining onto the
+  // query above: if this errors (e.g. the migration hasn't been applied to
+  // this environment yet), it fails soft to "nothing is held" instead of
+  // taking the whole generation run down with it, the way a hard failure in
+  // the main query would (that query's own result isn't error-checked). See
+  // generateRentProformas for the identical pattern.
+  const { data: heldContracts, error: heldErr } = await supabase.from("contracts").select("id").not("billing_hold_at", "is", null);
+  const heldIds = new Set(heldErr ? [] : (heldContracts ?? []).map((c) => c.id));
+  const contracts = rawContracts.filter((c) => !heldIds.has(c.id));
+  if (contracts.length === 0) return result;
 
   const contractIds = contracts.map((c) => c.id as string);
 
