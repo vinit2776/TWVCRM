@@ -556,7 +556,7 @@ function istNow(): Date {
 }
 
 /** Get month name + year label, e.g. "June 2026" */
-function monthLabel(month: number, year: number): string {
+export function monthLabel(month: number, year: number): string {
   return new Date(year, month - 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
 
@@ -648,7 +648,7 @@ export function cycleMonthWindows(month: number, year: number, count: number): M
  * Other services fall back to their catalog name.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildServiceDescription(service?: any): string {
+export function buildServiceDescription(service?: any): string {
   // Supabase may return the joined row as an object or a single-element array
   const svc = Array.isArray(service) ? service[0] : service;
   if (svc?.printer_column === "bw")     return "Print - B/W";
@@ -657,7 +657,7 @@ function buildServiceDescription(service?: any): string {
 }
 
 /** Create or fetch the accounting period row for a given month/year. */
-async function ensureAccountingPeriod(
+export async function ensureAccountingPeriod(
   supabase: SupabaseClient,
   month: number,
   year: number,

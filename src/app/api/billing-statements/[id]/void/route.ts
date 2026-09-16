@@ -180,6 +180,14 @@ export async function POST(
     .update({ billing_statement_id: null, is_billed: false })
     .eq("billing_statement_id", id);
 
+  // 2d. Un-link facility usage records — they carry their own
+  //     billing_statement_id since 00563; left linked, a voided statement's
+  //     facility overage would never bill again.
+  await supabase
+    .from("facility_usage_records")
+    .update({ billing_statement_id: null })
+    .eq("billing_statement_id", id);
+
   // 3. Create a fresh draft copy (carries over the billing-relevant data
   //    but strips out all finalization artifacts) — but only for
   //    contract/booking/lead-sourced statements. case_id/aggregator_id-owned
