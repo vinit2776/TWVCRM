@@ -76,6 +76,8 @@ import {
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
   ACTIVATION_UNBLOCKING_PURPOSE,
+  CONTRACT_PRE_ACTIVATION_STATUSES,
+  canWithdrawContract,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
@@ -316,6 +318,18 @@ export default function ContractDetailPage({
     setPendingActivateArgs(null);
   };
 
+  // Withdraw = terminating a contract that never reached activation. Same
+  // dialog as Terminate, with warnings for loose ends withdrawing won't tidy up.
+  const isWithdrawal =
+    !!contract && (CONTRACT_PRE_ACTIVATION_STATUSES as readonly string[]).includes(contract.status);
+  const withdrawMoneyReceived = [
+    linkedProposal?.deposit_payment_status === "paid" && "security deposit",
+    linkedProposal?.payment_status === "paid" && "pro-rata",
+  ].filter(Boolean).join(" and ");
+  const withdrawSigningPending =
+    !!contract?.leegality_document_id &&
+    !["COMPLETED", "EXPIRED", "CANCELLED"].includes(contract.leegality_status || "");
+
   const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
     setStatusUpdating(true);
     const payload: Record<string, unknown> = { status: newStatus };
@@ -339,7 +353,7 @@ export default function ContractDetailPage({
 
   const handleTerminate = async () => {
     if (!terminationReason.trim()) {
-      toast.error("Please provide a termination reason");
+      toast.error(isWithdrawal ? "Please provide a reason for withdrawing" : "Please provide a termination reason");
       return;
     }
     setTerminating(true);
@@ -352,13 +366,13 @@ export default function ContractDetailPage({
       }),
     });
     if (res.ok) {
-      toast.success("Contract terminated");
+      toast.success(isWithdrawal ? "Contract withdrawn" : "Contract terminated");
       setTerminateOpen(false);
       setTerminationReason("");
       fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to terminate contract");
+      toast.error(err?.error || (isWithdrawal ? "Failed to withdraw contract" : "Failed to terminate contract"));
     }
     setTerminating(false);
   };
@@ -1277,6 +1291,12 @@ export default function ContractDetailPage({
             <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
               <XCircle className="mr-2 h-4 w-4" />
               Terminate
+            </Button>
+          )}
+          {canWithdrawContract(contract, userRole) && (
+            <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setTerminateOpen(true)}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Withdraw
             </Button>
           )}
           {/* Email button for sent/viewed/accepted/rejected — hidden once stamped,
@@ -2540,7 +2560,7 @@ export default function ContractDetailPage({
                 <>
                   <Separator />
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Terminated</span>
+                    <span className="text-muted-foreground">{contract.activated_at ? "Terminated" : "Withdrawn"}</span>
                     <span>{formatDate(contract.terminated_at)}</span>
                   </div>
                 </>
@@ -2549,7 +2569,7 @@ export default function ContractDetailPage({
                 <>
                   <Separator />
                   <div>
-                    <span className="text-muted-foreground block mb-1">Termination Reason</span>
+                    <span className="text-muted-foreground block mb-1">{contract.activated_at ? "Termination Reason" : "Withdrawal Reason"}</span>
                     <span>{contract.termination_reason}</span>
                   </div>
                 </>
@@ -2688,21 +2708,44 @@ export default function ContractDetailPage({
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Terminate Contract</DialogTitle>
+            <DialogTitle>{isWithdrawal ? "Withdraw Contract" : "Terminate Contract"}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to terminate contract {contract.contract_number}?
-              This action cannot be undone.
+              {isWithdrawal
+                ? `Withdraw ${contract.contract_number}? It was never activated — withdrawing closes it so it no longer sits pending. This cannot be undone.`
+                : `Are you sure you want to terminate contract ${contract.contract_number}? This action cannot be undone.`}
             </DialogDescription>
           </DialogHeader>
+          {isWithdrawal && (withdrawMoneyReceived || withdrawSigningPending) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 space-y-1.5">
+              {withdrawMoneyReceived && (
+                <p className="flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    The customer has already paid the {withdrawMoneyReceived} on the proposal.
+                    Withdrawing does not refund it — arrange the refund or adjustment with accounts.
+                  </span>
+                </p>
+              )}
+              {withdrawSigningPending && (
+                <p className="flex gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    The e-signing link is still open for the customer. Cancel it in the Leegality
+                    section below so they can&apos;t sign a withdrawn contract.
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="termination-reason">
-              Termination Reason <span className="text-destructive">*</span>
+              {isWithdrawal ? "Reason for withdrawing" : "Termination Reason"} <span className="text-destructive">*</span>
             </Label>
             <Textarea
               id="termination-reason"
               value={terminationReason}
               onChange={(e) => setTerminationReason(e.target.value)}
-              placeholder="Please provide a reason for termination..."
+              placeholder={isWithdrawal ? "e.g. Customer did not proceed, or superseded by a newer contract..." : "Please provide a reason for termination..."}
               rows={3}
             />
           </div>
@@ -2718,10 +2761,10 @@ export default function ContractDetailPage({
               {terminating ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Terminating...
+                  {isWithdrawal ? "Withdrawing..." : "Terminating..."}
                 </>
               ) : (
-                "Terminate"
+                isWithdrawal ? "Withdraw" : "Terminate"
               )}
             </Button>
           </DialogFooter>

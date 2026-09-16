@@ -197,6 +197,8 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Record petty cash (submit an entry) | **Any authenticated user** — no role gate; entries start at `pending_manager` |
 | Approve petty cash | `admin`, `manager`; entries **≥ ₹5,000** need a second approval from `admin`/`accounts` |
 | Manage contracts | `admin`, `manager`, `sales_rep` |
+| Terminate an **active** contract | `admin`, `manager` |
+| **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
 | Facility tickets | `fms`, `admin` |
 | Void billing statements | `admin` only |
 
