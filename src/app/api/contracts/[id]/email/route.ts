@@ -4,6 +4,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
 
+const SENDABLE_STATUSES = ["draft", "rejected"];
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -153,11 +155,16 @@ export async function POST(
 
     console.log("Contract email sent:", emailResult?.id, "to:", recipients);
 
-    // Update contract status to "sent" and set sent_at
-    await supabase
-      .from("contracts")
-      .update({ status: "sent", sent_at: new Date().toISOString() })
-      .eq("id", id);
+    // Only a draft (or a re-offered rejected) contract moves to "sent".
+    // Re-emailing a contract that's already sent, viewed, accepted or further
+    // along must not drag its status backwards.
+    if (SENDABLE_STATUSES.includes(contract.status)) {
+      await supabase
+        .from("contracts")
+        .update({ status: "sent", sent_at: new Date().toISOString() })
+        .eq("id", id)
+        .in("status", SENDABLE_STATUSES);
+    }
 
     // Log email activity for the lead
     if (contract.lead_id && sender?.id) {
