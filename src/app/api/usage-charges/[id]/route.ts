@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
-import { CHARGE_ALLOWED_ROLES } from "@/lib/constants";
+import { CHARGE_ALLOWED_ROLES, CHARGE_HOLD_ALLOWED_ROLES } from "@/lib/constants";
 
 export async function GET(
   _request: NextRequest,
@@ -121,6 +121,30 @@ export async function PATCH(
     allowedFields.total_with_gst = 0;
   } else if (body.status !== undefined) {
     allowedFields.status = body.status;
+  }
+
+  // Hold / release: pauses (or resumes) just this charge's eligibility for
+  // the next Generate Drafts sweep — status stays "pending" throughout,
+  // unlike waive above. See usage_charges.held_at's own doc comment
+  // (00558_usage_charge_hold.sql) for how this differs from waiving.
+  if (body.hold === true) {
+    if (!dbUser || !CHARGE_HOLD_ALLOWED_ROLES.includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin and managers can hold charges" }, { status: 403 });
+    }
+    const holdReason = (body.hold_reason as string | undefined)?.trim();
+    if (!holdReason) {
+      return NextResponse.json({ error: "A reason is required when placing a hold" }, { status: 400 });
+    }
+    allowedFields.held_at = new Date().toISOString();
+    allowedFields.held_by = dbUser.id;
+    allowedFields.hold_reason = holdReason;
+  } else if (body.hold === false) {
+    if (!dbUser || !CHARGE_HOLD_ALLOWED_ROLES.includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin and managers can release a hold" }, { status: 403 });
+    }
+    allowedFields.held_at = null;
+    allowedFields.held_by = null;
+    allowedFields.hold_reason = null;
   }
 
   // Settle: mark as settled in a booking

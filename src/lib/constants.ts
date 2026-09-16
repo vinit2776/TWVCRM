@@ -2735,8 +2735,8 @@ export const ELECTRICITY_MARKUP_TYPE_LABELS: Record<string, string> = {
 // floor managers can submit charges but cannot remove them.
 export const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
 
-// Contract-wide billing hold — same admin/manager gate as Terminate and
-// other contract-level administrative actions (not accounts/sales_rep,
-// which CHARGE_ALLOWED_ROLES includes for everyday charge entry).
-export const BILLING_HOLD_ALLOWED_ROLES = ["admin", "manager"];
+// Holding or waiving a specific charge — same admin/manager gate the
+// PATCH /api/usage-charges/[id] waive branch already uses (narrower than
+// CHARGE_ALLOWED_ROLES, which also covers everyday charge entry).
+export const CHARGE_HOLD_ALLOWED_ROLES = ["admin", "manager"];
 

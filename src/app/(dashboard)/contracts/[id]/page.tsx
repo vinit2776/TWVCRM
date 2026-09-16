@@ -29,8 +29,6 @@ import {
   Minus,
   Plus,
   Link2,
-  PauseCircle,
-  PlayCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -117,10 +115,6 @@ export default function ContractDetailPage({
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
-  const [billingHoldOpen, setBillingHoldOpen] = useState(false);
-  const [billingHoldReason, setBillingHoldReason] = useState("");
-  const [billingHoldReasonError, setBillingHoldReasonError] = useState(false);
-  const [billingHoldSubmitting, setBillingHoldSubmitting] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
   const [stampingSignSeal, setStampingSignSeal] = useState(false);
@@ -367,43 +361,6 @@ export default function ContractDetailPage({
       toast.error(err?.error || "Failed to terminate contract");
     }
     setTerminating(false);
-  };
-
-  const submitBillingHold = async () => {
-    if (!billingHoldReason.trim()) {
-      setBillingHoldReasonError(true);
-      return;
-    }
-    setBillingHoldSubmitting(true);
-    const res = await fetch(`/api/contracts/${id}/billing-hold`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: billingHoldReason.trim() }),
-    });
-    if (res.ok) {
-      toast.success("Billing hold placed — no new rent or usage statements will be generated for this contract");
-      setBillingHoldOpen(false);
-      setBillingHoldReason("");
-      setBillingHoldReasonError(false);
-      fetchContract(false);
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to place billing hold");
-    }
-    setBillingHoldSubmitting(false);
-  };
-
-  const releaseBillingHold = async () => {
-    setBillingHoldSubmitting(true);
-    const res = await fetch(`/api/contracts/${id}/release-billing-hold`, { method: "POST" });
-    if (res.ok) {
-      toast.success("Billing hold released");
-      fetchContract(false);
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to release billing hold");
-    }
-    setBillingHoldSubmitting(false);
   };
 
   const handleSavePoNumber = async () => {
@@ -1035,14 +992,6 @@ export default function ContractDetailPage({
                   <CheckCircle2 className="h-3 w-3 mr-1" /> Signed
                 </Badge>
               )}
-              {contract.billing_hold_at && (
-                <Badge
-                  className="bg-amber-100 text-amber-800 border-amber-300"
-                  title={contract.billing_hold_reason ?? undefined}
-                >
-                  <PauseCircle className="h-3 w-3 mr-1" /> Billing on hold
-                </Badge>
-              )}
             </div>
             <p className="text-sm text-muted-foreground">
               {contract.title}
@@ -1329,19 +1278,6 @@ export default function ContractDetailPage({
               <XCircle className="mr-2 h-4 w-4" />
               Terminate
             </Button>
-          )}
-          {["admin", "manager"].includes(userRole ?? "") && (
-            contract.billing_hold_at ? (
-              <Button variant="outline" onClick={releaseBillingHold} disabled={billingHoldSubmitting}>
-                {billingHoldSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
-                Release Billing Hold
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={() => setBillingHoldOpen(true)}>
-                <PauseCircle className="mr-2 h-4 w-4" />
-                Place Billing Hold
-              </Button>
-            )
           )}
           {/* Email button for sent/viewed/accepted/rejected — hidden once stamped,
               since the email dialog always sends a freshly generated (unstamped)
@@ -2787,43 +2723,6 @@ export default function ContractDetailPage({
               ) : (
                 "Terminate"
               )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Billing Hold Dialog */}
-      <Dialog open={billingHoldOpen} onOpenChange={(open) => { setBillingHoldOpen(open); if (!open) setBillingHoldReasonError(false); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Place billing hold</DialogTitle>
-            <DialogDescription>
-              Pauses ALL future billing for {contract.contract_number} — no new rent proforma or
-              usage statement will be generated for this contract until the hold is released.
-              Already-generated statements are unaffected.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="billing-hold-reason">
-              Reason <span className="text-destructive">*</span>
-            </Label>
-            <Textarea
-              id="billing-hold-reason"
-              value={billingHoldReason}
-              onChange={(e) => { setBillingHoldReason(e.target.value); if (billingHoldReasonError) setBillingHoldReasonError(false); }}
-              placeholder="Why is this contract's billing being held?"
-              rows={3}
-              className={billingHoldReasonError ? "border-destructive" : ""}
-            />
-            {billingHoldReasonError && <p className="text-xs text-destructive">Enter a reason first.</p>}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBillingHoldOpen(false)} disabled={billingHoldSubmitting}>
-              Cancel
-            </Button>
-            <Button onClick={submitBillingHold} disabled={billingHoldSubmitting}>
-              {billingHoldSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Place Hold
             </Button>
           </DialogFooter>
         </DialogContent>

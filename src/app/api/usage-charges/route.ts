@@ -36,6 +36,11 @@ interface NormalizedRow {
   billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   /** "August 2026" — the month this charge belongs to, for the "Bills in: …" tag. */
   billing_cycle_label: string;
+  /** Manual/ad-hoc rows only — non-null excludes this charge from the next
+   *  Generate Drafts sweep without changing its status. See held_at's own
+   *  doc comment (00558_usage_charge_hold.sql). */
+  held_at: string | null;
+  hold_reason: string | null;
 }
 
 function lastDayOfMonth(year: number, month: number): string {
@@ -121,6 +126,7 @@ function normalizeManual(r: any): NormalizedRow {
     charge_date: r.charge_date, status: r.status, billable: null,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: r.held_at ?? null, hold_reason: r.hold_reason ?? null,
   };
 }
 
@@ -145,6 +151,7 @@ function normalizePrint(r: any): NormalizedRow {
     billable: Number(r.amount) > 0,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: null, hold_reason: null,
   };
 }
 
@@ -174,6 +181,7 @@ function normalizeFacility(r: any): NormalizedRow {
     billable: billable > 0,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    held_at: null, hold_reason: null,
   };
 }
 

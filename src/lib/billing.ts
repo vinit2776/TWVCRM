@@ -741,19 +741,8 @@ export async function generateRentProformas(
     .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfTargetMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
-  const { data: rawContracts } = await contractsQuery;
-  if (!rawContracts || rawContracts.length === 0) return result;
-
-  // Contract-wide billing hold (00556_contract_billing_hold.sql) — a
-  // deliberately separate, tolerant lookup rather than chaining onto the
-  // query above: if this errors (e.g. the migration hasn't been applied to
-  // this environment yet), it fails soft to "nothing is held" instead of
-  // taking the whole generation run down with it, the way a hard failure in
-  // the main query would (that query's own result isn't error-checked).
-  const { data: heldContracts, error: heldErr } = await supabase.from("contracts").select("id").not("billing_hold_at", "is", null);
-  const heldIds = new Set(heldErr ? [] : (heldContracts ?? []).map((c) => c.id));
-  const contracts = rawContracts.filter((c) => !heldIds.has(c.id));
-  if (contracts.length === 0) return result;
+  const { data: contracts } = await contractsQuery;
+  if (!contracts || contracts.length === 0) return result;
 
   const contractIds = contracts.map((c) => c.id as string);
 
@@ -1304,20 +1293,8 @@ export async function generateUsageStatements(
     .or(`status.eq.renewal_in_progress,end_date.gte.${firstOfMonth}`);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
-  const { data: rawContracts } = await contractsQuery;
-  if (!rawContracts || rawContracts.length === 0) return result;
-
-  // Contract-wide billing hold (00556_contract_billing_hold.sql) — a
-  // deliberately separate, tolerant lookup rather than chaining onto the
-  // query above: if this errors (e.g. the migration hasn't been applied to
-  // this environment yet), it fails soft to "nothing is held" instead of
-  // taking the whole generation run down with it, the way a hard failure in
-  // the main query would (that query's own result isn't error-checked). See
-  // generateRentProformas for the identical pattern.
-  const { data: heldContracts, error: heldErr } = await supabase.from("contracts").select("id").not("billing_hold_at", "is", null);
-  const heldIds = new Set(heldErr ? [] : (heldContracts ?? []).map((c) => c.id));
-  const contracts = rawContracts.filter((c) => !heldIds.has(c.id));
-  if (contracts.length === 0) return result;
+  const { data: contracts } = await contractsQuery;
+  if (!contracts || contracts.length === 0) return result;
 
   const contractIds = contracts.map((c) => c.id as string);
 
@@ -1490,7 +1467,18 @@ export async function generateUsageStatements(
   const serviceByContract  = new Map<string, ServiceRow[]>();
   const bookingsByContract = new Map<string, BookingRow[]>();
 
+  // Per-charge hold (see usage_charges.held_at) — excludes just this one
+  // charge from the sweep, not the whole contract. A separate, tolerant
+  // lookup rather than a filter chained onto usageRes's own query: if this
+  // errors (e.g. its migration hasn't been applied to this environment
+  // yet), it fails soft to "nothing is held" instead of taking the whole
+  // generation run down with it — same reasoning as every other query in
+  // this file whose result isn't error-checked.
+  const { data: heldCharges, error: heldChargeErr } = await supabase.from("usage_charges").select("id").not("held_at", "is", null);
+  const heldChargeIds = new Set(heldChargeErr ? [] : (heldCharges ?? []).map((c) => c.id));
+
   for (const u of (usageRes.data ?? []) as UsageRow[]) {
+    if (heldChargeIds.has(u.id)) continue;
     const list = usageByContract.get(u.contract_id) ?? [];
     list.push(u); usageByContract.set(u.contract_id, list);
   }

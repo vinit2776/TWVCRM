@@ -25,6 +25,7 @@ import {
   Ban,
   MinusCircle,
   PauseCircle,
+  PlayCircle,
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -171,6 +172,10 @@ interface UsageCharge {
   billable?: boolean | null;
   billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   billing_cycle_label?: string;
+  // Manual rows only — non-null excludes this charge from the next Generate
+  // Drafts sweep without changing `status`, which stays "pending" throughout.
+  held_at?: string | null;
+  hold_reason?: string | null;
 }
 
 interface BillingStatement {
@@ -551,27 +556,46 @@ export default function BillingPage() {
   };
 
   const submitHoldCharge = async () => {
-    if (!holdChargeTarget?.contract_id) return;
+    if (!holdChargeTarget) return;
     if (!holdChargeReason.trim()) { setHoldChargeReasonError(true); return; }
     setHoldChargeSubmitting(true);
     try {
-      const res = await fetch(`/api/contracts/${holdChargeTarget.contract_id}/billing-hold`, {
-        method: "POST",
+      const res = await fetch(`/api/usage-charges/${holdChargeTarget.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: holdChargeReason.trim() }),
+        body: JSON.stringify({ hold: true, hold_reason: holdChargeReason.trim() }),
       });
       if (res.ok) {
-        toast.success("Billing hold placed on this contract — no new statements will be generated until released");
+        toast.success("Charge held — it won't be swept into the next Generate Drafts run");
         setHoldChargeTarget(null);
         setHoldChargeReason("");
         setHoldChargeReasonError(false);
         fetchCharges();
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to place billing hold");
+        toast.error(err?.error || "Failed to hold charge");
       }
     } finally {
       setHoldChargeSubmitting(false);
+    }
+  };
+
+  const releaseChargeHold = async (charge: UsageCharge) => {
+    try {
+      const res = await fetch(`/api/usage-charges/${charge.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold: false }),
+      });
+      if (res.ok) {
+        toast.success("Hold released");
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to release hold");
+      }
+    } catch {
+      toast.error("Failed to release hold");
     }
   };
 
@@ -1360,6 +1384,15 @@ export default function BillingPage() {
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
+                        {charge.held_at && (
+                          <Badge
+                            variant="outline"
+                            className="block w-fit mt-1 text-[10px] bg-amber-50 text-amber-800 border-amber-300"
+                            title={charge.hold_reason ?? undefined}
+                          >
+                            Held{charge.hold_reason ? ` — ${charge.hold_reason}` : ""}
+                          </Badge>
+                        )}
                         {/* Only print/facility rows carry a real billable/non-billable
                             distinction — a manual charge is always billable unless
                             waived, which the status badge above already communicates. */}
@@ -1415,7 +1448,7 @@ export default function BillingPage() {
                                 <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
                               </DropdownMenuItem>
                             )}
-                            {charge.status === "pending" && charge.contract_id && (
+                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && !charge.held_at && (
                               <DropdownMenuItem
                                 onClick={() => {
                                   setHoldChargeTarget(charge);
@@ -1423,7 +1456,12 @@ export default function BillingPage() {
                                   setHoldChargeReasonError(false);
                                 }}
                               >
-                                <PauseCircle className="mr-2 h-4 w-4" />Hold contract&rsquo;s billing
+                                <PauseCircle className="mr-2 h-4 w-4" />Hold this charge
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && charge.held_at && (
+                              <DropdownMenuItem onClick={() => releaseChargeHold(charge)}>
+                                <PlayCircle className="mr-2 h-4 w-4" />Release hold
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
@@ -1571,10 +1609,10 @@ export default function BillingPage() {
       <Dialog open={!!holdChargeTarget} onOpenChange={(open) => { if (!open) setHoldChargeTarget(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-4 w-4" />Place billing hold</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-4 w-4" />Hold this charge</DialogTitle>
             <DialogDescription>
               {holdChargeTarget && (
-                <>Pauses ALL future billing for <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> — no new rent proforma or usage statement will be generated for this contract until the hold is released. Already-generated statements are unaffected.</>
+                <>&ldquo;{holdChargeTarget.description}&rdquo; won&rsquo;t be swept into the next Generate Drafts run — it stays pending. Every other charge on <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> bills normally. Release the hold whenever it&rsquo;s ready.</>
               )}
             </DialogDescription>
           </DialogHeader>
@@ -1584,7 +1622,7 @@ export default function BillingPage() {
               id="hold-charge-reason"
               value={holdChargeReason}
               onChange={(e) => { setHoldChargeReason(e.target.value); if (holdChargeReasonError) setHoldChargeReasonError(false); }}
-              placeholder="Why is this contract's billing being held?"
+              placeholder="Why is this charge being held?"
               rows={3}
               className={holdChargeReasonError ? "border-destructive" : ""}
             />
