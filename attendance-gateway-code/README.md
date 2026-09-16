@@ -62,6 +62,49 @@ a deployment reachable from the internet — production uses
 `ADMIN_BOOTSTRAP_PASSWORD` instead, which creates one admin account with a
 password only you know. Full list of variables: [.env.example](.env.example).
 
+## For contributors
+
+You do not need any cloud credentials to work on this app. Develop against a
+local SQLite file instead of Turso — the libSQL client reads it the same way.
+
+```bash
+git checkout main && git pull
+git checkout -b fix/<short-description>
+cd attendance-gateway-code
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```bash
+TURSO_DATABASE_URL=file:attendance.db   # local file, already git-ignored
+TURSO_AUTH_TOKEN=                       # leave empty for a local file
+SEED_DEMO_DATA=true                     # demo logins, local only
+```
+
+```bash
+npm install
+npm start    # http://localhost:3001 — admin / admin123 (forces a password change)
+npm test     # must pass before opening a PR
+```
+
+Delete `attendance.db` to start over from a clean schema.
+
+Ground rules:
+
+- **Never ask for or use the production Turso credentials.** Everything can be
+  reproduced locally; production holds real employee data.
+- **Never set `SEED_DEMO_DATA` on a deployed environment** — its passwords are
+  published right here.
+- **Keep this app isolated from the CRM.** No imports from `../src`, no Supabase
+  client, no links to the CRM's `/attendance` routes.
+- Every change goes through a PR into `main`; the repo owner reviews and merges.
+  A failing `Vercel – twv-attendance` check on your PR is expected if you are
+  not on the Vercel team — only `lint-and-build` is required.
+- Put pure computation in `attendance-logic.js` with a test in `test/`; that is
+  the only unit-tested part of the app, so click through anything in `server.js`
+  in the browser before opening the PR.
+
 ## Migrating from the old office database
 
 The app previously ran on the office Windows machine against a local
