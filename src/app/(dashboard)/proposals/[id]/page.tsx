@@ -156,6 +156,8 @@ export default function ProposalDetailPage({
   const [depositCustomerMessage, setDepositCustomerMessage] = useState("");
   const [depositCc, setDepositCc] = useState("");
   const [depositDownloading, setDepositDownloading] = useState(false);
+  const [depositNoteMissing, setDepositNoteMissing] = useState(false);
+  const depositNoteRef = useRef<HTMLTextAreaElement>(null);
   const depositPreviewRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Booking confirmation dialog (accept flow)
@@ -441,6 +443,7 @@ export default function ProposalDetailPage({
     setDepositEmailOpen(true);
     setDepositEmailPreview(null);
     setDepositInternalNote("");
+    setDepositNoteMissing(false);
     setDepositCustomerMessage("");
     setDepositCc((proposal?.lead?.billing_emails || []).join(", "));
     setDepositEmailLoading(true);
@@ -491,9 +494,18 @@ export default function ProposalDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depositCustomerMessage, depositEmailOpen]);
 
+  // The note is required before either action. The buttons stay enabled so
+  // clicking one explains what's missing instead of doing nothing.
+  const flagMissingDepositNote = () => {
+    setDepositNoteMissing(true);
+    depositNoteRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    depositNoteRef.current?.focus();
+    toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+  };
+
   const handleSendDepositEmail = async () => {
     if (depositInternalNote.trim().length < 10) {
-      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      flagMissingDepositNote();
       return;
     }
     setDepositEmailSending(true);
@@ -527,7 +539,7 @@ export default function ProposalDetailPage({
 
   const handleDownloadDepositRequest = async () => {
     if (depositInternalNote.trim().length < 10) {
-      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      flagMissingDepositNote();
       return;
     }
     setDepositDownloading(true);
@@ -1943,11 +1955,20 @@ export default function ProposalDetailPage({
                 </Label>
                 <Textarea
                   id="dep-internal-note"
+                  ref={depositNoteRef}
                   value={depositInternalNote}
-                  onChange={(e) => setDepositInternalNote(e.target.value)}
+                  onChange={(e) => {
+                    setDepositInternalNote(e.target.value);
+                    if (e.target.value.trim().length >= 10) setDepositNoteMissing(false);
+                  }}
                   placeholder="Why this deposit request exists — never shown to the customer"
                   rows={2}
+                  aria-invalid={depositNoteMissing}
+                  className={depositNoteMissing ? "border-destructive focus-visible:ring-destructive" : undefined}
                 />
+                <p className={`text-xs ${depositNoteMissing ? "text-destructive" : "text-muted-foreground"}`}>
+                  Required before sending or downloading — at least 10 characters.
+                </p>
                 <CheckAccountingNoteButton
                   note={depositInternalNote}
                   accountingHead="Security Deposit"
@@ -1986,7 +2007,7 @@ export default function ProposalDetailPage({
                 <Button
                   variant="outline"
                   onClick={handleDownloadDepositRequest}
-                  disabled={depositEmailSending || depositDownloading || depositInternalNote.trim().length < 10}
+                  disabled={depositEmailSending || depositDownloading}
                   title="Creates the payment link, marks the deposit as requested and downloads a PDF to share manually — no email is sent"
                 >
                   {depositDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
@@ -1994,7 +2015,7 @@ export default function ProposalDetailPage({
                 </Button>
                 <Button
                   onClick={handleSendDepositEmail}
-                  disabled={depositEmailSending || depositDownloading || !depositEmailPreview.to.length || depositInternalNote.trim().length < 10}
+                  disabled={depositEmailSending || depositDownloading || !depositEmailPreview.to.length}
                   className="bg-primary hover:bg-primary/90"
                 >
                   {depositEmailSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
