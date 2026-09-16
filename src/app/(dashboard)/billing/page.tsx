@@ -1328,8 +1328,23 @@ export default function BillingPage() {
                 </thead>
                 <tbody>
                   {filteredCharges.map((charge) => (
-                    <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
+                    <tr
+                      key={charge.id}
+                      className={`border-b transition-colors ${charge.held_at ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-muted/30"}`}
+                    >
+                      <td className="px-4 py-3 font-medium max-w-[200px]">
+                        <div className="flex items-center gap-1.5">
+                          {charge.held_at && (
+                            <span
+                              title={`Held${charge.hold_reason ? ` — ${charge.hold_reason}` : ""}`}
+                              className="shrink-0"
+                            >
+                              <PauseCircle className="h-3.5 w-3.5 text-amber-600" aria-label="Held" />
+                            </span>
+                          )}
+                          <span className="truncate">{charge.description}</span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 max-w-[160px] truncate" title={customerNameOf(charge.lead)}>{customerNameOf(charge.lead)}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                         {/* Show both contract + booking when present (a posted-
