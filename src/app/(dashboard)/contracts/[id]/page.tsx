@@ -100,6 +100,7 @@ import { ContractChainStrip } from "@/components/contracts/contract-chain-strip"
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import { QueryButton } from "@/components/queries/query-button";
 import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
+import { commitmentDifferences } from "@/lib/contract-commitment";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -1630,6 +1631,33 @@ export default function ContractDetailPage({
                   <p className="text-muted-foreground text-xs">Notice Period</p>
                   <p>{contract.notice_period_months || 2} months</p>
                 </div>
+                {contract.commitment_override_reason && (
+                  <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                    <p className="font-medium">
+                      Terms overridden from {contract.proposal?.proposal_number ?? "the proposal"}
+                      {contract.proposal && contract.proposal.tenure_months != null && contract.proposal.lock_in_months != null && contract.proposal.notice_period_months != null && (() => {
+                        const diffs = commitmentDifferences(
+                          {
+                            tenure_months: contract.proposal.tenure_months,
+                            lock_in_months: contract.proposal.lock_in_months,
+                            notice_period_months: contract.proposal.notice_period_months,
+                          },
+                          {
+                            tenure_months: contract.tenure_months,
+                            lock_in_months: contract.lock_in_months ?? contract.proposal.lock_in_months,
+                            notice_period_months: contract.notice_period_months ?? contract.proposal.notice_period_months,
+                          }
+                        );
+                        return diffs.length > 0 ? `: ${diffs.join(", ")}` : null;
+                      })()}
+                    </p>
+                    <p className="mt-1">&ldquo;{contract.commitment_override_reason}&rdquo;</p>
+                    <p className="mt-1 text-amber-800/80">
+                      {contract.commitment_overridden_by_user?.full_name ?? "Admin"}
+                      {contract.commitment_overridden_at && ` · ${formatDate(contract.commitment_overridden_at)}`}
+                    </p>
+                  </div>
+                )}
                 {contract.agreement_date && (
                   <div>
                     <p className="text-muted-foreground text-xs">Agreement Date</p>

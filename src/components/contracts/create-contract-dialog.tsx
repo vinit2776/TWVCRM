@@ -25,6 +25,9 @@ import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-selector";
 import type { Proposal, Lead } from "@/types";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { useProposalCommitmentLock } from "@/components/contracts/use-proposal-commitment-lock";
+import { ProposalCommitmentPanel } from "@/components/contracts/proposal-commitment-panel";
 
 interface CreateContractDialogProps {
   open: boolean;
@@ -197,6 +200,17 @@ export function CreateContractDialog({
     }
   }, [selectedProposal]);
 
+  const { user: currentUser } = useCurrentUser();
+  const commitmentLock = useProposalCommitmentLock({
+    selectedProposal,
+    startDate,
+    setTenureMonths,
+    setLockInMonths,
+    setNoticePeriodMonths,
+    setEndDate,
+  });
+  const { termsLocked } = commitmentLock;
+
   // Actual contract length, derived from the start + end dates. The end date
   // is authoritative; tenure (months) is computed for the agreement / display.
   const derivedTenureMonths = useMemo(() => {
@@ -244,13 +258,14 @@ export function CreateContractDialog({
     }
   }, [startDate, endDate, tenureMonths]);
 
-  // Keep lock-in / notice period within the actual contract length.
+  // Keep lock-in / notice period within the actual contract length. Skipped
+  // while locked to the proposal, whose values are already consistent.
   useEffect(() => {
-    if (derivedTenureMonths > 0) {
+    if (derivedTenureMonths > 0 && !termsLocked) {
       setLockInMonths((prev) => Math.min(prev, derivedTenureMonths));
       setNoticePeriodMonths((prev) => Math.min(prev, Math.max(3, derivedTenureMonths)));
     }
-  }, [derivedTenureMonths]);
+  }, [derivedTenureMonths, termsLocked]);
 
   // Quick-fill dropdown: picking a whole-month tenure sets the end date.
   const handleTenureChange = (val: string) => {
@@ -264,8 +279,12 @@ export function CreateContractDialog({
     }
   };
 
+  // Option lists below always include the current value — Radix Select's hidden
+  // native <select> otherwise pushes a fallback ("") back through onValueChange
+  // whenever the value isn't an option, which parses to NaN.
   const handleLockInChange = (val: string) => {
     const l = parseInt(val);
+    if (Number.isNaN(l)) return;
     setLockInMonths(l);
     const newMax = Math.max(3, derivedTenureMonths - l);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
@@ -348,6 +367,10 @@ export function CreateContractDialog({
       toast.error("Seats must be a positive number");
       return;
     }
+    if (commitmentLock.submitError) {
+      toast.error(commitmentLock.submitError);
+      return;
+    }
     if (!signatoryName.trim()) {
       toast.error("Member signatory name is required");
       return;
@@ -395,6 +418,7 @@ export function CreateContractDialog({
       escalation_percentage: escalationPercentage,
       notice_period_months: noticePeriodMonths,
       lock_in_months: lockInMonths,
+      commitment_override_reason: commitmentLock.overrideReasonForRequest,
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
       member_signatory_pan: signatoryPan.trim() || undefined,
@@ -745,6 +769,7 @@ export function CreateContractDialog({
                   value={endDate}
                   min={startDate || undefined}
                   onChange={(e) => setEndDate(e.target.value)}
+                  disabled={termsLocked}
                 />
                 {durationLabel && (
                   <p className="text-xs text-muted-foreground">
@@ -754,7 +779,7 @@ export function CreateContractDialog({
               </div>
               <div className="space-y-2">
                 <Label>Tenure (quick-fill)</Label>
-                <Select value={String(tenureMonths)} onValueChange={handleTenureChange}>
+                <Select value={String(tenureMonths)} onValueChange={handleTenureChange} disabled={termsLocked}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -767,19 +792,19 @@ export function CreateContractDialog({
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Sets the end date. Edit the end date for an exact period.
+                  {termsLocked ? "Set by the linked proposal." : "Sets the end date. Edit the end date for an exact period."}
                 </p>
               </div>
               <div className="space-y-2">
                 <Label>
                   Lock-in Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(lockInMonths)} onValueChange={handleLockInChange}>
+                <Select value={String(lockInMonths)} onValueChange={handleLockInChange} disabled={termsLocked}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -791,18 +816,32 @@ export function CreateContractDialog({
                 <Label>
                   Notice Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(noticePeriodMonths)} onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}>
+                <Select
+                  value={String(noticePeriodMonths)}
+                  onValueChange={(v) => { const n = parseInt(v); if (!Number.isNaN(n)) setNoticePeriodMonths(n); }}
+                  disabled={termsLocked}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                    {Array.from({ length: Math.max(maxNoticePeriod, noticePeriodMonths) + 1 }, (_, i) => i).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="sm:col-span-3">
+                <ProposalCommitmentPanel
+                  proposal={selectedProposal}
+                  agreedTerms={commitmentLock.agreedTerms}
+                  overrideReason={commitmentLock.overrideReason}
+                  onOverrideReasonChange={commitmentLock.setOverrideReason}
+                  onTermsRecorded={commitmentLock.recordTerms}
+                  userRole={currentUser?.role}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>

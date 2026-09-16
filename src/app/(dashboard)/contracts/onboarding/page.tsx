@@ -68,6 +68,8 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { generateStampReference } from "@/lib/company-stamp";
 import type { Proposal, Lead, Contract, ContractSpaceAllocation } from "@/types";
+import { useProposalCommitmentLock } from "@/components/contracts/use-proposal-commitment-lock";
+import { ProposalCommitmentPanel } from "@/components/contracts/proposal-commitment-panel";
 
 // Contract Onboarding Wizard — full local test build covering all 12 steps
 // derived from the 13-step handoff spec (handoff_contract_UI_wizard/README.md).
@@ -401,6 +403,16 @@ function ContractOnboardingWizard() {
     }
   }, [selectedProposal]);
 
+  const commitmentLock = useProposalCommitmentLock({
+    selectedProposal,
+    startDate,
+    setTenureMonths,
+    setLockInMonths,
+    setNoticePeriodMonths,
+    setEndDate,
+  });
+  const { termsLocked } = commitmentLock;
+
   const derivedTenureMonths = useMemo(() => {
     if (!startDate || !endDate || endDate < startDate) return 0;
     const s = new Date(startDate + "T00:00:00Z");
@@ -441,11 +453,12 @@ function ContractOnboardingWizard() {
   }, [startDate, endDate, tenureMonths]);
 
   useEffect(() => {
-    if (derivedTenureMonths > 0) {
+    // Skipped while locked to the proposal, whose values are already consistent.
+    if (derivedTenureMonths > 0 && !termsLocked) {
       setLockInMonths((prev) => Math.min(prev, derivedTenureMonths));
       setNoticePeriodMonths((prev) => Math.min(prev, Math.max(3, derivedTenureMonths)));
     }
-  }, [derivedTenureMonths]);
+  }, [derivedTenureMonths, termsLocked]);
 
   const handleTenureChange = useCallback(
     (val: string) => {
@@ -464,6 +477,8 @@ function ContractOnboardingWizard() {
   const handleLockInChange = useCallback(
     (val: string) => {
       const l = parseInt(val);
+      // Radix Select's hidden native <select> can push "" back through here.
+      if (Number.isNaN(l)) return;
       setLockInMonths(l);
       const newMax = Math.max(3, derivedTenureMonths - l);
       setNoticePeriodMonths((prev) => (prev > newMax ? newMax : prev));
@@ -514,6 +529,10 @@ function ContractOnboardingWizard() {
     }
     if (seats <= 0) {
       toast.error("Seats must be a positive number");
+      return;
+    }
+    if (commitmentLock.submitError) {
+      toast.error(commitmentLock.submitError);
       return;
     }
     if (!signatoryName.trim()) {
@@ -569,6 +588,7 @@ function ContractOnboardingWizard() {
       escalation_percentage: escalationPercentage,
       notice_period_months: noticePeriodMonths,
       lock_in_months: lockInMonths,
+      commitment_override_reason: commitmentLock.overrideReasonForRequest,
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
       member_signatory_pan: signatoryPan.trim() || undefined,
@@ -624,6 +644,7 @@ function ContractOnboardingWizard() {
     state, zipCode, country, selectedProposalId, derivedTenureMonths, monthlyFee, parkingSpace,
     complimentaryServices, securityDepositMonths, escalationPercentage, noticePeriodMonths,
     lockInMonths, signatoryPan, signatoryIdType, agreementDate, notes, selectedSpaceUnitIds,
+    commitmentLock.submitError, commitmentLock.overrideReasonForRequest,
   ]);
 
   const addRatePhase = useCallback(() => {
@@ -1385,12 +1406,13 @@ function ContractOnboardingWizard() {
                         value={endDate}
                         min={startDate || undefined}
                         onChange={(e) => setEndDate(e.target.value)}
+                        disabled={termsLocked}
                       />
                       {durationLabel && <p className="text-xs text-muted-foreground">Duration: {durationLabel}</p>}
                     </div>
                     <div className="space-y-2">
                       <Label>Tenure (quick-fill)</Label>
-                      <Select value={String(tenureMonths)} onValueChange={handleTenureChange}>
+                      <Select value={String(tenureMonths)} onValueChange={handleTenureChange} disabled={termsLocked}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
@@ -1407,12 +1429,12 @@ function ContractOnboardingWizard() {
                       <Label>
                         Lock-in Period <span className="text-destructive">*</span>
                       </Label>
-                      <Select value={String(lockInMonths)} onValueChange={handleLockInChange}>
+                      <Select value={String(lockInMonths)} onValueChange={handleLockInChange} disabled={termsLocked}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {Array.from({ length: Math.min(Math.max(derivedTenureMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                          {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
                             <SelectItem key={m} value={String(m)}>
                               {m} month{m !== 1 ? "s" : ""}
                             </SelectItem>
@@ -1424,18 +1446,32 @@ function ContractOnboardingWizard() {
                       <Label>
                         Notice Period <span className="text-destructive">*</span>
                       </Label>
-                      <Select value={String(noticePeriodMonths)} onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}>
+                      <Select
+                        value={String(noticePeriodMonths)}
+                        onValueChange={(v) => { const n = parseInt(v); if (!Number.isNaN(n)) setNoticePeriodMonths(n); }}
+                        disabled={termsLocked}
+                      >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                          {Array.from({ length: Math.max(maxNoticePeriod, noticePeriodMonths) + 1 }, (_, i) => i).map((m) => (
                             <SelectItem key={m} value={String(m)}>
                               {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div className="sm:col-span-3">
+                      <ProposalCommitmentPanel
+                        proposal={selectedProposal}
+                        agreedTerms={commitmentLock.agreedTerms}
+                        overrideReason={commitmentLock.overrideReason}
+                        onOverrideReasonChange={commitmentLock.setOverrideReason}
+                        onTermsRecorded={commitmentLock.recordTerms}
+                        userRole={userRole}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label>Security Deposit (x Monthly Fee)</Label>

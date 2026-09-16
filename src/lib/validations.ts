@@ -313,6 +313,9 @@ export const createContractSchema = z.object({
   pan_number: z.string().optional(),
   // Customer's own PO number for this contract, when they require one on every invoice
   po_number: z.string().optional(),
+  // Admin-only: set when term / lock-in / notice deliberately differ from the
+  // linked proposal. Enforced by resolveContractCommitment.
+  commitment_override_reason: z.string().optional(),
 }).refine(
   (d) => !d.end_date || d.end_date >= d.start_date,
   { message: "End date must be on or after the start date", path: ["end_date"] }
