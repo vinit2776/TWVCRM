@@ -1479,6 +1479,12 @@ export async function generateUsageStatements(
 
   for (const u of (usageRes.data ?? []) as UsageRow[]) {
     if (heldChargeIds.has(u.id)) continue;
+    // Zero-total charges (complimentary/courtesy add-ons) have nothing to
+    // bill — same reasoning as getUsageGaps'/getUsageSupplements' `total > 0`
+    // filter in unbilled-queue.ts. Without this, a lingering pending ₹0 row
+    // still makes `usageCharges.length` nonzero below, which defeats the
+    // zero-gate and produces an empty ₹0 draft for the contract.
+    if (Number(u.total) <= 0) continue;
     const list = usageByContract.get(u.contract_id) ?? [];
     list.push(u); usageByContract.set(u.contract_id, list);
   }
