@@ -52,6 +52,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
+import { UsageChargeDetailsDialog } from "@/components/billing/usage-charge-details-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { LogFacilityUsageDialog } from "@/components/accounting/log-facility-usage-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
@@ -176,6 +177,9 @@ interface UsageCharge {
   // Drafts sweep without changing `status`, which stays "pending" throughout.
   held_at?: string | null;
   hold_reason?: string | null;
+  waive_reason?: string | null;
+  waived_at?: string | null;
+  waived_by_name?: string | null;
 }
 
 interface BillingStatement {
@@ -462,6 +466,8 @@ export default function BillingPage() {
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
+  const [viewChargeOpen, setViewChargeOpen]           = useState(false);
+  const [viewingCharge, setViewingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
   const [facilityUsageOpen, setFacilityUsageOpen]     = useState(false);
 
@@ -1414,7 +1420,14 @@ export default function BillingPage() {
                             <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setViewingCharge(charge);
+                                setViewChargeOpen(true);
+                              }}
+                            >
+                              <Eye className="mr-2 h-4 w-4" />View Details
+                            </DropdownMenuItem>
                             {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
                               <DropdownMenuItem
                                 onClick={() => {
@@ -1523,6 +1536,11 @@ export default function BillingPage() {
         onOpenChange={setEditChargeOpen}
         onSuccess={fetchCharges}
         charge={editingCharge}
+      />
+      <UsageChargeDetailsDialog
+        open={viewChargeOpen}
+        onOpenChange={setViewChargeOpen}
+        charge={viewingCharge}
       />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} />

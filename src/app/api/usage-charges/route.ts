@@ -41,6 +41,11 @@ interface NormalizedRow {
    *  doc comment (00558_usage_charge_hold.sql). */
   held_at: string | null;
   hold_reason: string | null;
+  // Only ever set on "manual" rows — print/facility charges can never be
+  // waived (see doc comment on GET below), so these stay null for them.
+  waive_reason: string | null;
+  waived_at: string | null;
+  waived_by_name: string | null;
 }
 
 function lastDayOfMonth(year: number, month: number): string {
@@ -127,6 +132,8 @@ function normalizeManual(r: any): NormalizedRow {
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
     held_at: r.held_at ?? null, hold_reason: r.hold_reason ?? null,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null,
+    waived_by_name: r.waived_by_user?.full_name ?? null,
   };
 }
 
@@ -152,6 +159,7 @@ function normalizePrint(r: any): NormalizedRow {
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
     held_at: null, hold_reason: null,
+    waive_reason: null, waived_at: null, waived_by_name: null,
   };
 }
 
@@ -182,6 +190,7 @@ function normalizeFacility(r: any): NormalizedRow {
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
     held_at: null, hold_reason: null,
+    waive_reason: null, waived_at: null, waived_by_name: null,
   };
 }
 
