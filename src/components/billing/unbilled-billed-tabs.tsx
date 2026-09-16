@@ -319,7 +319,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             { number: 3, title: "Preview invoice & email", description: "Before you commit, see exactly what the customer will get — same PDF, same email." },
             { number: 4, title: "Confirm & Send", description: "This is real. It emails the customer a payment link and can't be undone from here." },
           ]}
-          tip="Only ad-hoc/print charges can be waived — facility and booking usage are locked in once the draft is generated."
+          tip="Ad-hoc, print, and facility charges can all be waived from here. Booking usage is locked in once the draft is generated."
         />
       )}
 

@@ -9,13 +9,12 @@
  * where the backing data supports it, a live total, and a Finalize & Send
  * step that previews the exact email + invoice PDF before dispatch.
  *
- * Waive is only wired for ad-hoc usage_charges (via
- * POST .../waive-charge) — that's the only source with a persisted,
- * individually-toggleable "waived" flag. Facility/service/booking usage are
- * rolled into the statement as aggregate amounts with no per-record billed
- * flag (see unbilled-queue.ts's usage_gap doc comment), so they render
- * read-only here rather than offering a waive button that would silently
- * do nothing.
+ * Waive is wired for all three per-charge sources (manual usage_charges,
+ * print/service_usage_records, facility_usage_records — via POST
+ * .../waive-charge with a `source` field) since the usage-billing-engine PR
+ * gave print/facility their own waived_at column. Only booking usage stays
+ * read-only here — it's rolled into the statement as an aggregate with no
+ * per-record billed flag of its own.
  */
 
 import { useState, useCallback } from "react";
@@ -41,9 +40,11 @@ interface UsageCharge {
 interface FacilityCharge {
   id: string; name: string; unit: string;
   billable_quantity: number; unit_price: number; total_charge: number;
+  waived_at: string | null; waive_reason: string | null;
 }
 interface ServiceCharge {
   id: string; service_name: string; overage: number; rate: number; amount: number;
+  waived_at: string | null; waive_reason: string | null;
 }
 interface BookingCharge {
   id: string; booking_number: string; date: string; space: string; amount: number;
@@ -56,6 +57,11 @@ interface StatementDetail {
   facility_charges: FacilityCharge[];
   service_charges: ServiceCharge[];
   booking_charges: BookingCharge[];
+  /** "proforma_first" | "gst_direct" — read straight off the contract this
+   *  statement belongs to, purely informational here (finalize-and-send
+   *  already branches on it server-side; this just surfaces it before you
+   *  click Send instead of only finding out after). */
+  billing_mode: string | null;
 }
 interface PreviewEmail {
   subject: string;
@@ -110,6 +116,7 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
         facility_charges: json.data.facility_charges || [],
         service_charges: json.data.service_charges || [],
         booking_charges: json.data.booking_charges || [],
+        billing_mode: json.data.contract?.billing_mode ?? null,
       };
       setDetail(next);
       return next;
@@ -135,23 +142,29 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
     setWaiveReasonError(false);
   };
 
-  const applyWaive = async (charge: UsageCharge, willWaive: boolean, reason?: string) => {
+  const applyWaive = async (chargeId: string, source: "manual" | "print" | "facility", willWaive: boolean, reason?: string) => {
     if (willWaive && !reason?.trim()) { setWaiveReasonError(true); return; }
     setWaiveReasonError(false);
-    setWaivingId(charge.id);
+    setWaivingId(chargeId);
     try {
       const res = await fetch(`/api/billing-statements/${statementId}/waive-charge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ charge_id: charge.id, waive: willWaive, reason: reason || undefined }),
+        body: JSON.stringify({ charge_id: chargeId, source, waive: willWaive, reason: reason || undefined }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to update");
-      setDetail((prev) => prev ? {
-        ...prev,
-        total_amount: Number(json.data.total_amount),
-        usage_charges: prev.usage_charges.map((c) => c.id === charge.id ? { ...c, is_waived: willWaive, waive_reason: reason || null } : c),
-      } : prev);
+      setDetail((prev) => {
+        if (!prev) return prev;
+        const stamp = willWaive ? new Date().toISOString() : null;
+        return {
+          ...prev,
+          total_amount: Number(json.data.total_amount),
+          usage_charges: source === "manual" ? prev.usage_charges.map((c) => c.id === chargeId ? { ...c, is_waived: willWaive, waive_reason: reason || null } : c) : prev.usage_charges,
+          facility_charges: source === "facility" ? prev.facility_charges.map((f) => f.id === chargeId ? { ...f, waived_at: stamp, waive_reason: reason || null } : f) : prev.facility_charges,
+          service_charges: source === "print" ? prev.service_charges.map((s) => s.id === chargeId ? { ...s, waived_at: stamp, waive_reason: reason || null } : s) : prev.service_charges,
+        };
+      });
       setWaiveReasonKey(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update charge");
@@ -272,11 +285,15 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
 
   const closeDialog = () => setDialogStep(null);
 
-  const items = detail ? [
-    ...detail.usage_charges.map((c) => ({ key: `uc:${c.id}`, desc: c.description, source: "Ad-hoc / Print", amount: c.total, waived: c.is_waived, waivable: true, charge: c })),
-    ...detail.facility_charges.map((f) => ({ key: `fc:${f.id}`, desc: `${f.name} — ${f.billable_quantity} ${f.unit} over quota`, source: "Facility usage", amount: f.total_charge, waived: false, waivable: false, charge: null })),
-    ...detail.service_charges.map((s) => ({ key: `sc:${s.id}`, desc: `${s.service_name} — ${s.overage} over quota`, source: "Print / service log", amount: s.amount, waived: false, waivable: false, charge: null })),
-    ...detail.booking_charges.filter((b) => b.amount > 0).map((b) => ({ key: `bc:${b.id}`, desc: `Booking ${b.booking_number} — ${b.space}`, source: "Booking overage", amount: b.amount, waived: false, waivable: false, charge: null })),
+  type LineItem = {
+    key: string; desc: string; sourceLabel: string; amount: number; waived: boolean;
+    waivable: boolean; chargeId: string | null; source: "manual" | "print" | "facility" | null; waiveReason: string | null;
+  };
+  const items: LineItem[] = detail ? [
+    ...detail.usage_charges.map((c): LineItem => ({ key: `uc:${c.id}`, desc: c.description, sourceLabel: "Ad-hoc / Manual", amount: c.total, waived: c.is_waived, waivable: true, chargeId: c.id, source: "manual", waiveReason: c.waive_reason })),
+    ...detail.facility_charges.map((f): LineItem => ({ key: `fc:${f.id}`, desc: `${f.name} — ${f.billable_quantity} ${f.unit} over quota`, sourceLabel: "Facility usage", amount: f.total_charge, waived: !!f.waived_at, waivable: true, chargeId: f.id, source: "facility", waiveReason: f.waive_reason })),
+    ...detail.service_charges.map((s): LineItem => ({ key: `sc:${s.id}`, desc: `${s.service_name} — ${s.overage} over quota`, sourceLabel: "Print / service log", amount: s.amount, waived: !!s.waived_at, waivable: true, chargeId: s.id, source: "print", waiveReason: s.waive_reason })),
+    ...detail.booking_charges.filter((b) => b.amount > 0).map((b): LineItem => ({ key: `bc:${b.id}`, desc: `Booking ${b.booking_number} — ${b.space}`, sourceLabel: "Booking overage", amount: b.amount, waived: false, waivable: false, chargeId: null, source: null, waiveReason: null })),
   ] : [];
 
   return (
@@ -318,11 +335,18 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-3"><Loader2 className="h-3 w-3 animate-spin" /> Loading items…</div>
           ) : detail ? (
             <>
-              {detail.status === "finalized" && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5 mb-2">
-                  Already finalized — items are locked. Click Send to dispatch it.
-                </p>
-              )}
+              <div className="flex items-center gap-2 mb-2">
+                {detail.billing_mode && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${detail.billing_mode === "gst_direct" ? "bg-green-50 text-green-800 border border-green-200" : "bg-blue-50 text-blue-800 border border-blue-200"}`}>
+                    {detail.billing_mode === "gst_direct" ? "GST direct" : "Proforma first"}
+                  </span>
+                )}
+                {detail.status === "finalized" && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+                    Already finalized — items are locked. Click Send to dispatch it.
+                  </p>
+                )}
+              </div>
               <div className="rounded-md border divide-y text-sm mb-2">
                 {items.map((it) => (
                   <div key={it.key} className="px-3 py-2">
@@ -330,8 +354,8 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
                       <div className="min-w-0">
                         <p className={`truncate ${it.waived ? "line-through text-muted-foreground" : ""}`}>{it.desc}</p>
                         <p className="text-[10.5px] text-muted-foreground mt-0.5">
-                          {it.source}
-                          {it.waived && it.charge?.waive_reason ? ` · waived: ${it.charge.waive_reason}` : ""}
+                          {it.sourceLabel}
+                          {it.waived && it.waiveReason ? ` · waived: ${it.waiveReason}` : ""}
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -339,15 +363,15 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
                         {it.waivable && canBill && detail.status === "draft" && (
                           <button
                             className={`text-[11px] font-semibold underline underline-offset-2 ${it.waived ? "text-slate-500 hover:text-slate-700" : "text-red-600 hover:text-red-800"}`}
-                            onClick={() => it.charge && (it.waived ? applyWaive(it.charge, false) : startWaive(it.charge.id))}
-                            disabled={waivingId === it.charge?.id}
+                            onClick={() => it.chargeId && it.source && (it.waived ? applyWaive(it.chargeId, it.source, false) : startWaive(it.chargeId))}
+                            disabled={waivingId === it.chargeId}
                           >
-                            {waivingId === it.charge?.id ? <Loader2 className="h-3 w-3 animate-spin" /> : it.waived ? "Un-waive" : "Waive"}
+                            {waivingId === it.chargeId ? <Loader2 className="h-3 w-3 animate-spin" /> : it.waived ? "Un-waive" : "Waive"}
                           </button>
                         )}
                       </div>
                     </div>
-                    {waiveReasonKey === it.charge?.id && (
+                    {waiveReasonKey === it.chargeId && (
                       <div>
                         <div className="flex items-center gap-2 mt-1.5">
                           <Input
@@ -355,11 +379,11 @@ export function UsageCurrentCycleCard({ row, canBill, onSent }: Props) {
                             placeholder="Reason for waiving (required)"
                             value={waiveReasonText}
                             onChange={(e) => { setWaiveReasonText(e.target.value); if (waiveReasonError) setWaiveReasonError(false); }}
-                            onKeyDown={(e) => { if (e.key === "Enter" && it.charge) void applyWaive(it.charge, true, waiveReasonText); }}
+                            onKeyDown={(e) => { if (e.key === "Enter" && it.chargeId && it.source) void applyWaive(it.chargeId, it.source, true, waiveReasonText); }}
                             className={`h-7 text-xs flex-1 ${waiveReasonError ? "border-red-400 bg-red-50 focus-visible:ring-red-400" : ""}`}
                           />
-                          <Button size="sm" className="h-7 text-xs bg-red-600 hover:bg-red-700" onClick={() => it.charge && applyWaive(it.charge, true, waiveReasonText)} disabled={waivingId === it.charge?.id}>
-                            {waivingId === it.charge?.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm waive"}
+                          <Button size="sm" className="h-7 text-xs bg-red-600 hover:bg-red-700" onClick={() => it.chargeId && it.source && applyWaive(it.chargeId, it.source, true, waiveReasonText)} disabled={waivingId === it.chargeId}>
+                            {waivingId === it.chargeId ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm waive"}
                           </Button>
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setWaiveReasonKey(null)}>Cancel</Button>
                         </div>
