@@ -71,7 +71,9 @@ import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { canRecordPayments } from "@/lib/constants";
-import { composeProposalTerms } from "@/lib/proposal-terms";
+import { composeProposalTerms, hasCommitmentTerms } from "@/lib/proposal-terms";
+import { RECORD_COMMITMENT_TERMS_ROLES } from "@/lib/contract-commitment";
+import { RecordCommitmentTermsDialog } from "@/components/proposals/record-commitment-terms-dialog";
 
 export default function ProposalDetailPage({
   params,
@@ -86,6 +88,7 @@ export default function ProposalDetailPage({
 
   // Current user (rep) profile for PDF/email attribution
   const { user: currentUser } = useCurrentUser();
+  const [recordTermsOpen, setRecordTermsOpen] = useState(false);
 
   // Service quotas for PDF rendering
   const [serviceQuotas, setServiceQuotas] = useState<{ name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]>([]);
@@ -1138,6 +1141,34 @@ export default function ProposalDetailPage({
               </CardContent>
             </Card>
           )}
+
+          {/* Accepted before term / lock-in / notice were captured — a contract
+              can't be created until the agreed terms are recorded. */}
+          {!(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(proposal.status) &&
+            proposal.status !== "rejected" &&
+            !hasCommitmentTerms(proposal) && (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardContent className="pt-6 text-sm text-amber-900 space-y-2">
+                  <p className="font-medium">No agreed term, lock-in or notice period recorded</p>
+                  <p className="text-xs">
+                    This proposal predates these fields. A contract can&apos;t be created from it until the terms the
+                    customer agreed are recorded.
+                  </p>
+                  {(RECORD_COMMITMENT_TERMS_ROLES as readonly string[]).includes(currentUser?.role || "") && (
+                    <Button size="sm" variant="outline" onClick={() => setRecordTermsOpen(true)}>
+                      Record agreed terms
+                    </Button>
+                  )}
+                  <RecordCommitmentTermsDialog
+                    proposalId={proposal.id}
+                    proposalNumber={proposal.proposal_number}
+                    open={recordTermsOpen}
+                    onOpenChange={setRecordTermsOpen}
+                    onRecorded={(terms) => setProposal((prev) => (prev ? { ...prev, ...terms } : prev))}
+                  />
+                </CardContent>
+              </Card>
+            )}
 
           {/* Terms & Conditions */}
           {composeProposalTerms(proposal) && (

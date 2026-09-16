@@ -9,6 +9,8 @@ import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
+import { resolveContractCommitment } from "@/lib/contract-commitment";
+import { hasCommitmentTerms } from "@/lib/proposal-terms";
 
 export async function GET(
   _request: NextRequest,
@@ -21,7 +23,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months, tenure_months, lock_in_months, notice_period_months), commitment_overridden_by_user:users!contracts_commitment_overridden_by_fkey(full_name), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name), rate_phases:contract_rate_phases(*)")
     .eq("id", id)
     .single();
 
@@ -170,6 +172,37 @@ export async function PATCH(
   }
   // Resolve the CRM user ID early — needed for _by actor columns and audit log
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  // Term / lock-in agreed on the proposal stay locked after creation too —
+  // same gate as POST /api/contracts. Contracts from proposals that predate
+  // structured terms (and renewals, which have no proposal) are unaffected.
+  if (("tenure_months" in allowedFields || "lock_in_months" in allowedFields) && oldContract.proposal_id) {
+    const { data: linkedProposal } = await supabase
+      .from("proposals")
+      .select("proposal_number, tenure_months, lock_in_months, notice_period_months")
+      .eq("id", oldContract.proposal_id)
+      .single();
+    if (linkedProposal && hasCommitmentTerms(linkedProposal)) {
+      const commitment = resolveContractCommitment({
+        proposal: linkedProposal,
+        submitted: {
+          tenure_months: (allowedFields.tenure_months as number | undefined) ?? oldContract.tenure_months,
+          lock_in_months: (allowedFields.lock_in_months as number | null | undefined) ?? oldContract.lock_in_months ?? undefined,
+          notice_period_months: oldContract.notice_period_months ?? undefined,
+        },
+        overrideReason: body.commitment_override_reason,
+        isAdmin: dbUser?.role === "admin",
+      });
+      if (!commitment.ok) {
+        return NextResponse.json({ error: commitment.error }, { status: commitment.status });
+      }
+      if (commitment.overridden) {
+        allowedFields.commitment_override_reason = String(body.commitment_override_reason).trim();
+        allowedFields.commitment_overridden_by = dbUser?.id ?? null;
+        allowedFields.commitment_overridden_at = new Date().toISOString();
+      }
+    }
+  }
 
   // Only admins may bypass the proposal payment gate
   if (body.payment_override_reason && dbUser?.role !== "admin") {

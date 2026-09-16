@@ -5,6 +5,7 @@ import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
 import { getProrataPaidDate } from "@/lib/proposals";
 import { firstBillingAnchor } from "@/lib/billing-months";
+import { commitmentEndDate, resolveContractCommitment } from "@/lib/contract-commitment";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -142,7 +143,23 @@ export async function POST(request: NextRequest) {
   const totalAmount = proposal.total_amount;
   const proposalLocationId: string | null = proposal.location_id;
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  // Term / lock-in / notice period must be what the proposal offered — the
+  // form locks them, this enforces it. Only an admin can differ, with a reason.
+  const commitment = resolveContractCommitment({
+    proposal,
+    submitted: {
+      tenure_months: d.tenure_months,
+      lock_in_months: d.lock_in_months ?? undefined,
+      notice_period_months: d.notice_period_months,
+    },
+    overrideReason: d.commitment_override_reason,
+    isAdmin: dbUser?.role === "admin",
+  });
+  if (!commitment.ok) {
+    return NextResponse.json({ error: commitment.error }, { status: commitment.status });
+  }
 
   // start_date is a placeholder until the proposal's pro-rata invoice is
   // actually paid. If it's already paid at creation time, the invoice's
@@ -164,9 +181,15 @@ export async function POST(request: NextRequest) {
   // End date: use the explicit end_date when the form supplies one (the
   // start/end-date picker). Otherwise derive it from start_date + tenure_months
   // minus 1 day — a contract starting Nov 1 for 11 months ends Sep 30.
+  //
+  // When the terms follow the proposal, the end date is always start + agreed
+  // term — computed here from the resolved start rather than trusting the
+  // form, since the resolved start can differ from what the form submitted.
   const startDate = new Date(resolvedStartDateStr);
   let endDateStr: string;
-  if (d.end_date) {
+  if (!commitment.overridden) {
+    endDateStr = commitmentEndDate(resolvedStartDateStr, commitment.values.tenure_months);
+  } else if (d.end_date) {
     endDateStr = d.end_date;
   } else {
     const endDate = new Date(startDate);
@@ -197,7 +220,7 @@ export async function POST(request: NextRequest) {
       discount_amount: discountAmount,
       total_amount: totalAmount,
       billing_cycle: d.billing_cycle,
-      tenure_months: d.tenure_months,
+      tenure_months: commitment.values.tenure_months,
       start_date: resolvedStartDateStr,
       end_date: endDateStr,
       // Tiered rate-phase clock anchor — defaults to start_date, same as the
@@ -219,8 +242,13 @@ export async function POST(request: NextRequest) {
       complimentary_services: d.complimentary_services,
       security_deposit_months: d.security_deposit_months,
       escalation_percentage: d.escalation_percentage,
-      notice_period_months: d.notice_period_months,
-      lock_in_months: d.lock_in_months ?? null,
+      notice_period_months: commitment.values.notice_period_months,
+      lock_in_months: commitment.values.lock_in_months,
+      ...(commitment.overridden && {
+        commitment_override_reason: d.commitment_override_reason?.trim(),
+        commitment_overridden_by: dbUser?.id,
+        commitment_overridden_at: new Date().toISOString(),
+      }),
       member_signatory_name: d.member_signatory_name,
       member_signatory_designation: d.member_signatory_designation,
       member_signatory_pan: d.member_signatory_pan ?? null,
@@ -242,6 +270,20 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
 
+    if (commitment.overridden) {
+      logAudit(supabase, {
+        entityType: "contract",
+        entityId: data.id,
+        action: "commitment_terms_overridden",
+        performedBy: dbUser.id,
+        changes: {
+          tenure_months: { old: proposal.tenure_months, new: commitment.values.tenure_months },
+          lock_in_months: { old: proposal.lock_in_months, new: commitment.values.lock_in_months },
+          notice_period_months: { old: proposal.notice_period_months, new: commitment.values.notice_period_months },
+          reason: { old: null, new: d.commitment_override_reason?.trim() },
+        },
+      });
+    }
   }
 
   // ── Copy proposal_service_quotas → contract_service_quotas ────────────────
