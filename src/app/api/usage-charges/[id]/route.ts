@@ -147,6 +147,16 @@ export async function PATCH(
     allowedFields.hold_reason = null;
   }
 
+  // "Bill anyway" — a stale charge (see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS
+  // in src/lib/constants.ts) is excluded from generateUsageStatements'
+  // automatic sweep until someone explicitly acknowledges it should still be
+  // charged. Any role that can edit charges may do this — it's a lighter
+  // action than Hold/Waive, just "yes, I looked at this."
+  if (body.review === true) {
+    allowedFields.reviewed_at = new Date().toISOString();
+    allowedFields.reviewed_by = dbUser?.id ?? null;
+  }
+
   // Settle: mark as settled in a booking
   if (body.settled_in_booking_id) {
     allowedFields.settled_in_booking_id = body.settled_in_booking_id;

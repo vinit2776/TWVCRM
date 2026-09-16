@@ -28,6 +28,7 @@ import {
   PlayCircle,
   Loader2,
 } from "lucide-react";
+import { USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -180,6 +181,8 @@ interface UsageCharge {
   waive_reason?: string | null;
   waived_at?: string | null;
   waived_by_name?: string | null;
+  /** Set by "Bill anyway" on a stale charge — see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS. */
+  reviewed_at?: string | null;
 }
 
 interface BillingStatement {
@@ -488,19 +491,32 @@ export default function BillingPage() {
   const [holdChargeReasonError, setHoldChargeReasonError]   = useState(false);
   const [holdChargeSubmitting, setHoldChargeSubmitting]     = useState(false);
 
+  // Manual charges live on usage_charges; print/facility are separate
+  // tables with their own PATCH endpoints — same action verbs, different URL.
+  const usageChargeEndpoint = (charge: UsageCharge) =>
+    charge.source === "print"    ? `/api/accounting/print-usage/${charge.id}` :
+    charge.source === "facility" ? `/api/accounting/facility-usage/${charge.id}` :
+    `/api/usage-charges/${charge.id}`;
+
+  // A pending charge past this many days needs an explicit "Bill anyway"
+  // (or Waive / Hold) before it can reach an invoice — see
+  // USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS's own doc comment.
+  const isChargeStale = (charge: UsageCharge) => {
+    if (charge.reviewed_at) return false;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS);
+    return charge.charge_date < cutoff.toISOString().slice(0, 10);
+  };
+
   const submitWaiveCharge = async () => {
     if (!waiveChargeTarget) return;
     if (!waiveChargeReason.trim()) { setWaiveChargeReasonError(true); return; }
     setWaiveChargeSubmitting(true);
     try {
-      const url =
-        waiveChargeTarget.source === "print"    ? `/api/accounting/print-usage/${waiveChargeTarget.id}` :
-        waiveChargeTarget.source === "facility" ? `/api/accounting/facility-usage/${waiveChargeTarget.id}` :
-        `/api/usage-charges/${waiveChargeTarget.id}`;
       const body = waiveChargeTarget.source === "print" || waiveChargeTarget.source === "facility"
         ? { waive: true, waive_reason: waiveChargeReason.trim() }
         : { status: "waived", waive_reason: waiveChargeReason.trim() };
-      const res = await fetch(url, {
+      const res = await fetch(usageChargeEndpoint(waiveChargeTarget), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -537,20 +553,24 @@ export default function BillingPage() {
     }
     setReduceChargeSubmitting(true);
     try {
-      // Keep quantity fixed and recompute unit_price from it, so Qty x Unit
-      // Price still equals the new Total exactly — never let total drift
-      // from that identity (see the CREATE route's own doc comment on why).
-      const newUnitPrice = reduceChargeTarget.quantity
-        ? parseFloat((newTotal / reduceChargeTarget.quantity).toFixed(2))
-        : newTotal;
-      const res = await fetch(`/api/usage-charges/${reduceChargeTarget.id}`, {
+      // Field name differs per source: manual keeps Qty x Unit Price = Total
+      // exact (see the CREATE route's own doc comment on why); print/facility
+      // have a single billed amount to override instead.
+      const body: Record<string, unknown> = { reduction_reason: reduceChargeReason.trim() };
+      if (reduceChargeTarget.source === "print") {
+        body.amount = newTotal;
+      } else if (reduceChargeTarget.source === "facility") {
+        body.total_charge = newTotal;
+      } else {
+        body.total = newTotal;
+        body.unit_price = reduceChargeTarget.quantity
+          ? parseFloat((newTotal / reduceChargeTarget.quantity).toFixed(2))
+          : newTotal;
+      }
+      const res = await fetch(usageChargeEndpoint(reduceChargeTarget), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          total: newTotal,
-          unit_price: newUnitPrice,
-          reduction_reason: reduceChargeReason.trim(),
-        }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         toast.success("Charge amount reduced");
@@ -573,7 +593,7 @@ export default function BillingPage() {
     if (!holdChargeReason.trim()) { setHoldChargeReasonError(true); return; }
     setHoldChargeSubmitting(true);
     try {
-      const res = await fetch(`/api/usage-charges/${holdChargeTarget.id}`, {
+      const res = await fetch(usageChargeEndpoint(holdChargeTarget), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hold: true, hold_reason: holdChargeReason.trim() }),
@@ -595,7 +615,7 @@ export default function BillingPage() {
 
   const releaseChargeHold = async (charge: UsageCharge) => {
     try {
-      const res = await fetch(`/api/usage-charges/${charge.id}`, {
+      const res = await fetch(usageChargeEndpoint(charge), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hold: false }),
@@ -609,6 +629,25 @@ export default function BillingPage() {
       }
     } catch {
       toast.error("Failed to release hold");
+    }
+  };
+
+  const submitReviewCharge = async (charge: UsageCharge) => {
+    try {
+      const res = await fetch(usageChargeEndpoint(charge), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ review: true }),
+      });
+      if (res.ok) {
+        toast.success("Will be included in the next Generate & Send run");
+        fetchCharges();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to mark as reviewed");
+      }
+    } catch {
+      toast.error("Failed to mark as reviewed");
     }
   };
 
@@ -1427,6 +1466,11 @@ export default function BillingPage() {
                         {charge.billable === false && (
                           <span className="block text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</span>
                         )}
+                        {charge.status === "pending" && isChargeStale(charge) && (
+                          <span className="block text-[11px] font-medium text-red-600 mt-0.5">
+                            {Math.floor((Date.now() - new Date(charge.charge_date).getTime()) / 86400000)} days · needs review
+                          </span>
+                        )}
                         {charge.billing_cycle_status && charge.billing_cycle_label && (
                           <Badge
                             variant="outline"
@@ -1460,7 +1504,7 @@ export default function BillingPage() {
                                 <Pencil className="mr-2 h-4 w-4" />Edit
                               </DropdownMenuItem>
                             )}
-                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
+                            {charge.status === "pending" && charge.billable !== false && (
                               <DropdownMenuItem
                                 onClick={() => {
                                   setWaiveChargeTarget(charge);
@@ -1471,7 +1515,7 @@ export default function BillingPage() {
                                 <Ban className="mr-2 h-4 w-4" />Waive fully
                               </DropdownMenuItem>
                             )}
-                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && charge.total > 0 && (
+                            {charge.status === "pending" && charge.total > 0 && (
                               <DropdownMenuItem
                                 onClick={() => {
                                   setReduceChargeTarget(charge);
@@ -1483,18 +1527,7 @@ export default function BillingPage() {
                                 <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
                               </DropdownMenuItem>
                             )}
-                            {charge.status === "pending" && (charge.source === "print" || charge.source === "facility") && charge.billable !== false && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setWaiveChargeTarget(charge);
-                                  setWaiveChargeReason("");
-                                  setWaiveChargeReasonError(false);
-                                }}
-                              >
-                                <Ban className="mr-2 h-4 w-4" />Waive fully
-                              </DropdownMenuItem>
-                            )}
-                            {charge.status === "pending" && (!charge.source || charge.source === "manual") && !charge.held_at && (
+                            {charge.status === "pending" && !charge.held_at && (
                               <DropdownMenuItem
                                 onClick={() => {
                                   setHoldChargeTarget(charge);
@@ -1508,6 +1541,11 @@ export default function BillingPage() {
                             {charge.status === "pending" && charge.held_at && (
                               <DropdownMenuItem onClick={() => releaseChargeHold(charge)}>
                                 <PlayCircle className="mr-2 h-4 w-4" />Release hold
+                              </DropdownMenuItem>
+                            )}
+                            {charge.status === "pending" && isChargeStale(charge) && (
+                              <DropdownMenuItem onClick={() => submitReviewCharge(charge)}>
+                                <CheckCircle className="mr-2 h-4 w-4" />Bill anyway
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>

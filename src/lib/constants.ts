@@ -2759,3 +2759,12 @@ export const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_mana
 // CHARGE_ALLOWED_ROLES, which also covers everyday charge entry).
 export const CHARGE_HOLD_ALLOWED_ROLES = ["admin", "manager"];
 
+// A pending charge (any of the 3 usage sources) older than this many days
+// drops out of generateUsageStatements' automatic sweep — it needs an
+// explicit "Bill anyway" (sets reviewed_at), Waive, or Hold before it can
+// reach an invoice. Protects against something genuinely stale silently
+// reaching a customer months after the fact. Shared with the frontend so
+// the Unbilled list's "needs review" flag matches what generation actually
+// enforces.
+export const USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS = 60;
+

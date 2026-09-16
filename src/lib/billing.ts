@@ -27,7 +27,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { logAudit } from "@/lib/audit";
 import { computePhaseBoundaries, daysBetweenInclusiveYmd, addDaysToYmd, formatDateRange, type PhaseBoundary } from "@/lib/rate-phase-dates";
-import { BILLING_CYCLE_MONTHS } from "@/lib/constants";
+import { BILLING_CYCLE_MONTHS, USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 // These sat mid-file, inside the block the deprecated combined generator
 // occupied. Nothing imports back into this module, so there's no cycle keeping
 // them down there — they belong with the rest of the imports.
@@ -1407,37 +1407,48 @@ export async function generateUsageStatements(
   const serviceOrFilter = supersedableIds.length > 0
     ? `and(is_billed.eq.false,billing_statement_id.is.null),billing_statement_id.in.(${supersedableIds.join(",")})`
     : `and(is_billed.eq.false,billing_statement_id.is.null)`;
+  // "On or before the closed month" — an exact-month match would strand a
+  // charge dated earlier and never revisited. billing_statement_id IS NULL
+  // (folded into usage/serviceOrFilter above) is what keeps this safe: an
+  // old pending row is either genuinely unbilled (safe to sweep) or already
+  // linked to a statement (excluded regardless of date).
+  const onOrBeforeTargetMonth = (yearCol: string, monthCol: string) =>
+    `${yearCol}.lt.${targetYear},and(${yearCol}.eq.${targetYear},${monthCol}.lte.${targetMonth})`;
+
+  // facility_usage_records has its own billing_statement_id now (see
+  // 00563_usage_billing_engine.sql) — the same "IS NULL = still owed" signal
+  // usage_charges/service_usage_records already rely on, so it can finally
+  // join the same supplementCandidates-scoped, any-past-period sweep instead
+  // of being locked to `billable` contracts and the exact current period.
+  const { data: outstandingPeriods } = await supabase
+    .from("accounting_periods")
+    .select("id, year, month")
+    .or(onOrBeforeTargetMonth("year", "month"));
+  const outstandingPeriodIds = (outstandingPeriods ?? []).map((p) => p.id as string);
+  const periodById = new Map((outstandingPeriods ?? []).map((p) => [p.id as string, p as { year: number; month: number }]));
 
   const [usageRes, facilityRes, serviceRes, bookingsRes] = await Promise.all([
     supabase
       .from("usage_charges")
-      .select("id, contract_id, description, quantity, unit_price, total")
+      .select("id, contract_id, description, quantity, unit_price, total, charge_date, reviewed_at")
       .in("contract_id", supplementCandidates)
       .or(usageOrFilter)
-      .gte("charge_date", firstOfMonth)
       .lte("charge_date", lastOfMonth),
 
-    // Scoped to `billable` only (never supplementable contracts): this table
-    // has no billing_statement_id/is_billed link (see the earlier comment
-    // where it's fetched below), so there is no query-level way to tell
-    // "already on the original statement" apart from "new since then" — the
-    // whole period's rows always come back. Safe for a first-time contract;
-    // would double-count for one that's already been billed. Facility usage
-    // is therefore never supplemented in this version.
-    billable.length > 0
+    supplementCandidates.length > 0 && outstandingPeriodIds.length > 0
       ? supabase
           .from("facility_usage_records")
-          .select("id, contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
-          .in("contract_id", billable)
-          .eq("accounting_period_id", periodId ?? "")
+          .select("id, contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge, accounting_period_id, reviewed_at")
+          .in("contract_id", supplementCandidates)
+          .in("accounting_period_id", outstandingPeriodIds)
+          .is("billing_statement_id", null)
       : Promise.resolve({ data: [], error: null }),
 
     supabase
       .from("service_usage_records")
-      .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed, service:service_catalog(name, printer_column)")
+      .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed, period_year, period_month, reviewed_at, service:service_catalog(name, printer_column)")
       .in("contract_id", supplementCandidates)
-      .eq("period_year", targetYear)
-      .eq("period_month", targetMonth)
+      .or(onOrBeforeTargetMonth("period_year", "period_month"))
       .or(serviceOrFilter),
 
     // Scoped to `billable` only, same reasoning as facility_usage_records
@@ -1456,10 +1467,10 @@ export async function generateUsageStatements(
       : Promise.resolve({ data: [], error: null }),
   ]);
 
-  type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
-  type FacilityRow = { id: string; contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
+  type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number; charge_date: string; reviewed_at: string | null };
+  type FacilityRow = { id: string; contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number; accounting_period_id: string; reviewed_at: string | null };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number; service?: any };
+  type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number; period_year: number; period_month: number; reviewed_at: string | null; service?: any };
   type BookingRow = { id: string; booking_number: string; contract_id: string; booking_date: string; start_time: string; end_time: string; duration_hours: number; pricing_model: string; total_amount: number; quantity: number; payment_status: string; space: { name: string }[] | { name: string } | null };
 
   const usageByContract    = new Map<string, UsageRow[]>();
@@ -1467,25 +1478,38 @@ export async function generateUsageStatements(
   const serviceByContract  = new Map<string, ServiceRow[]>();
   const bookingsByContract = new Map<string, BookingRow[]>();
 
-  // Per-charge hold (see usage_charges.held_at) — excludes just this one
-  // charge from the sweep, not the whole contract. A separate, tolerant
-  // lookup rather than a filter chained onto usageRes's own query: if this
-  // errors (e.g. its migration hasn't been applied to this environment
-  // yet), it fails soft to "nothing is held" instead of taking the whole
-  // generation run down with it — same reasoning as every other query in
-  // this file whose result isn't error-checked.
-  const { data: heldCharges, error: heldChargeErr } = await supabase.from("usage_charges").select("id").not("held_at", "is", null);
-  const heldChargeIds = new Set(heldChargeErr ? [] : (heldCharges ?? []).map((c) => c.id));
+  // Per-charge hold (see usage_charges.held_at, extended to print/facility by
+  // 00563_usage_billing_engine.sql) — excludes just this one charge from the
+  // sweep, not the whole contract. A separate, tolerant lookup rather than a
+  // filter chained onto each query: if this errors (e.g. a migration hasn't
+  // landed in some environment yet), it fails soft to "nothing is held"
+  // instead of taking the whole generation run down with it.
+  const [heldChargesRes, heldServiceRes, heldFacilityRes, waivedServiceRes, waivedFacilityRes] = await Promise.all([
+    supabase.from("usage_charges").select("id").not("held_at", "is", null),
+    supabase.from("service_usage_records").select("id").not("held_at", "is", null),
+    supabase.from("facility_usage_records").select("id").not("held_at", "is", null),
+    // Waived print/facility rows (see 00559_service_facility_charge_waive.sql)
+    // — a waived overage that would otherwise be permanently stranded (its
+    // covering statement already sent, no future run ever revisits that
+    // month) shouldn't get swept into a supplemental statement anyway.
+    supabase.from("service_usage_records").select("id").not("waived_at", "is", null),
+    supabase.from("facility_usage_records").select("id").not("waived_at", "is", null),
+  ]);
+  const heldChargeIds    = new Set(heldChargesRes.error    ? [] : (heldChargesRes.data    ?? []).map((c) => c.id));
+  const heldServiceIds   = new Set(heldServiceRes.error    ? [] : (heldServiceRes.data    ?? []).map((s) => s.id));
+  const heldFacilityIds  = new Set(heldFacilityRes.error   ? [] : (heldFacilityRes.data   ?? []).map((f) => f.id));
+  const waivedServiceIds = new Set(waivedServiceRes.error  ? [] : (waivedServiceRes.data  ?? []).map((s) => s.id));
+  const waivedFacilityIds = new Set(waivedFacilityRes.error ? [] : (waivedFacilityRes.data ?? []).map((f) => f.id));
 
-  // Waived print/facility rows (see 00559_service_facility_charge_waive.sql)
-  // — same tolerant, separate-query pattern as heldChargeIds above, so a
-  // waived overage that would otherwise be permanently stranded (its
-  // covering statement already sent, no future run ever revisits that
-  // month) doesn't get swept into a supplemental statement anyway.
-  const { data: waivedService, error: waivedServiceErr } = await supabase.from("service_usage_records").select("id").not("waived_at", "is", null);
-  const waivedServiceIds = new Set(waivedServiceErr ? [] : (waivedService ?? []).map((s) => s.id));
-  const { data: waivedFacility, error: waivedFacilityErr } = await supabase.from("facility_usage_records").select("id").not("waived_at", "is", null);
-  const waivedFacilityIds = new Set(waivedFacilityErr ? [] : (waivedFacility ?? []).map((f) => f.id));
+  // A charge older than USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS needs an
+  // explicit "Bill anyway" (sets reviewed_at), Waive, or Hold before it can
+  // reach an invoice via the automatic sweep — see the constant's own doc
+  // comment. Compared as a plain date string (YYYY-MM-DD sorts correctly).
+  const reviewCutoff = new Date(now);
+  reviewCutoff.setDate(reviewCutoff.getDate() - USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS);
+  const reviewCutoffStr = reviewCutoff.toISOString().slice(0, 10);
+  const monthEndDate = (year: number, month: number) =>
+    `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`;
 
   for (const u of (usageRes.data ?? []) as UsageRow[]) {
     if (heldChargeIds.has(u.id)) continue;
@@ -1495,16 +1519,22 @@ export async function generateUsageStatements(
     // still makes `usageCharges.length` nonzero below, which defeats the
     // zero-gate and produces an empty ₹0 draft for the contract.
     if (Number(u.total) <= 0) continue;
+    if (u.charge_date < reviewCutoffStr && !u.reviewed_at) continue;
     const list = usageByContract.get(u.contract_id) ?? [];
     list.push(u); usageByContract.set(u.contract_id, list);
   }
   for (const f of (facilityRes.data ?? []) as FacilityRow[]) {
-    if (waivedFacilityIds.has(f.id)) continue;
+    if (waivedFacilityIds.has(f.id) || heldFacilityIds.has(f.id)) continue;
+    const period = periodById.get(f.accounting_period_id);
+    const facilityDate = period ? monthEndDate(period.year, period.month) : lastOfMonth;
+    if (facilityDate < reviewCutoffStr && !f.reviewed_at) continue;
     const list = facilityByContract.get(f.contract_id) ?? [];
     list.push(f); facilityByContract.set(f.contract_id, list);
   }
   for (const s of (serviceRes.data ?? []) as ServiceRow[]) {
-    if (waivedServiceIds.has(s.id)) continue;
+    if (waivedServiceIds.has(s.id) || heldServiceIds.has(s.id)) continue;
+    const serviceDate = monthEndDate(s.period_year, s.period_month);
+    if (serviceDate < reviewCutoffStr && !s.reviewed_at) continue;
     const list = serviceByContract.get(s.contract_id) ?? [];
     list.push(s); serviceByContract.set(s.contract_id, list);
   }
@@ -1714,6 +1744,16 @@ export async function generateUsageStatements(
           .from("service_usage_records")
           .update({ billing_statement_id: stmtId, is_billed: true })
           .in("id", serviceRecs.map((s) => s.id));
+      }
+      // Link facility usage records (see 00563_usage_billing_engine.sql —
+      // this is the flag that makes a future sweep able to tell this row
+      // apart from a still-outstanding one, safely, no matter which period
+      // it's dated in).
+      if (facilityRecs.length > 0) {
+        await supabase
+          .from("facility_usage_records")
+          .update({ billing_statement_id: stmtId })
+          .in("id", facilityRecs.map((f) => f.id));
       }
       // Link bookings
       const billableBookingIds = bookingItems.map((b) => b.booking_id);
