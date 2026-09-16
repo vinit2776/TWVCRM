@@ -165,7 +165,9 @@ export async function GET(_req: NextRequest) {
     return s;
   }).join(",")).join("\n");
 
-  return new NextResponse(csv, {
+  // Excel assumes the system codepage without a BOM, which mangles ₹ and any
+  // non-ASCII character (e.g. the "—" placeholder) into junk like "â€"".
+  return new NextResponse("\ufeff" + csv, {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
