@@ -154,9 +154,11 @@ export async function GET(request: NextRequest) {
       ].join(",")
     );
     const csv = [header, ...lines].join("\n");
-    return new NextResponse(csv, {
+    // Excel assumes the system codepage without a BOM, which mangles ₹ and any
+    // non-ASCII character (e.g. the "—" placeholder) into junk like "â€"".
+    return new NextResponse("﻿" + csv, {
       headers: {
-        "Content-Type": "text/csv",
+        "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="facility-team-kpi-${dateFrom.slice(0,10)}-${dateTo.slice(0,10)}.csv"`,
       },
     });
