@@ -44,6 +44,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { EditUsageChargeDialog } from "@/components/billing/edit-usage-charge-dialog";
+import { UsageChargeDetailsDialog } from "@/components/billing/usage-charge-details-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { LogFacilityUsageDialog } from "@/components/accounting/log-facility-usage-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
@@ -164,6 +165,9 @@ interface UsageCharge {
   billable?: boolean | null;
   billing_cycle_status?: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   billing_cycle_label?: string;
+  waive_reason?: string | null;
+  waived_at?: string | null;
+  waived_by_name?: string | null;
 }
 
 interface BillingStatement {
@@ -443,6 +447,8 @@ export default function BillingPage() {
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
+  const [viewChargeOpen, setViewChargeOpen]           = useState(false);
+  const [viewingCharge, setViewingCharge]             = useState<UsageCharge | null>(null);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
   const [facilityUsageOpen, setFacilityUsageOpen]     = useState(false);
 
@@ -1224,7 +1230,14 @@ export default function BillingPage() {
                             <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setViewingCharge(charge);
+                                setViewChargeOpen(true);
+                              }}
+                            >
+                              <Eye className="mr-2 h-4 w-4" />View Details
+                            </DropdownMenuItem>
                             {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
                               <DropdownMenuItem
                                 onClick={() => {
@@ -1294,6 +1307,11 @@ export default function BillingPage() {
         onOpenChange={setEditChargeOpen}
         onSuccess={fetchCharges}
         charge={editingCharge}
+      />
+      <UsageChargeDetailsDialog
+        open={viewChargeOpen}
+        onOpenChange={setViewChargeOpen}
+        charge={viewingCharge}
       />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} />

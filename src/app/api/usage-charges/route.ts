@@ -36,6 +36,11 @@ interface NormalizedRow {
   billing_cycle_status: "cycle_open" | "ready" | "overdue" | "billed" | "waived" | "supplemental_needed";
   /** "August 2026" — the month this charge belongs to, for the "Bills in: …" tag. */
   billing_cycle_label: string;
+  // Only ever set on "manual" rows — print/facility charges can never be
+  // waived (see doc comment on GET below), so these stay null for them.
+  waive_reason: string | null;
+  waived_at: string | null;
+  waived_by_name: string | null;
 }
 
 function lastDayOfMonth(year: number, month: number): string {
@@ -121,6 +126,8 @@ function normalizeManual(r: any): NormalizedRow {
     charge_date: r.charge_date, status: r.status, billable: null,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    waive_reason: r.waive_reason ?? null, waived_at: r.waived_at ?? null,
+    waived_by_name: r.waived_by_user?.full_name ?? null,
   };
 }
 
@@ -145,6 +152,7 @@ function normalizePrint(r: any): NormalizedRow {
     billable: Number(r.amount) > 0,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    waive_reason: null, waived_at: null, waived_by_name: null,
   };
 }
 
@@ -174,6 +182,7 @@ function normalizeFacility(r: any): NormalizedRow {
     billable: billable > 0,
     notes: r.notes, created_at: r.created_at,
     billing_cycle_status: cycle.status, billing_cycle_label: cycle.label,
+    waive_reason: null, waived_at: null, waived_by_name: null,
   };
 }
 
