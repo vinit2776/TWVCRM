@@ -279,8 +279,12 @@ export function CreateContractDialog({
     }
   };
 
+  // Option lists below always include the current value — Radix Select's hidden
+  // native <select> otherwise pushes a fallback ("") back through onValueChange
+  // whenever the value isn't an option, which parses to NaN.
   const handleLockInChange = (val: string) => {
     const l = parseInt(val);
+    if (Number.isNaN(l)) return;
     setLockInMonths(l);
     const newMax = Math.max(3, derivedTenureMonths - l);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
@@ -800,7 +804,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -814,14 +818,14 @@ export function CreateContractDialog({
                 </Label>
                 <Select
                   value={String(noticePeriodMonths)}
-                  onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}
+                  onValueChange={(v) => { const n = parseInt(v); if (!Number.isNaN(n)) setNoticePeriodMonths(n); }}
                   disabled={termsLocked}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                    {Array.from({ length: Math.max(maxNoticePeriod, noticePeriodMonths) + 1 }, (_, i) => i).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
                       </SelectItem>
