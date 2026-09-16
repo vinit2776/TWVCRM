@@ -92,6 +92,17 @@ export interface UnbilledRow {
    * the month after the one it targets.
    */
   backfillTarget?: { month: number; year: number };
+  /**
+   * usage_gap rows only, and only when the bucket includes at least one
+   * ad-hoc charge — the only usage source with a "waived" status to flip.
+   * Passed to POST /api/usage-charges/waive-gap to waive every matching
+   * pending ad-hoc charge for this contract+month directly from the queue,
+   * whether it's a complimentary ₹0 entry with nothing to bill or a real,
+   * billable charge someone decides not to collect. On a bucket mixing
+   * ad-hoc with print/facility usage, only the ad-hoc share is cleared —
+   * the row still shows the remainder afterward.
+   */
+  waiveTarget?: { month: number; year: number };
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -440,18 +451,20 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // Ad-hoc usage charges dated before the window generateUsageStatements is
   // currently targeting — a future run will only ever look inside its own
   // month's window, so these are otherwise skipped forever.
-  // total > 0 excludes complimentary/courtesy charges (quantity x price = 0)
-  // — nothing to bill, so they don't belong in a queue of billing gaps to
-  // act on. usage-charges/route.ts now stores these as status="waived" at
-  // creation time (mirroring the facility-quota "within free quota" case),
-  // but this filter also covers any pre-existing zero-total rows still
-  // sitting at status="pending" from before that fix.
+  // usage-charges/route.ts now stores a complimentary/courtesy charge
+  // (quantity x price = 0) as status="waived" at creation time (mirroring
+  // the facility-quota "within free quota" case), so this query normally
+  // only ever sees nonzero pending charges going forward. It's still
+  // included with no total filter here (rather than excluded) so any
+  // zero-total row already sitting at status="pending" from before that fix
+  // surfaces with a one-click Waive action below instead of vanishing —
+  // there's nothing to bill on it, but it shouldn't stay "pending" forever
+  // either.
   const { data: staleCharges } = await supabase
     .from("usage_charges")
     .select("contract_id, charge_date, total")
     .eq("status", "pending")
     .is("billing_statement_id", null)
-    .gt("total", 0)
     .lt("charge_date", firstOfClosedMonth);
 
   // Print/service overage — same idea, keyed by period_year/period_month
@@ -517,11 +530,15 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   if (contributions.length === 0) return [];
 
   // Bucket by contract + month so multiple stale records collapse into one row.
-  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string> }>();
+  // adHocAmount is tracked separately from the bucket total: it's the only
+  // source with a "waived" status to flip, so it's also the only portion
+  // Waive-in-place (below) can act on when a bucket mixes sources.
+  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; adHocAmount: number; sources: Set<string> }>();
   for (const c of contributions) {
     const key = `${c.contractId}:${c.monthKey}`;
-    const bucket = buckets.get(key) ?? { contractId: c.contractId, monthKey: c.monthKey, amount: 0, sources: new Set<string>() };
+    const bucket = buckets.get(key) ?? { contractId: c.contractId, monthKey: c.monthKey, amount: 0, adHocAmount: 0, sources: new Set<string>() };
     bucket.amount += c.amount;
+    if (c.source === "Ad-hoc charge") bucket.adHocAmount += c.amount;
     bucket.sources.add(c.source);
     buckets.set(key, bucket);
   }
@@ -541,6 +558,11 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     const contract = contractById.get(bucket.contractId);
     if (!contract) continue; // contract deleted/inaccessible since the usage was captured
     const [year, month] = bucket.monthKey.split("-").map(Number);
+    // A bucket lands on exactly 0 only via zero-total ad-hoc charges —
+    // service/facility contributions are pre-filtered to amount > 0 above,
+    // so this is never a partial/mixed sum landing on zero by coincidence.
+    const isZeroOnly = bucket.amount === 0;
+    const hasAdHoc = bucket.sources.has("Ad-hoc charge");
     rows.push({
       id: `usage_gap:${bucket.contractId}:${bucket.monthKey}`,
       category: "usage_gap",
@@ -549,8 +571,16 @@ async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       customerName: customerNameOf(contract.lead),
       periodLabel: periodLabel(month, year, "usage_gap"),
       amount: bucket.amount,
-      detail: `${[...bucket.sources].join(", ")} — captured, not yet billed`,
+      detail: isZeroOnly
+        ? "Complimentary charge — nothing to bill"
+        : `${[...bucket.sources].join(", ")} — captured, not yet billed`,
       sortKey: `${bucket.monthKey}-01`,
+      // Ad-hoc is the only source with a "waived" status to flip, so it's
+      // the only portion Waive-in-place can act on — offered whenever a
+      // bucket includes any ad-hoc contribution, billable or not. On a
+      // mixed bucket, waiving only clears the ad-hoc share; the row still
+      // shows the print/facility remainder afterward.
+      ...(hasAdHoc ? { waiveTarget: { month, year } } : {}),
     });
   }
   return rows;

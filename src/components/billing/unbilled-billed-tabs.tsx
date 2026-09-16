@@ -26,9 +26,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, ChevronRight, CalendarPlus } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, CalendarPlus, Ban } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -103,6 +104,9 @@ const BILLING_ROLES = ["admin", "manager", "accounts"];
 export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">("unbilled");
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
+  // Matches waive-zero's own server-side gate (same as the statement-level
+  // waive-charge route) — narrower than canBill, which also allows accounts.
+  const canWaive = !!userRole && ["admin", "manager"].includes(userRole);
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
@@ -157,6 +161,65 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
     } finally {
       setGeneratingSupplementKey(null);
     }
+  };
+
+  // ── Waive an ad-hoc usage gap (usage only) ───────────────────────────────
+  // A ₹0 complimentary row has nothing at stake, so it waives immediately —
+  // same low-stakes reasoning as generateSupplemental above. A billable row
+  // is real revenue someone is choosing not to collect, so that one opens a
+  // small dialog asking why, same spirit as the statement-level waive-charge
+  // route's required reason.
+  const [waivingKey, setWaivingKey] = useState<string | null>(null);
+  const [waiveDialogRow, setWaiveDialogRow] = useState<UnbilledRow | null>(null);
+  const [waiveReason, setWaiveReason] = useState("");
+  const [waiveReasonError, setWaiveReasonError] = useState(false);
+  const [waiveSubmitting, setWaiveSubmitting] = useState(false);
+
+  const doWaive = async (row: UnbilledRow, reason: string | undefined) => {
+    if (!row.waiveTarget) return;
+    setWaivingKey(row.id);
+    try {
+      const res = await fetch("/api/usage-charges/waive-gap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: row.contractId, ...row.waiveTarget, reason }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to waive"); return; }
+      const remaining = (row.amount ?? 0) - (json.waivedAmount ?? 0);
+      if (remaining > 0.01) {
+        toast.success(`Waived ${formatCurrency(json.waivedAmount)} — ${formatCurrency(remaining)} from print/facility usage still needs billing`);
+      } else if (json.waivedAmount > 0) {
+        toast.success(`Waived ${formatCurrency(json.waivedAmount)}`);
+      } else {
+        toast.success(json.waived === 1 ? "Charge waived" : `${json.waived} charges waived`);
+      }
+      setWaiveDialogRow(null);
+      await loadUnbilled();
+      if (onFinalized) await onFinalized();
+    } catch {
+      toast.error("Failed to waive");
+    } finally {
+      setWaivingKey(null);
+    }
+  };
+
+  const startWaive = (row: UnbilledRow) => {
+    if ((row.amount ?? 0) > 0) {
+      setWaiveDialogRow(row);
+      setWaiveReason("");
+      setWaiveReasonError(false);
+      return;
+    }
+    void doWaive(row, undefined);
+  };
+
+  const submitWaiveDialog = async () => {
+    if (!waiveDialogRow) return;
+    if (!waiveReason.trim()) { setWaiveReasonError(true); return; }
+    setWaiveSubmitting(true);
+    await doWaive(waiveDialogRow, waiveReason.trim());
+    setWaiveSubmitting(false);
   };
 
   // ── Rent-gap backfill (rent_gap rows with a backfillTarget only) ─────────
@@ -405,6 +468,16 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                                 Send invoice
                               </button>
                             )}
+                            {row.waiveTarget && canWaive && (
+                              <button
+                                onClick={() => startWaive(row)}
+                                disabled={waivingKey === row.id}
+                                className="inline-flex items-center gap-1 rounded-md bg-slate-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                {waivingKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                Waive
+                              </button>
+                            )}
                             {row.statementId && onViewStatement && (
                               <button
                                 onClick={() => onViewStatement(row.statementId!)}
@@ -577,6 +650,45 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             <Button onClick={confirmBackfill} disabled={!backfillPreview || backfillSending}>
               {backfillSending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Raise &amp; send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!waiveDialogRow} onOpenChange={(open) => { if (!open) setWaiveDialogRow(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 shrink-0" />
+              Waive this charge
+            </DialogTitle>
+            <DialogDescription>
+              {waiveDialogRow && (
+                <>
+                  <span className="font-mono text-xs text-teal-700">{waiveDialogRow.contractNumber}</span> → {waiveDialogRow.customerName}: this waives {formatCurrency(waiveDialogRow.amount ?? 0)} of ad-hoc charges for {waiveDialogRow.periodLabel.split(" · ")[0]} — the customer won&rsquo;t be billed for it. Any print or facility usage in the same month stays outstanding.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div>
+            <Input
+              autoFocus
+              placeholder="Why is this being waived?"
+              value={waiveReason}
+              onChange={(e) => { setWaiveReason(e.target.value); if (waiveReasonError) setWaiveReasonError(false); }}
+              className={waiveReasonError ? "border-red-500" : ""}
+            />
+            {waiveReasonError && <p className="text-xs text-red-600 mt-1">Enter a reason first.</p>}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWaiveDialogRow(null)} disabled={waiveSubmitting}>
+              Cancel
+            </Button>
+            <Button onClick={submitWaiveDialog} disabled={waiveSubmitting}>
+              {waiveSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Waive
             </Button>
           </DialogFooter>
         </DialogContent>
