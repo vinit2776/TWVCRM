@@ -1235,34 +1235,12 @@ export function generateMembershipAgreementPDF(
   options?: {
     applyCompanyStamp?: boolean;
     stampRef?: string;
+    /** Explicit DRAFT-watermark choice from the contract page's checkbox.
+     * When set, it wins outright. When omitted (stamp, e-sign and server-side
+     * callers), the watermark follows start_date confirmation. */
     watermarkDraft?: boolean;
-    /** Explicit, user-confirmed override for the "Download for signature"
-     * flow — produces a clean copy even before start_date is confirmed.
-     * Only handleDownloadForSignature() may pass this; every other caller
-     * must go through the normal forced-watermark gate below. */
-    forSignatureDownload?: boolean;
-    /** The date to print as the start date on this one signature copy,
-     * paired with forSignatureDownload. Never written back to the contract
-     * record — start_date there stays whatever the placeholder or the
-     * pro-rata-locked value is; this only changes what's rendered here. */
-    signatureStartDateOverride?: string;
   }
 ): jsPDF {
-  if (options?.signatureStartDateOverride) {
-    // Mirrors the same re-anchoring the pro-rata-payment lock-in does (see
-    // PATCH /api/contracts/[id]): only move phase_start_date (the rate-
-    // escalation clock anchor) along with it if it was never independently
-    // moved off start_date — otherwise a deliberate edit there gets clobbered.
-    const rebaseEscalationAnchor = contract.phase_start_date === contract.start_date;
-    contract = {
-      ...contract,
-      start_date: options.signatureStartDateOverride,
-      phase_start_date: rebaseEscalationAnchor
-        ? options.signatureStartDateOverride
-        : contract.phase_start_date,
-    };
-  }
-
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -1849,23 +1827,15 @@ export function generateMembershipAgreementPDF(
   }
 
   // ================================================================
-  // DRAFT watermark — every page, forced on until start_date is locked
-  // in (i.e. the proposal's pro-rata invoice is paid and the occupation
-  // date is firm). Once locked, it's off by default but callers can
-  // still opt back in via options.watermarkDraft (e.g. a manual
-  // "include watermark" toggle) — that option has no effect while
-  // unconfirmed, it can only ever add the watermark back, never remove
-  // the forced one. See supabase/migrations/00503_contract_start_date_confirmation.sql.
-  //
-  // forSignatureDownload is the one deliberate exception: the "Download for
-  // signature" action needs a clean copy to send for physical signature
-  // before start_date is confirmed. Callers must warn the admin that the
-  // date could still change (see handleDownloadForSignature) and the
-  // contract tracks signature_copy_start_date so the UI can flag drift.
+  // DRAFT watermark — every page. The contract page's checkbox passes an
+  // explicit watermarkDraft and that choice is honoured unconditionally.
+  // Callers that don't pass it keep the default: watermarked until
+  // start_date is confirmed (see 00503_contract_start_date_confirmation.sql).
   // ================================================================
-  const showWatermark = options?.forSignatureDownload
-    ? false
-    : !contract.start_date_confirmed || !!options?.watermarkDraft;
+  const showWatermark =
+    options?.watermarkDraft !== undefined
+      ? options.watermarkDraft
+      : !contract.start_date_confirmed;
   if (showWatermark) {
     for (let i = 1; i <= totalPageCount; i++) {
       doc.setPage(i);

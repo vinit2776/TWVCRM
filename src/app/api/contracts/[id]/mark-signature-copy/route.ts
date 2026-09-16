@@ -12,11 +12,10 @@ const bodySchema = z.object({
 /**
  * POST /api/contracts/[id]/mark-signature-copy
  *
- * Records that a watermark-free "Download for signature" copy was just
- * generated for this contract while start_date isn't confirmed yet, and
- * snapshots the date the admin entered to print on that copy — not
- * contract.start_date, which stays whatever placeholder or pro-rata-locked
- * value it already had; this route never touches it. If the real start_date
+ * Records that a watermark-free copy was just downloaded (DRAFT watermark
+ * unticked) while start_date isn't confirmed yet, and snapshots the start
+ * date printed on it. This route never touches contract.start_date. If the
+ * real start_date
  * later differs from this snapshot, the UI compares them to warn staff that
  * the signed copy is now stale and needs to be re-sent.
  */

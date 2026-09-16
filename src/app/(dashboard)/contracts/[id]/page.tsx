@@ -154,15 +154,9 @@ export default function ContractDetailPage({
   const [stampExistingPageImageLoading, setStampExistingPageImageLoading] = useState(false);
   const [stampExistingClickRatio, setStampExistingClickRatio] = useState<{ x: number; y: number } | null>(null);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
-  // Manual override for the agreement PDF's DRAFT watermark. Freely
-  // togglable once start_date is confirmed (see generateMembershipAgreementPDF).
-  // While unconfirmed, the checkbox renders checked + soft-disabled — clicking
-  // it opens signatureStartDateDialogOpen instead of toggling directly (see
-  // handleWatermarkCheckboxClick).
-  const [includeDraftWatermark, setIncludeDraftWatermark] = useState(false);
-  const [signatureStartDateDialogOpen, setSignatureStartDateDialogOpen] = useState(false);
-  const [signatureStartDateInput, setSignatureStartDateInput] = useState("");
-  const [downloadingForSignature, setDownloadingForSignature] = useState(false);
+  // Manual toggle for the agreement PDF's DRAFT watermark (Download PDF +
+  // Email). Ticked by default; unticking always removes the watermark.
+  const [includeDraftWatermark, setIncludeDraftWatermark] = useState(true);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
@@ -411,58 +405,15 @@ export default function ContractDetailPage({
       { watermarkDraft: includeDraftWatermark }
     );
     doc.save(`${contract.contract_number}.pdf`);
-  };
-
-  // The DRAFT-watermark checkbox stays visible pre-confirmation but is
-  // soft-disabled (styled disabled, not the native `disabled` attribute —
-  // that would swallow the click entirely). Clicking it while unconfirmed
-  // opens a prompt for the date to use on this one download instead of
-  // toggling includeDraftWatermark directly, since removing the watermark
-  // for real still requires knowing what date to print.
-  const handleWatermarkCheckboxClick = () => {
-    if (!contract) return;
-    if (contract.start_date_confirmed) {
-      setIncludeDraftWatermark((v) => !v);
-      return;
-    }
-    setSignatureStartDateInput(contract.start_date || "");
-    setSignatureStartDateDialogOpen(true);
-  };
-
-  // Alternative to Download PDF for the pre-confirmation gap: start_date
-  // isn't locked yet, so the regular download is always watermarked. This
-  // generates a clean copy using an admin-entered date instead — for this
-  // one download only. It never writes contract.start_date or
-  // start_date_confirmed; that stays untouched until the real pro-rata
-  // payment locks it in. If the real date later differs from what's
-  // printed here, the contract page flags it as stale.
-  const handleDownloadForSignature = async () => {
-    if (!contract || !signatureStartDateInput) return;
-    setDownloadingForSignature(true);
-    try {
-      const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
-      const doc = generateMembershipAgreementPDF(
-        contract,
-        contract.lead || undefined,
-        contract.location || undefined,
-        { forSignatureDownload: true, signatureStartDateOverride: signatureStartDateInput }
-      );
-      doc.save(`${contract.contract_number}-for-signature.pdf`);
+    // A clean copy before start_date is confirmed can go out for physical
+    // signature — snapshot the printed date so the page can flag drift later.
+    if (!includeDraftWatermark && !contract.start_date_confirmed && contract.start_date) {
       const res = await fetch(`/api/contracts/${id}/mark-signature-copy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signatureStartDate: signatureStartDateInput }),
+        body: JSON.stringify({ signatureStartDate: contract.start_date }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Downloaded, but failed to record the signature-copy date");
-      }
-      setSignatureStartDateDialogOpen(false);
-      fetchContract(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to generate the signature copy");
-    } finally {
-      setDownloadingForSignature(false);
+      if (res.ok) fetchContract(false);
     }
   };
 
@@ -1313,24 +1264,11 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
-          {/* Watermark is forced on until start_date locks. Always visible so
-              it's clear the watermark exists and why it can't be removed yet
-              — soft-disabled (not the native `disabled` attribute, which
-              would swallow the click) while unconfirmed: clicking it opens a
-              prompt for the date to print on a one-off signature copy
-              instead of toggling directly. Once confirmed, behaves as a
-              normal toggle for Download PDF + Email. */}
           {["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
-            <label
-              className={`flex items-center gap-1.5 text-xs border rounded-md px-2.5 select-none ${
-                contract.start_date_confirmed
-                  ? "text-muted-foreground cursor-pointer"
-                  : "text-muted-foreground/70 cursor-not-allowed"
-              }`}
-            >
+            <label className="flex items-center gap-1.5 text-xs border rounded-md px-2.5 select-none text-muted-foreground cursor-pointer">
               <Checkbox
-                checked={contract.start_date_confirmed ? includeDraftWatermark : true}
-                onCheckedChange={handleWatermarkCheckboxClick}
+                checked={includeDraftWatermark}
+                onCheckedChange={(v) => setIncludeDraftWatermark(v === true)}
               />
               Include DRAFT watermark
             </label>
@@ -2980,50 +2918,6 @@ export default function ContractDetailPage({
                 </>
               ) : (
                 "Cancel e-signing request"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={signatureStartDateDialogOpen} onOpenChange={setSignatureStartDateDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Enter the start date for this copy</DialogTitle>
-            <DialogDescription>
-              {contract.contract_number}&apos;s start date isn&apos;t confirmed yet — it can
-              still change until the pro-rata invoice is paid. This doesn&apos;t set the
-              contract&apos;s actual start date; it only decides what&apos;s printed on this
-              one watermark-free copy, for sending out for physical signature. If the real
-              date later differs from what you enter here, you&apos;ll see a warning on this
-              page so you know to send an updated copy.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1">
-            <Label className="text-xs" htmlFor="signature-start-date">Start date to print</Label>
-            <Input
-              id="signature-start-date"
-              type="date"
-              value={signatureStartDateInput}
-              onChange={(e) => setSignatureStartDateInput(e.target.value)}
-              className="h-9"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSignatureStartDateDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleDownloadForSignature}
-              disabled={downloadingForSignature || !signatureStartDateInput}
-            >
-              {downloadingForSignature ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Downloading...
-                </>
-              ) : (
-                "Download clean copy"
               )}
             </Button>
           </DialogFooter>
