@@ -3,11 +3,14 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
-import { logWhatsAppActivity } from "@/lib/audit";
+import { logAudit, logWhatsAppActivity } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 import { escapeHtml } from "@/lib/html";
+import { logCommunication } from "@/lib/communications-log";
 
 const CUSTOMER_MESSAGE_MAX_LENGTH = 500;
+const MAX_CC = 10;
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
 
 /**
  * POST /api/proposals/[id]/deposit-link
@@ -20,7 +23,14 @@ const CUSTOMER_MESSAGE_MAX_LENGTH = 500;
  *     deposit_internal_notes is required (≥10 chars) in send mode — an
  *     internal-only note for accounts, never included in the customer email.
  *
- * Both modes accept an optional `deposit_customer_message` — free text shown
+ *     Accepts optional `additional_cc: string[]` — copied on the email.
+ *   - { deposit_internal_notes, mode: "download" } → same as send (creates or
+ *     reuses the link, stamps the sent date / due date, restarts reminders) but
+ *     sends no email or WhatsApp. Returns the details the client needs to build
+ *     a PDF the team shares with the customer by hand — so the deposit still
+ *     ages in AR even when it wasn't emailed from here.
+ *
+ * All modes accept an optional `deposit_customer_message` — free text shown
  * to the customer inside the email itself (e.g. "this covers the extra seat
  * added on 24 Jun"), distinct from deposit_internal_notes which is never sent.
  */
@@ -39,9 +49,20 @@ export async function POST(
   let isPreview = false;
   let internalNotes: string | null = null;
   let customerMessage = "";
+  let isDownload = false;
+  let additionalCc: string[] = [];
   try {
     const body = await request.json().catch(() => null);
     if (body && body.preview === true) isPreview = true;
+    if (body && body.mode === "download") isDownload = true;
+    if (body && Array.isArray(body.additional_cc)) {
+      additionalCc = Array.from(new Set(
+        body.additional_cc
+          .filter((e: unknown): e is string => typeof e === "string")
+          .map((e: string) => e.trim().toLowerCase())
+          .filter(Boolean)
+      ));
+    }
     if (body && typeof body.deposit_internal_notes === "string") {
       internalNotes = body.deposit_internal_notes.trim();
     }
@@ -54,6 +75,14 @@ export async function POST(
 
   if (!isPreview && (!internalNotes || internalNotes.length < 10)) {
     return NextResponse.json({ error: "Add an internal note (at least 10 characters) so accounts can book this correctly" }, { status: 400 });
+  }
+
+  const invalidCc = additionalCc.filter((e) => !EMAIL_RE.test(e));
+  if (invalidCc.length > 0) {
+    return NextResponse.json({ error: `Invalid CC address: ${invalidCc.join(", ")}` }, { status: 400 });
+  }
+  if (additionalCc.length > MAX_CC) {
+    return NextResponse.json({ error: `At most ${MAX_CC} CC addresses` }, { status: 400 });
   }
 
   // Fetch proposal with lead
@@ -221,18 +250,43 @@ export async function POST(
   }
 
   // Send mode — email customer
-  if (!customerEmail) {
+  if (!isDownload && !customerEmail) {
     return NextResponse.json({ error: "Customer email not found on the lead" }, { status: 400 });
   }
 
   const emailSentAt = new Date().toISOString();
-  await resend.emails.send({
-    from: EMAIL_FROM,
-    replyTo: EMAIL_REPLY_TO,
-    to: [customerEmail],
-    subject,
-    html,
-  }).catch(console.error);
+  // Every request is written to communications_log so the proposal page can
+  // show when a deposit was requested, how, from whom and to whom.
+  const commLogAdmin = createAdminClient();
+  if (!isDownload && customerEmail) {
+    let emailError: string | null = null;
+    try {
+      const r = await resend.emails.send({
+        from: EMAIL_FROM,
+        replyTo: EMAIL_REPLY_TO,
+        to: [customerEmail],
+        cc: additionalCc.length > 0 ? additionalCc : undefined,
+        subject,
+        html,
+      });
+      if (r.error) emailError = r.error.message || "Email provider rejected the send";
+    } catch (err) {
+      emailError = err instanceof Error ? err.message : String(err);
+    }
+    if (emailError) console.error("[deposit-link] email failed:", emailError);
+    await logCommunication(commLogAdmin, {
+      entityType: "proposal",
+      entityId: id,
+      channel: "email",
+      recipient: customerEmail,
+      cc: additionalCc,
+      subject,
+      body: html,
+      status: emailError ? "failed" : "sent",
+      errorMessage: emailError,
+      sentBy: dbUser?.id || null,
+    });
+  }
 
   // Stamp the follow-up due date alongside the send timestamp so AR can age
   // the deposit and the reminder ladder has something to gate on. Reset the
@@ -253,7 +307,44 @@ export async function POST(
     })
     .eq("id", id);
 
-  // WhatsApp — fire to phone if available (fire-and-forget)
+  if (isDownload) {
+    await logCommunication(commLogAdmin, {
+      entityType: "proposal",
+      entityId: id,
+      channel: "manual",
+      recipient: "PDF downloaded to share outside the CRM",
+      subject,
+      body: html,
+      attachmentName: `Security-Deposit-${proposal.proposal_number}.pdf`,
+      sentBy: dbUser?.id || null,
+    });
+
+    logAudit(supabase, {
+      entityType: "proposal",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser?.id || null,
+      changes: {
+        deposit_request_shared_manually: { old: null, new: emailSentAt },
+        deposit_due_date: { old: proposal.deposit_due_date ?? null, new: depositDueDate },
+      },
+    });
+
+    return NextResponse.json({
+      mode: "download",
+      deposit_link_url: depositLinkUrl,
+      amount: depositAmount,
+      proposal_number: proposal.proposal_number,
+      security_deposit_months: proposal.security_deposit_months,
+      customer_name: customerName,
+      company: lead?.company || null,
+      customer_message: customerMessage,
+      due_date: depositDueDate,
+    });
+  }
+
+  // WhatsApp — to phone if available. Awaited (not fire-and-forget) so the
+  // outcome can be written to the deposit request history.
   //
   // Uses the approved `booking_confirmation_doc` template, whose body already
   // reads "...pay the security deposit of Rs.{{3}} here: {{4}}". The previous
@@ -268,13 +359,12 @@ export async function POST(
     const amountFormatted = `${depositAmount.toLocaleString("en-IN")}`;
 
     if (proposal.pdf_storage_path) {
-      const adminSupabase = createAdminClient();
-      const { data: signed } = await adminSupabase.storage
+      const { data: signed } = await commLogAdmin.storage
         .from("crm-documents")
         .createSignedUrl(proposal.pdf_storage_path, 365 * 24 * 3600);
 
       if (signed?.signedUrl) {
-        messaging.bookingConfirmationDocument(
+        const waResult = await messaging.bookingConfirmationDocument(
           customerPhone,
           customerName,
           proposal.proposal_number,
@@ -282,7 +372,21 @@ export async function POST(
           depositLinkUrl,
           signed.signedUrl,
           id
-        ).catch((e: unknown) => console.error("[messaging] deposit WhatsApp failed:", e));
+        ).catch((e: unknown) => ({ success: false, error: e instanceof Error ? e.message : String(e) }));
+        if (!waResult.success) console.error("[messaging] deposit WhatsApp failed:", waResult.error);
+
+        await logCommunication(commLogAdmin, {
+          entityType: "proposal",
+          entityId: id,
+          channel: "whatsapp",
+          recipient: customerPhone,
+          body: `Security deposit of Rs.${amountFormatted} for ${proposal.proposal_number}. Payment link: ${depositLinkUrl}`,
+          attachmentUrl: proposal.pdf_storage_path,
+          attachmentName: `${proposal.proposal_number}.pdf`,
+          status: waResult.success ? "sent" : "failed",
+          errorMessage: waResult.success ? null : waResult.error || "unknown",
+          sentBy: dbUser?.id || null,
+        });
 
         // Log in lead activities
         if (proposal.lead_id && dbUser?.id) {
@@ -306,5 +410,6 @@ export async function POST(
     deposit_link_id: depositLinkId,
     amount: depositAmount,
     sent_to: customerEmail,
+    cc: additionalCc,
   });
 }

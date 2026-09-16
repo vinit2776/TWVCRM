@@ -1180,7 +1180,7 @@ export interface AuditLog {
 // Communications Log Types
 // ==========================================
 export type CommunicationEntityType = "billing_statement" | "contract" | "proposal" | "booking" | "lead";
-export type CommunicationChannel = "email" | "whatsapp" | "sms";
+export type CommunicationChannel = "email" | "whatsapp" | "sms" | "manual";
 export type CommunicationStatus = "sent" | "failed";
 
 /** A single outbound email/WhatsApp/SMS send, with full content + attachment
@@ -1193,6 +1193,8 @@ export interface CommunicationLogEntry {
   entity_id: string;
   channel: CommunicationChannel;
   recipient: string;
+  /** Email CC list — null on rows logged before migration 00562. */
+  cc?: string[] | null;
   subject: string | null;
   body: string;
   attachment_url: string | null;
@@ -1201,6 +1203,27 @@ export interface CommunicationLogEntry {
   error_message: string | null;
   sent_by: string | null;
   created_at: string;
+}
+
+/** One row of a proposal's security deposit request history
+ *  (GET /api/proposals/[id]/deposit-history). */
+export interface DepositHistoryItem {
+  id: string;
+  /** request = sent/downloaded from the deposit dialog; legacy = sent before
+   *  requests were logged, only the timestamp survives. */
+  source: "request" | "manual_reminder" | "auto_reminder" | "legacy";
+  channel: CommunicationChannel;
+  status: CommunicationStatus;
+  recipient: string | null;
+  cc: string[];
+  created_at: string;
+  sent_by_name: string | null;
+  subject: string | null;
+  body: string | null;
+  attachment_url: string | null;
+  attachment_name: string | null;
+  error_message: string | null;
+  reminder_label: string | null;
 }
 
 // ==========================================

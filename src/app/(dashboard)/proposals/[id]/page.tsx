@@ -58,6 +58,7 @@ import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
@@ -71,6 +72,10 @@ import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { canRecordPayments } from "@/lib/constants";
+
+function parseCcList(raw: string): string[] {
+  return Array.from(new Set(raw.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean)));
+}
 
 export default function ProposalDetailPage({
   params,
@@ -145,6 +150,8 @@ export default function ProposalDetailPage({
   } | null>(null);
   const [depositInternalNote, setDepositInternalNote] = useState("");
   const [depositCustomerMessage, setDepositCustomerMessage] = useState("");
+  const [depositCc, setDepositCc] = useState("");
+  const [depositDownloading, setDepositDownloading] = useState(false);
   const depositPreviewRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Booking confirmation dialog (accept flow)
@@ -431,6 +438,7 @@ export default function ProposalDetailPage({
     setDepositEmailPreview(null);
     setDepositInternalNote("");
     setDepositCustomerMessage("");
+    setDepositCc((proposal?.lead?.billing_emails || []).join(", "));
     setDepositEmailLoading(true);
     try {
       const res = await fetch(`/api/proposals/${id}/deposit-link`, {
@@ -486,18 +494,22 @@ export default function ProposalDetailPage({
     }
     setDepositEmailSending(true);
     try {
+      const ccList = parseCcList(depositCc);
       const res = await fetch(`/api/proposals/${id}/deposit-link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           deposit_internal_notes: depositInternalNote.trim(),
           deposit_customer_message: depositCustomerMessage.trim(),
+          additional_cc: ccList,
         }),
       });
       const json = await res.json();
       if (res.ok) {
-        toast.success(`Deposit email sent to ${json.sent_to || "customer"}`);
+        const ccNote = json.cc?.length ? ` (cc ${json.cc.join(", ")})` : "";
+        toast.success(`Deposit email sent to ${json.sent_to || "customer"}${ccNote}`);
         setDepositEmailOpen(false);
+        rememberLeadBillingEmails(ccList);
         fetchProposal();
       } else {
         toast.error(json.error || "Failed to send deposit email");
@@ -506,6 +518,54 @@ export default function ProposalDetailPage({
       toast.error("Unexpected error sending email");
     } finally {
       setDepositEmailSending(false);
+    }
+  };
+
+  const handleDownloadDepositRequest = async () => {
+    if (depositInternalNote.trim().length < 10) {
+      toast.error("Add an internal note (at least 10 characters) so accounts can book this correctly");
+      return;
+    }
+    setDepositDownloading(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/deposit-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "download",
+          deposit_internal_notes: depositInternalNote.trim(),
+          deposit_customer_message: depositCustomerMessage.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to prepare deposit request");
+        return;
+      }
+      const { generateDepositRequestPDF } = await import("@/lib/deposit-request-pdf");
+      const doc = await generateDepositRequestPDF(json);
+      doc.save(`Security-Deposit-${json.proposal_number}.pdf`);
+      toast.success("Deposit request downloaded — marked as sent, reminders start from today");
+      setDepositEmailOpen(false);
+      fetchProposal();
+    } catch {
+      toast.error("Unexpected error preparing the PDF");
+    } finally {
+      setDepositDownloading(false);
+    }
+  };
+
+  // Same "ad hoc field pre-filled from a saved list" behaviour as the GST
+  // invoice dialog: an edited CC list is remembered against the lead.
+  const rememberLeadBillingEmails = (ccList: string[]) => {
+    const existingCc = proposal?.lead?.billing_emails || [];
+    const ccChanged = ccList.length !== existingCc.length || ccList.some((e) => !existingCc.includes(e));
+    if (ccChanged && proposal?.lead_id) {
+      fetch(`/api/leads/${proposal.lead_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_emails: ccList }),
+      }).catch(() => {});
     }
   };
 
@@ -561,9 +621,7 @@ export default function ProposalDetailPage({
     }
     setGstSending(true);
     try {
-      const ccList = Array.from(new Set(
-        gstCc.split(",").map((e) => e.trim()).filter(Boolean)
-      ));
+      const ccList = parseCcList(gstCc);
       const res = await fetch(`/api/proposals/${id}/send-invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -584,17 +642,7 @@ export default function ProposalDetailPage({
         );
         setGstDialogOpen(false);
 
-        // Remember the edited CC list against the lead for next time, matching
-        // the "ad hoc field pre-filled from a saved list" behaviour.
-        const existingCc = proposal?.lead?.billing_emails || [];
-        const ccChanged = ccList.length !== existingCc.length || ccList.some((e) => !existingCc.includes(e));
-        if (ccChanged && proposal?.lead_id) {
-          fetch(`/api/leads/${proposal.lead_id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ billing_emails: ccList }),
-          }).catch(() => {});
-        }
+        rememberLeadBillingEmails(ccList);
 
         fetchProposal();
       } else {
@@ -1468,6 +1516,13 @@ export default function ProposalDetailPage({
                     </div>
                   );
                 })()}
+
+                {["admin", "manager", "accounts", "sales_rep"].includes(currentUser?.role || "") && (
+                  <DepositRequestHistory
+                    proposalId={proposal.id}
+                    refreshKey={`${proposal.updated_at}|${proposal.deposit_email_sent_at}`}
+                  />
+                )}
               </CardContent>
             </Card>
           )}
@@ -1822,6 +1877,24 @@ export default function ProposalDetailPage({
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <Label htmlFor="dep-cc">CC (comma-separated)</Label>
+                <Input
+                  id="dep-cc"
+                  type="text"
+                  placeholder="accounts@customer.com, cfo@customer.com"
+                  value={depositCc}
+                  onChange={(e) => setDepositCc(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">Pre-filled from the lead&apos;s saved billing contacts. Edited addresses are remembered for next time.</p>
+              </div>
+
+              {!depositEmailPreview.to.length && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                  This lead has no email address, so the email can&apos;t be sent. Use <strong>Download to share</strong> to send the request manually.
+                </div>
+              )}
+
               {depositEmailPreview.link_already_exists ? (
                 <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
                   This proposal already has an active Razorpay deposit link — the existing link will be used.
@@ -1875,12 +1948,21 @@ export default function ProposalDetailPage({
               </div>
 
               <div className="flex justify-end gap-2 pt-1">
-                <Button variant="outline" onClick={() => setDepositEmailOpen(false)} disabled={depositEmailSending}>
+                <Button variant="outline" onClick={() => setDepositEmailOpen(false)} disabled={depositEmailSending || depositDownloading}>
                   Cancel
                 </Button>
                 <Button
+                  variant="outline"
+                  onClick={handleDownloadDepositRequest}
+                  disabled={depositEmailSending || depositDownloading || depositInternalNote.trim().length < 10}
+                  title="Creates the payment link, marks the deposit as requested and downloads a PDF to share manually — no email is sent"
+                >
+                  {depositDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                  {depositDownloading ? "Preparing…" : "Download to share"}
+                </Button>
+                <Button
                   onClick={handleSendDepositEmail}
-                  disabled={depositEmailSending || !depositEmailPreview.to.length || depositInternalNote.trim().length < 10}
+                  disabled={depositEmailSending || depositDownloading || !depositEmailPreview.to.length || depositInternalNote.trim().length < 10}
                   className="bg-primary hover:bg-primary/90"
                 >
                   {depositEmailSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
