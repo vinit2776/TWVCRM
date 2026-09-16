@@ -120,7 +120,9 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().split("T")[0];
   const filename = `vendor-bills-${today}.csv`;
 
-  return new Response(csv, {
+  // Excel assumes the system codepage without a BOM, which mangles ₹ and any
+  // non-ASCII character (e.g. the "—" placeholder) into junk like "â€"".
+  return new Response("﻿" + csv, {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
