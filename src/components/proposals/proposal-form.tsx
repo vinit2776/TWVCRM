@@ -16,7 +16,6 @@ import { LineItemsEditor, type LineItemData } from "@/components/shared/line-ite
 import { Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
-import { syncDepositTerm } from "@/lib/proposal-deposit-terms";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import {
@@ -180,16 +179,14 @@ export function ProposalForm({
     .filter((item) => item.description.trim())
     .reduce((sum, item) => sum + Math.max(1, item.quantity) * item.unit_price, 0);
 
-  // Keep the auto-calculated deposit following the rent, and the deposit line
-  // in the terms following the deposit — otherwise the PDF quotes a deposit
-  // that doesn't match what was selected.
+  // Keep the auto-calculated deposit following the rent. The deposit line in
+  // the terms is generated from these values (see generatedTermLines).
   const effectiveDepositAmount = depositOverridden ? depositAmount : depositMonths * computedSubtotal;
   useEffect(() => {
     if (!open) return;
     if (!depositOverridden && depositAmount !== effectiveDepositAmount) {
       setDepositAmount(effectiveDepositAmount);
     }
-    setTermsAndConditions((prev) => syncDepositTerm(prev, depositMonths, effectiveDepositAmount));
   }, [open, depositMonths, depositAmount, depositOverridden, effectiveDepositAmount]);
 
   const resetForm = () => {
@@ -245,6 +242,7 @@ export function ProposalForm({
     lock_in_months: lockInMonths,
     notice_period_months: noticePeriodMonths,
     security_deposit_months: depositMonths,
+    security_deposit_amount: depositMonths > 0 ? effectiveDepositAmount : 0,
   });
 
   const updateQuota = (serviceId: string, field: "monthly_quota" | "overage_rate", value: number) => {

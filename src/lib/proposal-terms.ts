@@ -10,6 +10,8 @@
  * all three always say the same thing.
  */
 
+import { STANDARD_DEPOSIT_LINE, depositTermText } from "@/lib/proposal-deposit-terms";
+
 export const PROPOSAL_MAX_TENURE_MONTHS = 18;
 
 export interface ProposalCommitmentTerms {
@@ -17,6 +19,7 @@ export interface ProposalCommitmentTerms {
   lock_in_months?: number | null;
   notice_period_months?: number | null;
   security_deposit_months?: number | null;
+  security_deposit_amount?: number | null;
 }
 
 /**
@@ -67,7 +70,7 @@ export function buildCommitmentTermLines(terms: ProposalCommitmentTerms): string
   const notice = terms.notice_period_months as number;
   return [
     deposit > 0
-      ? `• ${months(deposit)} rent payable as an interest free refundable security deposit`
+      ? `• ${depositTermText(deposit, Number(terms.security_deposit_amount || 0))}`
       : "• No security deposit",
     `• Term ${months(terms.tenure_months as number)} (Lock-in ${months(terms.lock_in_months as number)})`,
     notice > 0 ? `• Notice period ${months(notice)} post lock-in` : "• No notice period post lock-in",
@@ -83,11 +86,12 @@ export function composeProposalTerms(
     .join("\n");
 }
 
-// The three lines the old static DEFAULT_PROPOSAL_TERMS carried. Stripped from
+// The three lines the old static DEFAULT_PROPOSAL_TERMS carried (the deposit
+// one possibly with an amount, from the earlier in-text syncing). Stripped from
 // a legacy draft's free text when it is edited, so the regenerated lines don't
-// sit next to a contradicting hardcoded copy.
+// sit next to a contradicting copy.
 const LEGACY_STATIC_LINE_PATTERNS = [
-  /^•?\s*[\d.]+\s+months?\s+rent payable as an interest free refundable security deposit\.?$/i,
+  STANDARD_DEPOSIT_LINE,
   /^•?\s*Term\b.*\(Lock-in\b.*\)\.?$/i,
   /^•?\s*Notice period\b.*post lock-in\.?$/i,
 ];

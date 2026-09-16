@@ -9,7 +9,13 @@ import {
 } from "../proposal-terms";
 import { DEFAULT_PROPOSAL_TERMS } from "../constants";
 
-const standard = { tenure_months: 12, lock_in_months: 11, notice_period_months: 2, security_deposit_months: 2 };
+const standard = {
+  tenure_months: 12,
+  lock_in_months: 11,
+  notice_period_months: 2,
+  security_deposit_months: 2,
+  security_deposit_amount: 64000,
+};
 
 describe("validateCommitmentTerms", () => {
   it("accepts a consistent set", () => {
@@ -37,7 +43,7 @@ describe("validateCommitmentTerms", () => {
 describe("buildCommitmentTermLines", () => {
   it("renders the selected values", () => {
     expect(buildCommitmentTermLines(standard)).toEqual([
-      "• 2 months rent payable as an interest free refundable security deposit",
+      "• 2 months rent payable as an interest free refundable security deposit of Rs. 64,000",
       "• Term 12 months (Lock-in 11 months)",
       "• Notice period 2 months post lock-in",
     ]);
@@ -74,6 +80,12 @@ describe("legacy static lines", () => {
 • Term 1 year (Lock-in 11 months)
 • Notice period 2 months post lock-in
 • Center timing Monday - Saturday 9AM to 7PM`;
+
+  it("also strips a deposit line that carries an amount", () => {
+    expect(
+      stripLegacyCommitmentLines("• Taxes as applicable\n• 3 months rent payable as an interest free refundable security deposit of Rs. 36,000")
+    ).toBe("• Taxes as applicable");
+  });
 
   it("strips only the deposit/term/notice lines from the old default", () => {
     expect(stripLegacyCommitmentLines(oldDefault)).toBe(`• Taxes as applicable
