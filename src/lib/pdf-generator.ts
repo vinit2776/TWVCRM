@@ -47,6 +47,9 @@ function sanitizeForPdf(text: string): string {
     .replace(/[“”]/g, '"')
     .replace(/[–—]/g, "-")
     .replace(/…/g, "...")
+    // Bullets (incl. Word's private-use U+F0B7) aren't in the built-in fonts and
+    // would otherwise be stripped, leaving terms as an unmarked block of text.
+    .replace(/[•●▪◦\uF0B7]/g, "-")
     .replace(/[^\x00-\xFF]/g, "");
 }
 
@@ -335,12 +338,32 @@ function addLogoToDoc(doc: jsPDF): number {
   return 32;
 }
 
+const FOOTER_H = 20;
+const PAGE_TOP_Y = 20;
+
 function generatePDF(options: PDFOptions): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
+  // Lowest baseline content may use before running into the footer band.
+  const contentBottomY = doc.internal.pageSize.getHeight() - FOOTER_H - 6;
 
   // ── Header with Logo ──
   let y = addLogoToDoc(doc);
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > contentBottomY) {
+      doc.addPage();
+      y = PAGE_TOP_Y;
+    }
+  };
+
+  const writeLines = (lines: string[], lineH: number) => {
+    for (const line of lines) {
+      ensureSpace(lineH);
+      doc.text(line, 14, y);
+      y += lineH;
+    }
+  };
 
   // ── Divider ──
   doc.setDrawColor(...BRAND_TEAL);
@@ -493,7 +516,14 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   autoTable(doc, {
     startY: y,
-    head: [["#", "Description", "Qty", "Unit", "Unit Price", "Total"]],
+    head: [[
+      { content: "#", styles: { halign: "center" } },
+      "Description",
+      { content: "Qty", styles: { halign: "center" } },
+      { content: "Unit", styles: { halign: "center" } },
+      { content: "Unit Price", styles: { halign: "right" } },
+      { content: "Total", styles: { halign: "right" } },
+    ]],
     body: tableRows,
     theme: "striped",
     headStyles: {
@@ -514,13 +544,14 @@ function generatePDF(options: PDFOptions): jsPDF {
       4: { cellWidth: 36, halign: "right" },
       5: { cellWidth: 36, halign: "right" },
     },
-    margin: { left: 14, right: 14 },
+    margin: { left: 14, right: 14, top: PAGE_TOP_Y, bottom: FOOTER_H + 6 },
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   y = (doc as any).lastAutoTable.finalY + 8;
 
   // ── Totals Section ──
+  ensureSpace(44);
   const totalsX = pageWidth - 85;
   const totalsValueX = pageWidth - 14;
 
@@ -558,18 +589,20 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // Total amount with teal background
   doc.setFillColor(...BRAND_TEAL);
-  doc.roundedRect(totalsX - 2, y - 5, totalsValueX - totalsX + 4, 10, 2, 2, "F");
+  // Box stays inside the right margin so it lines up with Subtotal/Tax above.
+  doc.roundedRect(totalsX - 3, y - 5, totalsValueX - totalsX + 3, 10, 2, 2, "F");
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(255, 255, 255);
-  doc.text("Total:", totalsX + 2, y + 1);
-  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX - 2, y + 1, {
+  doc.text("Total:", totalsX, y + 1);
+  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX - 3, y + 1, {
     align: "right",
   });
   y += 14;
 
   // ── Description / Complimentary Services ──
   if (options.description) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -579,14 +612,13 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const descLines = doc.splitTextToSize(options.description, pageWidth - 28);
-    doc.text(descLines, 14, y);
-    y += descLines.length * 4.5 + 6;
+    writeLines(doc.splitTextToSize(options.description, pageWidth - 28), 4.5);
+    y += 6;
   }
 
   // ── Service Quotas table (proposals) ──
   if (options.serviceQuotas && options.serviceQuotas.length > 0) {
-    if (y + 20 > doc.internal.pageSize.getHeight() - 20) { doc.addPage(); y = 20; }
+    ensureSpace(20);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -602,7 +634,12 @@ function generatePDF(options: PDFOptions): jsPDF {
 
     autoTable(doc, {
       startY: y,
-      head: [["Service", "Unit", "Free quota / month", "Addl Usage rate"]],
+      head: [[
+        "Service",
+        "Unit",
+        { content: "Free quota / month", styles: { halign: "center" } },
+        { content: "Addl Usage rate", styles: { halign: "right" } },
+      ]],
       body: quotaRows,
       theme: "striped",
       headStyles: { fillColor: BRAND_TEAL, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
@@ -614,13 +651,14 @@ function generatePDF(options: PDFOptions): jsPDF {
         2: { cellWidth: 38, halign: "center" },
         3: { cellWidth: 48, halign: "right" },
       },
-      margin: { left: 14, right: 14 },
+      margin: { left: 14, right: 14, top: PAGE_TOP_Y, bottom: FOOTER_H + 6 },
     });
     y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
   }
 
   // ── Terms & Conditions ──
   if (options.termsAndConditions) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -630,15 +668,16 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const tcLines = doc.splitTextToSize(
-      sanitizeForPdf(options.termsAndConditions),
-      pageWidth - 28
+    writeLines(
+      doc.splitTextToSize(sanitizeForPdf(options.termsAndConditions), pageWidth - 28),
+      4.5
     );
-    doc.text(tcLines, 14, y);
-    y += tcLines.length * 4.5 + 6;
+    y += 6;
   }
 
   // ── Bank Details ──
+  // Keep the heading, all five lines and any QR code together on one page.
+  ensureSpace(options.qrCodeBase64 ? 52 : 30);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
@@ -665,6 +704,7 @@ function generatePDF(options: PDFOptions): jsPDF {
   // ── Razorpay Payment Link — button + raw URL ──────────────────────────────
   if (options.razorpayPaymentLink) {
     y += 5;
+    ensureSpace(30);
 
     // Section label in small grey caps
     doc.setFontSize(8);
@@ -763,6 +803,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Notes ──
   if (options.notes) {
+    ensureSpace(12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
@@ -772,48 +813,51 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    const notesLines = doc.splitTextToSize(options.notes, pageWidth - 28);
-    doc.text(notesLines, 14, y);
+    writeLines(doc.splitTextToSize(options.notes, pageWidth - 28), 4.5);
   }
 
-  // ── Footer ──
+  // ── Footer (every page) ──
   const pageHeight = doc.internal.pageSize.getHeight();
-  const footerH = 20;
+  const footerH = FOOTER_H;
   const footerY = pageHeight - footerH;
+  const pageCount = doc.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page++) {
+    doc.setPage(page);
 
-  // Footer teal bar
-  doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, footerY, pageWidth, footerH, "F");
+    // Footer teal bar
+    doc.setFillColor(...BRAND_TEAL);
+    doc.rect(0, footerY, pageWidth, footerH, "F");
 
-  // Thin green accent line at top of footer
-  doc.setFillColor(...BRAND_GREEN);
-  doc.rect(0, footerY, pageWidth, 0.8, "F");
+    // Thin green accent line at top of footer
+    doc.setFillColor(...BRAND_GREEN);
+    doc.rect(0, footerY, pageWidth, 0.8, "F");
 
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(255, 255, 255);
-  doc.text(
-    `${BRAND_NAME}  |  ${COMPANY_NAME}`,
-    pageWidth / 2,
-    footerY + 6,
-    { align: "center" }
-  );
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      `${BRAND_NAME}  |  ${COMPANY_NAME}`,
+      pageWidth / 2,
+      footerY + 6,
+      { align: "center" }
+    );
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6.5);
-  doc.setTextColor(200, 230, 220);
-  doc.text(
-    `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
-    pageWidth / 2,
-    footerY + 11,
-    { align: "center" }
-  );
-  doc.text(
-    COMPANY_GST,
-    pageWidth / 2,
-    footerY + 16,
-    { align: "center" }
-  );
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(200, 230, 220);
+    doc.text(
+      `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
+      pageWidth / 2,
+      footerY + 11,
+      { align: "center" }
+    );
+    doc.text(
+      COMPANY_GST,
+      pageWidth / 2,
+      footerY + 16,
+      { align: "center" }
+    );
+  }
 
   return doc;
 }
