@@ -36,6 +36,7 @@ import { USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 import { buildServiceDescription, ensureAccountingPeriod, monthLabel } from "@/lib/billing";
 import { dispatchGstDirect, dispatchProforma } from "@/lib/send-proforma";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
+import { logAudit } from "@/lib/audit";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -569,6 +570,14 @@ export async function sendPreparedUsageInvoice(
     .eq("id", statementId)
     .eq("status", "draft");
   if (finErr) return { error: { code: "failed", message: finErr.message } };
+  // Same entry Finalize & Send writes, so the statement's history shows when it was finalized.
+  logAudit(supabase, {
+    entityType: "billing_statement",
+    entityId: statementId,
+    action: "update",
+    performedBy: userId,
+    changes: { status: { old: "draft", new: "finalized" } },
+  });
 
   const releaseIfUntouched = async (reason: string): Promise<SendOutcome> => {
     const { data: after } = await supabase
@@ -580,6 +589,13 @@ export async function sendPreparedUsageInvoice(
     if (irreversible) return { kind: "not_delivered_kept", statementNumber: draft.statement_number, reason };
     // Back to draft first so the discard guard (status = draft) applies.
     await supabase.from("billing_statements").update({ status: "draft", finalized_at: null }).eq("id", statementId);
+    logAudit(supabase, {
+      entityType: "billing_statement",
+      entityId: statementId,
+      action: "update",
+      performedBy: userId,
+      changes: { status: { old: "finalized", new: "draft" }, finalize_rollback_reason: { old: null, new: reason } },
+    });
     await discardDraft(supabase, statementId, userId, `Send failed: ${reason}`);
     return { kind: "not_sent_released", reason };
   };
