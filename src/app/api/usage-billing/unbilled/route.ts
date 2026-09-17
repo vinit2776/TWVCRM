@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { countOldUsageDrafts, getUnbilledUsage } from "@/lib/usage-billing";
+import { listOldUsageDrafts, getUnbilledUsage } from "@/lib/usage-billing";
 import { requireUsageBillingUser } from "../auth";
 
 /**
@@ -15,7 +15,7 @@ export async function GET() {
 
   const admin = createAdminClient();
   try {
-    const [groups, oldDrafts] = await Promise.all([getUnbilledUsage(admin), countOldUsageDrafts(admin)]);
+    const [groups, oldDrafts] = await Promise.all([getUnbilledUsage(admin), listOldUsageDrafts(admin)]);
     return NextResponse.json({ data: groups, old_drafts: oldDrafts });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to load unbilled usage" }, { status: 500 });

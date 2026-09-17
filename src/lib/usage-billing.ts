@@ -340,15 +340,30 @@ export async function getUnbilledUsage(supabase: SupabaseClient, contractId?: st
   return groupUnbilledUsage({ charges, ...facts, today: istToday() });
 }
 
-/** Old month-draft usage statements (never sent) — their charges don't appear in the list until discarded. */
-export async function countOldUsageDrafts(supabase: SupabaseClient): Promise<number> {
-  const { count } = await supabase
+/** Unsent usage drafts older than an hour — made by the old Generate Drafts
+ *  button, or a Review & send window closed without cancelling. Their charges
+ *  are locked to them, so they don't appear in the grouped list until
+ *  discarded. Anything newer may be a Review & send in progress elsewhere. */
+export async function listOldUsageDrafts(supabase: SupabaseClient): Promise<Array<{
+  id: string; statement_number: string; contract_number: string | null; period_start: string; total_amount: number;
+}>> {
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
     .from("billing_statements")
-    .select("id", { count: "exact", head: true })
+    .select("id, statement_number, period_start, total_amount, contract:contracts!billing_statements_contract_id_fkey(contract_number)")
     .eq("statement_type", "usage")
     .eq("status", "draft")
-    .is("voided_at", null);
-  return count ?? 0;
+    .is("voided_at", null)
+    .lt("created_at", hourAgo)
+    .order("period_start", { ascending: true });
+  if (error) throw new Error(`Failed to load old usage drafts: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string; statement_number: string; period_start: string; total_amount: number; contract: unknown }>).map((d) => ({
+    id: d.id,
+    statement_number: d.statement_number,
+    period_start: d.period_start,
+    total_amount: Number(d.total_amount),
+    contract_number: one<{ contract_number: string }>(d.contract as { contract_number: string } | null)?.contract_number ?? null,
+  }));
 }
 
 // ─── Prepare / send / cancel ─────────────────────────────────────────────────
@@ -502,6 +517,11 @@ async function discardDraft(supabase: SupabaseClient, statementId: string, userI
   await releaseStatementCharges(supabase, statementId);
 }
 
+async function wasProformaDelivered(supabase: SupabaseClient, statementId: string): Promise<boolean> {
+  const { data } = await supabase.from("billing_statements").select("proforma_sent_at").eq("id", statementId).single();
+  return !!data?.proforma_sent_at;
+}
+
 async function loadPreparedDraft(supabase: SupabaseClient, statementId: string) {
   const { data } = await supabase
     .from("billing_statements")
@@ -576,6 +596,13 @@ export async function sendPreparedUsageInvoice(
     // Handed to Tally, or GST issuance paused (standby) — queued, not failed.
     if (result.routedToTally || result.standby) return { kind: "handed_off", statementNumber: draft.statement_number };
     if (result.noContact) return await releaseIfUntouched("No email or phone on file for this customer");
+    // Dispatch can "succeed" without delivering anything — e.g. no email on
+    // file and no payment link. dispatchProforma only stamps proforma_sent_at
+    // when something the customer can act on actually went out.
+    const delivered = billingMode === "proforma_first"
+      ? await wasProformaDelivered(supabase, statementId)
+      : !!result.emailedTo || !!result.razorpayLinkUrl;
+    if (!delivered) return await releaseIfUntouched("Nothing was delivered — no email on file for this customer");
     return { kind: "sent", statementNumber: draft.statement_number, emailedTo: result.emailedTo ?? null };
   } catch (e) {
     return await releaseIfUntouched(e instanceof Error ? e.message : "Dispatch failed");
