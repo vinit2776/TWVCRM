@@ -269,6 +269,7 @@ export default function PurchaseRequestDetailPage() {
 
   const userRole = user?.role ?? "";
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
+  const [approvalThreshold, setApprovalThreshold] = useState<number>(PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -326,6 +327,7 @@ export default function PurchaseRequestDetailPage() {
     if (res.ok) {
       const json = await res.json();
       setPr(json.data);
+      if (typeof json.approval_threshold === "number") setApprovalThreshold(json.approval_threshold);
     } else {
       toast.error("Failed to load material request");
       router.push("/procurement/requests");
@@ -426,7 +428,7 @@ export default function PurchaseRequestDetailPage() {
   const canEditRequest =
     MR_EDITABLE_STATUSES.includes(pr.status) &&
     ["admin", "manager", "office_admin"].includes(userRole);
-  const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
+  const isLargeAmount = pr.total_estimated_amount > approvalThreshold;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
   // Lifecycle derived data
@@ -833,7 +835,7 @@ export default function PurchaseRequestDetailPage() {
               </div>
               {isLargeAmount && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                  Amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()} — admin approval required
+                  Amount exceeds ₹{approvalThreshold.toLocaleString()} — admin approval required
                 </div>
               )}
               <div className="flex justify-between text-sm">
@@ -1561,7 +1563,7 @@ export default function PurchaseRequestDetailPage() {
             )}
             {isLargeAmount && (
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                This amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()}. Only admin users can approve this.
+                This amount exceeds ₹{approvalThreshold.toLocaleString()}. Only admin users can approve this.
               </div>
             )}
           </div>
