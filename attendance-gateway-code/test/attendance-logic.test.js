@@ -19,7 +19,7 @@ function setup() {
   db.exec(`
     CREATE TABLE employees (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, shift_start TEXT NOT NULL, shift_end TEXT NOT NULL,
-      onsite_enabled INTEGER NOT NULL DEFAULT 0
+      onsite_enabled INTEGER NOT NULL DEFAULT 0, date_joined TEXT
     );
     CREATE TABLE punches (
       id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, timestamp TEXT NOT NULL,
@@ -85,6 +85,24 @@ test('pre-launch fallback: no punches before LAUNCH_DATE returns Present, not Ab
   const { computeDayStatus } = setup();
   const result = await computeDayStatus(EMP, '2026-07-01'); // before LAUNCH_DATE (2026-07-29)
   assert.equal(result.status, 'Present');
+});
+
+test('pre-employment fallback: no punches before the employee\'s own date_joined returns Present, not Absent', async () => {
+  const { db, computeDayStatus } = setup();
+  // Joined well after LAUNCH_DATE, so the pre-launch fallback above doesn't cover this —
+  // this is the employee's own join date being the reason there's no attendance data.
+  db.prepare('UPDATE employees SET date_joined = ? WHERE id = ?').run('2026-08-15', EMP);
+  const result = await computeDayStatus(EMP, '2026-08-05');
+  assert.equal(result.status, 'Present');
+});
+
+test('post-employment regression: no punches on a weekday on/after date_joined still returns Absent', async () => {
+  const { db, computeDayStatus } = setup();
+  db.prepare('UPDATE employees SET date_joined = ? WHERE id = ?').run('2026-07-30', EMP);
+  // Same date as the plain "absent" test above (Thu, post-launch weekday) — joining on
+  // this exact day shouldn't excuse an absence starting the day they were hired.
+  const result = await computeDayStatus(EMP, '2026-07-30');
+  assert.equal(result.status, 'Absent');
 });
 
 test('future date: no punches on a future date returns Upcoming', async () => {
