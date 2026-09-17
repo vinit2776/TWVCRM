@@ -1,0 +1,57 @@
+name: Attendance scope
+
+# Keeps attendance-only contributors inside attendance-gateway-code/.
+#
+# Who is restricted lives in the repository variable ATTENDANCE_ONLY_USERS
+# (Settings → Secrets and variables → Actions → Variables), a comma-separated
+# list of GitHub usernames — so adding or removing someone needs no PR. Everyone
+# else (the owner, charidevops's CRM work, the version-bump bot) passes untouched.
+#
+# pull_request_target, not pull_request, on purpose: it runs this file as it is
+# on main, so a restricted user cannot weaken the check by editing it inside
+# their own PR. That is only safe because the job never checks out or executes
+# PR code — it reads the changed-file list from the API and nothing else.
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  attendance-scope:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject files outside attendance-gateway-code/
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          RESTRICTED: ${{ vars.ATTENDANCE_ONLY_USERS }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          author=$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')
+          restricted=$(echo "$RESTRICTED" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+
+          if [[ ",$restricted," != *",$author,"* ]]; then
+            echo "$AUTHOR is not an attendance-only contributor; no path restriction."
+            exit 0
+          fi
+
+          # A rename out of the folder shows the new path in .filename, and a
+          # rename into it from elsewhere shows the old one in .previous_filename,
+          # so both are checked.
+          outside=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' \
+            | grep -v '^attendance-gateway-code/' || true)
+
+          if [[ -n "$outside" ]]; then
+            echo "::error::$AUTHOR may only change files inside attendance-gateway-code/. These are outside it:"
+            echo "$outside"
+            exit 1
+          fi
+
+          echo "All changed files are inside attendance-gateway-code/."
