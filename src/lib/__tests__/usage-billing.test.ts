@@ -151,7 +151,7 @@ describe("buildUsageLineItems", () => {
     expect(sections[2].items[0]).toMatchObject({ qty: 50, unit_price: 5, amount: 250 });
     expect(sections[1].label).toBe("Facility Usage — Aug 2026");
     expect([manualSubtotal, printSubtotal, facilitySubtotal]).toEqual([600, 250, 800]);
-    for (const sec of sections) for (const it of sec.items as Array<Record<string, number>>) {
+    for (const sec of sections) for (const it of sec.items as unknown as Array<Record<string, number>>) {
       expect((it.quantity ?? it.qty) * it.unit_price).toBe(it.amount);
     }
   });
