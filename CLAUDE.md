@@ -39,7 +39,12 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 ## Co-Developer Working Agreement
 
-Established 2026-08-23. `main` has branch protection: no direct pushes, a required CI check, but no required PR review (GitHub blocks a solo account from approving its own PR, so that requirement was unsatisfiable and has been removed). This means **the merge click is the only approval gate that exists** — nothing else stops a PR from shipping.
+Established 2026-08-23; ruleset updated 2026-09-17. `main` is protected by the **Mainprotect** GitHub ruleset:
+
+- **Co-developers (Write access):** no direct pushes, force-pushes, or deletion of `main`. Every change needs a PR that passes `lint-and-build`, is up to date with `main`, and is approved by the code owner (`@vinit2776`, via `.github/CODEOWNERS`). New commits dismiss an existing approval, and the most recent push must itself be approved — so what merges is exactly what Vinit reviewed.
+- **Vinit (repo admin):** bypasses every rule. GitHub won't let an account approve its own PR, so Vinit's and Claude's PRs merge with `gh pr merge <N> --merge --delete-branch --admin`. For these PRs **the merge click is the only approval gate that exists** — nothing else stops them from shipping.
+
+Only invite new developers with **Write** access; Maintain or Admin would let them bypass or change these rules.
 
 **Vinit's role:**
 - Describe bugs/features in plain English — no technical detail required.
@@ -52,8 +57,6 @@ Established 2026-08-23. `main` has branch protection: no direct pushes, a requir
 - Merge only when explicitly asked to in that moment (e.g. "merge it") — never on Claude's own initiative, and never before CI and the Vercel preview have both been checked. Being asked once does not carry forward to later PRs; each merge needs its own explicit ask.
 - Test every change before opening the PR: build, lint, and an actual browser click-through for UI-facing changes (see "Mandatory: Build → Deploy → Browser Verify" below).
 - Stop and ask before continuing if a task's scope grows beyond what was originally asked.
-
-If a second human developer joins the project, re-enable "require 1 approval" on `main` — it works correctly once PR author and approver are different accounts.
 
 ---
 
