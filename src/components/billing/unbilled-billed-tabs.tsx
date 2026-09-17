@@ -1,27 +1,15 @@
 "use client";
 
 /**
- * Unbilled / Billed for one statement type — rendered once by the Rentals
- * tab (type="rent") and once by the Usage tab (type="usage"), each with its
- * own batch-run card and its own Unbilled/Billed lists. The two tabs used to
- * share one mixed "Statements" view where a usage row had no discovery path
- * of its own (no card to generate a draft, current_cycle only ever showed
- * what already had a statement) — splitting by type gives usage the same
- * Preview → Generate Drafts flow rent already had.
+ * Rentals tab: Unbilled (the rent queue — src/lib/unbilled-queue.ts) plus
+ * Billed (sent rent/combined statements), with the Monthly Rent Proforma card.
  *
- * Unbilled is a single, persistent, cross-month list (see
- * src/lib/unbilled-queue.ts for the detection logic): this cycle's
- * ready-to-send statement of this type, plus — rent only — past rent gaps,
- * drifting renewals, and expired contracts with no renewal on file. Nothing
- * here is scoped to whichever month the page-level MonthPicker happens to
- * show — that picker still drives the other tabs on this page, just not
- * this one.
+ * Usage tab ("Usage invoices"): Billed list only — usage statements. Unbilled
+ * usage lives in Usage Charges → Unbilled, grouped by contract and month
+ * (src/components/billing/usage-billing-board.tsx).
  *
- * Billed is the historical statements list for this type, paginated via the
- * same GET /api/billing-statements endpoint and
- * { page, limit, total, totalPages } shape already used elsewhere on this
- * page. Rentals' Billed also includes "combined" statements (the legacy
- * rent+usage-in-one-document type) since those are rent-bearing too.
+ * Billed is paginated via GET /api/billing-statements with the
+ * { page, limit, total, totalPages } shape used elsewhere on this page.
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -36,9 +24,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
-import { UsageCurrentCycleCard } from "@/components/billing/usage-current-cycle-card";
-import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
-import type { UnbilledCategory, UnbilledRow, UnbilledType } from "@/lib/unbilled-queue";
+import type { UnbilledCategory, UnbilledRow } from "@/lib/unbilled-queue";
 
 /** One rent line the backfill preview would bill. Mirrors CyclePreview in
  *  contract-invoices-section.tsx — same /api/billing/auto-generate shape. */
@@ -58,22 +44,18 @@ interface BackfillPreview {
   note?: string;
 }
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "supplemental", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal"];
 const CATEGORY_TITLE: Record<UnbilledCategory, string> = {
   current_cycle: "Current cycle — ready to send",
   rent_gap: "Rent gap",
   renewal_drift: "Renewal drift",
   no_renewal: "No renewal on file",
-  usage_gap: "Usage gap — captured but never billed",
-  supplemental: "Supplemental — already billed, new charges found",
 };
 const CATEGORY_BADGE_CLASS: Record<UnbilledCategory, string> = {
   current_cycle: "bg-blue-50 text-blue-900 border-blue-200",
   rent_gap: "bg-amber-50 text-amber-900 border-amber-200",
   renewal_drift: "bg-red-50 text-red-900 border-red-200",
   no_renewal: "bg-slate-100 text-slate-700 border-slate-300",
-  usage_gap: "bg-amber-50 text-amber-900 border-amber-200",
-  supplemental: "bg-purple-50 text-purple-900 border-purple-200",
 };
 
 function monthLabel(year: number, month: number): string {
@@ -92,7 +74,7 @@ interface BilledStatement {
 }
 
 interface Props {
-  type: UnbilledType;
+  type: "rent" | "usage";
   userRole?: string | null;
   onFinalized?: () => void | Promise<void>;
   onViewStatement?: (id: string) => void;
@@ -101,24 +83,25 @@ interface Props {
 const BILLING_ROLES = ["admin", "manager", "accounts"];
 
 export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
-  const [tab, setTab] = useState<"unbilled" | "billed">("unbilled");
+  const [tab, setTab] = useState<"unbilled" | "billed">(type === "usage" ? "billed" : "unbilled");
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
   const [unbilledLoading, setUnbilledLoading] = useState(true);
   const [counts, setCounts] = useState<Record<UnbilledCategory, number>>({
-    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0, supplemental: 0,
+    current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0,
   });
 
   const loadUnbilled = useCallback(async () => {
+    if (type === "usage") { setUnbilledLoading(false); return; }
     setUnbilledLoading(true);
     try {
-      const res = await fetch(`/api/billing/unbilled?type=${type}`);
+      const res = await fetch("/api/billing/unbilled?type=rent");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setUnbilledRows(json.data || []);
-      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0, usage_gap: 0, supplemental: 0 });
+      setCounts(json.counts || { current_cycle: 0, rent_gap: 0, renewal_drift: 0, no_renewal: 0 });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load unbilled queue");
     } finally {
@@ -127,37 +110,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   }, [type]);
 
   useEffect(() => { loadUnbilled(); }, [loadUnbilled]);
-
-  // ── Generate supplemental (usage only) ──────────────────────────────────
-  // Usage drafts never auto-dispatch to a client (unlike rent's Run & Send),
-  // so this runs directly on click — no separate preview/confirm dialog,
-  // consistent with the low-stakes-until-Finalize nature of every usage draft.
-  const [generatingSupplementKey, setGeneratingSupplementKey] = useState<string | null>(null);
-  const generateSupplemental = async (row: UnbilledRow) => {
-    if (!row.supplementTarget) return;
-    setGeneratingSupplementKey(row.id);
-    try {
-      const res = await fetch("/api/billing/auto-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dry_run: false, mode: "usage", contract_id: row.contractId, ...row.supplementTarget }),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Failed to generate supplemental statement"); return; }
-      const generated = json.usage_statements?.generated ?? 0;
-      if (generated > 0) {
-        toast.success(`Supplemental statement created — supplements ${row.supplementsStatementNumber}`);
-      } else {
-        toast.info("Nothing to generate — it may already exist");
-      }
-      await loadUnbilled();
-      if (onFinalized) await onFinalized();
-    } catch {
-      toast.error("Failed to generate supplemental statement");
-    } finally {
-      setGeneratingSupplementKey(null);
-    }
-  };
 
   // ── Rent-gap backfill (rent_gap rows with a backfillTarget only) ─────────
   // Same preview-then-confirm flow as "Bill a missed month" on the contract
@@ -269,18 +221,11 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   useEffect(() => { if (tab === "billed") loadBilled(); }, [tab, loadBilled]);
 
   // Rent bills a month in advance (this ops month -> next month's proforma).
-  // Usage bills in arrears instead: the last FULLY-CLOSED month, matching
-  // generateUsageStatements' own default and getCurrentCycleReady()'s window
-  // in unbilled-queue.ts, so a freshly-generated draft immediately shows up
-  // under "Current cycle — ready to send" instead of falling outside the
-  // window it's being checked against.
   const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const opsMonth = nowIst.getUTCMonth() + 1;
   const opsYear = nowIst.getUTCFullYear();
   const nextMonth = opsMonth === 12 ? 1 : opsMonth + 1;
   const nextYear = opsMonth === 12 ? opsYear + 1 : opsYear;
-  const closedMonth = opsMonth === 1 ? 12 : opsMonth - 1;
-  const closedYear = opsMonth === 1 ? opsYear - 1 : opsYear;
 
   const totalUnbilled = Object.values(counts).reduce((s, n) => s + n, 0);
 
@@ -288,7 +233,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
 
   return (
     <div className="space-y-4">
-      {type === "rent" ? (
+      {type === "rent" && (
         <ProformaBillingCard
           mode="rent"
           periodLabel={monthLabel(nextYear, nextMonth)}
@@ -296,49 +241,24 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
           year={opsYear}
           onSuccess={async () => { await Promise.all([loadUnbilled(), loadBilled()]); if (onFinalized) await onFinalized(); }}
         />
-      ) : (
-        <ProformaBillingCard
-          mode="usage"
-          periodLabel={`${monthLabel(closedYear, closedMonth)} (closed)`}
-          month={closedMonth}
-          year={closedYear}
-          pendingDraftsCount={counts.current_cycle}
-          onSuccess={async () => { await Promise.all([loadUnbilled(), loadBilled()]); if (onFinalized) await onFinalized(); }}
-        />
-      )}
-
-      {type === "usage" && (
-        <FinanceGuideCard
-          guideKey="usage-review-worklist"
-          accentColor="blue"
-          title="Reviewing a usage draft — how this works"
-          subtitle="Each row under Current cycle is one contract's usage statement for the closed month, ready for you to review before it goes out."
-          steps={[
-            { number: 1, title: "Expand a row", description: "See every charge for that contract — print, facility, ad-hoc, all mixed together." },
-            { number: 2, title: "Waive or add a charge", description: "Waive anything that shouldn't be billed, or + Add Charge for anything missing. The total updates live." },
-            { number: 3, title: "Preview invoice & email", description: "Before you commit, see exactly what the customer will get — same PDF, same email." },
-            { number: 4, title: "Confirm & Send", description: "This is real. It emails the customer a payment link and can't be undone from here." },
-          ]}
-          tip="Ad-hoc, print, and facility charges can all be waived from here. Booking usage is locked in once the draft is generated."
-        />
       )}
 
       <div className="flex items-center justify-between gap-2 border-b pb-3">
         <div className="flex items-center gap-2">
-          <button
+          {type === "rent" && <button
             onClick={() => setTab("unbilled")}
             className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "unbilled" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
           >
             Unbilled <span className="ml-1 opacity-80">({totalUnbilled})</span>
-          </button>
+          </button>}
           <button
             onClick={() => setTab("billed")}
             className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${tab === "billed" ? "bg-teal-700 text-white border-teal-700 shadow-sm" : "bg-white text-gray-700 border-gray-300 hover:border-teal-500"}`}
           >
-            Billed
+            {type === "usage" ? "Usage invoices" : "Billed"}
           </button>
         </div>
-        {type === "usage" && <GuideReopenButton guideKey="usage-review-worklist" label="How this works" />}
+        {type === "usage" && <p className="text-xs text-muted-foreground">Unbilled usage is in Usage Charges → Unbilled.</p>}
       </div>
 
       {tab === "unbilled" && (
@@ -357,17 +277,8 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                     <Badge className={`${CATEGORY_BADGE_CLASS[cat]} text-[11px]`}>{CATEGORY_TITLE[cat]}</Badge>
                     <span className="text-xs text-muted-foreground">{rows.length}</span>
                   </div>
-                  <div className={cat === "current_cycle" && type === "usage" ? "rounded-md border" : "rounded-md border divide-y"}>
-                    {cat === "current_cycle" && type === "usage" ? (
-                      rows.map((row) => (
-                        <UsageCurrentCycleCard
-                          key={row.id}
-                          row={row}
-                          canBill={canBill}
-                          onSent={async () => { await loadUnbilled(); if (onFinalized) await onFinalized(); }}
-                        />
-                      ))
-                    ) : (
+                  <div className="rounded-md border divide-y">
+                    {(
                       rows.map((row) => (
                         <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
                           <div className="min-w-0">
@@ -387,16 +298,6 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                             <Link href={`/contracts/${row.contractId}`} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
                               Open contract
                             </Link>
-                            {row.supplementTarget && (
-                              <button
-                                onClick={() => generateSupplemental(row)}
-                                disabled={generatingSupplementKey === row.id}
-                                className="inline-flex items-center gap-1 rounded-md bg-purple-700 px-2.5 py-1 text-xs font-semibold text-white hover:bg-purple-800 disabled:opacity-60"
-                              >
-                                {generatingSupplementKey === row.id && <Loader2 className="h-3 w-3 animate-spin" />}
-                                Generate supplemental
-                              </button>
-                            )}
                             {row.backfillTarget && canBill && (
                               <button
                                 onClick={() => openBackfillDialog(row)}
