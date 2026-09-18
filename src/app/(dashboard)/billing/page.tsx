@@ -1392,7 +1392,7 @@ export default function BillingPage() {
             </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Every unbilled charge, by contract and month. Each month is one invoice, sent only when you click Review &amp; send.
+                Every unbilled charge. Each contract-month is one invoice, sent only when you click Review &amp; send.
               </p>
             )}
             <DropdownMenu>
