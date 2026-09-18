@@ -603,6 +603,11 @@ async function init() {
     await db.exec("UPDATE employees SET designation = role, role = NULL WHERE role IS NOT NULL");
   } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE employees ADD COLUMN branch TEXT'); } catch { /* already exists */ }
+  // Existing employees (registered before this column existed) will have mobile = NULL —
+  // required going forward on the registration/edit forms, but not backfilled.
+  try { await db.exec('ALTER TABLE employees ADD COLUMN mobile TEXT'); } catch { /* already exists */ }
+  // Optional, unlike mobile — left NULL for anyone who doesn't have one on file.
+  try { await db.exec('ALTER TABLE employees ADD COLUMN email TEXT'); } catch { /* already exists */ }
   // Employee-chosen UI language (English/Tamil) — admin accounts never set this away
   // from the default, since the toggle only renders for role 'employee'.
   try { await db.exec("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'"); } catch { /* already exists */ }
@@ -1219,6 +1224,21 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// Accepts a bare 10-digit Indian mobile number, optionally prefixed with '+91', '91',
+// or a domestic trunk '0'. Returns the bare 10-digit form, or null if invalid — the
+// caller is responsible for treating null as a validation error.
+function normalizeMobile(raw) {
+  const digits = String(raw || '').replace(/[\s-]/g, '');
+  const match = digits.match(/^(?:\+?91|0)?([6-9]\d{9})$/);
+  return match ? match[1] : null;
+}
+
+// Deliberately permissive (no full RFC 5322 check) — this only guards against
+// obviously-malformed input, since the field is optional and unverified anyway.
+function isValidEmail(str) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
 }
 
 const STATUS_STYLE = {
@@ -2760,6 +2780,14 @@ Password: password123</code>
           <input type="text" name="name" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Mobile Number</label>
+          <input type="tel" name="mobile" required placeholder="9876543210" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Email <span style="color:#9AA5B1;">(optional)</span></label>
+          <input type="email" name="email" placeholder="name@company.com" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+        </div>
+        <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Employment Type</label>
           <select name="role" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             ${EMPLOYMENT_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
@@ -2833,6 +2861,14 @@ async function renderEditEmployee(employee, user, error) {
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">Name</label>
           <input type="text" name="name" required value="${escapeHtml(employee.name)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Mobile Number</label>
+          <input type="tel" name="mobile" required value="${escapeHtml(employee.mobile || '')}" placeholder="9876543210" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Email <span style="color:#9AA5B1;">(optional)</span></label>
+          <input type="email" name="email" value="${escapeHtml(employee.email || '')}" placeholder="name@company.com" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
         <div>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Employment Type</label>
@@ -4463,12 +4499,20 @@ async function handleRequest(req, res) {
     const shiftStart = (form.shift_start || '').trim();
     const shiftEnd = (form.shift_end || '').trim();
     const dateJoined = (form.date_joined || '').trim();
+    const email = (form.email || '').trim();
     // Defaults to 'employee' on anything unrecognized rather than erroring the whole
     // registration over it — this field only controls in-app permissions, never
     // employment data, so failing safe (least privilege) beats blocking the form.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : 'employee';
     if (!name || !shiftStart || !shiftEnd || !dateJoined) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Name, shift start, shift end, and date joined are all required.'));
+    }
+    const mobile = normalizeMobile(form.mobile);
+    if (!mobile) {
+      return sendHtml(res, await renderEmployeeRegistration(user, 'Enter a valid 10-digit mobile number.'));
+    }
+    if (email && !isValidEmail(email)) {
+      return sendHtml(res, await renderEmployeeRegistration(user, 'Enter a valid email address.'));
     }
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown role.'));
@@ -4490,8 +4534,8 @@ async function handleRequest(req, res) {
       id = await nextEmployeeId();
       try {
         await db.prepare(
-          'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null);
+          'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to, mobile, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null);
         break;
       } catch (err) {
         const isIdCollision = /unique constraint/i.test(err && err.message || '') && /employees/i.test(err && err.message || '');
@@ -4636,8 +4680,16 @@ async function handleRequest(req, res) {
     const shiftStart = (form.shift_start || '').trim();
     const shiftEnd = (form.shift_end || '').trim();
     const dateJoined = (form.date_joined || '').trim();
+    const email = (form.email || '').trim();
     if (!name || !shiftStart || !shiftEnd || !dateJoined) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Name, shift start, shift end, and date joined are all required.'));
+    }
+    const mobile = normalizeMobile(form.mobile);
+    if (!mobile) {
+      return sendHtml(res, await renderEditEmployee(employee, user, 'Enter a valid 10-digit mobile number.'));
+    }
+    if (email && !isValidEmail(email)) {
+      return sendHtml(res, await renderEditEmployee(employee, user, 'Enter a valid email address.'));
     }
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown role.'));
@@ -4661,8 +4713,8 @@ async function handleRequest(req, res) {
     // someone, since account_role governs what the employee's login can do.
     const accountRole = ACCOUNT_ROLES.includes(form.account_role) ? form.account_role : currentAccountRole;
     await db.prepare(
-      'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ? WHERE id = ?'
-    ).run(name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, employeeId);
+      'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
+    ).run(name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
     if (accountRole !== currentAccountRole) {
       await db.prepare('UPDATE users SET role = ? WHERE employee_id = ?').run(accountRole, employeeId);
       // Session role is copied in at login time, not re-read per request — without this,
