@@ -164,3 +164,4 @@ clearing one is an explicit checkbox.
 - `POST` bodies are capped at 64KB (`MAX_BODY_BYTES`), returning 413.
 - Login is rate-limited on username **and** IP together, so nobody can lock a
   real user out from an arbitrary network.
+Setup check by Anmol
