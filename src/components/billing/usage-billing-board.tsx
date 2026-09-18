@@ -1,8 +1,11 @@
 "use client";
 
 /**
- * Usage Charges → Unbilled, grouped contract → month (one invoice per
- * contract-month). Data and rules come from GET /api/usage-billing/unbilled
+ * Usage Charges → Unbilled. One invoice per contract-month either way; the
+ * "Group by" toggle only changes the nesting — month → contract (the default,
+ * for month-end closing) or contract → month (for a customer's whole picture).
+ * The choice is remembered per browser. Data and rules come from
+ * GET /api/usage-billing/unbilled
  * (src/lib/usage-billing.ts); per-charge actions reuse the page's existing
  * waive / reduce / hold / release / "Bill anyway" dialogs via callbacks, and
  * Review & send opens UsageSendDialog.
@@ -66,6 +69,99 @@ export function toInvoice(g: UsageContractGroup, m: UsageMonthGroup): UsageInvoi
   };
 }
 
+type ViewMode = "month" | "contract";
+const VIEW_KEY = "twv.usageBoard.groupBy";
+
+/** One charge line, identical in both groupings. */
+function ChargeRow({ c, g, canWaive, actions }: { c: BoardCharge; g: UsageContractGroup; canWaive: boolean; actions: Props }) {
+  return (
+    <li className={`grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-4 gap-y-1 px-4 py-2.5 pl-8 ${c.status === "held" ? "bg-amber-50/60" : ""}`}>
+      <div className="min-w-0">
+        <p className={`text-sm truncate ${c.status === "within_quota" ? "text-muted-foreground" : ""}`} title={c.description}>{c.description}</p>
+        <p className="text-xs text-muted-foreground flex flex-wrap gap-x-1.5">
+          <span>{SOURCE_LABEL[c.source]}</span>
+          {c.bookingNumber && <span>· {c.bookingNumber}</span>}
+          <span>· {formatDate(c.date)}</span>
+          {c.status === "held" && <span className="text-amber-700 font-medium">· On hold{c.holdReason ? `: ${c.holdReason}` : ""}</span>}
+          {c.status === "needs_review" && <span className="text-red-600 font-medium">· Over 60 days — needs review, not in total</span>}
+          {c.status === "within_quota" && <span>· Within quota, not billed</span>}
+        </p>
+      </div>
+      <span className={`text-sm tabular-nums text-right ${c.status === "billable" ? "font-medium" : "text-muted-foreground line-through decoration-muted-foreground/40"}`}>
+        {formatCurrency(c.amount)}
+      </span>
+      <div className="col-span-2 sm:col-span-1 flex items-center justify-end gap-1.5 flex-wrap">
+        {c.status === "within_quota" ? null : c.status === "held" ? (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => actions.onRelease(c, g)}>
+            <PlayCircle className="mr-1 h-3.5 w-3.5" />Release
+          </Button>
+        ) : (
+          <>
+            {c.status === "needs_review" && (
+              <Button size="sm" className="h-7 text-xs bg-teal-700 hover:bg-teal-800" onClick={() => actions.onReview(c, g)}>
+                <CheckCircle className="mr-1 h-3.5 w-3.5" />Bill anyway
+              </Button>
+            )}
+            {canWaive && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" className="h-7 text-xs">Waive<ChevronDown className="ml-1 h-3 w-3" /></Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => actions.onWaive(c, g)}><Ban className="mr-2 h-4 w-4" />Waive fully</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => actions.onReduce(c, g)}><MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => actions.onHold(c, g)}>
+              <PauseCircle className="mr-1 h-3.5 w-3.5" />Hold
+            </Button>
+          </>
+        )}
+        {c.source === "manual" && c.status !== "within_quota" && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="More actions"><MoreHorizontal className="h-4 w-4" /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => actions.onEdit(c)}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function MonthStateBadges({ m }: { m: UsageMonthGroup }) {
+  return (
+    <>
+      {m.block === "open_month" && <span className="text-xs font-normal text-muted-foreground">month still open — send after it ends</span>}
+      {m.block === "accounting_locked" && <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Locked in accounting</Badge>}
+      {m.alreadyInvoiced && <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-800 border-amber-200">{m.label.split(" ")[0]} already invoiced ({m.alreadyInvoiced}) — this is extra</Badge>}
+    </>
+  );
+}
+
+function SendMonthButton({ m, onSend }: { m: UsageMonthGroup; onSend: () => void }) {
+  return (
+    <Button
+      size="sm"
+      variant={m.canSend ? "default" : "outline"}
+      className={m.canSend ? "h-8 bg-teal-700 hover:bg-teal-800" : "h-8"}
+      disabled={!m.canSend}
+      title={
+        m.block === "open_month" ? "Can be sent after the month ends"
+          : m.block === "accounting_locked" ? "This month is locked in accounting"
+          : m.subtotal <= 0 ? "Nothing billable in this month" : undefined
+      }
+      onClick={onSend}
+    >
+      Review &amp; send
+    </Button>
+  );
+}
+
 export function UsageBillingBoard(props: Props) {
   const { refreshKey, canSend, canWaive, onChanged } = props;
   const [groups, setGroups] = useState<UsageContractGroup[]>([]);
@@ -76,6 +172,20 @@ export function UsageBillingBoard(props: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [quotaOpen, setQuotaOpen] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<UsageInvoiceToSend[] | null>(null);
+  // Month-first by default: month-end closing is the routine job. The choice
+  // is per browser — a personal preference, not shared state.
+  const [view, setView] = useState<ViewMode>("month");
+  const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(VIEW_KEY);
+      if (saved === "month" || saved === "contract") setView(saved);
+    } catch { /* private window / blocked storage — keep the default */ }
+  }, []);
+  const changeView = (next: ViewMode) => {
+    setView(next);
+    try { window.localStorage.setItem(VIEW_KEY, next); } catch { /* ignore */ }
+  };
   const [discarding, setDiscarding] = useState(false);
 
   const load = useCallback(async () => {
@@ -123,6 +233,30 @@ export function UsageBillingBoard(props: Props) {
     () => visible.flatMap((g) => g.months.filter((m) => m.canSend).map((m) => toInvoice(g, m))),
     [visible],
   );
+
+  /** The same rows, pivoted: month → the contracts with charges in it. */
+  const byMonth = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; block: UsageMonthGroup["block"]; rows: Array<{ g: UsageContractGroup; m: UsageMonthGroup }> }>();
+    for (const g of visible) for (const m of g.months) {
+      const entry = map.get(m.key) ?? { key: m.key, label: m.label, block: m.block, rows: [] };
+      entry.rows.push({ g, m });
+      map.set(m.key, entry);
+    }
+    return [...map.values()]
+      .sort((a, b) => b.key.localeCompare(a.key))
+      .map((month) => {
+        const sendable = month.rows.filter((r) => r.m.canSend);
+        return {
+          ...month,
+          rows: month.rows.sort((a, b) => a.g.contractNumber.localeCompare(b.g.contractNumber)),
+          charges: month.rows.reduce((n, r) => n + r.m.charges.length, 0),
+          total: month.rows.reduce((t, r) => t + r.m.total, 0),
+          needsReview: month.rows.reduce((n, r) => n + r.m.charges.filter((c) => c.status === "needs_review").length, 0),
+          held: month.rows.reduce((n, r) => n + r.m.charges.filter((c) => c.status === "held").length, 0),
+          sendable,
+        };
+      });
+  }, [visible]);
 
   const discardOldDrafts = async () => {
     setDiscarding(true);
@@ -183,6 +317,20 @@ export function UsageBillingBoard(props: Props) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-md border border-teal-200 bg-white p-0.5" role="group" aria-label="Group by">
+            <span className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground self-center">Group by</span>
+            {(["month", "contract"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={view === mode}
+                onClick={() => changeView(mode)}
+                className={`px-3 py-1 text-xs font-semibold rounded ${view === mode ? "bg-teal-700 text-white" : "text-teal-900 hover:bg-teal-50"}`}
+              >
+                {mode === "month" ? "Month" : "Contract"}
+              </button>
+            ))}
+          </div>
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
@@ -217,6 +365,93 @@ export function UsageBillingBoard(props: Props) {
         <p className="text-sm text-muted-foreground py-8 text-center">
           {search ? `No unbilled usage matches “${search}”.` : "No unbilled usage. Charges you log will appear here, grouped by contract and month."}
         </p>
+      ) : view === "month" ? (
+        <div className="space-y-3">
+          {byMonth.map((month) => {
+            const isCollapsed = collapsedMonths.has(month.key);
+            return (
+              <section key={month.key} className="rounded-md border bg-white">
+                <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => toggle(collapsedMonths, month.key, setCollapsedMonths)}
+                    className="flex items-start gap-2 text-left min-w-0"
+                    aria-expanded={!isCollapsed}
+                  >
+                    {isCollapsed ? <ChevronRight className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />}
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold flex flex-wrap items-center gap-2">
+                        {month.label}
+                        {month.block === "open_month" && <span className="text-xs font-normal text-muted-foreground">still open — send after it ends</span>}
+                        {month.block === "accounting_locked" && <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Locked in accounting</Badge>}
+                        {month.needsReview > 0 && <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">{month.needsReview} need review</Badge>}
+                        {month.held > 0 && <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-800 border-amber-200">{month.held} on hold</Badge>}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {month.sendable.length > 0 ? `${month.sendable.length} invoice${month.sendable.length === 1 ? "" : "s"} ready` : "Nothing ready to send"} · {month.rows.length} contract{month.rows.length === 1 ? "" : "s"} · {month.charges} charge{month.charges === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  </button>
+                  <span className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">{formatCurrency(month.total)}</span>
+                    {canSend && month.sendable.length > 0 && (
+                      <Button
+                        size="sm"
+                        className="h-8 bg-teal-700 hover:bg-teal-800"
+                        onClick={() => setSending(month.sendable.map(({ g, m }) => toInvoice(g, m)))}
+                      >
+                        <Send className="h-3.5 w-3.5 mr-1.5" />Send all {month.sendable.length}
+                      </Button>
+                    )}
+                  </span>
+                </header>
+
+                {!isCollapsed && month.rows.map(({ g, m }) => {
+                  const quotaKey = `${month.key}:${g.contractId}`;
+                  const showQuota = quotaOpen.has(quotaKey);
+                  const quotaCount = m.charges.filter((c) => c.status === "within_quota").length;
+                  return (
+                    <div key={g.contractId} className="border-t">
+                      <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/40 px-4 py-2">
+                        <span className="text-sm font-medium flex flex-wrap items-center gap-2 min-w-0">
+                          <span className="font-mono text-xs text-teal-700">{g.contractNumber}</span>
+                          <span className="truncate">{g.customerName}</span>
+                          {g.ended && <Badge variant="outline" className="text-[10px] text-slate-600 border-slate-300">Contract ended</Badge>}
+                          {routeBadge(g.billingMode)}
+                          {m.alreadyInvoiced && <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-800 border-amber-200">already invoiced ({m.alreadyInvoiced}) — this is extra</Badge>}
+                        </span>
+                        <span className="flex items-center gap-3">
+                          <span className="text-right">
+                            <span className="block text-sm font-semibold tabular-nums">{formatCurrency(m.total)}</span>
+                            {m.subtotal > 0 && <span className="block text-[11px] text-muted-foreground tabular-nums">{formatCurrency(m.subtotal)} + GST</span>}
+                          </span>
+                          {canSend && <SendMonthButton m={m} onSend={() => setSending([toInvoice(g, m)])} />}
+                        </span>
+                      </div>
+
+                      <ul className="divide-y">
+                        {m.charges.filter((c) => c.status !== "within_quota" || showQuota).map((c) => (
+                          <ChargeRow key={c.key} c={c} g={g} canWaive={canWaive} actions={props} />
+                        ))}
+                      </ul>
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-xs">
+                        <button type="button" className="font-medium text-teal-700 hover:text-teal-900" onClick={() => props.onAddCharge(g.contractId)}>
+                          + Add charge to this contract
+                        </button>
+                        {quotaCount > 0 && (
+                          <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" onClick={() => toggle(quotaOpen, quotaKey, setQuotaOpen)}>
+                            <Eye className="h-3 w-3" />{showQuota ? "Hide" : "Show"} within quota, not billed ({quotaCount})
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </section>
+            );
+          })}
+        </div>
       ) : (
         <div className="space-y-3">
           {visible.map((g) => {
@@ -256,91 +491,20 @@ export function UsageBillingBoard(props: Props) {
                     <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/40 px-4 py-2">
                       <span className="text-sm font-medium flex flex-wrap items-center gap-2">
                         {m.label}
-                        {m.block === "open_month" && <span className="text-xs font-normal text-muted-foreground">month still open — send after it ends</span>}
-                        {m.block === "accounting_locked" && <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200">Locked in accounting</Badge>}
-                        {m.alreadyInvoiced && <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-800 border-amber-200">{m.label.split(" ")[0]} already invoiced ({m.alreadyInvoiced}) — this is extra</Badge>}
+                        <MonthStateBadges m={m} />
                       </span>
                       <span className="flex items-center gap-3">
                         <span className="text-right">
                           <span className="block text-sm font-semibold tabular-nums">{formatCurrency(m.total)}</span>
                           {m.subtotal > 0 && <span className="block text-[11px] text-muted-foreground tabular-nums">{formatCurrency(m.subtotal)} + GST</span>}
                         </span>
-                        {canSend && (
-                          <Button
-                            size="sm"
-                            variant={m.canSend ? "default" : "outline"}
-                            className={m.canSend ? "h-8 bg-teal-700 hover:bg-teal-800" : "h-8"}
-                            disabled={!m.canSend}
-                            title={
-                              m.block === "open_month" ? "Can be sent after the month ends"
-                                : m.block === "accounting_locked" ? "This month is locked in accounting"
-                                : m.subtotal <= 0 ? "Nothing billable in this month" : undefined
-                            }
-                            onClick={() => setSending([toInvoice(g, m)])}
-                          >
-                            Review &amp; send
-                          </Button>
-                        )}
+                        {canSend && <SendMonthButton m={m} onSend={() => setSending([toInvoice(g, m)])} />}
                       </span>
                     </div>
 
                     <ul className="divide-y">
                       {m.charges.filter((c) => c.status !== "within_quota" || showQuota).map((c) => (
-                        <li key={c.key} className={`grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-4 gap-y-1 px-4 py-2.5 pl-8 ${c.status === "held" ? "bg-amber-50/60" : ""}`}>
-                          <div className="min-w-0">
-                            <p className={`text-sm truncate ${c.status === "within_quota" ? "text-muted-foreground" : ""}`} title={c.description}>{c.description}</p>
-                            <p className="text-xs text-muted-foreground flex flex-wrap gap-x-1.5">
-                              <span>{SOURCE_LABEL[c.source]}</span>
-                              {c.bookingNumber && <span>· {c.bookingNumber}</span>}
-                              <span>· {formatDate(c.date)}</span>
-                              {c.status === "held" && <span className="text-amber-700 font-medium">· On hold{c.holdReason ? `: ${c.holdReason}` : ""}</span>}
-                              {c.status === "needs_review" && <span className="text-red-600 font-medium">· Over 60 days — needs review, not in total</span>}
-                              {c.status === "within_quota" && <span>· Within quota, not billed</span>}
-                            </p>
-                          </div>
-                          <span className={`text-sm tabular-nums text-right ${c.status === "billable" ? "font-medium" : "text-muted-foreground line-through decoration-muted-foreground/40"}`}>
-                            {formatCurrency(c.amount)}
-                          </span>
-                          <div className="col-span-2 sm:col-span-1 flex items-center justify-end gap-1.5 flex-wrap">
-                            {c.status === "within_quota" ? null : c.status === "held" ? (
-                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => props.onRelease(c, g)}>
-                                <PlayCircle className="mr-1 h-3.5 w-3.5" />Release
-                              </Button>
-                            ) : (
-                              <>
-                                {c.status === "needs_review" && (
-                                  <Button size="sm" className="h-7 text-xs bg-teal-700 hover:bg-teal-800" onClick={() => props.onReview(c, g)}>
-                                    <CheckCircle className="mr-1 h-3.5 w-3.5" />Bill anyway
-                                  </Button>
-                                )}
-                                {canWaive && (
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button size="sm" variant="outline" className="h-7 text-xs">Waive<ChevronDown className="ml-1 h-3 w-3" /></Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                      <DropdownMenuItem onClick={() => props.onWaive(c, g)}><Ban className="mr-2 h-4 w-4" />Waive fully</DropdownMenuItem>
-                                      <DropdownMenuItem onClick={() => props.onReduce(c, g)}><MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)</DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                )}
-                                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => props.onHold(c, g)}>
-                                  <PauseCircle className="mr-1 h-3.5 w-3.5" />Hold
-                                </Button>
-                              </>
-                            )}
-                            {c.source === "manual" && c.status !== "within_quota" && (
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="More actions"><MoreHorizontal className="h-4 w-4" /></Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem onClick={() => props.onEdit(c)}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            )}
-                          </div>
-                        </li>
+                        <ChargeRow key={c.key} c={c} g={g} canWaive={canWaive} actions={props} />
                       ))}
                     </ul>
                   </div>
