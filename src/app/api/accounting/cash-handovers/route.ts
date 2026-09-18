@@ -19,10 +19,11 @@ export async function GET(request: NextRequest) {
   let contractQuery = supabase
     .from("contract_payments")
     .select(
-      "id, payment_number, amount, payment_date, payment_mode, cash_handover_status, collected_by, collected_at, handed_over_to, handed_over_at, handover_confirmed_by, handover_confirmed_at, handover_notes, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), collector:users!contract_payments_collected_by_fkey(id, full_name), handover_receiver:users!contract_payments_handed_over_to_fkey(id, full_name)"
+      "id, payment_number, amount, payment_date, payment_mode, cash_handover_status, collected_by, collected_at, handed_over_to, handed_over_at, handover_confirmed_by, handover_confirmed_at, handover_notes, contract:contracts!contract_payments_contract_id_fkey!inner(id, contract_number, is_test_contract, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), collector:users!contract_payments_collected_by_fkey(id, full_name), handover_receiver:users!contract_payments_handed_over_to_fkey(id, full_name)"
     )
     .eq("payment_mode", "cash")
     .not("cash_handover_status", "is", null)
+    .eq("contract.is_test_contract", false)
     .gte("payment_date", periodStart)
     .lte("payment_date", periodEnd);
 

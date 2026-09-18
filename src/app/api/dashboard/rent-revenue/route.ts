@@ -34,9 +34,12 @@ export async function GET() {
 
   // 2) Revenue billed this month: billing_statements finalized/exported,
   //    period overlapping current month, join to contracts → location_id
+  // contract_id on billing_statements is nullable (case/booking-billed
+  // statements have no contract) — left join + filter in JS below, not
+  // !inner, so those rows aren't silently dropped from revenue.
   const { data: revenueRows } = await admin
     .from("billing_statements")
-    .select("total_amount, contract:contracts(location_id)")
+    .select("total_amount, contract:contracts(location_id, is_test_contract)")
     .in("status", ["finalized", "exported"])
     .lte("period_start", periodEnd)
     .gte("period_end", periodStart);
@@ -58,7 +61,9 @@ export async function GET() {
   // Aggregate revenue by location
   const revenueByLocation: Record<string, number> = {};
   for (const row of revenueRows ?? []) {
-    const locId = (row.contract as { location_id?: string } | null)?.location_id;
+    const contract = row.contract as { location_id?: string; is_test_contract?: boolean } | null;
+    if (contract?.is_test_contract) continue;
+    const locId = contract?.location_id;
     if (!locId) continue;
     revenueByLocation[locId] = (revenueByLocation[locId] ?? 0) + (row.total_amount ?? 0);
   }

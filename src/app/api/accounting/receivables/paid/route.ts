@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getTestContractIds, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 const PAGE_SIZE = 20;
 
@@ -61,6 +62,14 @@ export async function GET(req: NextRequest) {
     .eq("payment_status", "paid")
     .is("voided_at", null)
     .order("updated_at", { ascending: false });
+
+  // Exclude test contracts' fake statements — contract_id is nullable
+  // (case/proposal/aggregator-billed statements have none and must stay).
+  const testContractOrFilter = excludeTestContractsOrFilter(
+    "contract_id",
+    await getTestContractIds(createAdminClient())
+  );
+  if (testContractOrFilter) query = query.or(testContractOrFilter);
 
   if (search) {
     // PostgREST's .or() filter DSL treats "," and "(" / ")" as syntax —

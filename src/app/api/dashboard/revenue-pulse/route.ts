@@ -42,15 +42,17 @@ export async function GET(request: NextRequest) {
 
   const contractsThisQ = adminSupabase
     .from("contract_payments")
-    .select("amount, payment_date, status, contract:contracts(lead:leads(location_id))")
+    .select("amount, payment_date, status, contract:contracts!inner(lead:leads(location_id), is_test_contract)")
     .eq("status", "verified")
+    .eq("contract.is_test_contract", false)
     .gte("payment_date", fmt(startOfMonth))
     .lte("payment_date", fmt(now));
 
   const contractsLastQ = adminSupabase
     .from("contract_payments")
-    .select("amount, payment_date, status, contract:contracts(lead:leads(location_id))")
+    .select("amount, payment_date, status, contract:contracts!inner(lead:leads(location_id), is_test_contract)")
     .eq("status", "verified")
+    .eq("contract.is_test_contract", false)
     .gte("payment_date", fmt(startOfLastMonth))
     .lte("payment_date", fmt(sameDayLastMonth));
 

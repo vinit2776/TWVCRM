@@ -240,7 +240,8 @@ export async function buildBillingReconciliationReport(
   const { data: baseContracts } = await supabase
     .from("contracts")
     .select(CONTRACT_SELECT)
-    .in("status", BILLABLE_STATUSES);
+    .in("status", BILLABLE_STATUSES)
+    .eq("is_test_contract", false);
 
   // ── 2. Every unpaid/partial statement, ANY period, ANY contract status ───
   // Drives two things: which extra (non-billable-status) contracts to pull
@@ -264,7 +265,8 @@ export async function buildBillingReconciliationReport(
     const { data } = await supabase
       .from("contracts")
       .select(CONTRACT_SELECT)
-      .in("id", extraContractIds);
+      .in("id", extraContractIds)
+      .eq("is_test_contract", false);
     extraContracts = (data ?? []) as unknown as ContractRow[];
   }
 

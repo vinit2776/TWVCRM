@@ -31,7 +31,7 @@ export async function GET() {
   const { data, error } = await adminSupabase
     .from("service_usage_records")
     .select(
-      "id, contract_id, service_id, period_year, period_month, quantity_used, quota_snapshot, overage_quantity, amount, total_with_gst, billing_statement_id, contract:contracts(contract_number, lead:leads(first_name, last_name, company)), service:service_catalog(name, unit_label)"
+      "id, contract_id, service_id, period_year, period_month, quantity_used, quota_snapshot, overage_quantity, amount, total_with_gst, billing_statement_id, contract:contracts(contract_number, is_test_contract, lead:leads(first_name, last_name, company)), service:service_catalog(name, unit_label)"
     )
     .eq("period_year", year)
     .eq("period_month", month)
@@ -48,12 +48,13 @@ export async function GET() {
     total_with_gst: number | null;
     contract: {
       contract_number: string | null;
+      is_test_contract: boolean | null;
       lead: { first_name: string; last_name: string; company: string | null } | null;
     } | null;
     service: { name: string; unit_label: string } | null;
   };
 
-  const rows = (data ?? []) as unknown as Row[];
+  const rows = ((data ?? []) as unknown as Row[]).filter((r) => !r.contract?.is_test_contract);
 
   const items = rows
     .filter((r) => r.contract_id != null)

@@ -50,7 +50,8 @@ export async function GET(request: NextRequest) {
       .from("contracts")
       .select("lead_id, total_amount, status")
       .in("lead_id", wonLeadIds)
-      .in("status", ["active", "renewed"]);
+      .in("status", ["active", "renewed"])
+      .eq("is_test_contract", false);
     contractsRev = new Map();
     for (const c of contracts ?? []) {
       const id = c.lead_id as string;

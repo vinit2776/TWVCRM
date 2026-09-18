@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
       id, gst_invoice_number, subtotal, tax_percentage,
       cgst_amount, sgst_amount, igst_amount, total_amount, payment_date,
       contract:contracts!billing_statements_contract_id_fkey(
-        id, contract_number,
+        id, contract_number, is_test_contract,
         lead:leads!contracts_lead_id_fkey(
           first_name, last_name, company, gst_number, state
         )
@@ -72,6 +72,12 @@ export async function GET(request: NextRequest) {
     .gte("payment_date", dateFrom)
     .lte("payment_date", dateTo)
     .order("payment_date", { ascending: true });
+
+  // Exclude test contracts' fake GST activity (contract_id is nullable —
+  // proforma/case-billed statements have none and must stay included).
+  const visibleBillings = (billings ?? []).filter(
+    (b) => !(b.contract as { is_test_contract?: boolean } | null)?.is_test_contract
+  );
 
   // ── Build unified line items ──────────────────────────────────────────────
   type GstLine = {
@@ -121,7 +127,7 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  for (const b of billings || []) {
+  for (const b of visibleBillings) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract = b.contract as any;
     const lead = contract?.lead;

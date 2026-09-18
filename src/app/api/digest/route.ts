@@ -6,6 +6,7 @@ import { paymentCredit, balanceDue } from "@/lib/settlement";
 import { summarizeAuditEvent } from "@/lib/audit-labels";
 import { queryEntityDef } from "@/lib/queries/registry";
 import { loadEntitySummaries, entityKey, entityLabel } from "@/lib/queries/server";
+import { getTestContractIds, testContractIdsFilter, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 export const maxDuration = 60;
 
@@ -187,6 +188,19 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
   const rangeStart = `${fromDate}T00:00:00`;
   const rangeEnd = `${toDate}T23:59:59`;
 
+  // contract_payments.contract_id is NOT NULL, so excluding test contracts'
+  // fake collections here is a plain not-in filter.
+  const testContractIds = await getTestContractIds(supabase);
+  const testContractFilter = testContractIdsFilter(testContractIds);
+  let testStatementFilter: string | null = null;
+  if (testContractFilter) {
+    const { data: testStatements } = await supabase
+      .from("billing_statements")
+      .select("id")
+      .in("contract_id", testContractIds);
+    testStatementFilter = testContractIdsFilter((testStatements ?? []).map((s: { id: string }) => s.id));
+  }
+
   const [
     collections,
     billingCollections,
@@ -209,17 +223,25 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     // (the receipt date the recorder enters, which can be backdated) — so a
     // manually-entered payment always surfaces in the digest for the day it
     // was actually logged, even if it's for an earlier receipt date.
-    supabase
-      .from("contract_payments")
-      .select("amount")
-      .eq("status", "verified")
-      .gte("created_at", rangeStart)
-      .lte("created_at", rangeEnd),
-    supabase
-      .from("billing_payments")
-      .select("amount")
-      .gte("created_at", rangeStart)
-      .lte("created_at", rangeEnd),
+    (() => {
+      let q = supabase
+        .from("contract_payments")
+        .select("amount")
+        .eq("status", "verified")
+        .gte("created_at", rangeStart)
+        .lte("created_at", rangeEnd);
+      if (testContractFilter) q = q.not("contract_id", "in", testContractFilter);
+      return q;
+    })(),
+    (() => {
+      let q = supabase
+        .from("billing_payments")
+        .select("amount")
+        .gte("created_at", rangeStart)
+        .lte("created_at", rangeEnd);
+      if (testStatementFilter) q = q.not("billing_statement_id", "in", testStatementFilter);
+      return q;
+    })(),
     supabase
       .from("booking_payments")
       .select("amount")
@@ -277,6 +299,7 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
       .from("contracts")
       .select("id", { count: "exact", head: true })
       .eq("status", "active")
+      .eq("is_test_contract", false)
       .gte("created_at", rangeStart)
       .lte("created_at", rangeEnd),
     supabase
@@ -349,13 +372,14 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
   const [paymentsRes, billingPaymentsRes, leadsRes, bookingsRes] = await Promise.all([
     supabase
       .from("contract_payments")
-      .select("amount, contract:contracts!contract_payments_contract_id_fkey(location_id)")
+      .select("amount, contract:contracts!contract_payments_contract_id_fkey!inner(location_id, is_test_contract)")
       .eq("status", "verified")
+      .eq("contract.is_test_contract", false)
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
     supabase
       .from("billing_payments")
-      .select("amount, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(contract:contracts!billing_statements_contract_id_fkey(location_id))")
+      .select("amount, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(contract:contracts!billing_statements_contract_id_fkey(location_id, is_test_contract))")
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
     supabase
@@ -396,7 +420,7 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
     );
     const locBillingPayments = (billingPaymentsRes.data || []).filter(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (p: any) => p.billing_statement?.contract?.location_id === loc.id
+      (p: any) => p.billing_statement?.contract?.location_id === loc.id && !p.billing_statement?.contract?.is_test_contract
     );
     const colTotal =
       locPayments.reduce(
@@ -490,7 +514,7 @@ async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ tra
     supabase
       .from("contract_payments")
       .select(`amount, payment_mode, created_at, contract:contracts!contract_payments_contract_id_fkey(
-        contract_number,
+        contract_number, is_test_contract,
         lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
       )`)
       .eq("status", "verified")
@@ -500,7 +524,7 @@ async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ tra
       .from("billing_payments")
       .select(`amount, payment_mode, created_at, billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
         statement_number,
-        contract:contracts!billing_statements_contract_id_fkey(contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
+        contract:contracts!billing_statements_contract_id_fkey(contract_number, is_test_contract, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
         booking:bookings!billing_statements_booking_id_fkey(booking_number, guest_name, guest_company, lead:leads!bookings_lead_id_fkey(first_name, last_name, company)),
         proposal:proposals!billing_statements_proposal_id_fkey(proposal_number, lead:leads!proposals_lead_id_fkey(first_name, last_name, company)),
         invoice:proforma_invoices!billing_statements_invoice_id_fkey(invoice_number, lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)),
@@ -519,10 +543,11 @@ async function fetchRevenueBreakdown(supabase: any, date: string): Promise<{ tra
       .lte("created_at", dayEnd),
   ]);
 
+  // Exclude test contracts' fake payments from the itemized breakdown.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const contractRows = (cp.data || []) as any[];
+  const contractRows = ((cp.data || []) as any[]).filter((r) => !r.contract?.is_test_contract);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const billingRows = (bp.data || []) as any[];
+  const billingRows = ((bp.data || []) as any[]).filter((r) => !r.billing_statement?.contract?.is_test_contract);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookingRows = (bkp.data || []) as any[];
 
@@ -691,6 +716,7 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .from("contracts")
       .select("id", { count: "exact", head: true })
       .eq("status", "active")
+      .eq("is_test_contract", false)
       .lte("end_date", thirtyDaysOut)
       .gte("end_date", date),
     supabase
@@ -790,7 +816,8 @@ async function fetchPortfolio(supabase: any): Promise<Portfolio> {
   const { data: contracts } = await supabase
     .from("contracts")
     .select("subtotal, total_amount")
-    .in("status", ["active", "renewal_in_progress"]);
+    .in("status", ["active", "renewal_in_progress"])
+    .eq("is_test_contract", false);
 
   const rows = contracts || [];
   return {
@@ -831,11 +858,19 @@ async function fetchReceivablesAging(supabase: any, date: string): Promise<Recei
   // and must not appear as overdue; they are tracked separately as "pending finalization".
   // "exported" statements are excluded: GST generation requires payment_status="paid",
   // so exported always means fully settled.
-  const { data: rows } = await supabase
+  // Exclude test contracts' fake statements (contract_id is nullable —
+  // case/proposal/aggregator-billed statements have none and must stay).
+  const testContractOrFilter = excludeTestContractsOrFilter(
+    "contract_id",
+    await getTestContractIds(supabase)
+  );
+  let agingQuery = supabase
     .from("billing_statements")
-    .select("id, total_amount, period_end, status, payment_status")
+    .select("id, total_amount, period_end, status, payment_status, contract_id")
     .in("status", ["draft", "finalized"])
     .neq("payment_status", "paid");
+  if (testContractOrFilter) agingQuery = agingQuery.or(testContractOrFilter);
+  const { data: rows } = await agingQuery;
 
   // Aging measures the outstanding balance, not the full invoice total —
   // partial payments (including TDS deductions) reduce what's owed. Same
@@ -982,6 +1017,7 @@ async function fetchExtended(supabase: any, date: string): Promise<ExtendedData>
     supabase
       .from("contracts")
       .select("contract_number, title, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
+      .eq("is_test_contract", false)
       .gte("activated_at", dayStart)
       .lte("activated_at", dayEnd),
     // Pipeline funnel counts

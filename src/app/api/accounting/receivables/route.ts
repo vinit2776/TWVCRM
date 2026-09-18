@@ -130,7 +130,7 @@ export async function GET(_req: NextRequest) {
       last_reminder_sent_at, reminder_count, voided_at, created_at,
       gst_invoice_number, pi_cancelled_at, accounted,
       contract:contracts!billing_statements_contract_id_fkey(
-        id, contract_number, title, billing_mode,
+        id, contract_number, title, billing_mode, is_test_contract,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       ),
       proposal:proposals!billing_statements_proposal_id_fkey(
@@ -155,7 +155,12 @@ export async function GET(_req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const statementIds = (statements || []).map((s) => s.id as string);
+  // Exclude test contracts' fake statements from the receivables list/totals.
+  const visibleStatements = (statements || []).filter(
+    (s) => !(s.contract as { is_test_contract?: boolean } | null)?.is_test_contract
+  );
+
+  const statementIds = visibleStatements.map((s) => s.id as string);
   // One round-trip to sum payments per statement instead of N selects.
   // Paid-to-date includes TDS (same settlement definition as the payment
   // route) — a TDS-bearing partial payment must not inflate balance_due.
@@ -247,7 +252,7 @@ export async function GET(_req: NextRequest) {
   const todayIst = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
   const todayMs = Date.parse(todayIst + "T00:00:00Z");
 
-  const rows = (statements || []).map((s) => {
+  const rows = visibleStatements.map((s) => {
     const paid = paidByStatement.get(s.id as string) || 0;
     const balance = balanceDue(s.total_amount as number, paid);
     let daysOverdue: number | null = null;

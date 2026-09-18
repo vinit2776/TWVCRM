@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getTestContractIds, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 const PAGE_SIZE = 20;
 
@@ -59,6 +60,14 @@ export async function GET(req: NextRequest) {
     .eq("payment_status", "written_off")
     .order("written_off_at", { ascending: false });
 
+  // Exclude test contracts' fake statements — contract_id is nullable
+  // (case/proposal/aggregator-billed statements have none and must stay).
+  const testContractOrFilter = excludeTestContractsOrFilter(
+    "contract_id",
+    await getTestContractIds(createAdminClient())
+  );
+  if (testContractOrFilter) query = query.or(testContractOrFilter);
+
   if (search) {
     // PostgREST's .or() filter DSL treats "," and "(" / ")" as syntax —
     // strip them out of free-typed search text so it can't be misread as
@@ -106,10 +115,12 @@ export async function GET(req: NextRequest) {
 
   // Total written off across every matching row, not just this page — the
   // whole point of the tab is a reconciliation total, not just a paged list.
-  const { data: totalRows } = await supabase
+  let totalQuery = supabase
     .from("billing_statements")
     .select("written_off_amount")
     .eq("payment_status", "written_off");
+  if (testContractOrFilter) totalQuery = totalQuery.or(testContractOrFilter);
+  const { data: totalRows } = await totalQuery;
   const totalWrittenOff = (totalRows || []).reduce((s, r) => s + Number(r.written_off_amount || 0), 0);
 
   return NextResponse.json({

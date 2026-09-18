@@ -567,6 +567,8 @@ export interface Contract {
   location?: Location;
   title: string;
   status: ContractStatus;
+  /** Marks a contract created for internal testing so financial reports/dashboards can exclude it. */
+  is_test_contract?: boolean;
   items: LineItem[];
   subtotal: number;
   tax_percentage: number;

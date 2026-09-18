@@ -62,7 +62,8 @@ export async function GET(
   const { data: locationContracts, error: contractsErr } = await supabase
     .from("contracts")
     .select("id, contract_number, lead_id, total_amount, activated_at")
-    .eq("location_id", locationId);
+    .eq("location_id", locationId)
+    .eq("is_test_contract", false);
   if (contractsErr) return NextResponse.json({ error: contractsErr.message }, { status: 500 });
   const contracts = locationContracts ?? [];
   const contractIds = contracts.map((c) => c.id as string);

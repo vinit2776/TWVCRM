@@ -36,7 +36,8 @@ export async function GET(request: NextRequest) {
         "id, contract_number, title, status, start_date, seats, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)"
       )
       .lte("start_date", periodEnd)
-      .in("status", ["active", "renewal_in_progress"]),
+      .in("status", ["active", "renewal_in_progress"])
+      .eq("is_test_contract", false),
     adminSupabase
       .from("booking_payments")
       .select("*, booking:bookings!booking_payments_booking_id_fkey(guest_name, guest_company, customer_type)")

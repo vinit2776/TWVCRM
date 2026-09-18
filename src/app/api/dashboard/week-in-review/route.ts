@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getTestContractIds, testContractIdsFilter, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 /**
  * GET /api/dashboard/week-in-review
@@ -29,6 +30,20 @@ export async function GET() {
     .toISOString()
     .slice(0, 10);
   const today = new Date().toISOString().slice(0, 10);
+
+  // Exclude test contracts' fake billing activity from the billing counts below.
+  const testContractIds = await getTestContractIds(admin);
+  // contract_id is nullable on billing_statements (case/booking-billed
+  // statements have none) — use the OR-based filter so those stay included.
+  const testContractOrFilter = excludeTestContractsOrFilter("contract_id", testContractIds);
+  let testStatementFilter: string | null = null;
+  if (testContractIds.length > 0) {
+    const { data: testStatements } = await admin
+      .from("billing_statements")
+      .select("id")
+      .in("contract_id", testContractIds);
+    testStatementFilter = testContractIdsFilter((testStatements ?? []).map((s) => s.id as string));
+  }
 
   const [
     // Sales
@@ -71,15 +86,27 @@ export async function GET() {
     // Sales: proposals accepted in last 7 days
     admin.from("proposals").select("*", { count: "exact", head: true }).eq("status", "accepted").gte("updated_at", sevenDaysAgo),
     // Sales: contracts activated in last 7 days
-    admin.from("contracts").select("*", { count: "exact", head: true }).eq("status", "active").gte("activated_at", sevenDaysAgo),
+    admin.from("contracts").select("*", { count: "exact", head: true }).eq("status", "active").eq("is_test_contract", false).gte("activated_at", sevenDaysAgo),
     // Sales: active contracts expiring in 30 days
-    admin.from("contracts").select("*", { count: "exact", head: true }).eq("status", "active").gte("end_date", today).lte("end_date", thirtyDaysFromNow),
+    admin.from("contracts").select("*", { count: "exact", head: true }).eq("status", "active").eq("is_test_contract", false).gte("end_date", today).lte("end_date", thirtyDaysFromNow),
     // Billing: statements created in last 7 days
-    admin.from("billing_statements").select("*", { count: "exact", head: true }).gte("created_at", sevenDaysAgo),
+    (() => {
+      let q = admin.from("billing_statements").select("*", { count: "exact", head: true }).gte("created_at", sevenDaysAgo);
+      if (testContractOrFilter) q = q.or(testContractOrFilter);
+      return q;
+    })(),
     // Billing: payments collected in last 7 days
-    admin.from("billing_payments").select("amount").gte("created_at", sevenDaysAgo),
+    (() => {
+      let q = admin.from("billing_payments").select("amount").gte("created_at", sevenDaysAgo);
+      if (testStatementFilter) q = q.not("billing_statement_id", "in", testStatementFilter);
+      return q;
+    })(),
     // Billing: overdue statements (unpaid and past due date)
-    admin.from("billing_statements").select("*", { count: "exact", head: true }).eq("payment_status", "unpaid").lt("due_date", today).not("status", "eq", "voided"),
+    (() => {
+      let q = admin.from("billing_statements").select("*", { count: "exact", head: true }).eq("payment_status", "unpaid").lt("due_date", today).not("status", "eq", "voided");
+      if (testContractOrFilter) q = q.or(testContractOrFilter);
+      return q;
+    })(),
     // Billing: vendor bills approved in last 7 days
     admin.from("vendor_bills").select("*", { count: "exact", head: true }).eq("approval_status", "approved").gte("updated_at", sevenDaysAgo),
     // Billing: vendor payments made in last 7 days

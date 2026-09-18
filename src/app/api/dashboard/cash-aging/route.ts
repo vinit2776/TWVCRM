@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { getTestContractIds, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 /**
  * GET /api/dashboard/cash-aging
@@ -53,17 +54,28 @@ export async function GET() {
     return buckets;
   }
 
+  const testContractOrFilter = excludeTestContractsOrFilter(
+    "contract_id",
+    await getTestContractIds(adminSupabase)
+  );
+
   const [
     { data: statements },
     { data: bills },
   ] = await Promise.all([
     // Receivables: finalized billing statements not fully paid.
-    // Use period_end as reference for aging.
-    adminSupabase
-      .from("billing_statements")
-      .select("id, total_amount, period_end, payment_status, status")
-      .eq("status", "finalized")
-      .neq("payment_status", "paid"),
+    // Use period_end as reference for aging. Excludes test contracts' fake
+    // statements from the receivables total (contract_id is nullable —
+    // case/booking-billed statements must stay included).
+    (() => {
+      let q = adminSupabase
+        .from("billing_statements")
+        .select("id, total_amount, period_end, payment_status, status, contract_id")
+        .eq("status", "finalized")
+        .neq("payment_status", "paid");
+      if (testContractOrFilter) q = q.or(testContractOrFilter);
+      return q;
+    })(),
 
     // Payables: vendor bills unpaid / partial. Use due_date if present, fall
     // back to invoice_date. Scoped to approval_status = 'approved' — a

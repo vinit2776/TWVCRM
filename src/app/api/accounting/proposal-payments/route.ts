@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
       payment_status, payment_date, gst_invoice_status,
       accounted, accounted_at, accounted_by,
       contract:contracts!billing_statements_contract_id_fkey(
-        id, contract_number,
+        id, contract_number, is_test_contract,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, gst_number, state)
       )
     `)
@@ -72,20 +72,26 @@ export async function GET(request: NextRequest) {
     .lte("payment_date", dateTo)
     .order("payment_date", { ascending: true });
 
+  // Exclude test contracts' fake payments (contract_id is nullable —
+  // proforma/case-billed statements have none and must stay included).
+  const visibleBillings = (billings ?? []).filter(
+    (b) => !(b.contract as { is_test_contract?: boolean } | null)?.is_test_contract
+  );
+
   return NextResponse.json({
     month: month || new Date().toISOString().slice(0, 7),
     date_from: dateFrom,
     date_to: dateTo,
     proformas: proformas || [],
-    billings: billings || [],
+    billings: visibleBillings,
     summary: {
       proforma_count: (proformas || []).length,
       proforma_total: (proformas || []).reduce((s, p) => s + Number(p.total_amount || 0), 0),
-      billing_count: (billings || []).length,
-      billing_total: (billings || []).reduce((s, b) => s + Number(b.total_amount || 0), 0),
+      billing_count: visibleBillings.length,
+      billing_total: visibleBillings.reduce((s, b) => s + Number(b.total_amount || 0), 0),
       unaccounted_count:
         (proformas || []).filter((p) => !p.accounted).length +
-        (billings || []).filter((b) => !b.accounted).length,
+        visibleBillings.filter((b) => !b.accounted).length,
     },
   });
 }
