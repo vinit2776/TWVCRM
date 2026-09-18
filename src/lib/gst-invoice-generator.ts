@@ -285,25 +285,47 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   y = detailY + (detailY > 32 ? 5 : 6);
 
   // ── Seller / Buyer box ──
+  // Row heights are derived from the actual wrapped line count of each address
+  // (rather than hardcoded offsets) so a long recipient address can't collide
+  // with the GSTIN/PAN/State lines drawn below it.
+  doc.setFontSize(8);
+  const LINE_H = 4;
+  const sellerAddr = doc.splitTextToSize(SELLER.address, pageWidth / 2 - 20);
+  const buyerAddr = data.buyerAddress ? doc.splitTextToSize(data.buyerAddress, pageWidth / 2 - 20) : [];
+
+  let sellerBottom = y + 10 + 2 * LINE_H + sellerAddr.length * LINE_H; // name + brand + address
+  sellerBottom += LINE_H; // GSTIN
+  sellerBottom += LINE_H; // State
+
+  let buyerBottom = y + 10 + LINE_H; // name
+  buyerBottom += buyerAddr.length * LINE_H;
+  if (data.buyerGstin || data.buyerPan) buyerBottom += LINE_H;
+  if (data.buyerState) buyerBottom += LINE_H;
+  buyerBottom += LINE_H; // Place of Supply
+
+  const boxHeight = Math.max(36, Math.max(sellerBottom, buyerBottom) - y + 4);
+
   doc.setDrawColor(200, 200, 200);
   doc.setLineWidth(0.3);
-  doc.rect(14, y, pageWidth - 28, 36);
-  doc.line(pageWidth / 2, y, pageWidth / 2, y + 36);
+  doc.rect(14, y, pageWidth - 28, boxHeight);
+  doc.line(pageWidth / 2, y, pageWidth / 2, y + boxHeight);
 
   // Service Provider (left)
-  doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
   doc.text("SERVICE PROVIDER", 16, y + 5);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
-  doc.text(SELLER.name, 16, y + 10);
-  doc.text(SELLER.brand, 16, y + 14);
-  const sellerAddr = doc.splitTextToSize(SELLER.address, pageWidth / 2 - 20);
-  doc.text(sellerAddr, 16, y + 18);
-  doc.text(`GSTIN: ${SELLER.gstin}`, 16, y + 26);
-  doc.text(`State: ${SELLER.state} (${SELLER.stateCode})`, 16, y + 30);
+  let sy = y + 10;
+  doc.text(SELLER.name, 16, sy);
+  sy += LINE_H;
+  doc.text(SELLER.brand, 16, sy);
+  sy += LINE_H;
+  doc.text(sellerAddr, 16, sy);
+  sy += sellerAddr.length * LINE_H;
+  doc.text(`GSTIN: ${SELLER.gstin}`, 16, sy);
+  sy += LINE_H;
+  doc.text(`State: ${SELLER.state} (${SELLER.stateCode})`, 16, sy);
 
   // Service Recipient (right)
   const bx = pageWidth / 2 + 4;
@@ -312,22 +334,28 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text("SERVICE RECIPIENT", bx, y + 5);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(60, 60, 60);
-  doc.text(data.buyerName, bx, y + 10);
+  let by = y + 10;
+  doc.text(data.buyerName, bx, by);
+  by += LINE_H;
   if (data.buyerAddress) {
-    const buyerAddr = doc.splitTextToSize(data.buyerAddress, pageWidth / 2 - 20);
-    doc.text(buyerAddr, bx, y + 14);
+    doc.text(buyerAddr, bx, by);
+    by += buyerAddr.length * LINE_H;
   }
   if (data.buyerGstin || data.buyerPan) {
     const idParts = [
       data.buyerGstin ? `GSTIN: ${data.buyerGstin}` : null,
       data.buyerPan ? `PAN: ${data.buyerPan}` : null,
     ].filter(Boolean);
-    doc.text(idParts.join("   "), bx, y + 22);
+    doc.text(idParts.join("   "), bx, by);
+    by += LINE_H;
   }
-  if (data.buyerState) doc.text(`State: ${data.buyerState}${data.buyerStateCode ? ` (${data.buyerStateCode})` : ""}`, bx, y + 26);
-  doc.text(`Place of Supply: ${data.isInterstate ? (data.buyerState || "Other") : SELLER.state}`, bx, y + 30);
+  if (data.buyerState) {
+    doc.text(`State: ${data.buyerState}${data.buyerStateCode ? ` (${data.buyerStateCode})` : ""}`, bx, by);
+    by += LINE_H;
+  }
+  doc.text(`Place of Supply: ${data.isInterstate ? (data.buyerState || "Other") : SELLER.state}`, bx, by);
 
-  y += 40;
+  y += boxHeight + 4;
 
   // ── Supply details ──
   doc.setFontSize(8);
