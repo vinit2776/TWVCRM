@@ -183,8 +183,8 @@ export function MaterialRequestQuotations({ prId, prStatus, onChange }: Props) {
       <CardContent className="space-y-3">
         {isMissingForApproval && (
           <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            ⚠ No quotations attached. Approval is blocked until at least one estimate / bill
-            is uploaded.
+            ⚠ No quotations attached. The approver will see a warning — consider uploading an
+            estimate or bill first.
           </div>
         )}
         {loading ? (

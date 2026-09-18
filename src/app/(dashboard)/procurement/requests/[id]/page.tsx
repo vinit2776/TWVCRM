@@ -276,7 +276,7 @@ export default function PurchaseRequestDetailPage() {
   // Dialog state
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
-  // Admin-only override for approving without a vendor quotation attached (repeat / pre-approved orders)
+  // Optional note when approving without a vendor quotation attached — advisory, not a gate
   const [quotationOverrideReason, setQuotationOverrideReason] = useState("");
   // Edit-prices-and-resubmit (only available on rejected MRs)
   const [editPricesOpen, setEditPricesOpen] = useState(false);
@@ -1442,27 +1442,21 @@ export default function PurchaseRequestDetailPage() {
               You are about to approve <strong>{pr.pr_number}</strong> for{" "}
               <strong>{formatCurrency(pr.total_estimated_amount)}</strong>.
             </p>
-            {/* Quotation gate — no vendor quotation attached */}
+            {/* Quotation warning — no vendor quotation attached; advisory only, doesn't block approval */}
             {hasNoQuotations && (
-              userRole === "admin" ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-amber-800">
-                    No vendor quotation attached. As admin you can approve anyway — provide a reason
-                    (e.g. repeat / pre-approved order at an already-agreed price).
-                  </p>
-                  <Textarea
-                    value={quotationOverrideReason}
-                    onChange={(e) => setQuotationOverrideReason(e.target.value)}
-                    placeholder="Reason for approving without a quotation…"
-                    rows={2}
-                    className="bg-white"
-                  />
-                </div>
-              ) : (
-                <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-                  ⛔ No vendor quotation attached. Only admin can approve without one.
-                </div>
-              )
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-800">
+                  ⚠ No vendor quotation attached. You can still approve — for new or unusual purchases,
+                  consider asking the requester to upload one first.
+                </p>
+                <Textarea
+                  value={quotationOverrideReason}
+                  onChange={(e) => setQuotationOverrideReason(e.target.value)}
+                  placeholder="Note for approving without a quotation (optional)…"
+                  rows={2}
+                  className="bg-white"
+                />
+              </div>
             )}
             {/* Budget check panel — approvers only (admin / manager) */}
             {isApprover && budgetLoading && (
@@ -1574,7 +1568,7 @@ export default function PurchaseRequestDetailPage() {
               onClick={() =>
                 performAction(
                   "approve",
-                  hasNoQuotations && userRole === "admin"
+                  hasNoQuotations && quotationOverrideReason.trim()
                     ? { quotation_override_reason: quotationOverrideReason.trim() }
                     : undefined
                 )
@@ -1582,9 +1576,7 @@ export default function PurchaseRequestDetailPage() {
               disabled={
                 actionLoading ||
                 (budgetCheck?.is_over_budget === true && userRole === "manager") ||
-                (budgetCheck?.center?.is_over_budget === true && userRole === "manager") ||
-                (hasNoQuotations && userRole !== "admin") ||
-                (hasNoQuotations && userRole === "admin" && !quotationOverrideReason.trim())
+                (budgetCheck?.center?.is_over_budget === true && userRole === "manager")
               }
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle className="h-4 w-4 mr-1" />}

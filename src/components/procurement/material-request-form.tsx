@@ -258,7 +258,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const [showPreGstConfirm, setShowPreGstConfirm] = useState(false);
   const [preGstAcked, setPreGstAcked] = useState(false);
   // Soft gate — appears on submit when no quotation is attached (e.g. repeat / pre-approved orders).
-  // Submitting without one is allowed; approval then requires an admin override.
+  // Submitting without one is allowed; the approver just sees an advisory warning, not a block.
   const [showQuotationWarning, setShowQuotationWarning] = useState(false);
   const userRole = user?.role ?? "";
   const canSeePrices = ["admin", "manager"].includes(userRole);
@@ -697,7 +697,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     const err = validate();
     if (err) { toast.error(err); return; }
     // Soft gate: warn (don't block) when no quotation is attached — repeat / pre-approved
-    // orders can still be submitted; approval will then require an admin override.
+    // orders can still be submitted; approval will just show the approver an advisory warning.
     if (validQuotations.length < 1) {
       setShowQuotationWarning(true);
       return;
@@ -1464,8 +1464,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
               Recommended — attach at least one vendor quotation, estimate, or bill so the approver
-              has context. PDF / JPG / PNG / WEBP / HEIC (max 50 MB each). Repeat / pre-approved
-              orders can be submitted without one — approval will then need an admin override.
+              has context. PDF / JPG / PNG / WEBP / HEIC (max 50 MB each). You can submit without
+              one — the approver will just see a warning.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={addQuotation}>
@@ -1480,8 +1480,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                 No quotations attached yet
               </p>
               <p className="text-xs text-amber-700 mt-1">
-                Recommended for new or unusual purchases. Repeat / pre-approved orders can skip
-                this — an admin will need to override at approval.
+                Recommended for new or unusual purchases. You can still submit — the approver will
+                see a warning instead of a block.
               </p>
               <Button
                 variant="outline"
@@ -1723,8 +1723,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </DialogTitle>
             <DialogDescription>
               This request has no vendor quotation or estimate attached. You can still submit it —
-              for repeat or pre-approved orders, an admin can approve without one by providing an
-              override reason. New or unusual purchases should have a quotation attached.
+              the approver will see a warning, not a block. New or unusual purchases should have a
+              quotation attached.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex-col sm:flex-row gap-2">
