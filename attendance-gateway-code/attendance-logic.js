@@ -77,6 +77,14 @@ function createAttendanceLogic(db) {
     const punches = await getPunchesForDay(employeeId, dateStr);
 
     if (punches.length === 0) {
+      // An employee's own join date is authoritative for "no attendance obligation
+      // yet" — checked before anything else, same treatment as the pre-LAUNCH_DATE
+      // fallback below: no punches before someone was even hired isn't Absent. Without
+      // this, every employee joining after LAUNCH_DATE showed a string of false
+      // Absent days stretching back to LAUNCH_DATE the moment they were registered.
+      if (employee.date_joined && dateStr < employee.date_joined) {
+        return { date: dateStr, status: 'Present', checkIn: null, checkOut: null, hoursWorked: 0, breakMinutes: 0, onBreak: false, breakStart: null };
+      }
       // Schedule facts (holiday / week off / approved leave) apply whether the date is
       // in the past or future — only fall back to Upcoming/Absent once those are ruled out.
       const holiday = await getHoliday(dateStr);

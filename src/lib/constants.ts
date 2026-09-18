@@ -1829,7 +1829,7 @@ export const TICKET_STATUS_COLORS: Record<string, string> = {
 // ==========================================
 
 export const PROCUREMENT_APPROVAL_THRESHOLDS = {
-  ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
+  ADMIN_REQUIRED_ABOVE: 20000, // INR — PRs above this amount require admin approval
 };
 
 export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"] as const;

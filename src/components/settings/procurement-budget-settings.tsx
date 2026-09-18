@@ -857,6 +857,39 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const isAdmin = userRole === "admin";
   const currentFY = getCurrentFY();
 
+  // MR approval threshold — global, not scoped to company/month/year.
+  const [approvalThreshold, setApprovalThreshold] = useState("");
+  const [thresholdLoading, setThresholdLoading] = useState(true);
+  const [savingThreshold, setSavingThreshold] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/procurement/settings")
+      .then((r) => r.json())
+      .then((j) => setApprovalThreshold(String(j.data?.approval_threshold ?? "")))
+      .finally(() => setThresholdLoading(false));
+  }, []);
+
+  const handleSaveThreshold = async () => {
+    const threshold = parseInt(approvalThreshold, 10);
+    if (isNaN(threshold) || threshold < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingThreshold(true);
+    const res = await fetch("/api/procurement/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threshold }),
+    });
+    if (res.ok) {
+      toast.success("Approval threshold updated");
+    } else {
+      const json = await res.json().catch(() => ({}));
+      toast.error(json.error || "Failed to update threshold");
+    }
+    setSavingThreshold(false);
+  };
+
   // Companies — default to the first (Workvilla) once loaded, since this page
   // has no combined view and always needs exactly one company selected.
   useEffect(() => {
@@ -1009,6 +1042,88 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
 
   return (
     <div className="space-y-6">
+      {/* ── MR Approval Thresholds — global, not scoped to company/month/year ── */}
+      <Card>
+        <CardContent className="pt-4 pb-4 space-y-4">
+          <div>
+            <h3 className="font-semibold text-base">Material Request Approval Thresholds</h3>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Who can approve a material request on their own, and how large it can be before it needs the next role up.
+            </p>
+          </div>
+
+          {thresholdLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left text-xs text-muted-foreground font-medium py-2">Role</th>
+                    <th className="text-left text-xs text-muted-foreground font-medium py-2 w-28">Can approve</th>
+                    <th className="text-right text-xs text-muted-foreground font-medium py-2 w-48">Threshold</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b">
+                    <td className="py-2.5 font-medium">Admin</td>
+                    <td className="py-2.5">
+                      <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 px-1.5">Yes</Badge>
+                    </td>
+                    <td className="py-2.5 text-right text-muted-foreground italic">No limit</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="py-2.5 font-medium">Manager</td>
+                    <td className="py-2.5">
+                      <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 px-1.5">Yes</Badge>
+                    </td>
+                    <td className="py-2.5">
+                      <div className="relative ml-auto w-40">
+                        <IndianRupee className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          step="1000"
+                          min="0"
+                          value={approvalThreshold}
+                          onChange={(e) => setApprovalThreshold(e.target.value)}
+                          className="pl-8 h-8 text-sm text-right"
+                          disabled={!isAdmin}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                  {["Sales Rep", "Floor Incharge", "Accounts", "Facility Manager", "Office Administrator", "IT Team"].map((role) => (
+                    <tr key={role} className="border-b last:border-b-0">
+                      <td className="py-2.5 text-muted-foreground">{role}</td>
+                      <td className="py-2.5">
+                        <Badge variant="secondary" className="text-[10px] bg-gray-100 text-gray-500 px-1.5">No</Badge>
+                      </td>
+                      <td className="py-2.5 text-right text-muted-foreground">—</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="text-xs text-muted-foreground bg-muted/30 rounded px-3 py-2 space-y-1">
+            <p>— A manager is also blocked, regardless of amount, if the MR has no vendor quotation attached, or if approving it would exceed the department&apos;s (or AMC&apos;s) monthly budget. Only admin can override either.</p>
+            <p>— Admin approval has no ceiling by design — it&apos;s the escalation path, not a role with a bigger number.</p>
+          </div>
+
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button size="sm" onClick={handleSaveThreshold} disabled={savingThreshold || thresholdLoading}>
+                {savingThreshold ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+                {savingThreshold ? "Saving…" : "Save Threshold"}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* ── Operational Department Budgets header ──────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>

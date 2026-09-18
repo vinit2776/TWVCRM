@@ -68,6 +68,8 @@ import { computeSettlement } from "@/lib/settlement";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
+import { UsageBillingBoard, type BoardCharge } from "@/components/billing/usage-billing-board";
+import type { UsageContractGroup } from "@/lib/usage-billing";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
 import { AgingBuckets } from "@/components/accounting/aging-buckets";
@@ -467,6 +469,7 @@ export default function BillingPage() {
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [chargesSearchQuery, setChargesSearchQuery]   = useState("");
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
+  const [addChargeContractId, setAddChargeContractId] = useState<string | undefined>(undefined);
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
   const [viewChargeOpen, setViewChargeOpen]           = useState(false);
@@ -541,7 +544,7 @@ export default function BillingPage() {
         setWaiveChargeTarget(null);
         setWaiveChargeReason("");
         setWaiveChargeReasonError(false);
-        fetchCharges();
+        refreshCharges();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || "Failed to waive charge");
@@ -593,7 +596,7 @@ export default function BillingPage() {
         setReduceChargeAmount("");
         setReduceChargeReason("");
         setReduceChargeError(null);
-        fetchCharges();
+        refreshCharges();
       } else {
         const err = await res.json().catch(() => null);
         setReduceChargeError(err?.error || "Failed to reduce charge");
@@ -614,11 +617,11 @@ export default function BillingPage() {
         body: JSON.stringify({ hold: true, hold_reason: holdChargeReason.trim() }),
       });
       if (res.ok) {
-        toast.success("Charge held — it won't be swept into the next Generate Drafts run");
+        toast.success("Charge held — it won't be billed until released");
         setHoldChargeTarget(null);
         setHoldChargeReason("");
         setHoldChargeReasonError(false);
-        fetchCharges();
+        refreshCharges();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || "Failed to hold charge");
@@ -637,7 +640,7 @@ export default function BillingPage() {
       });
       if (res.ok) {
         toast.success("Hold released");
-        fetchCharges();
+        refreshCharges();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || "Failed to release hold");
@@ -655,8 +658,8 @@ export default function BillingPage() {
         body: JSON.stringify({ review: true }),
       });
       if (res.ok) {
-        toast.success("Will be included in the next Generate & Send run");
-        fetchCharges();
+        toast.success("Reviewed — it's now included in its month's invoice");
+        refreshCharges();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || "Failed to mark as reviewed");
@@ -664,6 +667,32 @@ export default function BillingPage() {
     } catch {
       toast.error("Failed to mark as reviewed");
     }
+  };
+
+  // The grouped board's charges → the UsageCharge shape the existing
+  // waive / reduce / hold / release / review dialogs already work with.
+  const boardToUsageCharge = (c: BoardCharge, g: UsageContractGroup): UsageCharge => ({
+    id: c.id,
+    source: c.source,
+    description: c.description,
+    quantity: c.quantity,
+    unit_price: c.unitPrice,
+    total: c.amount,
+    charge_date: c.date,
+    status: "pending",
+    held_at: c.held ? "held" : null,
+    hold_reason: c.holdReason,
+    reviewed_at: c.reviewed ? "reviewed" : null,
+    contract_id: g.contractId,
+    contract: { id: g.contractId, contract_number: g.contractNumber },
+  } as UsageCharge);
+
+  const openEditManualCharge = async (chargeId: string) => {
+    const res = await fetch(`/api/usage-charges/${chargeId}`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.data) { toast.error(json?.error || "Couldn't load the charge"); return; }
+    setEditingCharge(json.data as UsageCharge);
+    setEditChargeOpen(true);
   };
 
   // ── Billing Statements ────────────────────────────────────────────────────
@@ -783,6 +812,15 @@ export default function BillingPage() {
   // ── Fetch usage charges (with AbortController) ──────────────────────────
   const chargesControllerRef = useRef<AbortController | null>(null);
 
+  // The grouped Unbilled board loads its own data; bump this after any charge
+  // mutation so it refetches alongside the History table.
+  const [boardRefreshKey, setBoardRefreshKey] = useState(0);
+  const refreshCharges = useCallback(() => {
+    void fetchChargesRef.current?.();
+    setBoardRefreshKey((k) => k + 1);
+  }, []);
+  const fetchChargesRef = useRef<(() => Promise<void>) | null>(null);
+
   const fetchCharges = useCallback(async (signal?: AbortSignal) => {
     setChargesLoading(true);
     try {
@@ -809,6 +847,7 @@ export default function BillingPage() {
       if (!signal?.aborted) setChargesLoading(false);
     }
   }, [chargesPage, chargesContractFilter, chargesView, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
+  useEffect(() => { fetchChargesRef.current = () => fetchCharges(); }, [fetchCharges]);
 
   // Only fire on the Usage Charges tab — saves a round-trip on first load
   // for users who never open it.
@@ -1089,7 +1128,7 @@ export default function BillingPage() {
           Collections) is hidden as noise, not deleted: each tab's code and
           content stay reachable by deep link (?tab=...), see sectionForTab
           and SECTION_TABS above.
-            • Billing for usage  — Usage Charges (capture) + Generate & Send
+            • Billing for usage  — Usage Charges (capture + grouped billing) + Usage invoices
               (bill it) — one workflow, split into two steps of the same job.
             • Billing for rental — Rentals only. No sub-tab bar renders here
               since there's exactly one thing to show (see the Tabs block
@@ -1144,7 +1183,7 @@ export default function BillingPage() {
               {section === "receivables" && (
                 <>
                   <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
-                  <TabsTrigger value="usage">Generate &amp; Send</TabsTrigger>
+                  <TabsTrigger value="usage">Usage invoices</TabsTrigger>
                 </>
               )}
               {section === "collections" && (
@@ -1280,6 +1319,7 @@ export default function BillingPage() {
             </button>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            {chargesView === "history" ? (
             <div className="flex flex-wrap items-center gap-2">
               {/* Free-text search — description, contract#, booking#, customer, status */}
               <div className="relative">
@@ -1350,6 +1390,11 @@ export default function BillingPage() {
                 </Button>
               )}
             </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Every unbilled charge. Each contract-month is one invoice, sent only when you click Review &amp; send.
+              </p>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button><Plus className="mr-2 h-4 w-4" />Add usage</Button>
@@ -1372,6 +1417,21 @@ export default function BillingPage() {
             </DropdownMenu>
           </div>
 
+          {chargesView === "unbilled" ? (
+            <UsageBillingBoard
+              refreshKey={boardRefreshKey}
+              canSend={["admin", "manager", "accounts"].includes(userRole ?? "")}
+              canWaive={["admin", "manager"].includes(userRole ?? "")}
+              onChanged={refreshCharges}
+              onWaive={(c, g) => { setWaiveChargeTarget(boardToUsageCharge(c, g)); setWaiveChargeReason(""); setWaiveChargeReasonError(false); }}
+              onReduce={(c, g) => { setReduceChargeTarget(boardToUsageCharge(c, g)); setReduceChargeAmount(""); setReduceChargeReason(""); setReduceChargeError(null); }}
+              onHold={(c, g) => { setHoldChargeTarget(boardToUsageCharge(c, g)); setHoldChargeReason(""); setHoldChargeReasonError(false); }}
+              onRelease={(c, g) => void releaseChargeHold(boardToUsageCharge(c, g))}
+              onReview={(c, g) => void submitReviewCharge(boardToUsageCharge(c, g))}
+              onEdit={(c) => void openEditManualCharge(c.id)}
+              onAddCharge={(contractId) => { setAddChargeContractId(contractId); setAddChargeOpen(true); }}
+            />
+          ) : (<>
           {chargesLoading ? (
             <TableSkeleton rows={6} />
           ) : filteredCharges.length === 0 ? (
@@ -1389,7 +1449,6 @@ export default function BillingPage() {
                   {filteredCharges.length} of {charges.length} charges match &ldquo;{chargesSearchQuery}&rdquo;
                 </p>
               )}
-              {chargesView === "history" ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -1508,158 +1567,6 @@ export default function BillingPage() {
                   ))}
                 </tbody>
               </table>
-              ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Charge</th>
-                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Source</th>
-                    <th className="px-4 py-3 text-right font-medium">Amount</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Logged</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCharges.map((charge) => {
-                    const stale = charge.status === "pending" && isChargeStale(charge);
-                    const age = chargeAgeLabel(charge);
-                    return (
-                      <tr
-                        key={charge.id}
-                        className={`border-b transition-colors ${charge.held_at ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-muted/30"}`}
-                      >
-                        <td className="px-4 py-3 font-medium max-w-[280px]">
-                          <div className="flex items-center gap-1.5">
-                            {charge.held_at && (
-                              <span title={`Held${charge.hold_reason ? ` — ${charge.hold_reason}` : ""}`} className="shrink-0">
-                                <PauseCircle className="h-3.5 w-3.5 text-amber-600" aria-label="Held" />
-                              </span>
-                            )}
-                            <span className="truncate">{charge.description}</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                            {customerNameOf(charge.lead)}
-                            {charge.contract?.contract_number && (
-                              <> · <Link href={`/contracts/${charge.contract_id}`} target="_blank" rel="noopener" className="text-primary hover:underline" title="Open contract">{charge.contract.contract_number}</Link></>
-                            )}
-                            {charge.booking?.booking_number && (
-                              <> · <Link href={`/bookings/${charge.booking_id}`} target="_blank" rel="noopener" className="text-blue-600 hover:underline" title={`Open booking — ${formatDate(charge.booking.booking_date)}`}>{charge.booking.booking_number}</Link></>
-                            )}
-                          </p>
-                          {charge.held_at && (
-                            <p className="text-[11px] text-amber-700 mt-0.5">Held{charge.hold_reason ? ` — ${charge.hold_reason}` : ""}</p>
-                          )}
-                          {charge.billable === false && (
-                            <p className="text-[11px] text-muted-foreground mt-0.5">Non-billable — within quota</p>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 hidden sm:table-cell">
-                          <Badge variant="outline" className={USAGE_SOURCE_COLORS[charge.source ?? "manual"]}>
-                            {USAGE_SOURCE_LABELS[charge.source ?? "manual"]}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold">
-                          {formatCurrency(charge.total_with_gst ?? charge.total)}
-                        </td>
-                        <td className="px-4 py-3 hidden md:table-cell">
-                          <span className={`text-sm ${age.className}`}>{age.text}</span>
-                          {stale && <span className="block text-[11px] font-medium text-red-600 mt-0.5">needs review</span>}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                            {charge.held_at ? (
-                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => releaseChargeHold(charge)}>
-                                <PlayCircle className="mr-1 h-3.5 w-3.5" />Release
-                              </Button>
-                            ) : charge.status === "pending" && charge.billable === false ? (
-                              // Within-quota print/facility rows have nothing to
-                              // bill, waive, or hold — the "Non-billable" note
-                              // under the description already says so.
-                              <span className="text-[11px] text-muted-foreground px-1.5">—</span>
-                            ) : charge.status === "pending" && (
-                              <>
-                                {stale ? (
-                                  <Button size="sm" className="h-7 text-xs bg-teal-700 hover:bg-teal-800" onClick={() => submitReviewCharge(charge)}>
-                                    <CheckCircle className="mr-1 h-3.5 w-3.5" />Bill anyway
-                                  </Button>
-                                ) : (
-                                  <span className="text-[11px] font-medium text-muted-foreground px-1.5">Billable</span>
-                                )}
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button size="sm" variant="outline" className="h-7 text-xs">Waive<ChevronDown className="ml-1 h-3 w-3" /></Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end">
-                                    <DropdownMenuItem
-                                      onClick={() => {
-                                        setWaiveChargeTarget(charge);
-                                        setWaiveChargeReason("");
-                                        setWaiveChargeReasonError(false);
-                                      }}
-                                    >
-                                      <Ban className="mr-2 h-4 w-4" />Waive fully
-                                    </DropdownMenuItem>
-                                    {charge.total > 0 && (
-                                      <DropdownMenuItem
-                                        onClick={() => {
-                                          setReduceChargeTarget(charge);
-                                          setReduceChargeAmount("");
-                                          setReduceChargeReason("");
-                                          setReduceChargeError(null);
-                                        }}
-                                      >
-                                        <MinusCircle className="mr-2 h-4 w-4" />Waive partly (reduce)
-                                      </DropdownMenuItem>
-                                    )}
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 text-xs"
-                                  onClick={() => {
-                                    setHoldChargeTarget(charge);
-                                    setHoldChargeReason("");
-                                    setHoldChargeReasonError(false);
-                                  }}
-                                >
-                                  <PauseCircle className="mr-1 h-3.5 w-3.5" />Hold
-                                </Button>
-                              </>
-                            )}
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><MoreHorizontal className="h-4 w-4" /></Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setViewingCharge(charge);
-                                    setViewChargeOpen(true);
-                                  }}
-                                >
-                                  <Eye className="mr-2 h-4 w-4" />View Details
-                                </DropdownMenuItem>
-                                {charge.status === "pending" && (!charge.source || charge.source === "manual") && (
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setEditingCharge(charge);
-                                      setEditChargeOpen(true);
-                                    }}
-                                  >
-                                    <Pencil className="mr-2 h-4 w-4" />Edit
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              )}
             </div>
           )}
 
@@ -1678,6 +1585,7 @@ export default function BillingPage() {
               </div>
             </div>
           )}
+          </>)}
         </TabsContent>
 
         {/* ── Electricity Bills ─────────────────────────────────────────── */}
@@ -1696,21 +1604,27 @@ export default function BillingPage() {
 
         {/* ── Usage ─────────────────────────────────────────────────────── */}
         <TabsContent value="usage" className="space-y-6 mt-4">
-          {/* Same Unbilled | Billed shape as Rentals, scoped to usage
-              statements — its own Generate Drafts card, its own queue. No
-              rent-gap/renewal-drift/no-renewal categories here; those audit
-              rent coverage specifically and don't apply to usage. */}
+          {/* Usage invoice statements (all statuses). Unbilled usage is billed from Usage
+              Charges → Unbilled (UsageBillingBoard), grouped by contract and
+              month. */}
           <UnbilledBilledTabs type="usage" userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
         </TabsContent>
       </Tabs>
 
       {/* ── Dialogs ─────────────────────────────────────────────────────── */}
       <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
-      <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} defaultChargeDate={defaultChargeDate} />
+      <AddUsageChargeDialog
+        key={addChargeContractId ?? "any"}
+        open={addChargeOpen}
+        onOpenChange={(o) => { setAddChargeOpen(o); if (!o) setAddChargeContractId(undefined); }}
+        onSuccess={refreshCharges}
+        defaultChargeDate={defaultChargeDate}
+        contractId={addChargeContractId}
+      />
       <EditUsageChargeDialog
         open={editChargeOpen}
         onOpenChange={setEditChargeOpen}
-        onSuccess={fetchCharges}
+        onSuccess={refreshCharges}
         charge={editingCharge}
       />
       <UsageChargeDetailsDialog
@@ -1718,8 +1632,8 @@ export default function BillingPage() {
         onOpenChange={setViewChargeOpen}
         charge={viewingCharge}
       />
-      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} defaultPeriod={{ year, month }} />
-      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={fetchCharges} defaultPeriod={{ year, month }} />
+      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={refreshCharges} defaultPeriod={{ year, month }} />
+      <LogFacilityUsageDialog open={facilityUsageOpen} onOpenChange={setFacilityUsageOpen} onSuccess={refreshCharges} defaultPeriod={{ year, month }} />
 
       {/* Waive fully */}
       <Dialog open={!!waiveChargeTarget} onOpenChange={(open) => { if (!open) setWaiveChargeTarget(null); }}>
@@ -1806,7 +1720,7 @@ export default function BillingPage() {
             <DialogTitle className="flex items-center gap-2"><PauseCircle className="h-4 w-4" />Hold this charge</DialogTitle>
             <DialogDescription>
               {holdChargeTarget && (
-                <>&ldquo;{holdChargeTarget.description}&rdquo; won&rsquo;t be swept into the next Generate Drafts run — it stays pending. Every other charge on <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> bills normally. Release the hold whenever it&rsquo;s ready.</>
+                <>&ldquo;{holdChargeTarget.description}&rdquo; won&rsquo;t go on any invoice while held — it stays in the list. Every other charge on <span className="font-mono text-xs text-teal-700">{holdChargeTarget.contract?.contract_number}</span> bills normally. Release the hold whenever it&rsquo;s ready.</>
               )}
             </DialogDescription>
           </DialogHeader>

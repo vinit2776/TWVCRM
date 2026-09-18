@@ -108,8 +108,17 @@ export async function POST(request: NextRequest) {
   // 2026-09-01 incident where a hand-typed `dryRun` (camelCase) key was
   // ignored by `=== true` and defaulted straight into a live send.
   const dryRun     = body.dry_run !== false;
-  const modeIn     = String(body.mode || "both").toLowerCase();
-  const mode: GenMode = (modeIn === "rent" || modeIn === "usage") ? modeIn : "both";
+  const modeIn     = String(body.mode || "rent").toLowerCase();
+  // Usage is billed from Billing → Usage Charges → Unbilled, grouped by
+  // contract and month (src/lib/usage-billing.ts). Month-drafts from
+  // generateUsageStatements would lock charges into drafts that list never
+  // shows, so this endpoint no longer runs the usage generator in any mode.
+  if (modeIn === "usage") {
+    return NextResponse.json({
+      error: "Usage drafts are no longer generated here. Send usage invoices from Billing → Usage Charges → Unbilled.",
+    }, { status: 410 });
+  }
+  const mode: GenMode = "rent";
 
   // Whole-batch live rent sending is disabled on this synchronous endpoint.
   // It dispatches real invoices to every eligible customer in one request with
@@ -117,9 +126,8 @@ export async function POST(request: NextRequest) {
   // above. The supported live-batch path is /api/billing/dispatch-run, which
   // queues one job per contract. A live run here is only allowed when scoped
   // to a single contract_id (the "bill this contract now" action — see
-  // contract-invoices-section.tsx) or when mode is usage-only (drafts only,
-  // never dispatched to a client from this route).
-  if (!dryRun && mode !== "usage" && !contractId) {
+  // contract-invoices-section.tsx).
+  if (!dryRun && !contractId) {
     return NextResponse.json({
       error: "Live batch rent generation is disabled on this endpoint — use /api/billing/dispatch-run instead, or pass dry_run: true to preview here.",
     }, { status: 400 });

@@ -137,6 +137,12 @@ export async function POST(
     .update({ billing_statement_id: null, is_billed: false })
     .eq("billing_statement_id", id);
 
+  // Facility usage links via its own billing_statement_id (00563).
+  await supabase
+    .from("facility_usage_records")
+    .update({ billing_statement_id: null })
+    .eq("billing_statement_id", id);
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: id,

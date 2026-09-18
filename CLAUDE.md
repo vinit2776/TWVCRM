@@ -218,6 +218,16 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - `BillingLifecycleStatus` component (`src/components/billing/billing-lifecycle-status.tsx`) renders the 6-step progress indicator on list views.
 
+### Usage Invoices (contract/month grouped)
+
+Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.ts`; API under `/api/usage-billing/` (`unbilled`, `prepare`, `send`, `cancel`; admin/manager/accounts).
+
+- Sources: `usage_charges` (includes every booking charge), `service_usage_records` (print), `facility_usage_records`. **Bookings are never billed directly** — their charge is already a `usage_charges` row (posted at booking, or at checkout for quota rooms); billing the booking too would double-bill.
+- One invoice per contract per month; never spans months. Current month can't be sent. A month locked in accounting can't be sent. A late charge for an already-invoiced month gets its own invoice (`00565` relaxes the one-per-month unique index for `usage` only).
+- Held and within-quota charges never bill; charges older than `USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS` need "Bill anyway" (`reviewed_at`) first. Ended contracts still bill.
+- `prepare` → `create_usage_invoice` RPC (`00564`) locks and links charges to a draft in one transaction and refuses if anything changed (`USAGE_INVOICE_STALE`). Preview with the existing `preview-send` / `proforma-pdf?preview=1` routes. `send` finalizes and dispatches by `contracts.billing_mode`; if it fails before anything irreversible (payment link, GST number, sent), the draft is discarded and charges return to the list. `cancel` discards and releases.
+- Discard and void must release all three charge tables, including `facility_usage_records.billing_statement_id`.
+
 ### Proposal → Contract Flow (strictly enforced)
 
 **Responsibility split:**

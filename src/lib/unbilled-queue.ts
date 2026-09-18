@@ -1,46 +1,20 @@
 /**
- * Cross-contract billing queue behind the Rentals and Usage tabs on /billing.
- * `getUnbilledQueue(supabase, type)` takes "rent" or "usage" and returns only
- * that type's rows — the two tabs each call this with their own type rather
- * than sharing one mixed list.
+ * Cross-contract rent billing queue behind the Rentals tab on /billing.
  *
- * Five categories, computed batched (never N+1 per contract):
- *   1. current_cycle  — this cycle's already-generated statement of the
- *                        requested type, draft/finalized, not yet sent, not
- *                        held. The routine job the old Rent/Usage tabs
- *                        existed for. For usage, "this cycle" is the last
- *                        FULLY-CLOSED month (usage bills a month behind, in
- *                        arrears — see generateUsageStatements).
- *   2. rent_gap       — rent-only: past months with no rent-bearing statement
- *                        at all, via the existing unbilledMonths() detector,
- *                        run across every contract's whole renewal chain.
- *   3. renewal_drift  — rent-only: a renewal's start date has passed/is
- *                        imminent while the child contract isn't active yet.
- *                        Same query reportRenewalDrift() uses for its email
- *                        report.
- *   4. no_renewal     — rent-only: an expired contract with zero successor
- *                        contracts, in any status.
- *   5. usage_gap      — usage-only: chargeable usage (ad-hoc charges, print
- *                        overage, facility overage) dated in a month EARLIER
- *                        than the one current_cycle is targeting. Each
- *                        generateUsageStatements run only ever looks inside
- *                        one month's window, so a charge logged late (or a
- *                        month where nobody ran "Generate Drafts") is
- *                        otherwise silently skipped by every future run —
- *                        this is what lets the admin "include it in the next
- *                        available billing cycle" per the billing model.
- *   6. supplemental   — usage-only: a contract already has a SENT/PAID usage
- *                        statement for a month, but new ad-hoc charges or
- *                        print/service overage have since appeared for that
- *                        same month. Distinct from usage_gap (nothing billed
- *                        at all yet) — here the month was billed correctly at
- *                        the time, something just turned up afterward. See
- *                        generateUsageStatements' supplemental-statement
- *                        support in billing.ts.
+ * Four categories, computed batched (never N+1 per contract):
+ *   1. current_cycle  — this cycle's already-generated rent statement,
+ *                        draft/finalized, not yet sent, not held.
+ *   2. rent_gap       — past months with no rent-bearing statement at all,
+ *                        via the existing unbilledMonths() detector, run
+ *                        across every contract's whole renewal chain.
+ *   3. renewal_drift  — a renewal's start date has passed/is imminent while
+ *                        the child contract isn't active yet. Same query
+ *                        reportRenewalDrift() uses for its email report.
+ *   4. no_renewal     — an expired contract with zero successor contracts,
+ *                        in any status.
  *
- * Categories 2-4 are rent-specific audits (rent coverage, renewal timing);
- * categories 5-6 are the usage-specific equivalents. A type="rent" call never
- * populates usage_gap/supplemental and a type="usage" call never populates 2-4.
+ * Usage is not part of this queue: it's billed from Usage Charges → Unbilled,
+ * grouped by contract and month (src/lib/usage-billing.ts).
  *
  * Deliberately read-only: this module never writes anything. It surfaces
  * gaps for a person to act on, same philosophy as unbilledMonths() itself.
@@ -48,10 +22,9 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
-import { USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
 
-export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal" | "usage_gap" | "supplemental";
-export type UnbilledType = "rent" | "usage";
+export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal";
+export type UnbilledType = "rent";
 
 export interface UnbilledRow {
   /** Stable key: statement id for current_cycle, otherwise category:contractId:period. */
@@ -68,16 +41,6 @@ export interface UnbilledRow {
   statementId?: string;
   /** Secondary text, e.g. "12 days late", "starts in 2 days". */
   detail?: string;
-  /**
-   * supplemental rows only. The month/year to pass to
-   * POST /api/billing/auto-generate (mode: "usage") to generate the
-   * supplemental statement — unlike rent's backfillTarget, this is the
-   * period itself, not a month offset (generateUsageStatements' target
-   * month IS the month being billed).
-   */
-  supplementTarget?: { month: number; year: number };
-  /** supplemental rows only — the original statement this would top up. */
-  supplementsStatementNumber?: string;
   /**
    * Present only on rent_gap rows safe to bill directly from this list —
    * a renewal_in_progress contract, for a gap month after ITS OWN end_date
@@ -100,14 +63,12 @@ export interface UnbilledRow {
  *  sorted lexicographically ("September" < "August"). Stripped before return. */
 type InternalRow = UnbilledRow & { sortKey: string };
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "supplemental", "rent_gap", "renewal_drift", "no_renewal", "usage_gap"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal"];
 const STATUS_WORD: Record<UnbilledCategory, string> = {
   current_cycle: "current cycle",
   rent_gap: "gap",
   renewal_drift: "drift",
   no_renewal: "no renewal",
-  usage_gap: "gap",
-  supplemental: "supplemental",
 };
 
 function monthLabel(month: number, year: number): string {
@@ -129,16 +90,6 @@ function istTodayYmd(): string {
   return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-/** The last FULLY-CLOSED calendar month (IST) — the month usage bills for.
- *  Run in September, this returns August. Mirrors generateUsageStatements'
- *  own default so the queue and the generator always agree on which month
- *  "current cycle" means for usage. */
-function lastClosedMonth(): { month: number; year: number } {
-  const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-  const cycleYear = todayIst.getUTCFullYear();
-  const cycleMonth = todayIst.getUTCMonth() + 1;
-  return cycleMonth === 1 ? { month: 12, year: cycleYear - 1 } : { month: cycleMonth - 1, year: cycleYear };
-}
 
 function customerNameOf(lead: { first_name?: string | null; last_name?: string | null; company?: string | null } | null | undefined): string {
   if (!lead) return "—";
@@ -147,54 +98,41 @@ function customerNameOf(lead: { first_name?: string | null; last_name?: string |
 
 // ─── 1. Current cycle, ready to send ────────────────────────────────────────
 
-async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType): Promise<InternalRow[]> {
+async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalRow[]> {
+  // Rent's "current cycle" is the calendar month we're in right now — its
+  // proforma was generated last ops-month with prepaid_month = this month
+  // (see generateRentProformas).
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const cycleYear = todayIst.getUTCFullYear();
   const cycleMonth = todayIst.getUTCMonth() + 1;
 
-  // Rent's "current cycle" is the calendar month we're in right now — its
-  // proforma was generated last ops-month with prepaid_month = this month
-  // (see generateRentProformas). Usage bills one month behind instead: the
-  // last FULLY-CLOSED month, matching generateUsageStatements' own default —
-  // so a usage draft generated today (in September) covers August, not
-  // September, and must be looked up by August's window, not this month's.
-  const closed = lastClosedMonth();
-  const windowMonth = type === "rent" ? cycleMonth : closed.month;
-  const windowYear = type === "rent" ? cycleYear : closed.year;
-  const firstOfCycle = `${windowYear}-${String(windowMonth).padStart(2, "0")}-01`;
-  const daysInCycle = new Date(Date.UTC(windowYear, windowMonth, 0)).getUTCDate();
-  const lastOfCycle = `${windowYear}-${String(windowMonth).padStart(2, "0")}-${String(daysInCycle).padStart(2, "0")}`;
-
-  const filter = type === "rent"
-    ? `and(statement_type.in.(rent,combined),prepaid_month.eq.${cycleMonth},prepaid_year.eq.${cycleYear})`
-    : `and(statement_type.eq.usage,period_start.gte.${firstOfCycle},period_start.lte.${lastOfCycle})`;
-
   const { data, error } = await supabase
     .from("billing_statements")
     .select(`
-      id, statement_type, total_amount, prepaid_month, prepaid_year, period_start,
+      id, statement_type, total_amount, prepaid_month, prepaid_year,
       contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company))
     `)
     .in("status", ["draft", "finalized"])
     .is("proforma_sent_at", null)
     .is("held_at", null)
     .is("voided_at", null)
-    .or(filter);
+    .in("statement_type", ["rent", "combined"])
+    .eq("prepaid_month", cycleMonth)
+    .eq("prepaid_year", cycleYear);
 
   if (error || !data) return [];
 
   const rows: InternalRow[] = [];
   for (const s of data as unknown as Array<{
     id: string; statement_type: string; total_amount: number | null;
-    prepaid_month: number | null; prepaid_year: number | null; period_start: string;
+    prepaid_month: number | null; prepaid_year: number | null;
     contract_id: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     contract: any;
   }>) {
     if (!s.contract_id || !s.contract) continue;
-    const isUsage = s.statement_type === "usage";
-    const month = isUsage ? +s.period_start.slice(5, 7) : (s.prepaid_month ?? cycleMonth);
-    const year = isUsage ? +s.period_start.slice(0, 4) : (s.prepaid_year ?? cycleYear);
+    const month = s.prepaid_month ?? cycleMonth;
+    const year = s.prepaid_year ?? cycleYear;
     rows.push({
       id: s.id,
       category: "current_cycle",
@@ -204,7 +142,7 @@ async function getCurrentCycleReady(supabase: SupabaseClient, type: UnbilledType
       periodLabel: periodLabel(month, year, "current_cycle"),
       amount: s.total_amount ?? null,
       statementId: s.id,
-      detail: isUsage ? "Usage statement" : "Rent statement",
+      detail: "Rent statement",
       sortKey: `${year}-${String(month).padStart(2, "0")}-01`,
     });
   }
@@ -424,259 +362,17 @@ async function getNoRenewalOnFile(supabase: SupabaseClient): Promise<InternalRow
   });
 }
 
-// ─── 5. Usage gap — captured but never billed ───────────────────────────────
-
-/** One stale-usage record's contribution to a contract/month gap bucket. */
-interface GapContribution {
-  contractId: string;
-  monthKey: string; // "YYYY-MM"
-  amount: number;
-  source: string;
-}
-
-async function getUsageGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
-  // "Gap" now means the same thing generateUsageStatements' own review gate
-  // does (see USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS in src/lib/constants.ts):
-  // older than the review window and never explicitly reviewed. Everything
-  // more recent than that gets swept automatically by the next Generate
-  // Drafts run regardless of which month it's dated in (usage-billing-engine
-  // PR broadened that sweep from "exactly this month" to "on or before it"),
-  // so flagging it here as a stranded "gap" would be actively misleading —
-  // it isn't stuck, it just hasn't billed yet. A held charge is excluded
-  // too: that's a deliberate, already-visible choice, not an accidental gap.
-  const reviewCutoff = new Date();
-  reviewCutoff.setDate(reviewCutoff.getDate() - USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS);
-  const reviewCutoffDate = reviewCutoff.toISOString().slice(0, 10);
-  const cutoffYear = reviewCutoff.getFullYear();
-  const cutoffMonth = reviewCutoff.getMonth() + 1;
-
-  // total > 0 excludes complimentary/courtesy charges (quantity x price = 0)
-  // — nothing to bill, so they don't belong in a queue of billing gaps to
-  // act on. usage-charges/route.ts now stores these as status="waived" at
-  // creation time (mirroring the facility-quota "within free quota" case),
-  // but this filter also covers any pre-existing zero-total rows still
-  // sitting at status="pending" from before that fix.
-  const { data: staleCharges } = await supabase
-    .from("usage_charges")
-    .select("contract_id, charge_date, total")
-    .eq("status", "pending")
-    .is("billing_statement_id", null)
-    .is("held_at", null)
-    .is("reviewed_at", null)
-    .gt("total", 0)
-    .lt("charge_date", reviewCutoffDate);
-
-  // Print/service overage — same idea, keyed by period_year/period_month
-  // instead of a date column.
-  const { data: staleService } = await supabase
-    .from("service_usage_records")
-    .select("contract_id, period_year, period_month, amount, overage_quantity")
-    .eq("is_billed", false)
-    .is("billing_statement_id", null)
-    .is("held_at", null)
-    .is("reviewed_at", null)
-    .gt("overage_quantity", 0)
-    .gt("amount", 0)
-    .or(`period_year.lt.${cutoffYear},and(period_year.eq.${cutoffYear},period_month.lt.${cutoffMonth})`);
-
-  // Facility overage — scoped by billing_statement_id (see
-  // 00563_usage_billing_engine.sql) now that the column exists, same as the
-  // other two sources, instead of the old period+covering-statement proxy.
-  const { data: oldPeriods } = await supabase
-    .from("accounting_periods")
-    .select("id, year, month")
-    .or(`year.lt.${cutoffYear},and(year.eq.${cutoffYear},month.lt.${cutoffMonth})`);
-  const oldPeriodById = new Map(
-    (oldPeriods ?? []).map((p) => [p.id as string, p as { id: string; year: number; month: number }]),
-  );
-
-  const { data: staleFacility } = oldPeriodById.size
-    ? await supabase
-        .from("facility_usage_records")
-        .select("contract_id, accounting_period_id, billable_quantity, total_charge")
-        .in("accounting_period_id", [...oldPeriodById.keys()])
-        .is("billing_statement_id", null)
-        .is("held_at", null)
-        .is("reviewed_at", null)
-        .gt("billable_quantity", 0)
-        .gt("total_charge", 0)
-    : { data: [] };
-
-  const contributions: GapContribution[] = [];
-  for (const c of (staleCharges ?? []) as Array<{ contract_id: string; charge_date: string; total: number }>) {
-    contributions.push({ contractId: c.contract_id, monthKey: c.charge_date.slice(0, 7), amount: Number(c.total || 0), source: "Ad-hoc charge" });
-  }
-  for (const s of (staleService ?? []) as Array<{ contract_id: string; period_year: number; period_month: number; amount: number }>) {
-    contributions.push({ contractId: s.contract_id, monthKey: `${s.period_year}-${String(s.period_month).padStart(2, "0")}`, amount: Number(s.amount || 0), source: "Print usage" });
-  }
-  for (const f of (staleFacility ?? []) as Array<{ contract_id: string; accounting_period_id: string; total_charge: number }>) {
-    const period = oldPeriodById.get(f.accounting_period_id);
-    if (!period) continue;
-    const monthKey = `${period.year}-${String(period.month).padStart(2, "0")}`;
-    contributions.push({ contractId: f.contract_id, monthKey, amount: Number(f.total_charge || 0), source: "Facility usage" });
-  }
-
-  if (contributions.length === 0) return [];
-
-  // Bucket by contract + month so multiple stale records collapse into one row.
-  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string> }>();
-  for (const c of contributions) {
-    const key = `${c.contractId}:${c.monthKey}`;
-    const bucket = buckets.get(key) ?? { contractId: c.contractId, monthKey: c.monthKey, amount: 0, sources: new Set<string>() };
-    bucket.amount += c.amount;
-    bucket.sources.add(c.source);
-    buckets.set(key, bucket);
-  }
-
-  const contractIds = [...new Set([...buckets.values()].map((b) => b.contractId))];
-  const { data: contracts } = contractIds.length
-    ? await supabase
-        .from("contracts")
-        .select("id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
-        .in("id", contractIds)
-    : { data: [] };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const contractById = new Map((contracts ?? []).map((c: any) => [c.id as string, c]));
-
-  const rows: InternalRow[] = [];
-  for (const bucket of buckets.values()) {
-    const contract = contractById.get(bucket.contractId);
-    if (!contract) continue; // contract deleted/inaccessible since the usage was captured
-    const [year, month] = bucket.monthKey.split("-").map(Number);
-    rows.push({
-      id: `usage_gap:${bucket.contractId}:${bucket.monthKey}`,
-      category: "usage_gap",
-      contractId: bucket.contractId,
-      contractNumber: contract.contract_number,
-      customerName: customerNameOf(contract.lead),
-      periodLabel: periodLabel(month, year, "usage_gap"),
-      amount: bucket.amount,
-      detail: `${[...bucket.sources].join(", ")} — captured, not yet billed`,
-      sortKey: `${bucket.monthKey}-01`,
-    });
-  }
-  return rows;
-}
-
-// ─── 6. Supplemental — already billed, new charges found ───────────────────
-
-async function getUsageSupplements(supabase: SupabaseClient): Promise<InternalRow[]> {
-  // total/amount > 0 excludes complimentary/courtesy charges with nothing to
-  // bill — same reasoning as the identical filter in getUsageGaps above.
-  const [{ data: pendingCharges }, { data: pendingService }] = await Promise.all([
-    supabase.from("usage_charges").select("contract_id, charge_date, total").eq("status", "pending").is("billing_statement_id", null).gt("total", 0),
-    supabase.from("service_usage_records").select("contract_id, period_year, period_month, amount, overage_quantity").eq("is_billed", false).is("billing_statement_id", null).gt("overage_quantity", 0).gt("amount", 0),
-  ]);
-  if ((pendingCharges?.length ?? 0) === 0 && (pendingService?.length ?? 0) === 0) return [];
-
-  const contractIds = [...new Set([
-    ...(pendingCharges ?? []).map((c) => c.contract_id as string),
-    ...(pendingService ?? []).map((s) => s.contract_id as string),
-  ])];
-  if (contractIds.length === 0) return [];
-
-  // Covering statements (sent/paid, non-voided, usage/combined) for those
-  // contracts, keyed by contract+month — same "wasSentOrPaid" test
-  // generateUsageStatements uses for its own alreadySent partition.
-  const { data: coveringStmts } = await supabase
-    .from("billing_statements")
-    .select("id, contract_id, statement_number, period_start, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
-    .in("contract_id", contractIds)
-    .in("statement_type", ["usage", "combined"])
-    .is("voided_at", null);
-
-  const coveringByKey = new Map<string, { id: string; statement_number: string }>();
-  for (const s of (coveringStmts ?? []) as Array<{
-    id: string; contract_id: string; statement_number: string; period_start: string;
-    proforma_sent_at: string | null; gst_invoice_number: string | null;
-    billing_payments: { id: string }[];
-  }>) {
-    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
-    if (!wasSentOrPaid) continue;
-    const key = `${s.contract_id}:${s.period_start.slice(0, 7)}`;
-    if (!coveringByKey.has(key)) coveringByKey.set(key, { id: s.id, statement_number: s.statement_number });
-  }
-  if (coveringByKey.size === 0) return [];
-
-  // A covering statement that already has a live supplement isn't
-  // actionable again here — generateUsageStatements only ever maintains one
-  // automatic supplement per original (see its doc comment). A discarded
-  // supplement keeps voided_at NULL (same gap 00432 fixed for the
-  // void/regenerate path), so it's excluded by status too, not voided_at alone.
-  const coveringIds = [...new Set([...coveringByKey.values()].map((c) => c.id))];
-  const { data: existingSupplements } = await supabase
-    .from("billing_statements")
-    .select("supplements_statement_id")
-    .in("supplements_statement_id", coveringIds)
-    .is("voided_at", null)
-    .neq("status", "discarded");
-  const alreadySupplemented = new Set((existingSupplements ?? []).map((s) => s.supplements_statement_id as string));
-
-  const buckets = new Map<string, { contractId: string; monthKey: string; amount: number; sources: Set<string>; covering: { id: string; statement_number: string } }>();
-  const addToBucket = (contractId: string, monthKey: string, amount: number, source: string) => {
-    const key = `${contractId}:${monthKey}`;
-    const covering = coveringByKey.get(key);
-    if (!covering || alreadySupplemented.has(covering.id)) return;
-    const bucket = buckets.get(key) ?? { contractId, monthKey, amount: 0, sources: new Set<string>(), covering };
-    bucket.amount += amount;
-    bucket.sources.add(source);
-    buckets.set(key, bucket);
-  };
-  for (const c of (pendingCharges ?? []) as Array<{ contract_id: string; charge_date: string; total: number }>) {
-    addToBucket(c.contract_id, c.charge_date.slice(0, 7), Number(c.total || 0), "Ad-hoc charge");
-  }
-  for (const s of (pendingService ?? []) as Array<{ contract_id: string; period_year: number; period_month: number; amount: number }>) {
-    addToBucket(s.contract_id, `${s.period_year}-${String(s.period_month).padStart(2, "0")}`, Number(s.amount || 0), "Print usage");
-  }
-  if (buckets.size === 0) return [];
-
-  const bucketContractIds = [...new Set([...buckets.values()].map((b) => b.contractId))];
-  const { data: contracts } = await supabase
-    .from("contracts")
-    .select("id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
-    .in("id", bucketContractIds);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const contractById = new Map((contracts ?? []).map((c: any) => [c.id as string, c]));
-
-  const rows: InternalRow[] = [];
-  for (const bucket of buckets.values()) {
-    const contract = contractById.get(bucket.contractId);
-    if (!contract) continue;
-    const [year, month] = bucket.monthKey.split("-").map(Number);
-    rows.push({
-      id: `supplemental:${bucket.contractId}:${bucket.monthKey}`,
-      category: "supplemental",
-      contractId: bucket.contractId,
-      contractNumber: contract.contract_number,
-      customerName: customerNameOf(contract.lead),
-      periodLabel: periodLabel(month, year, "supplemental"),
-      amount: bucket.amount,
-      detail: `${[...bucket.sources].join(", ")} — supplements ${bucket.covering.statement_number}`,
-      sortKey: `${bucket.monthKey}-01`,
-      supplementTarget: { month, year },
-      supplementsStatementNumber: bucket.covering.statement_number,
-    });
-  }
-  return rows;
-}
-
 // ─── Combined ────────────────────────────────────────────────────────────────
 
-export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledType = "rent"): Promise<{
+export async function getUnbilledQueue(supabase: SupabaseClient): Promise<{
   rows: UnbilledRow[];
   counts: Record<UnbilledCategory, number>;
 }> {
-  // rent_gap / renewal_drift / no_renewal are rent-only concepts (they audit
-  // rent coverage and renewal timing); usage_gap is the usage-specific
-  // equivalent. Each call only runs the three queries relevant to its type
-  // rather than five, four of them empty.
-  const [currentCycle, rentGaps, renewalDrift, noRenewal, usageGaps, supplements] = await Promise.all([
-    getCurrentCycleReady(supabase, type),
-    type === "rent" ? getRentGaps(supabase) : Promise.resolve([]),
-    type === "rent" ? getRenewalDrift(supabase) : Promise.resolve([]),
-    type === "rent" ? getNoRenewalOnFile(supabase) : Promise.resolve([]),
-    type === "usage" ? getUsageGaps(supabase) : Promise.resolve([]),
-    type === "usage" ? getUsageSupplements(supabase) : Promise.resolve([]),
+  const [currentCycle, rentGaps, renewalDrift, noRenewal] = await Promise.all([
+    getCurrentCycleReady(supabase),
+    getRentGaps(supabase),
+    getRenewalDrift(supabase),
+    getNoRenewalOnFile(supabase),
   ]);
 
   const byCategory: Record<UnbilledCategory, InternalRow[]> = {
@@ -684,8 +380,6 @@ export async function getUnbilledQueue(supabase: SupabaseClient, type: UnbilledT
     rent_gap: rentGaps,
     renewal_drift: renewalDrift,
     no_renewal: noRenewal,
-    usage_gap: usageGaps,
-    supplemental: supplements,
   };
 
   const rows = CATEGORY_ORDER.flatMap((cat) =>
