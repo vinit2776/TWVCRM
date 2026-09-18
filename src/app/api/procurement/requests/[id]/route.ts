@@ -204,14 +204,6 @@ export async function PATCH(
   const { action } = parsed.data;
   let updatePayload: Record<string, unknown> = {};
 
-  // Only admins may bypass the vendor-quotation gate
-  if ("quotation_override_reason" in parsed.data && parsed.data.quotation_override_reason && dbUser.role !== "admin") {
-    return NextResponse.json(
-      { error: "Only admins can override the vendor quotation requirement" },
-      { status: 403 }
-    );
-  }
-
   switch (action) {
     case "submit": {
       if (pr.status !== "draft") {
@@ -238,22 +230,6 @@ export async function PATCH(
     case "approve": {
       if (pr.status !== "submitted") {
         return NextResponse.json({ error: "Only submitted PRs can be approved" }, { status: 422 });
-      }
-      // Quotation gate: at least one vendor quotation must be attached before approval,
-      // unless an admin has supplied an override reason (repeat / pre-approved orders).
-      const { count: quotationCount } = await supabase
-        .from("material_request_quotations")
-        .select("*", { count: "exact", head: true })
-        .eq("pr_id", id);
-      if ((!quotationCount || quotationCount < 1) && !parsed.data.quotation_override_reason) {
-        return NextResponse.json(
-          {
-            error:
-              "At least one vendor quotation / estimate must be attached before this MR can be approved. Ask the requester to upload supporting documents, or have an admin approve with an override reason.",
-            quotations_required: true,
-          },
-          { status: 422 }
-        );
       }
       const requiresAdmin = pr.total_estimated_amount > approvalThreshold;
       if (requiresAdmin && dbUser.role !== "admin") {
