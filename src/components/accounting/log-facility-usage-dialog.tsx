@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, AlertCircle, Lock } from "lucide-react";
 import { toast } from "sonner";
@@ -259,21 +260,21 @@ export function LogFacilityUsageDialog({
           {/* Contract selector */}
           <div>
             <Label className="text-xs">Contract</Label>
-            <Select value={contractId} onValueChange={setContractId} disabled={contractsLoading || saving}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder={contractsLoading ? "Loading…" : "Select active contract"} />
-              </SelectTrigger>
-              <SelectContent>
-                {contracts.map(c => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {contractLabel(c)}
-                    {c.location && (
-                      <span className="text-muted-foreground ml-1 text-[11px]">· {c.location.name}</span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Searchable: the list runs to every active contract, so scrolling
+                for one contract number was the slow part of logging usage. */}
+            <SearchableSelect
+              className="mt-1"
+              value={contractId}
+              onValueChange={setContractId}
+              disabled={contractsLoading || saving}
+              placeholder={contractsLoading ? "Loading…" : "Select active contract"}
+              searchPlaceholder="Search by contract # or customer…"
+              emptyMessage="No matching contracts found."
+              options={contracts.map(c => ({
+                value: c.id,
+                label: c.location ? `${contractLabel(c)} · ${c.location.name}` : contractLabel(c),
+              }))}
+            />
             {contracts.length === 0 && !contractsLoading && (
               <p className="text-[11px] text-muted-foreground mt-1">No active contracts found.</p>
             )}
