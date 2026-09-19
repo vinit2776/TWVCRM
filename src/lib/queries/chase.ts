@@ -24,7 +24,10 @@
  */
 
 export const ESCALATE_AFTER_HOURS = 48;
-export const NUDGE_COOLDOWN_HOURS = 24;
+// Deliberately under 24h. The digest cron runs once a day and its start time
+// drifts by seconds; a 24h cooldown would see "23h59m since the last nudge" on
+// the next run and silently skip every other day.
+export const NUDGE_COOLDOWN_HOURS = 20;
 /** Past this much overdue, the chase also reaches admin + manager. */
 export const ESCALATE_TO_MANAGEMENT_AFTER_DAYS = 3;
 

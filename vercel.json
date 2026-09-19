@@ -126,8 +126,8 @@
       "schedule": "0 */6 * * *"
     },
     {
-      "path": "/api/cron/query-escalation",
-      "schedule": "0 */6 * * *"
+      "path": "/api/cron/query-digest",
+      "schedule": "30 3 * * *"
     },
     {
       "path": "/api/cron/billing-dispatch-pump",

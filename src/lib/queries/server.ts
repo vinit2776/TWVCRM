@@ -3,7 +3,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
-import { emailQueryEvent } from "./notify";
 import { queryEntityDef, isQueryUser, type QueryEntityDef, type EntityRow } from "./registry";
 import { resolveRecipients, type CandidateUser } from "./audience";
 import type { QueryEntitySummary, QueryKind, QueryTargeting } from "./types";
@@ -183,9 +182,13 @@ export async function logQueryAudit(
 }
 
 /**
- * Notify the audience (in-app) and alert the narrower paging set (email).
- * Both derive from resolveRecipients() so create/reply/reopen can't disagree
- * about who hears what.
+ * Notify the audience in-app, in real time.
+ *
+ * Email is deliberately not sent from here: it used to go out on every event,
+ * which flooded anyone paged across several modules. The paging set now gets
+ * one daily digest instead — see src/app/api/cron/query-digest and
+ * src/lib/queries/digest.ts. Both use resolveRecipients(), so the in-app and
+ * email audiences can't disagree about who hears what.
  */
 export async function fanOutQueryEvent(
   admin: SupabaseClient,
@@ -209,7 +212,7 @@ export async function fanOutQueryEvent(
 
   const rows = (candidates ?? []) as Array<CandidateUser & { email: string | null }>;
 
-  const { notify, alert } = resolveRecipients({
+  const { notify } = resolveRecipients({
     query: params.targeting,
     def: params.def,
     candidates: rows,
@@ -225,17 +228,6 @@ export async function fanOutQueryEvent(
       url: `/queries?open=${params.queryId}`,
       entityType: params.def.auditEntityType,
       entityId: params.entityId,
-    });
-  }
-
-  if (alert.length > 0) {
-    const alertSet = new Set(alert);
-    void emailQueryEvent({
-      recipients: rows.filter((r) => alertSet.has(r.id)).map((r) => ({ email: r.email })),
-      headline: params.headline,
-      entityLabel: entityLabel(params.def, params.entitySummary),
-      message: `${params.author.full_name}: ${params.message}`,
-      queryId: params.queryId,
     });
   }
 }
