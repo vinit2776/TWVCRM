@@ -32,6 +32,8 @@ export interface QueryDigestEmailItem {
   /** "Bluescale Analytics · TWV-C-0112 · STM-0042". */
   entityLabel: string;
   kindLabel: string;
+  /** "Meera Shah · Accounts" — who raised it. Null if the user no longer exists. */
+  askedBy: string | null;
   badges: DigestBadge[];
   awaitingYou: boolean;
   latestReply: string | null;
@@ -48,12 +50,13 @@ function itemHtml(item: QueryDigestEmailItem): string {
   const reply = item.latestReply
     ? `<p style="margin:6px 0 0;color:#555;font-size:13px;border-left:3px solid #e5e5e5;padding-left:8px">${esc(item.latestReply)}</p>`
     : "";
+  const asker = item.askedBy ? ` · asked by ${esc(item.askedBy)}` : "";
   const due = item.neededBy ? ` · needed by ${esc(item.neededBy)}` : "";
   return `
   <div style="padding:12px 0;border-top:1px solid #e5e5e5">
     <div>${yourTurn}${badges}</div>
     <p style="margin:2px 0 0;color:#1a1a1a"><strong>${esc(item.entityLabel)}</strong></p>
-    <p style="margin:2px 0 0;color:#777;font-size:12px">${esc(item.kindLabel)}${due}</p>
+    <p style="margin:2px 0 0;color:#777;font-size:12px">${esc(item.kindLabel)}${asker}${due}</p>
     ${reply}
     <a href="${esc(item.url)}" style="display:inline-block;margin-top:6px;color:#015E65;font-size:13px">Open query</a>
   </div>`;

@@ -7,6 +7,7 @@ import { emailQueryDigest, queryUrl } from "@/lib/queries/notify";
 import type { QueryDigestEmailItem } from "@/lib/queries/digest-email";
 import { buildQueryDigest, DIGEST_LOOKBACK_HOURS, type DigestCandidate, type DigestThread } from "@/lib/queries/digest";
 import { ESCALATE_AFTER_HOURS } from "@/lib/queries/chase";
+import { USER_ROLE_LABELS } from "@/lib/constants";
 import { QUERY_KIND_LABELS, type QueryKind, type QueryTargeting } from "@/lib/queries/types";
 
 import { withCronHealth } from "@/lib/cron-ping";
@@ -121,6 +122,17 @@ async function handler(request: NextRequest) {
   }
   const summaries = await loadEntitySummaries(supabase, [...summaryRefs.values()]);
 
+  // Askers are looked up separately from `candidates`: that list is active
+  // users only, and someone who has since left still raised the query.
+  const askerIds = [...new Set([...digest.byRecipient.values()].flatMap((items) => items.map((i) => i.askerId)))];
+  const askers = new Map<string, string>();
+  if (askerIds.length > 0) {
+    const { data: askerRows } = await supabase.from("users").select("id, full_name, role").in("id", askerIds);
+    for (const a of (askerRows ?? []) as Array<{ id: string; full_name: string | null; role: string }>) {
+      if (a.full_name) askers.set(a.id, `${a.full_name} · ${USER_ROLE_LABELS[a.role] ?? a.role}`);
+    }
+  }
+
   // One email per person. Sequential on purpose: the list is a handful of
   // staff, and the mailer tries SMTP first — a burst of parallel sends buys
   // nothing and invites throttling.
@@ -138,6 +150,7 @@ async function handler(request: NextRequest) {
           ? entityLabel(def, summaries.get(entityKey(item.entityType, item.entityId)) ?? null)
           : "(unknown record)",
         kindLabel: QUERY_KIND_LABELS[item.kind] ?? "Question",
+        askedBy: askers.get(item.askerId) ?? null,
         badges: item.badges,
         awaitingYou: item.awaitingYou,
         latestReply: item.latestReply,

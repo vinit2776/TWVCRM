@@ -95,6 +95,10 @@ describe("a new query", () => {
     expect(kinds(d, "priya")).not.toContain("replied");
   });
 
+  it("carries who asked, so the email can name them", () => {
+    expect(d.byRecipient.get("priya")![0].askerId).toBe("meera");
+  });
+
   it("marks it as awaiting the recipient", () => {
     expect(d.byRecipient.get("priya")![0].awaitingYou).toBe(true);
   });

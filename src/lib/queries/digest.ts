@@ -75,6 +75,8 @@ export interface DigestItem {
   entityType: string;
   entityId: string;
   kind: QueryKind;
+  /** Who raised the query. */
+  askerId: string;
   /** Most urgent first. Never empty. */
   badges: DigestBadge[];
   /** The ball is in this person's court right now. */
@@ -274,6 +276,7 @@ export function buildQueryDigest(params: {
         entityType: thread.entity_type,
         entityId: thread.entity_id,
         kind: thread.kind,
+        askerId: thread.created_by,
         badges,
         awaitingYou: isAwaitingUser(
           {
