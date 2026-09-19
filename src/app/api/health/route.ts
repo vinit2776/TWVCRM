@@ -28,7 +28,6 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/comp-request-expiry":     3 * HOUR,
   // every 6h
   "cron/facility-sla-check":      8,
-  "cron/query-escalation":        8,
   // daily
   "petty-cash/day-book":          DAILY,
   "digest":                       DAILY,
@@ -44,6 +43,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/renewal-reminders":       DAILY,
   "cron/lease-payment-reminders": DAILY,
   "cron/inbox-digest":            DAILY,
+  "cron/query-digest":            DAILY,
   // Mon–Sat, 3×/day — the Sat 12:30 → Mon 04:30 gap is ~40h
   "cron/headcount-reminder":      44,
   // weekly
