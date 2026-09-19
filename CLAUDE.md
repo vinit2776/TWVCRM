@@ -41,10 +41,12 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 Established 2026-08-23; ruleset updated 2026-09-17. `main` is protected by the **Mainprotect** GitHub ruleset:
 
-- **Co-developers (Write access):** no direct pushes, force-pushes, or deletion of `main`. Every change needs a PR that passes `lint-and-build`, is up to date with `main`, and is approved by the code owner (`@vinit2776`, via `.github/CODEOWNERS`). New commits dismiss an existing approval, and the most recent push must itself be approved — so what merges is exactly what Vinit reviewed.
+- **Co-developers (Write access):** no direct pushes, force-pushes, or deletion of `main`. Every change needs a PR that passes `lint-and-build` and `attendance-scope`, is up to date with `main`, and is approved by the code owner (`@vinit2776`, via `.github/CODEOWNERS`). New commits dismiss an existing approval, and the most recent push must itself be approved — so what merges is exactly what Vinit reviewed.
 - **Vinit (repo admin):** bypasses every rule. GitHub won't let an account approve its own PR, so Vinit's and Claude's PRs merge with `gh pr merge <N> --merge --delete-branch --admin`. For these PRs **the merge click is the only approval gate that exists** — nothing else stops them from shipping.
 
 Only invite new developers with **Write** access; Maintain or Admin would let them bypass or change these rules.
+
+**Attendance-only contributors** (since 2026-09-18: `anmolnahar`). GitHub has no per-folder permissions, so they can still *read* the whole repo, but they can only get changes merged inside `attendance-gateway-code/`. `.github/workflows/attendance-scope.yml` fails any PR whose author is listed in the Actions repository variable `ATTENDANCE_ONLY_USERS` (comma-separated usernames) and that changes, or renames from, a file outside that folder. Everyone else — Vinit, `charidevops` (who works on CRM facility code), the version-bump bot — passes immediately. It runs on `pull_request_target`, so it always uses `main`'s copy and a restricted user can't weaken it from inside their own PR; it never checks out PR code, which is what makes that trigger safe here. To restrict or release someone, edit the variable (Settings → Secrets and variables → Actions → Variables) — no PR needed.
 
 **Vinit's role:**
 - Describe bugs/features in plain English — no technical detail required.
