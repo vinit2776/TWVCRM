@@ -167,14 +167,38 @@ const ANDROID_INSTALL_SHEET_HTML = `<div id="androidInstallSheet" style="display
         deferredInstallPrompt = null;
         promptEvent.prompt();
       }
+      // First login lands on the language picker, then the welcome sheet and
+      // tour — all of which are the same bottom-sheet shape as this one. Two
+      // sheets stacked on an employee's very first screen reads as clutter and
+      // competes for the tap, so wait the install offer out: poll (fixed-position
+      // overlays are removed or display:none'd, never unmounted on a timer we can
+      // hook) and show it once nothing else is on screen.
+      const ONBOARDING_OVERLAY_IDS = ['onbLangPick', 'onbWelcome', 'onbWhatsNew', 'onbSpot', 'onbCard'];
+      function onboardingVisible() {
+        return ONBOARDING_OVERLAY_IDS.some((id) => {
+          const el = document.getElementById(id);
+          return el && getComputedStyle(el).display !== 'none';
+        });
+      }
+      function showAndroidInstallSheet() {
+        const el = document.getElementById('androidInstallSheet');
+        if (el) el.style.display = 'block';
+      }
       window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredInstallPrompt = e;
         try {
           if (localStorage.getItem('androidInstallSheetDismissed')) return;
         } catch (e2) {}
-        const el = document.getElementById('androidInstallSheet');
-        if (el) el.style.display = 'block';
+        if (!onboardingVisible()) { showAndroidInstallSheet(); return; }
+        const waitForOnboarding = setInterval(() => {
+          if (onboardingVisible()) return;
+          clearInterval(waitForOnboarding);
+          try {
+            if (localStorage.getItem('androidInstallSheetDismissed')) return;
+          } catch (e3) {}
+          showAndroidInstallSheet();
+        }, 800);
       });
       // Covers the manual-install path too (Chrome's own menu > "Install app"),
       // not just our button — either way, don't ask again once it's installed.
