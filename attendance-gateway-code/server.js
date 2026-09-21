@@ -132,6 +132,58 @@ const IOS_INSTALL_SHEET_HTML = `<div id="iosInstallSheet" style="display:none;po
       })();
     </script>`;
 
+// Android/Chrome's own installability signal (`beforeinstallprompt`) drives a mini
+// infobar that's easy to miss and, per Chrome's own engagement heuristics, may not
+// fire on a first visit at all — captured here instead and re-shown as an
+// app-styled sheet with an explicit Install button. Present everywhere PWA_HEAD_TAGS
+// is, including the login page, since that's the first thing an employee sees when
+// they follow the link — same reasoning as IOS_INSTALL_SHEET_HTML above, just for
+// the other platform (iOS never fires this event, so the two sheets never overlap).
+const ANDROID_INSTALL_SHEET_HTML = `<div id="androidInstallSheet" style="display:none;position:fixed;left:0;right:0;bottom:0;max-width:480px;margin:0 auto;background:#fff;border-radius:20px 20px 0 0;box-shadow:0 -10px 28px rgba(15,20,25,0.16);padding:18px 20px calc(24px + env(safe-area-inset-bottom));box-sizing:border-box;z-index:1000;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <img src="/icons/icon-192.png" width="44" height="44" style="border-radius:11px;flex-shrink:0;">
+        <div>
+          <div style="font-weight:700;font-size:15px;color:#1B2430;">Install Attendance Gateway</div>
+          <div style="font-size:12px;color:#7C8896;margin-top:1px;">Add it to your Home Screen for quick, full-screen access.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button type="button" onclick="dismissAndroidInstallSheet()" style="flex:1;padding:10px 0;border-radius:8px;border:none;background:transparent;color:#7C8896;font-weight:600;font-size:13px;cursor:pointer;">Not now</button>
+        <button type="button" onclick="installAndroidApp()" style="flex:2;padding:10px 0;border-radius:8px;border:none;background:#1565C0;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Install</button>
+      </div>
+    </div>
+    <script>
+      let deferredInstallPrompt = null;
+      function dismissAndroidInstallSheet() {
+        const el = document.getElementById('androidInstallSheet');
+        if (el) el.style.display = 'none';
+        try { localStorage.setItem('androidInstallSheetDismissed', '1'); } catch (e) {}
+      }
+      function installAndroidApp() {
+        const el = document.getElementById('androidInstallSheet');
+        if (el) el.style.display = 'none';
+        if (!deferredInstallPrompt) return;
+        const promptEvent = deferredInstallPrompt;
+        deferredInstallPrompt = null;
+        promptEvent.prompt();
+      }
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        try {
+          if (localStorage.getItem('androidInstallSheetDismissed')) return;
+        } catch (e2) {}
+        const el = document.getElementById('androidInstallSheet');
+        if (el) el.style.display = 'block';
+      });
+      // Covers the manual-install path too (Chrome's own menu > "Install app"),
+      // not just our button — either way, don't ask again once it's installed.
+      window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        try { localStorage.setItem('androidInstallSheetDismissed', '1'); } catch (e) {}
+      });
+    </script>`;
+
 const OFFLINE_HTML = `<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Offline</title>
   <style>body{font-family:-apple-system,"Segoe UI",sans-serif;background:#F5F6F8;color:#1B2430;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px;box-sizing:border-box;}
   .box{max-width:320px;}h2{margin-bottom:8px;}p{color:#7C8896;font-size:0.92em;}</style></head>
@@ -1488,6 +1540,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
       </div>
     </div>
     ${IOS_INSTALL_SHEET_HTML}
+    ${ANDROID_INSTALL_SHEET_HTML}
     ${onboardingKind ? renderOnboardingOverlay(onboardingKind, lang, user, employeeId, showLanguagePicker) : ''}
     </body></html>`;
 }
@@ -1637,7 +1690,9 @@ function renderLogin(error) {
         <input type="password" name="password" required>
         <button type="submit">Log in</button>
       </form>
-    </div></body></html>`;
+    </div>
+    ${ANDROID_INSTALL_SHEET_HTML}
+    </body></html>`;
 }
 
 function renderChangePassword(error, username) {
@@ -1663,7 +1718,9 @@ function renderChangePassword(error, username) {
         <input type="password" name="confirm_password" required minlength="8">
         <button type="submit">Set password</button>
       </form>
-    </div></body></html>`;
+    </div>
+    ${ANDROID_INSTALL_SHEET_HTML}
+    </body></html>`;
 }
 
 async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false) {
