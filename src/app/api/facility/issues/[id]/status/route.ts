@@ -42,7 +42,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, scope, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, satisfaction_token, assignee:users!facility_issues_assigned_to_fkey(full_name)")
+    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, reported_by, scope, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, sla_breached, reopen_count, reporter_email, reporter_phone, satisfaction_token, assignee:users!facility_issues_assigned_to_fkey(full_name)")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -153,6 +153,7 @@ export async function PATCH(
     {
       type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name,
       reporterEmail: existing.reporter_email ?? null, satisfactionToken: existing.satisfaction_token ?? null,
+      reportedByUserId: existing.reported_by ?? null,
     }
   );
 
