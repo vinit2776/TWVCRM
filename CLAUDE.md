@@ -283,6 +283,7 @@ MSG91_AUTH_KEY / MSG91_WHATSAPP_SENDER / MSG91_SMS_*
 B2_KEY_ID / B2_APPLICATION_KEY / B2_BUCKET / B2_ENDPOINT
 LEEGALITY_API_KEY / LEEGALITY_API_URL / LEEGALITY_PROFILE_ID / LEEGALITY_PRIVATE_SALT
 BACKUP_DB_HOST / BACKUP_DB_NAME / BACKUP_DB_USER / BACKUP_DB_PASSWORD / BACKUP_DB_PORT
+ASSET_CREDENTIALS_ENCRYPTION_KEY   # encrypts facility_asset_credentials.password_encrypted; generate with `openssl rand -hex 32`
 ```
 
 Razorpay keys are stored in the `app_settings` DB table, not env vars.

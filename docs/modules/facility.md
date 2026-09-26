@@ -179,6 +179,28 @@ All DB enums and tables are defined in migration `00116_facility_issues.sql`.
 
 **Soft delete:** DELETE API route sets `status = 'retired'` rather than deleting the row.
 
+### `facility_asset_credentials`
+
+Login credentials for network-capable assets (modems, WiFi routers, network printers) — the admin URL/port, username, and password used to log into the device's own management interface. One row per asset (migration 00569).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `asset_id` | UUID FK `facility_assets(id) ON DELETE CASCADE` | **UNIQUE** — one credential set per asset |
+| `admin_url` | TEXT | nullable — e.g. `https://192.168.1.1:8080` |
+| `username` | TEXT | nullable |
+| `password_encrypted` | TEXT NOT NULL | AES-256-GCM ciphertext, base64 (`src/lib/crypto-secrets.ts`) — **never plaintext** |
+| `updated_by` | UUID FK `users(id)` | nullable |
+| `created_at` / `updated_at` | TIMESTAMPTZ | |
+
+**RLS:** SELECT — any `authenticated` (the encrypted blob is useless without the server-only `ASSET_CREDENTIALS_ENCRYPTION_KEY`, so the real access boundary is the reveal endpoint's role check below, not this table's RLS). ALL (write) — `admin`, `it_manager`, `it_technician` only — narrower than `facility_assets` itself, since most asset-editing roles (`fms`, `floor_manager`, `office_admin`) never need the device's own password.
+
+**Reveal flow:** the password is never returned by the main GET (only `admin_url`/`username`/`updated_at`). `POST /api/facility/assets/[id]/credentials/reveal` decrypts and returns it on an explicit click, gated to the same three roles, and every call — success or failure — is logged to `audit_trail` (`entity_type: "facility_asset_credentials"`, `action: "view"`), mirroring the existing `/api/unifi/vouchers/reveal` pattern.
+
+**CSV export:** `GET /api/facility/assets?format=csv` deliberately never joins this table — see the comment at the top of the CSV block in `src/app/api/facility/assets/route.ts`.
+
+**UI:** `src/components/facility/asset-credentials-card.tsx` — renders on the asset detail page's Details tab for any viewer once credentials exist; add/edit/reveal controls only render for the three roles above.
+
 ### `facility_asset_photos`
 
 Multiple photos per asset. Added in migration 00301. Separate from `facility_asset_events.photo_urls` — these are standalone asset photos not tied to a specific event.
@@ -715,6 +737,14 @@ Auto-reopens the issue if `rating <= 2` and `status === "resolved"`.
 
 Returns active users with roles `fms`, `admin`, `floor_manager` and `is_active = true`. These are the users eligible to be assigned to facility issues or set as `default_assignee_id` / `backup_assignee_id` on a category. Used by the issue assign dialog and the category routing settings. No longer hardcodes IT email addresses.
 
+### `GET/PUT/DELETE /api/facility/assets/[id]/credentials`
+
+See `facility_asset_credentials` above. GET returns non-secret fields only (`admin_url`, `username`, `updated_at`) to any authenticated user. PUT (upsert) and DELETE are gated to `admin`/`it_manager`/`it_technician` (`FACILITY_ROLES.credentials`); PUT's `password` field is optional on an update — omit it to keep the existing encrypted value.
+
+### `POST /api/facility/assets/[id]/credentials/reveal`
+
+Decrypts and returns `{ password }` for one asset. Gated to `FACILITY_ROLES.credentials`. Every call is audit-logged (`action: "view"`), win or lose the lookup.
+
 ---
 
 ## Integration Points with Other Modules
@@ -813,7 +843,9 @@ Both can be populated simultaneously. The satisfaction survey is sent to `report
 
 ## Environment / Config Dependencies
 
-No module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails in `src/lib/facility-notifications.ts`).
+`ASSET_CREDENTIALS_ENCRYPTION_KEY` — required for `facility_asset_credentials` (asset admin login storage). A 64-character hex string; generate with `openssl rand -hex 32`. Without it, `src/lib/crypto-secrets.ts` throws on the first attempt to add or reveal an asset's stored password (everything else in the module is unaffected).
+
+Otherwise, no module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails in `src/lib/facility-notifications.ts`).
 
 There are no hardcoded IT email addresses in this module. Assignee routing is fully database-driven via `facility_asset_categories.default_assignee_id` and `backup_assignee_id`.
 
@@ -1145,10 +1177,22 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 | `00300_facility_assets_rls_floor_manager.sql` | Extend `facility_assets` RLS write policy to include `floor_manager` and `office_admin` roles |
 | `00301_facility_asset_photos.sql` | Add `facility_asset_photos` table — multiple photos per asset stored in `facility-asset-photos` bucket (id, asset_id, photo_url, caption, uploaded_by, created_at) |
 | `00305_facility_issues_claim_model.sql` | Add claim model to `facility_issues`: `claimed_by uuid REFERENCES users(id)`, `claimed_at timestamptz`; introduces `claimed` intermediate status for floor manager pre-assignment |
+| `00569_facility_asset_credentials.sql` | Add `facility_asset_credentials` table — encrypted admin login (URL, username, password) per network-capable asset |
+
+(Note: this reference table has gaps between 00305 and 00569 from migrations landed without a doc update — not re-backfilled here.)
 
 ---
 
 ## Changelog
+
+### 2026-09-26
+
+**Asset Login Credentials (migration 00569)**
+- New `facility_asset_credentials` table: one row per asset, storing `admin_url`, `username`, and an AES-256-GCM-encrypted `password_encrypted` (`src/lib/crypto-secrets.ts`, key from `ASSET_CREDENTIALS_ENCRYPTION_KEY`).
+- New `FACILITY_ROLES.credentials` tier (`admin`, `it_manager`, `it_technician`) — narrower than general asset write access.
+- API: `GET/PUT/DELETE /api/facility/assets/[id]/credentials` (GET never returns the password) and `POST /api/facility/assets/[id]/credentials/reveal` (decrypts on demand, audit-logged every call — mirrors `/api/unifi/vouchers/reveal`).
+- UI: `asset-credentials-card.tsx` on the asset detail page — masked by default, reveal/edit gated to the roles above.
+- CSV export (`GET /api/facility/assets?format=csv`) intentionally never joins this table.
 
 ### 2026-06-28
 
