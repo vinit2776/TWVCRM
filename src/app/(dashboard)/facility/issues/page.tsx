@@ -83,6 +83,7 @@ function FacilityIssuesPageInner() {
   const [locationId, setLocationId] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(() => searchParams.get("only_open") === "true");
   const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyReportedByMe, setOnlyReportedByMe] = useState(false);
   const [onlyUnowned, setOnlyUnowned] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
   const [assignedToFilter, setAssignedToFilter] = useState(() => searchParams.get("assigned_to") ?? "");
@@ -96,6 +97,7 @@ function FacilityIssuesPageInner() {
     if (slaBreached) params.set("sla_breached", "true");
     if (onlyMine) params.set("assigned_to", "me");
     else if (onlyUnowned) params.set("assigned_to", "unassigned");
+    if (onlyReportedByMe) params.set("reported_by", "me");
     // Note: assignedToFilter (the "Assigned to" person picker) is applied
     // client-side in `filtered` below, not here — sending it server-side would
     // shrink `issues` to just that person's tasks, collapsing the picker's own
@@ -131,7 +133,7 @@ function FacilityIssuesPageInner() {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priority, locationId, slaBreached, onlyMine, onlyOpen, onlyUnowned, statusFilters]);
+  }, [priority, locationId, slaBreached, onlyMine, onlyReportedByMe, onlyOpen, onlyUnowned, statusFilters]);
 
   // Distinct assignees currently present in the loaded set — only people who
   // actually have a task show up, so the dropdown doesn't list the whole company.
@@ -293,6 +295,7 @@ function FacilityIssuesPageInner() {
         </Chip>
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
+        <Chip active={onlyReportedByMe} onClick={() => { setOnlyReportedByMe((v) => !v); setOnlyUnowned(false); }}>Created by me</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(TAT)</span>
         </Chip>
