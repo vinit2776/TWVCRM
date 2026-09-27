@@ -47,6 +47,22 @@ export async function PUT(
 
   const body = await request.json();
   const adminUrl = typeof body.admin_url === "string" ? body.admin_url.trim() || null : null;
+  // The asset page renders this straight into an <a href>. Anything but
+  // http/https there is a script payload aimed at whoever opens the asset —
+  // and the people who can save one hold the same roles that can reveal every
+  // stored password, so this is the privilege-escalation step, not a typo
+  // guard. Validate on the way in rather than at render, so a bad value can
+  // never reach the column in the first place.
+  if (adminUrl !== null) {
+    let scheme: string | null = null;
+    try { scheme = new URL(adminUrl).protocol; } catch { scheme = null; }
+    if (scheme !== "http:" && scheme !== "https:") {
+      return NextResponse.json(
+        { error: "Admin URL must be a full http:// or https:// address" },
+        { status: 400 },
+      );
+    }
+  }
   const username = typeof body.username === "string" ? body.username.trim() || null : null;
   const password = typeof body.password === "string" && body.password.length > 0 ? body.password : undefined;
 

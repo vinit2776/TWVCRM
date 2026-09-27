@@ -3,8 +3,8 @@
  *
  * Decrypts and returns the stored admin password for one asset. Mirrors
  * /api/unifi/vouchers/reveal's shape (role-gated here since a device admin
- * password is more sensitive than a WiFi guest voucher) — every call is
- * logged to the audit trail regardless of outcome.
+ * password is more sensitive than a WiFi guest voucher) — both a successful
+ * reveal and a role-denied attempt are written to the audit trail.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -25,6 +25,16 @@ export async function POST(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
   if (!hasRole(dbUser.role, FACILITY_ROLES.credentials)) {
+    // A refused attempt on a password store is worth more to whoever reads
+    // this trail later than a successful one, so it gets its own entry.
+    void logAudit(createAdminClient(), {
+      entityType: "facility_asset_credentials", entityId: id, action: "view",
+      performedBy: dbUser.id,
+      changes: {
+        password_revealed: { old: null, new: "DENIED" },
+        revealed_by_role: { old: null, new: dbUser.role },
+      },
+    });
     return NextResponse.json({ error: "Insufficient role" }, { status: 403 });
   }
 
