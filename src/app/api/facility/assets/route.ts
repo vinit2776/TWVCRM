@@ -66,6 +66,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (format === "csv") {
+    // Intentionally does not join facility_asset_credentials -- the query
+    // above never touches that table, so there's no decrypted (or even
+    // encrypted) password anywhere in this response to leak into a bulk
+    // export. Keep it that way if this list ever grows more columns.
+    //
     // Excel and Sheets execute any cell whose text starts with = + - @ (or a
     // leading tab/CR) as a formula. These columns are free text an operator
     // typed in, so without this a note beginning "=" runs as a formula on

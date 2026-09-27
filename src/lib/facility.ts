@@ -228,6 +228,11 @@ export const FACILITY_ROLES = {
   // restricted to admin/manager only (office_admin can do everything else
   // in the override tier, but not this).
   passCard: ["admin", "manager"] as const,
+  // Who can add/edit/reveal an asset's stored admin login (router/modem/
+  // printer password) — narrower than general asset write access, since
+  // most asset-editing roles (fms, floor_manager, office_admin) never need
+  // to log into the device itself.
+  credentials: ["admin", "it_manager", "it_technician"] as const,
   // Anyone authenticated can report.
 };
 

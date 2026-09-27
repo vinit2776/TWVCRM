@@ -1134,6 +1134,7 @@ export type AuditEntityType =
   | "space_seat_occupant"
   | "facility_asset_category"
   | "facility_asset"
+  | "facility_asset_credentials"
   | "facility_issue"
   | "facility_issue_attachment"
   | "facility_department"
@@ -3402,6 +3403,15 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+}
+
+// Non-secret fields only — the decrypted password is never part of this
+// shape, it only ever comes back from the dedicated reveal endpoint.
+export interface FacilityAssetCredentials {
+  id: string;
+  admin_url: string | null;
+  username: string | null;
+  updated_at: string;
 }
 
 export type FacilityAssetEventType =

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { cn, formatDate, formatCurrency } from "@/lib/utils";
 import { PRIORITY_STYLES, STATUS_STYLES, timeAgo } from "@/lib/facility-ui";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
+import { AssetCredentialsCard } from "@/components/facility/asset-credentials-card";
 import { AssetEventDialog, type OpenIssue } from "@/components/facility/asset-event-dialog";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
@@ -363,6 +364,8 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
               )}
             </aside>
           </div>
+
+          <AssetCredentialsCard assetId={id} userRole={userRole} />
 
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Issue history</div>
