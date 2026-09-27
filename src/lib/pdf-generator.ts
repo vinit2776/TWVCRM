@@ -24,6 +24,18 @@ const COMPANY_EMAIL = "contact@theworkvilla.com";
 const COMPANY_WEBSITE = "www.theworkvilla.com";
 const COMPANY_GST = "GST: 33AAACU4245J1ZF";
 
+// usage_charges.quantity is a consumption ledger (drives free-quota
+// accounting on the checkout pooled-usage path) and is NOT always what the
+// customer is billed for — billed_quantity is. Invoice/statement line
+// items must render billed_quantity when present, falling back to
+// quantity for historical rows inserted before that column existed.
+// `LineItem` (from @/types) doesn't declare billed_quantity since it's
+// shared with proposal/contract line items that don't have the concept,
+// so callers pass it through as an untyped extra field.
+function displayQty(quantity: number, billedQuantity?: number | null): string {
+  return String(billedQuantity ?? quantity);
+}
+
 function formatCurrencyPDF(amount: number): string {
   // Use "Rs." instead of Unicode ₹ symbol — jsPDF's Helvetica cannot render ₹
   return (
@@ -506,14 +518,17 @@ function generatePDF(options: PDFOptions): jsPDF {
   }
 
   // ── Line Items Table ──
-  const tableRows = options.items.map((item, i) => [
-    String(i + 1),
-    item.description,
-    String(item.quantity),
-    item.unit || "",
-    formatCurrencyPDF(item.unit_price),
-    formatCurrencyPDF(item.total),
-  ]);
+  const tableRows = options.items.map((item, i) => {
+    const billedQuantity = (item as LineItem & { billed_quantity?: number | null }).billed_quantity;
+    return [
+      String(i + 1),
+      item.description,
+      displayQty(item.quantity, billedQuantity),
+      item.unit || "",
+      formatCurrencyPDF(item.unit_price),
+      formatCurrencyPDF(item.total),
+    ];
+  });
 
   autoTable(doc, {
     startY: y,
@@ -970,7 +985,7 @@ export function generateBillingStatementPDF(
   statement: BillingStatement,
   contract?: Partial<Contract>,
   lead?: Partial<Lead>,
-  usageCharges?: { description: string; quantity: number; unit_price: number; total: number; charge_date: string }[]
+  usageCharges?: { description: string; quantity: number; billed_quantity?: number | null; unit_price: number; total: number; charge_date: string }[]
 ): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1068,7 +1083,7 @@ export function generateBillingStatementPDF(
     const usageRows = usageCharges.map((c, i) => [
       String(i + 1),
       c.description,
-      String(c.quantity),
+      displayQty(c.quantity, c.billed_quantity),
       formatCurrencyPDF(c.unit_price),
       formatCurrencyPDF(c.total),
     ]);
