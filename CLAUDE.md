@@ -98,6 +98,14 @@ Any change to `src/lib/billing.ts`, `src/lib/send-proforma.ts`, `src/lib/pdf-gen
 
 The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
 
+## Local Development Environment
+
+Do not run `npm run dev` from the iCloud Drive path (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) — Turbopack HMR never fires under `com~apple~CloudDocs` (stale code served) and cold compiles hang for minutes on iCloud-evicted files. `npm run build` and `git` are unaffected.
+
+**Fix (run once):** `bash scripts/setup-local-dev.sh` copies the project to `~/Projects/twv-crm` (with `.env.local`) and installs deps. Do all local dev there. GitHub remains the backup.
+
+Editing in iCloud can also create conflict copies (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push`; working from `~/Projects/twv-crm` avoids them.
+
 ## Commands
 
 ```bash
