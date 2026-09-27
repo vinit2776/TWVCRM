@@ -2357,7 +2357,7 @@ export interface ProcurementVendor {
 }
 
 export type ItemType = "goods" | "service";
-export type ServicePoBillingCycle = "monthly" | "quarterly" | "yearly";
+export type ServicePoBillingCycle = "monthly" | "quarterly" | "half_yearly" | "yearly";
 
 export interface ProcurementItem {
   id: string;
