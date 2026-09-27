@@ -73,6 +73,9 @@ interface TimelineItem {
   deliveryReceiptId?: string;
   billId?: string;
   billApprovalStatus?: string;
+  reversedAt?: string | null;
+  reversedBy?: string | null;
+  reversalReason?: string | null;
 }
 
 function buildTimeline(
@@ -139,6 +142,9 @@ function buildTimeline(
       fileUrl: dr.file_url,
       fileLabel: "View Challan",
       deliveryReceiptId: dr.id,
+      reversedAt: dr.reversed_at,
+      reversedBy: dr.reverser?.full_name ?? null,
+      reversalReason: dr.reversal_reason,
     });
   }
 
@@ -327,6 +333,9 @@ export default function PurchaseOrderDetailPage() {
 
   // Cancel (with delivery-aware warnings)
   const [forceCancelStep, setForceCancelStep] = useState<1 | 2>(1);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelBlockedBills, setCancelBlockedBills] = useState<{ bill_number: string; reason: string }[] | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // Reject Delivery
   const [rejectDeliveryId, setRejectDeliveryId] = useState<string | null>(null);
@@ -517,6 +526,47 @@ export default function PurchaseOrderDetailPage() {
       setActionDialog(null);
       setPartialCancelQtys({});
       setForceCancelStep(1);
+      await fetchPo();
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // ── Cancel Order (reason-required, can be blocked by unvoidable child bills) ──
+  const handleCancelOrder = async (force = false) => {
+    if (cancelReason.trim().length < 10) {
+      toast.error("Reason must be at least 10 characters");
+      return;
+    }
+    setActionLoading(true);
+    setCancelError(null);
+    setCancelBlockedBills(null);
+    try {
+      const res = await fetch(`/api/procurement/orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "cancel",
+          reason: cancelReason.trim(),
+          ...(force ? { force: true } : {}),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        if (json.blocked_bills) {
+          setCancelBlockedBills(json.blocked_bills);
+          setCancelError(json.error || "Some vendor bills could not be voided");
+          return;
+        }
+        toast.error(json.error || "Failed to cancel order");
+        return;
+      }
+      toast.success("Order cancelled");
+      setActionDialog(null);
+      setForceCancelStep(1);
+      setCancelReason("");
+      setCancelBlockedBills(null);
+      setCancelError(null);
       await fetchPo();
     } finally {
       setActionLoading(false);
@@ -744,6 +794,7 @@ export default function PurchaseOrderDetailPage() {
       }
       let receivedValue = 0;
       for (const receipt of po.po_delivery_receipts) {
+        if (receipt.reversed_at) continue; // reversed receipts no longer contribute to stock on hand
         for (const ri of receipt.po_delivery_receipt_items ?? []) {
           receivedValue += (priceMap[ri.po_item_id] ?? 0) * Number(ri.qty_received);
         }
@@ -913,6 +964,12 @@ export default function PurchaseOrderDetailPage() {
 
   const timelineItems = buildTimeline(po, auditEvents);
 
+  // Cancel is only offered while the PO is in a cancellable state, and — per the API's
+  // 403 rule — requires admin once any child vendor bill has been approved.
+  const cancelStatuses = ["pending", "ordered", "partially_received", "received", "invoice_received", "invoice_approved"];
+  const hasApprovedChildBill = (po.vendor_bills ?? []).some((b) => b.approval_status === "approved");
+  const canCancelOrder = cancelStatuses.includes(po.status) && (!hasApprovedChildBill || currentUserRole === "admin");
+
   // Determine if this is an AMC PO
   const isAmcPo =
     po.purchase_requests?.expenditure_type === "amc" || !!po.amc_start_date;
@@ -1058,8 +1115,8 @@ export default function PurchaseOrderDetailPage() {
                 setInvAmount(String(po.total_ordered_amount || ""));
                 setActionDialog("add_invoice");
               }}
-              disabled={!(po.po_delivery_receipts ?? []).length}
-              title={!(po.po_delivery_receipts ?? []).length ? "Record a delivery before uploading a vendor invoice" : undefined}
+              disabled={!(po.po_delivery_receipts ?? []).some((dr) => !dr.reversed_at)}
+              title={!(po.po_delivery_receipts ?? []).some((dr) => !dr.reversed_at) ? "Record a delivery before uploading a vendor invoice" : undefined}
             >
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
@@ -1114,12 +1171,18 @@ export default function PurchaseOrderDetailPage() {
               Partial Cancel
             </Button>
           )}
-          {["pending", "ordered", "partially_received", "received"].includes(po.status) && (
+          {canCancelOrder && (
             <Button
               size="sm"
               variant="ghost"
               className="text-muted-foreground"
-              onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
+              onClick={() => {
+                setForceCancelStep(1);
+                setCancelReason("");
+                setCancelBlockedBills(null);
+                setCancelError(null);
+                setActionDialog("cancel");
+              }}
               disabled={actionLoading}
             >
               Cancel Order
@@ -1952,13 +2015,31 @@ export default function PurchaseOrderDetailPage() {
                   <div key={item.id} className="relative flex gap-3">
                     {/* Dot */}
                     <div
-                      className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background flex-shrink-0 ${TIMELINE_DOT_COLORS[item.type]}`}
+                      className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background flex-shrink-0 ${
+                        item.reversedAt ? "bg-gray-300" : TIMELINE_DOT_COLORS[item.type]
+                      }`}
                     />
-                    <div className="ml-1 min-w-0">
-                      <p className="text-sm font-medium leading-snug">{item.title}</p>
+                    <div className={`ml-1 min-w-0 ${item.reversedAt ? "opacity-60" : ""}`}>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className={`text-sm font-medium leading-snug ${item.reversedAt ? "line-through text-muted-foreground" : ""}`}>
+                          {item.title}
+                        </p>
+                        {item.reversedAt && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-gray-200 text-gray-700">
+                            Reversed
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {formatDate(item.ts)} · {item.subtitle}
                       </p>
+                      {item.reversedAt && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Stock reversed {formatDate(item.reversedAt)}
+                          {item.reversedBy ? ` by ${item.reversedBy}` : ""}
+                          {item.reversalReason ? ` — ${item.reversalReason}` : ""}
+                        </p>
+                      )}
                       <div className="flex items-center gap-3 mt-1">
                         {item.fileUrl && (
                           <a
@@ -1971,7 +2052,7 @@ export default function PurchaseOrderDetailPage() {
                             {item.fileLabel ?? "View Document"}
                           </a>
                         )}
-                        {item.deliveryReceiptId && !["invoice_approved", "cancelled", "partially_cancelled"].includes(po.status) && (
+                        {item.deliveryReceiptId && !item.reversedAt && !["invoice_approved", "cancelled", "partially_cancelled"].includes(po.status) && (
                           <button
                             type="button"
                             className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -1981,7 +2062,7 @@ export default function PurchaseOrderDetailPage() {
                             Edit
                           </button>
                         )}
-                        {item.deliveryReceiptId && ["partially_received", "received"].includes(po.status) && (
+                        {item.deliveryReceiptId && !item.reversedAt && ["partially_received", "received"].includes(po.status) && (
                           <button
                             type="button"
                             className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline"
@@ -2792,13 +2873,90 @@ export default function PurchaseOrderDetailPage() {
       </Dialog>
 
       {/* ── Cancel dialog (delivery-aware) ──────────────────────────────── */}
-      <Dialog open={actionDialog === "cancel"} onOpenChange={() => { setActionDialog(null); setForceCancelStep(1); }}>
+      <Dialog
+        open={actionDialog === "cancel"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setForceCancelStep(1);
+          setCancelReason("");
+          setCancelBlockedBills(null);
+          setCancelError(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel Purchase Order</DialogTitle>
           </DialogHeader>
 
           {(() => {
+            const childBills = po.vendor_bills ?? [];
+
+            const billsWarning = childBills.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-1.5">
+                <p className="text-sm font-medium text-amber-800">
+                  The following vendor bill{childBills.length > 1 ? "s" : ""} will be voided as part of this cancellation:
+                </p>
+                <ul className="text-xs text-amber-900 list-disc pl-4 space-y-0.5">
+                  {childBills.map((b) => (
+                    <li key={b.id} className="font-mono">{b.bill_number}</li>
+                  ))}
+                </ul>
+              </div>
+            );
+
+            const reasonField = (
+              <div className="space-y-1.5">
+                <Label>Reason <span className="text-red-500">*</span></Label>
+                <Textarea
+                  placeholder="Explain why this order is being cancelled..."
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  rows={2}
+                />
+                <p className={`text-xs ${cancelReason.trim().length < 10 ? "text-muted-foreground" : "text-green-700"}`}>
+                  {cancelReason.trim().length}/10 characters minimum
+                </p>
+              </div>
+            );
+
+            // Blocked by unvoidable child bills — surfaced from the 422 response.
+            // Every blocker is listed so the user can fix them all at once, rather
+            // than discovering them one retry at a time via a toast.
+            if (cancelBlockedBills) {
+              return (
+                <div className="space-y-4 py-2">
+                  <div className="rounded-md border border-red-300 bg-red-50 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm font-medium text-red-800">
+                        {cancelError || "Some vendor bills could not be voided"}
+                      </p>
+                    </div>
+                    <ul className="text-xs text-red-800 space-y-1 pl-6 list-disc">
+                      {cancelBlockedBills.map((b) => (
+                        <li key={b.bill_number}>
+                          <span className="font-mono font-medium">{b.bill_number}</span>: {b.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setActionDialog(null);
+                        setForceCancelStep(1);
+                        setCancelBlockedBills(null);
+                        setCancelError(null);
+                      }}
+                    >
+                      Close
+                    </Button>
+                  </DialogFooter>
+                </div>
+              );
+            }
+
             const receivedItems = (po.purchase_order_items ?? []).filter(
               (i) => Number(i.quantity_received) > 0
             );
@@ -2807,22 +2965,29 @@ export default function PurchaseOrderDetailPage() {
             // Simple cancel — no deliveries
             if (!hasDeliveries) {
               return (
-                <>
-                  <p className="text-sm text-muted-foreground py-2">
+                <div className="space-y-4 py-2">
+                  <p className="text-sm text-muted-foreground">
                     Are you sure you want to cancel <strong>{po.po_number}</strong>? This action cannot be undone.
                   </p>
+                  {billsWarning}
+                  {reasonField}
+                  {cancelError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                      <p className="text-sm text-red-800">{cancelError}</p>
+                    </div>
+                  )}
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setActionDialog(null)}>Keep Order</Button>
                     <Button
                       variant="destructive"
-                      onClick={() => performAction("cancel")}
-                      disabled={actionLoading}
+                      onClick={() => handleCancelOrder(false)}
+                      disabled={actionLoading || cancelReason.trim().length < 10}
                     >
                       {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
                       Yes, Cancel
                     </Button>
                   </DialogFooter>
-                </>
+                </div>
               );
             }
 
@@ -2859,6 +3024,8 @@ export default function PurchaseOrderDetailPage() {
                       Rejecting deliveries first is recommended to avoid inventory imbalance.
                     </p>
                   </div>
+                  {billsWarning}
+                  {reasonField}
                   <DialogFooter>
                     <Button
                       variant="outline"
@@ -2869,6 +3036,7 @@ export default function PurchaseOrderDetailPage() {
                     <Button
                       variant="destructive"
                       onClick={() => setForceCancelStep(2)}
+                      disabled={cancelReason.trim().length < 10}
                     >
                       Cancel Anyway
                     </Button>
@@ -2878,26 +3046,73 @@ export default function PurchaseOrderDetailPage() {
             }
 
             // Step 2: Final force-cancel confirmation
+            const itemNameMap: Record<string, { name: string; unit: string }> = {};
+            for (const item of po.purchase_order_items ?? []) {
+              itemNameMap[item.id] = { name: item.item_name, unit: item.unit };
+            }
+            const liveReceipts = (po.po_delivery_receipts ?? []).filter((dr) => !dr.reversed_at);
             return (
               <div className="space-y-4 py-2">
-                <div className="rounded-md border border-red-300 bg-red-50 p-3">
+                <div className="rounded-md border border-red-300 bg-red-50 p-3 space-y-2">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
                     <div className="space-y-1">
-                      <p className="text-sm font-medium text-red-800">Inventory imbalance warning</p>
+                      <p className="text-sm font-medium text-red-800">This will reverse received stock to zero</p>
                       <p className="text-xs text-red-700">
-                        Cancelling with received goods means you have inventory that will never be billed.
-                        This creates an accounting discrepancy that must be resolved manually.
+                        Force-cancelling reverses every delivery below: the received quantities are
+                        subtracted back out, so stock for this PO returns to zero at this location.
+                        The delivery challans are kept, not deleted — they will be marked as reversed
+                        and remain visible in the Activity timeline with the reason, who reversed them,
+                        and when.
                       </p>
                     </div>
                   </div>
+                  {liveReceipts.length > 0 && (
+                    <div className="rounded border border-red-200 overflow-hidden bg-white">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-red-100/50 border-b border-red-200">
+                            <th className="px-3 py-1.5 text-left font-medium text-red-900">Challan</th>
+                            <th className="px-3 py-1.5 text-left font-medium text-red-900">Date</th>
+                            <th className="px-3 py-1.5 text-left font-medium text-red-900">Item</th>
+                            <th className="px-3 py-1.5 text-right font-medium text-red-900">Qty to Reverse</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {liveReceipts.map((dr) =>
+                            (dr.po_delivery_receipt_items ?? []).map((ri) => (
+                              <tr key={`${dr.id}-${ri.id}`} className="border-b border-red-200 last:border-0">
+                                <td className="px-3 py-1.5 text-red-900 font-mono text-xs">
+                                  {dr.dc_number || "—"}
+                                </td>
+                                <td className="px-3 py-1.5 text-red-900 text-xs">
+                                  {formatDate(dr.received_at)}
+                                </td>
+                                <td className="px-3 py-1.5 text-red-900">
+                                  {itemNameMap[ri.po_item_id]?.name ?? "—"}
+                                </td>
+                                <td className="px-3 py-1.5 text-right text-red-900">
+                                  {ri.qty_received} {itemNameMap[ri.po_item_id]?.unit ?? ""}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
+                {cancelError && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                    <p className="text-sm text-red-800">{cancelError}</p>
+                  </div>
+                )}
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setForceCancelStep(1)}>Go Back</Button>
                   <Button
                     variant="destructive"
-                    onClick={() => performAction("cancel", { force: true })}
-                    disabled={actionLoading}
+                    onClick={() => handleCancelOrder(true)}
+                    disabled={actionLoading || cancelReason.trim().length < 10}
                   >
                     {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
                     Yes, Force Cancel
@@ -3012,23 +3227,32 @@ export default function PurchaseOrderDetailPage() {
           <DialogHeader>
             <DialogTitle>Reject Delivery</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">
-            This will reverse the received quantities from this delivery and delete the delivery record.
-            This action cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setActionDialog(null); setRejectDeliveryId(null); }}>
-              Keep Delivery
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => rejectDeliveryId && rejectDelivery(rejectDeliveryId)}
-              disabled={actionLoading}
-            >
-              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Yes, Reject
-            </Button>
-          </DialogFooter>
+          {(() => {
+            const targetReceipt = (po?.po_delivery_receipts ?? []).find((dr) => dr.id === rejectDeliveryId);
+            const alreadyReversed = !!targetReceipt?.reversed_at;
+            return (
+              <>
+                <p className="text-sm text-muted-foreground py-2">
+                  {alreadyReversed
+                    ? "This delivery was already reversed (its received quantities have already been backed out) — it cannot be rejected again."
+                    : "This will reverse the received quantities from this delivery and delete the delivery record. This action cannot be undone."}
+                </p>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => { setActionDialog(null); setRejectDeliveryId(null); }}>
+                    Keep Delivery
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => rejectDeliveryId && rejectDelivery(rejectDeliveryId)}
+                    disabled={actionLoading || alreadyReversed}
+                  >
+                    {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                    Yes, Reject
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

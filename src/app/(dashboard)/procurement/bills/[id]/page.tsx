@@ -240,6 +240,12 @@ export default function VendorBillDetailPage() {
   const [rejectLoading, setRejectLoading] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
 
+  // Void dialog (admin only — permanently voids the invoice)
+  const [voidDialog, setVoidDialog] = useState(false);
+  const [voidLoading, setVoidLoading] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidError, setVoidError] = useState<string | null>(null);
+
   // Edit-amount-and-resubmit dialog (rejected bills only)
   const [resubmitDialog, setResubmitDialog] = useState(false);
   const [resubmitAmount, setResubmitAmount] = useState<string>("");
@@ -468,6 +474,35 @@ export default function VendorBillDetailPage() {
     }
   };
 
+  const handleVoidBill = async () => {
+    if (voidReason.trim().length < 10) {
+      toast.error("Reason must be at least 10 characters");
+      return;
+    }
+    setVoidLoading(true);
+    setVoidError(null);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "void", reason: voidReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setVoidError(json.error || "Failed to void invoice");
+        return;
+      }
+      toast.success("Invoice voided");
+      setVoidDialog(false);
+      setVoidReason("");
+      emitApprovalChanged();
+      await fetchAll();
+    } catch {
+      setVoidError("Failed to void invoice");
+    } finally {
+      setVoidLoading(false);
+    }
+  };
 
   const handleUpdateGst = async () => {
     if (!bill) return;
@@ -514,6 +549,11 @@ export default function VendorBillDetailPage() {
   const billGst   = Number(bill.gst_amount ?? 0);
   const remaining = Number(bill.total_amount) + billGst - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
+  const isAdmin = currentUserRole === "admin";
+  // A voided bill is stored as approval_status "rejected" with rejection_outcome "void" —
+  // render it distinctly so Accounts doesn't confuse it with a normal rejection.
+  const isVoided = bill.approval_status === "rejected" && bill.rejection_outcome === "void";
+  const canVoidBill = isAdmin && (bill.approval_status === "pending" || bill.approval_status === "approved");
 
   const linkedPo = bill.purchase_orders as {
     id: string; po_number: string; status: string; po_type?: string;
@@ -604,8 +644,8 @@ export default function VendorBillDetailPage() {
               <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
                 {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
               </Badge>
-              <Badge variant="secondary" className={BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}>
-                {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
+              <Badge variant="secondary" className={isVoided ? "bg-gray-200 text-gray-700" : BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}>
+                {isVoided ? "Voided" : BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
               </Badge>
               {bill.auto_approved && (
                 <Badge variant="secondary" className={AUTO_APPROVED_BADGE_CLASS}>
@@ -676,6 +716,16 @@ export default function VendorBillDetailPage() {
               className="bg-orange-600 hover:bg-orange-700 text-white"
             >
               <FilePlus className="h-4 w-4 mr-1" /> Re-upload Replacement Invoice
+            </Button>
+          )}
+          {canVoidBill && (
+            <Button
+              variant="outline"
+              onClick={() => { setVoidReason(""); setVoidError(null); setVoidDialog(true); }}
+              className="text-red-600 border-red-200 hover:bg-red-50"
+              disabled={voidLoading}
+            >
+              <XCircle className="h-4 w-4 mr-1" /> Void Invoice
             </Button>
           )}
         </div>
@@ -836,9 +886,9 @@ export default function VendorBillDetailPage() {
             {bill.approval_status === "rejected" && (
               <div className="border-t pt-3 space-y-2">
                 <div className="flex items-start gap-2.5">
-                  <XCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <XCircle className={`h-4 w-4 flex-shrink-0 mt-0.5 ${isVoided ? "text-gray-500" : "text-red-600"}`} />
                   <div className="text-sm">
-                    <span className="text-muted-foreground">Rejected: </span>
+                    <span className="text-muted-foreground">{isVoided ? "Void reason: " : "Rejected: "}</span>
                     {bill.rejection_reason}
                     {bill.approved_at && (
                       <span className="text-muted-foreground"> · {formatDate(bill.approved_at)}</span>
@@ -848,27 +898,31 @@ export default function VendorBillDetailPage() {
                     )}
                   </div>
                 </div>
-                {bill.rejection_outcome && (
+                {bill.rejection_outcome && !isVoided && (
                   <div className="flex items-center gap-2.5 pl-[26px]">
                     <span className="text-xs text-muted-foreground">
                       Outcome: {REJECTION_OUTCOME_LABELS[bill.rejection_outcome] ?? bill.rejection_outcome}
                     </span>
                   </div>
                 )}
-                {/* Resubmit affordance — typical use case: original amount was GST-inclusive. */}
-                <div className="pl-[26px] pt-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setResubmitAmount(String(bill.total_amount ?? ""));
-                      setResubmitDialog(true);
-                    }}
-                  >
-                    <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
-                    Edit amount & resubmit
-                  </Button>
-                </div>
+                {/* Resubmit affordance — typical use case: original amount was GST-inclusive.
+                    Not offered on a voided bill: voiding is permanent and the invoice is no
+                    longer payable, so there is nothing to resubmit. */}
+                {!isVoided && (
+                  <div className="pl-[26px] pt-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setResubmitAmount(String(bill.total_amount ?? ""));
+                        setResubmitDialog(true);
+                      }}
+                    >
+                      <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+                      Edit amount & resubmit
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -1710,6 +1764,51 @@ export default function VendorBillDetailPage() {
             >
               {rejectLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Reject Invoice
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Void Invoice Dialog — admin only, permanent */}
+      <Dialog open={voidDialog} onOpenChange={(open) => { if (!voidLoading) { setVoidDialog(open); if (!open) setVoidError(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Void Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+              <p className="text-sm text-red-800">
+                This action is <strong>permanent</strong>. Once voided, this invoice will no longer be payable and cannot be resubmitted.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason <span className="text-red-500">*</span></Label>
+              <Textarea
+                placeholder="Explain why this invoice is being voided..."
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value)}
+                rows={3}
+              />
+              <p className={`text-xs ${voidReason.trim().length < 10 ? "text-muted-foreground" : "text-green-700"}`}>
+                {voidReason.trim().length}/10 characters minimum
+              </p>
+            </div>
+            {voidError && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                <p className="text-sm text-red-800">{voidError}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVoidDialog(false)} disabled={voidLoading}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={handleVoidBill}
+              disabled={voidLoading || voidReason.trim().length < 10}
+            >
+              {voidLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Void Invoice
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -32,9 +32,9 @@ export async function GET(
     .select(`
       id, po_number, po_type, status, total_amount, created_at, expected_delivery_date, ordered_at,
       procurement_vendors(id, name),
-      po_delivery_receipts(id, received_at, status, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name), po_delivery_receipt_items(id)),
+      po_delivery_receipts(id, received_at, status, reversed_at, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name), po_delivery_receipt_items(id)),
       po_service_reports(id, service_date, notes, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)),
-      vendor_bills(id, bill_number, invoice_date, total_amount, payment_status, approval_status, approved_at, payment_date, approver:users!vendor_bills_approved_by_fkey(id, full_name))
+      vendor_bills(id, bill_number, invoice_date, total_amount, payment_status, approval_status, rejection_outcome, approved_at, payment_date, approver:users!vendor_bills_approved_by_fkey(id, full_name))
     `)
     .eq("pr_id", id)
     .order("created_at", { ascending: true });
