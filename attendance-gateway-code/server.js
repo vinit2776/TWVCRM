@@ -835,6 +835,45 @@ async function logAdminAction(actorUsername, action, targetType, targetId, detai
 async function getAdminAuditLog(limit = 200) {
   return await db.prepare('SELECT * FROM admin_audit_log ORDER BY created_at DESC LIMIT ?').all(limit);
 }
+
+// Merges admin_audit_log (management decisions and changes) with login_attempts
+// (who signed in, successfully or not) into one chronological feed. Both tables
+// already stamp their timestamp with the same formatTimestamp() shape, so a plain
+// lexicographic ORDER BY sorts correctly without any parsing.
+//
+// Punches are deliberately NOT part of this feed — once the biometric device is
+// live, its daily volume would vastly outnumber every real management action and
+// bury the log in noise. They get their own on-demand, filtered view instead; see
+// getPunchesFiltered and the "Punches" tab in renderAuditLog.
+const AUDIT_FEED_LIMIT = 200;
+async function getAuditFeed(limit = AUDIT_FEED_LIMIT) {
+  return await db.prepare(`
+    SELECT * FROM (
+      SELECT created_at AS ts, actor_username AS actor, action, target_type, target_id, details
+      FROM admin_audit_log
+      UNION ALL
+      SELECT attempted_at AS ts, username AS actor,
+        CASE WHEN success = 1 THEN 'login_success' ELSE 'login_failed' END AS action,
+        'session' AS target_type, ip AS target_id, '' AS details
+      FROM login_attempts
+    )
+    ORDER BY ts DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+const PUNCH_FEED_LIMIT = 300;
+// On-demand only — never called with no filter and no limit, precisely to avoid
+// the volume problem the feed above sidesteps by excluding punches entirely.
+async function getPunchesFiltered({ employeeId, fromDate, toDate, limit = PUNCH_FEED_LIMIT }) {
+  const conditions = [];
+  const args = [];
+  if (employeeId) { conditions.push('employee_id = ?'); args.push(employeeId); }
+  if (fromDate) { conditions.push('timestamp >= ?'); args.push(`${fromDate} 00:00:00`); }
+  if (toDate) { conditions.push('timestamp <= ?'); args.push(`${toDate} 23:59:59`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  return await db.prepare(`SELECT * FROM punches ${where} ORDER BY timestamp DESC LIMIT ?`).all(...args, limit);
+}
 async function getNotifications(employeeId) {
   return await db.prepare('SELECT * FROM notifications WHERE employee_id = ? ORDER BY created_at DESC').all(employeeId);
 }
@@ -1397,7 +1436,7 @@ async function employeeSwitcher(currentId, basePath) {
   return `<select onchange="location.href='${basePath}?employee_id=' + this.value" style="font-size:0.95em;padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;">${options}</select>`;
 }
 
-const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
+const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings', 'audit-log']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
@@ -1551,6 +1590,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
+        ${isAdmin ? `<a href="/admin/audit-log" class="${activeNav === 'audit-log' ? 'active' : ''}"><span class="ico">📜</span> <span class="lbl">Audit Log</span></a>` : ''}
         ${isAdmin
           ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${unreadCount ? ` (${unreadCount})` : ''}</span></a>`
           : `<a id="navNotifications" href="/notifications?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">${t(lang, 'nav.notifications')}${unreadCount ? ` (${unreadCount})` : ''}</span></a>`}
@@ -3273,6 +3313,112 @@ async function renderDevicePins(user, error) {
   return pageShell('Device PINs', '', 'device-pins', body, user);
 }
 
+// Human-readable label for a feed action, since raw action strings ('approve',
+// 'login_failed', 'change_account_role') read fine in a log but not in a UI.
+const AUDIT_ACTION_LABELS = {
+  login_success: 'Logged in',
+  login_failed: 'Login failed',
+  approve: 'Approved',
+  reject: 'Rejected',
+  record: 'Recorded',
+  enable: 'Enabled',
+  disable: 'Disabled',
+  add_employee: 'Registered employee',
+  edit_employee: 'Edited employee',
+  reset_password: 'Reset password',
+  change_account_role: 'Changed account role',
+  add_holiday: 'Added holiday',
+  delete_holiday: 'Deleted holiday',
+  download_report: 'Downloaded report',
+  settings_updated: 'Updated settings',
+  punch_api_key_generated: 'Generated punch API key',
+  set_device_pin: 'Set device PIN',
+};
+
+async function renderAuditLog(user, opts = {}) {
+  const { punchFilter } = opts;
+  const isPunchesTab = !!punchFilter;
+
+  const tabStyle = (active) => `padding:6px 14px;border-radius:8px;text-decoration:none;font-weight:600;font-size:0.9em;${active ? 'background:#1565C0;color:#fff;' : 'background:#F0F2F4;color:#4C5A68;'}`;
+  const tabs = `
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <a href="/admin/audit-log" style="${tabStyle(!isPunchesTab)}">Activity</a>
+      <a href="/admin/audit-log?view=punches" style="${tabStyle(isPunchesTab)}">Punches</a>
+    </div>`;
+
+  if (isPunchesTab) {
+    const employees = await allEmployees();
+    const employeeOptions = employees.map(e => `<option value="${escapeHtml(e.id)}" ${e.id === punchFilter.employeeId ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`).join('');
+    // Nothing loads until at least one filter is set — an unfiltered query here would
+    // dump the most recent punches across every employee, which is exactly the noise
+    // this tab exists to avoid by being separate from the Activity feed in the first place.
+    const hasFilter = !!(punchFilter.employeeId || punchFilter.fromDate || punchFilter.toDate);
+    const rows = hasFilter ? await getPunchesFiltered(punchFilter) : [];
+    const tableRows = !hasFilter
+      ? `<tr><td colspan="6" style="color:#9AA5B1;">Choose an employee and/or date range above to see punches.</td></tr>`
+      : rows.map(r => `
+      <tr>
+        <td>${escapeHtml(r.timestamp)}</td>
+        <td>${escapeHtml(r.employee_id)}</td>
+        <td>${escapeHtml(r.direction)}</td>
+        <td>${escapeHtml(r.source)}</td>
+        <td>${escapeHtml(r.marked_by || '—')}</td>
+        <td>${escapeHtml(r.location_address || r.location || '—')}</td>
+      </tr>`).join('') || `<tr><td colspan="6" style="color:#9AA5B1;">No punches match this filter.</td></tr>`;
+
+    const body = `
+      ${tabs}
+      <div class="card" style="color:#7C8896;font-size:0.9em;">
+        Punches are kept separate from the Activity feed — the biometric device's daily
+        volume would otherwise bury every real management action. Filter by employee
+        and/or date range; nothing loads by default.
+      </div>
+      <form method="GET" action="/admin/audit-log" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;" class="card">
+        <input type="hidden" name="view" value="punches">
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Employee</label>
+          <select name="employee_id" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+            <option value="">All employees</option>
+            ${employeeOptions}
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">From</label>
+          <input type="date" name="from" value="${escapeHtml(punchFilter.fromDate || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">To</label>
+          <input type="date" name="to" value="${escapeHtml(punchFilter.toDate || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">Filter</button>
+      </form>
+      <div class="card">
+        <table><tr><th>Time</th><th>Employee</th><th>Direction</th><th>Source</th><th>Marked By</th><th>Location</th></tr>${tableRows}</table>
+        ${hasFilter && rows.length >= PUNCH_FEED_LIMIT ? `<div style="color:#B26A00;font-size:0.85em;margin-top:10px;">Showing the most recent ${PUNCH_FEED_LIMIT} — narrow the filter to see more.</div>` : ''}
+      </div>`;
+    return pageShell('Audit Log', '', 'audit-log', body, user);
+  }
+
+  const feed = await getAuditFeed();
+  const feedRows = feed.map(r => `
+    <tr>
+      <td style="white-space:nowrap;">${escapeHtml(r.ts)}</td>
+      <td>${escapeHtml(r.actor || '—')}</td>
+      <td>${escapeHtml(AUDIT_ACTION_LABELS[r.action] || r.action)}</td>
+      <td>${escapeHtml(r.target_type)}${r.target_id ? `: ${escapeHtml(r.target_id)}` : ''}</td>
+      <td style="color:#7C8896;">${escapeHtml(r.details || '')}</td>
+    </tr>`).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No activity recorded yet.</td></tr>`;
+
+  const body = `
+    ${tabs}
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px;">Recent Activity</div>
+      <table><tr><th>Time</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th></tr>${feedRows}</table>
+      ${feed.length >= AUDIT_FEED_LIMIT ? `<div style="color:#B26A00;font-size:0.85em;margin-top:10px;">Showing the most recent ${AUDIT_FEED_LIMIT} entries.</div>` : ''}
+    </div>`;
+  return pageShell('Audit Log', '', 'audit-log', body, user);
+}
+
 // Admin-only runtime configuration (see SETTING_DEFS). Shows where each value is
 // actually coming from — database, environment, or built-in default — because the
 // most confusing failure here is a setting that looks right in the UI while an
@@ -4911,6 +5057,17 @@ async function handleRequest(req, res) {
     );
     await logAdminAction(user.username, 'download_report', 'muster_report', monthStr, '');
     return sendCsv(res, `muster-report-${monthStr}.csv`, csv);
+  }
+
+  if (parsed.pathname === '/admin/audit-log' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const isPunchesTab = parsed.searchParams.get('view') === 'punches';
+    const punchFilter = isPunchesTab ? {
+      employeeId: parsed.searchParams.get('employee_id') || '',
+      fromDate: parsed.searchParams.get('from') || '',
+      toDate: parsed.searchParams.get('to') || '',
+    } : null;
+    return sendHtml(res, await renderAuditLog(user, { punchFilter }));
   }
 
   if (parsed.pathname === '/admin/settings' && req.method === 'GET') {
