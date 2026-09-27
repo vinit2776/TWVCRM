@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { hasRole, FACILITY_ROLES } from "@/lib/facility";
+import { resolveIssue } from "@/lib/facility-resolve";
 
 const VALID_TYPES = [
   "maintenance", "inspection", "fault_observed", "part_replaced",
@@ -67,6 +69,11 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // audit_trail.performed_by references public.users(id); facility_asset_events
+  // .logged_by references auth.users(id). Two different ids, both needed here.
+  const { data: dbUser } = await supabase
+    .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
+
   const body = await request.json();
   const { event_type, note, photo_urls, issue_id, resolve_issue } = body;
 
@@ -89,32 +96,44 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Resolving from here used to hand-roll a three-column update, which skipped
+  // SLA evaluation, KPI points, the satisfaction request, the timeline entry
+  // and every notification — and its audit write passed an auth id into a
+  // column that references public.users, so it silently failed too. Go through
+  // the same helper the status route uses instead (issue #759).
+  let resolveError: string | null = null;
   if (issue_id && resolve_issue) {
-    await supabase
-      .from("facility_issues")
-      .update({
-        status: "resolved",
-        resolved_at: new Date().toISOString(),
-        resolution_notes: note?.trim() || `Resolved via event log on asset`,
-      })
-      .eq("id", issue_id);
-
-    logAudit(supabase, {
-      action: "update",
-      entityType: "facility_issue",
-      entityId: issue_id,
-      performedBy: user.id,
-      changes: { status: { old: null, new: "resolved" }, resolved_via: { old: null, new: "asset_event" } },
-    });
+    if (!hasRole(dbUser?.role, FACILITY_ROLES.workOnIssues)) {
+      // Logging the event is open to any authenticated user, as before.
+      // Resolving a ticket through it is not — that now matches the status
+      // endpoint, which this path was quietly bypassing.
+      resolveError = "You don't have permission to resolve this ticket";
+    } else {
+      const result = await resolveIssue(supabase, {
+        issueId: issue_id,
+        actor: { id: dbUser!.id, authId: user.id, fullName: dbUser!.full_name },
+        resolutionNotes: note?.trim() || `Resolved via event log on asset`,
+        // The event this request just created is the asset-side record; a
+        // second one from the helper would duplicate it.
+        logAssetEvent: false,
+      });
+      if (!result.ok) resolveError = result.error;
+    }
   }
 
   logAudit(supabase, {
     action: "create",
     entityType: "facility_asset",
     entityId: id,
-    performedBy: user.id,
+    performedBy: dbUser?.id ?? null,
     changes: { event: { old: null, new: { id: data.id, event_type, issue_id: issue_id || null } } },
   });
 
-  return NextResponse.json({ data }, { status: 201 });
+  // The event itself was written, so this is a 201 either way — but the caller
+  // has to know the ticket did not actually move, or the dialog will say
+  // "Event logged & issue resolved" when only half of that happened.
+  return NextResponse.json(
+    resolveError ? { data, resolve_error: resolveError } : { data },
+    { status: 201 },
+  );
 }
