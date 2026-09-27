@@ -615,7 +615,7 @@ Query params:
 - `priority` — single value
 - `location_id`
 - `assigned_to` — `"me"` (resolves to current user's DB id), `"unassigned"`, or a UUID
-- `reported_by` — UUID
+- `reported_by` — `"me"` (resolves to current user's DB id, same shorthand as `assigned_to`) or a UUID. `/facility/issues`'s "Created by me" quick filter uses this — the assignee-grouped view then shows every ticket you created, bucketed by whoever it's assigned to.
 - `category_id`
 - `sla_breached` — `"true"`
 - `date_from`, `date_to` — filter by `created_at`
