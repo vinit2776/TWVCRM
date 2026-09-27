@@ -43,7 +43,8 @@ export async function GET() {
     adminSupabase
       .from("contracts")
       .select("*", { count: "exact", head: true })
-      .eq("payment_status", "overdue"),
+      .eq("payment_status", "overdue")
+      .eq("is_test_contract", false),
   ]);
 
   const unpaidBillsCount = unpaidBillsData?.length ?? 0;

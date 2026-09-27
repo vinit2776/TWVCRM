@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
       line_items,
       usage_charges:usage_charges(description, quantity, unit_price, total, notes),
       contract:contracts!billing_statements_contract_id_fkey(
-        id, contract_number, title, billing_mode,
+        id, contract_number, title, billing_mode, is_test_contract,
         lead:leads!contracts_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number, billing_emails,
           street, city, state, zip_code
@@ -210,6 +210,7 @@ export async function GET(req: NextRequest) {
       contract_number: string;
       title: string | null;
       billing_mode: "proforma_first" | "gst_direct" | null;
+      is_test_contract: boolean | null;
       lead: {
         id: string;
         first_name: string | null;
@@ -278,12 +279,19 @@ export async function GET(req: NextRequest) {
     aggregator: InboxAggregator | null;
   }>;
 
+  // Exclude test contracts' fake statements from the queue/stats — but not
+  // from single-row lookups (badges/quick-actions elsewhere still need to
+  // work on a test contract's own statement while it's being tested).
+  const visibleStatementList = singleId
+    ? statementList
+    : statementList.filter((s) => !s.contract?.is_test_contract);
+
   // JS post-filter for search. The result set is already capped (closed=200,
   // open=unbounded but realistically small). Doing this in JS keeps the
   // search flexible across joined fields (customer name, GSTIN) without
   // fighting PostgREST's nested-OR syntax.
   const filtered = q
-    ? statementList.filter((s) => {
+    ? visibleStatementList.filter((s) => {
         const lc = q.toLowerCase();
         const haystack: string[] = [
           s.statement_number ?? "",
@@ -319,7 +327,7 @@ export async function GET(req: NextRequest) {
         ];
         return haystack.some((h) => h.toLowerCase().includes(lc));
       })
-    : statementList;
+    : visibleStatementList;
 
   const statementIds = filtered.map((s) => s.id);
 

@@ -37,6 +37,7 @@ export async function GET(request: NextRequest) {
       "id, contract_number, end_date, total_amount, billing_cycle, tenure_months, seats, renewal_declined, renewal_reminder_count, lead:leads(id, first_name, last_name, company, location_id)"
     )
     .eq("status", "active")
+    .eq("is_test_contract", false)
     .gte("end_date", todayStr)
     .lte("end_date", in60Str)
     .order("end_date", { ascending: true });

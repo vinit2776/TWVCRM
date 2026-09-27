@@ -36,7 +36,10 @@ export async function GET() {
     .from("usage_charges")
     .select(
       "id, total_with_gst, charge_date, booking_id, " +
-      "contract:contracts!usage_charges_contract_id_fkey(contract_number), " +
+      // contract_id on usage_charges is nullable (booking-only charges have
+      // no contract) — left join + filter in JS below, not !inner, so those
+      // rows aren't silently dropped.
+      "contract:contracts!usage_charges_contract_id_fkey(contract_number, is_test_contract), " +
       "lead:leads!usage_charges_lead_id_fkey(first_name, last_name, company), " +
       "booking:bookings!usage_charges_booking_id_fkey(booking_number)"
     )
@@ -50,12 +53,12 @@ export async function GET() {
     id: string;
     total_with_gst: number | null;
     booking_id: string | null;
-    contract: { contract_number: string | null } | null;
+    contract: { contract_number: string | null; is_test_contract: boolean | null } | null;
     lead: { first_name: string; last_name: string; company: string | null } | null;
     booking: { booking_number: string | null } | null;
   };
 
-  const rows = (data ?? []) as unknown as Row[];
+  const rows = ((data ?? []) as unknown as Row[]).filter((r) => !r.contract?.is_test_contract);
 
   const items = rows.slice(0, 8).map((r) => ({
     id: r.id,

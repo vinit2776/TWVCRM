@@ -119,7 +119,7 @@ export async function GET(request: NextRequest) {
       billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
         statement_type,
         contract:contracts!billing_statements_contract_id_fkey(
-          contract_number,
+          contract_number, is_test_contract,
           lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
         )
       )
@@ -137,11 +137,11 @@ export async function GET(request: NextRequest) {
     // 3. Contract payments (manual accounting module)
     admin.from("contract_payments").select(`
       amount, payment_mode, payment_reference,
-      contract:contracts!contract_payments_contract_id_fkey(
+      contract:contracts!contract_payments_contract_id_fkey!inner(
         contract_number,
         lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
       )
-    `).eq("status", "verified").eq("payment_date", yesterdayIST),
+    `).eq("status", "verified").eq("payment_date", yesterdayIST).eq("contract.is_test_contract", false),
 
     // 4. Security deposits from proposals
     admin.from("proposals").select(`
@@ -167,7 +167,13 @@ export async function GET(request: NextRequest) {
 
   const ydayRows: CollectionRow[] = [
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...(billingPmts.data || []).map((p: any) => {
+    ...(billingPmts.data || [])
+      .filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (p: any) => !p.billing_statement?.contract?.is_test_contract
+      )
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((p: any) => {
       const contract = p.billing_statement?.contract;
       const stmtType = p.billing_statement?.statement_type;
       const typeLabel = stmtType === "rent" ? "Monthly Rent" : stmtType === "usage" ? "Usage Invoice" : "Invoice";
@@ -198,13 +204,13 @@ export async function GET(request: NextRequest) {
   const ydayTotal = ydayRows.reduce((s, r) => s + r.amount, 0);
 
   // ── 2. Unpaid statements ─────────────────────────────────────────────────────
-  const { data: statements, error: stmtErr } = await admin
+  const { data: allStatements, error: stmtErr } = await admin
     .from("billing_statements")
     .select(`
       id, statement_number, period_start, period_end, due_date,
       total_amount, payment_status, finalized_at,
       contract:contracts!billing_statements_contract_id_fkey(
-        id, contract_number, start_date, end_date,
+        id, contract_number, start_date, end_date, is_test_contract,
         lead:leads!contracts_lead_id_fkey(
           first_name, last_name, company, email, phone, mobile
         )
@@ -216,7 +222,11 @@ export async function GET(request: NextRequest) {
     .is("voided_at", null)
     .not("due_date", "is", null);
 
-  if (stmtErr || !statements?.length) {
+  // Exclude test contracts' fake pending statements from the report.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const statements = (allStatements ?? []).filter((s: any) => !s.contract?.is_test_contract);
+
+  if (stmtErr || !statements.length) {
     await pingCronHealth("cron/pending-payment-report", stmtErr ? "error" : "ok");
     if (stmtErr) return NextResponse.json({ error: stmtErr.message }, { status: 500 });
     return NextResponse.json({ sent: 0, message: "No pending statements — nothing to report" });

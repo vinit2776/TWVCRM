@@ -44,7 +44,8 @@ export async function GET(request: NextRequest) {
       "id, contract_number, title, status, start_date, seats, total_amount, billing_cycle, tenure_months, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
     )
     .lte("start_date", periodEnd)
-    .in("status", ["active", "renewal_in_progress"]);
+    .in("status", ["active", "renewal_in_progress"])
+    .eq("is_test_contract", false);
 
   // Filter contracts actually active during this period
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

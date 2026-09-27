@@ -106,7 +106,16 @@ export interface ContractRow {
  * same set by different windows, so one fetch + JS bucketing beats N queries.
  */
 export async function fetchContracts(supabase: Supabase, locationId?: string | null): Promise<ContractRow[]> {
-  let q = supabase.from("contracts").select("id, location_id, total_amount, activated_at");
+  // Excludes test contracts: every downstream consumer here joins a child
+  // record (statement, allocation) back to this set via contract_id and
+  // already skips anything that comes back unmatched (see e.g. the
+  // `if (!locId) continue` pattern in the summary/trend routes), so leaving
+  // a contract out of this set is enough to drop its fake billing/occupancy
+  // data from every metric below.
+  let q = supabase
+    .from("contracts")
+    .select("id, location_id, total_amount, activated_at")
+    .eq("is_test_contract", false);
   if (locationId) q = q.eq("location_id", locationId);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
@@ -215,10 +224,10 @@ export async function fetchActiveSpaceUnits(supabase: Supabase, locationId?: str
 export async function fetchSpaceAllocations(supabase: Supabase, locationId?: string | null): Promise<SpaceAllocationRow[]> {
   const { data, error } = await supabase
     .from("contract_space_allocations")
-    .select("id, space_unit_id, start_date, end_date, contract:contracts(status, location_id)");
+    .select("id, space_unit_id, start_date, end_date, contract:contracts(status, location_id, is_test_contract)");
   if (error) throw new Error(error.message);
-  type Row = { id: string; space_unit_id: string; start_date: string; end_date: string | null; contract: { status: string | null; location_id: string } | null };
-  const rows = (data ?? []) as unknown as Row[];
+  type Row = { id: string; space_unit_id: string; start_date: string; end_date: string | null; contract: { status: string | null; location_id: string; is_test_contract: boolean | null } | null };
+  const rows = ((data ?? []) as unknown as Row[]).filter((r) => !r.contract?.is_test_contract);
   const filtered = locationId ? rows.filter((r) => r.contract?.location_id === locationId) : rows;
   return filtered.map((r) => ({
     id: r.id,
@@ -335,13 +344,15 @@ export interface ContractRatePhase {
 export async function fetchSpaceAllocationsForHeatmap(supabase: Supabase): Promise<HeatmapAllocationRow[]> {
   const { data, error } = await supabase
     .from("contract_space_allocations")
-    .select("id, space_unit_id, contract_id, start_date, end_date, contract:contracts(status, total_amount, subtotal, start_date, phase_start_date)");
+    .select("id, space_unit_id, contract_id, start_date, end_date, contract:contracts(status, total_amount, subtotal, start_date, phase_start_date, is_test_contract)");
   if (error) throw new Error(error.message);
   type Row = {
     id: string; space_unit_id: string; contract_id: string; start_date: string; end_date: string | null;
-    contract: { status: string | null; total_amount: number | null; subtotal: number | null; start_date: string | null; phase_start_date: string | null } | null;
+    contract: { status: string | null; total_amount: number | null; subtotal: number | null; start_date: string | null; phase_start_date: string | null; is_test_contract: boolean | null } | null;
   };
-  return ((data ?? []) as unknown as Row[]).map((r) => ({
+  return ((data ?? []) as unknown as Row[])
+    .filter((r) => !r.contract?.is_test_contract)
+    .map((r) => ({
     id: r.id,
     space_unit_id: r.space_unit_id,
     contract_id: r.contract_id,
@@ -572,7 +583,8 @@ export async function fetchProjectionContracts(
   let q = supabase
     .from("contracts")
     .select("id, contract_number, location_id, status, start_date, end_date, subtotal, total_amount, phase_start_date, escalation_percentage, lead_id")
-    .in("status", ["active", "renewal_in_progress"]);
+    .in("status", ["active", "renewal_in_progress"])
+    .eq("is_test_contract", false);
   if (locationId) q = q.eq("location_id", locationId);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
@@ -657,16 +669,16 @@ export interface ProjectionAdjustmentRow {
 export async function fetchProjectionAdjustments(supabase: Supabase): Promise<ProjectionAdjustmentRow[]> {
   const { data, error } = await supabase
     .from("projection_adjustments")
-    .select("id, contract_id, month, amount, reason, created_at, contract:contracts(location_id, contract_number), created_by_user:users(full_name)")
+    .select("id, contract_id, month, amount, reason, created_at, contract:contracts(location_id, contract_number, is_test_contract), created_by_user:users(full_name)")
     .order("month", { ascending: true });
   if (error) throw new Error(error.message);
   type Row = {
     id: string; contract_id: string; month: string; amount: number; reason: string; created_at: string;
-    contract: { location_id: string; contract_number: string } | null;
+    contract: { location_id: string; contract_number: string; is_test_contract: boolean | null } | null;
     created_by_user: { full_name: string } | null;
   };
   return ((data ?? []) as unknown as Row[])
-    .filter((r) => r.contract) // contract_id is NOT NULL FK, but defend against a race with a deleted contract
+    .filter((r) => r.contract && !r.contract.is_test_contract) // contract_id is NOT NULL FK, but defend against a race with a deleted contract
     .map((r) => ({
       id: r.id,
       contract_id: r.contract_id,

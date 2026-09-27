@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getTestContractIds, excludeTestContractsOrFilter } from "@/lib/test-contracts";
 
 type Stage =
   | "voided"
@@ -50,15 +51,25 @@ export async function GET(request: NextRequest) {
   const periodStart = new Date(year, month - 1, 1).toISOString().split("T")[0];
   const periodEnd   = new Date(year, month, 0).toISOString().split("T")[0];
 
-  const { data: rows, error } = await adminSupabase
+  let query = adminSupabase
     .from("billing_statements")
-    .select("status, payment_status, accounted, gst_invoice_number, proforma_sent_at, total_amount")
+    .select("status, payment_status, accounted, gst_invoice_number, proforma_sent_at, total_amount, contract_id")
     .gte("period_start", periodStart)
     .lte("period_end", periodEnd)
     // Discarded drafts never entered the pipeline — counting them as drafts
     // would show work outstanding that nobody intends to do. (Voided rows do
     // stay: they were real documents, and have their own stage.)
     .neq("status", "discarded");
+
+  // Exclude test contracts' fake statements (contract_id is nullable —
+  // case/proposal/aggregator-billed statements have none and must stay).
+  const testContractOrFilter = excludeTestContractsOrFilter(
+    "contract_id",
+    await getTestContractIds(adminSupabase)
+  );
+  if (testContractOrFilter) query = query.or(testContractOrFilter);
+
+  const { data: rows, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

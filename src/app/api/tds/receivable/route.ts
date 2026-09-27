@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
         contract:contracts!billing_statements_contract_id_fkey(
           id,
           contract_number,
+          is_test_contract,
           lead:leads!contracts_lead_id_fkey(
             id,
             first_name,
@@ -94,9 +95,14 @@ export async function GET(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Flatten and shape the response
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows = (data ?? []).map((p: any) => {
+  // Flatten and shape the response — exclude test contracts' fake TDS entries.
+  const rows = (data ?? [])
+    .filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (p: any) => !p.billing_statement?.contract?.is_test_contract
+    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((p: any) => {
     const stmt    = p.billing_statement;
     const contract = stmt?.contract;
     const lead     = contract?.lead;
