@@ -17,6 +17,7 @@ export type FacilityNotifyEvent =
   | {
       type: "status_changed"; from: string; to: string; actorName: string;
       reporterEmail?: string | null; satisfactionToken?: string | null;
+      reportedByUserId?: string | null;
     }
   | { type: "priority_escalated"; from: string; to: string; actorName: string }
   | { type: "assigned"; assigneeName: string | null; actorName: string }
@@ -104,6 +105,16 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
       for (const cid of collabUserIds) {
         if (!recipientIds.includes(cid)) recipientIds.push(cid);
       }
+    }
+
+    // The ticket's own creator (an internal user, distinct from the external
+    // reporter_email path below) gets pinged too, but only on the actual
+    // completion event — not every status_changed — same reasoning as the
+    // reporter_email branch in the switch below: resolved is the one
+    // terminal state worth interrupting the creator for.
+    if (event.type === "status_changed" && event.to === "resolved" && event.reportedByUserId
+        && !recipientIds.includes(event.reportedByUserId)) {
+      recipientIds.push(event.reportedByUserId);
     }
 
     let pushUserIds: string[];

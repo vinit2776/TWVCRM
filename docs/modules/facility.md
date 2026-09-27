@@ -572,8 +572,13 @@ For each event, `notifyIssueAssignee(issue, event)` in `src/lib/facility-notific
 1. **Primary assignee** — `issue.assigned_to` (looked up from `users` table)
 2. **Backup assignee** — the `backup_assignee_id` of the issue's category (if set and active)
 3. **Collaborators** — all rows in `facility_issue_collaborators` for the issue
+4. **The ticket's internal creator** (`reported_by`) — push + in-app only, and only when a `status_changed` event's `to` is `resolved`. Not added for any other event type or status, to avoid paging the creator for routine progress updates — mirrors the external `reporter_email` completion email below, just for internal users instead of walk-in/WhatsApp reporters. Requires the caller to pass `reportedByUserId` on the event (see `PATCH /api/facility/issues/[id]/status`).
 
 If the final recipient list is empty (unassigned, no backup, no collaborators), all admins are notified as a fallback.
+
+**Two separate "reporter" notification paths, don't conflate them:** `reporter_email` (external, e.g. WhatsApp/walk-in) gets a dedicated resolved-only *email* built inline in the `status_changed` switch case, independent of the generic recipient list above. `reported_by` (internal user) gets folded into the generic recipient list instead, so they get the same push+in-app the assignee gets — no separate email. A ticket created directly in the app (not via the public report form) has `reported_by` set but `reporter_email` null, so only the second path applies to it.
+
+**Known gap:** `POST /api/facility/assets/[id]/events` (`resolve_issue: true`) is a second way to resolve an issue — via logging a maintenance event on its linked asset — and does not call `notifyIssueAssignee` at all. Nobody (not even the assignee) is notified when an issue is resolved through that path, and it also skips `resolution_time_minutes`, `sla_breached`, `kpi_points`, and `satisfaction_requested_at`. Not fixed here — flagged as a follow-up.
 
 ### Channels
 
