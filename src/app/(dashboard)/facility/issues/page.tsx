@@ -295,7 +295,12 @@ function FacilityIssuesPageInner() {
         </Chip>
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
-        <Chip active={onlyReportedByMe} onClick={() => { setOnlyReportedByMe((v) => !v); setOnlyUnowned(false); }}>Created by me</Chip>
+        {/* Deliberately does NOT clear onlyUnowned, unlike the Mine chip above.
+            Mine and Unclaimed both write `assigned_to`, so they are genuinely
+            exclusive; this one writes `reported_by`, which composes with either.
+            "Created by me" + "Unclaimed" is the useful view of work you handed
+            out that nobody has picked up yet. */}
+        <Chip active={onlyReportedByMe} onClick={() => setOnlyReportedByMe((v) => !v)}>Created by me</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> Overdue <span className="opacity-70 ml-0.5">(TAT)</span>
         </Chip>
