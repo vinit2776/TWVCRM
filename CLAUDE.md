@@ -82,7 +82,9 @@ sidebar entry is intentionally hidden (commented out in `sidebar.tsx`), not dele
 1. `npm run build` — must compile with 0 TypeScript errors
 2. Push the feature branch and open a PR — triggers CI (lint + build) and a Vercel preview deploy for that branch
 3. Wait for CI to pass: `gh run watch <run-id> --exit-status --repo vinit2776/TWVCRM`
-4. Reload the Vercel preview URL in the browser (Chrome MCP) and click through the actual UI change
+4. Open the Vercel preview URL in the browser and click through the actual UI change.
+   **Confirm the amber STAGING banner is on screen first** — without it that
+   deployment is on production and nothing you click there is safe (see "Staging").
 5. Report the PR to the user for review/merge. Only confirm the feature is *live* after they've merged it and you've re-verified against production — see "Co-Developer Working Agreement" above.
 
 **Never claim a feature is done based on local code alone.** The user expects proof it works in a real browser — on the PR's preview deploy pre-merge, and on production post-merge. If it doesn't look right, investigate and fix before confirming.
@@ -340,12 +342,89 @@ and nothing you are about to click is safe.
 Seed data uses reserved-fake addresses (`@example.com`) and obviously fake phone
 numbers, so even a bug that triggers a live send against it reaches nobody real.
 
+### Preview deployments — test the branch before the PR reaches review
+
+`main` deploys to production. **Every other branch deploys to a Vercel Preview**,
+and Preview is scoped to the staging database — so pushing a branch gives you a
+real, deployed copy of your change running against safe data, before anyone is
+asked to review it.
+
+**Staging is a database, not a copy of the app.** There is no staging branch and
+no shared staging site to deploy over or keep in sync:
+
+- Each branch gets **its own** preview URL. Pushing yours affects nobody else's,
+  and previews are disposable — after a merge they are just stale history, with
+  nothing to clean up or sync back.
+- The **staging database is the one shared piece**. Anyone can seed it, edit it
+  or apply a migration to it, and everyone else's previews see that. It holds
+  test data by design; when it gets messy, re-seed it.
+- **Production is reached only by merging to `main`**, which only Vinit does.
+  Nothing a branch or a preview does can touch it.
+
+So pushing branches and previews needs no approval — the approval gate is the
+merge, and it hasn't moved.
+
+The one way staging and production genuinely drift is **migrations**: a
+migration applied to one and not the other leaves previews testing a schema
+production doesn't have, or the reverse. Whenever you apply one, apply it to
+both. Staging is yours to apply; production is Vinit's.
+
+The intended loop:
+
+1. Push the branch. Vercel builds a preview automatically.
+2. If the change has a migration, apply it to **staging** first (`npx supabase
+   db push` against the staging project) or the preview will run against a
+   schema that doesn't have it yet — a feature can look "shipped" while being
+   impossible to exercise anywhere.
+3. Open the preview URL and click through the actual change.
+4. Open the PR with the preview link and a screenshot showing the change.
+
+**Check the banner every single time you open a preview.** The amber `🧪 STAGING`
+strip is the only thing that tells you which database that deployment is talking
+to. It is not decoration — it is the check:
+
+- **Banner present** → the preview is on staging. Click freely.
+- **Banner absent** → that deployment is on **production**. Stop, don't click
+  anything that writes, and say so — either the Preview environment variables
+  are wrong or they were never set.
+
+Production migrations are Vinit's; staging migrations are not, so don't wait on
+him to be able to test your own schema change.
+
+#### One-time setup (Vinit) — the above assumes this is done
+
+If a preview shows no banner, this is why. In Vercel → project `twv-crm` →
+Settings → Environment Variables, the **Preview** scope of
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY` must hold the **staging** values, with Production
+scope left on production.
+
+Two related settings matter as much:
+
+- **Outbound keys must be dead in Preview.** Razorpay follows the database
+  (`app_settings`), so it is safe automatically — but `RESEND_API_KEY`,
+  `MSG91_*` and `SMTP_*` are project env vars. Give them dummy Preview-scoped
+  values, or a preview can send real email and SMS. Crons are production-only
+  (`vercel.json`), so previews never fire them.
+- **Preview URLs are SSO-protected.** Anyone expected to test a preview needs
+  Vercel team membership, or the link just redirects to `vercel.com/login`.
+  Member/Developer is enough; Owner is not required and shouldn't be given.
+
+Staging Supabase access is per-person and separate from production. Grant the
+staging project only — production stays with Vinit.
+
 ### What this means for verification
 
-"Tested locally" means **tested against staging, through the browser**. Driving
-the real UI on staging is the verification the checklists below ask for. A
+"Tested locally" means **tested against staging, through the browser** — either
+a local dev server pointed at staging, or the branch's own preview deployment.
+Driving the real UI is the verification the checklists below ask for. A
 hand-rolled `fetch()` or `curl` against an API route is not a substitute — see
 "Critical Rules → NEVER" for why that shortcut once emailed 20 real customers.
+
+State which one you used in the PR, and say plainly when something could not be
+exercised. "The migration isn't on staging yet, so the add/reveal flow is
+unverified" is worth more to a reviewer than a confident sentence that turns out
+to describe what the code was meant to do rather than what was observed.
 
 Staging is exactly what makes clicking through freely safe. Use it.
 
