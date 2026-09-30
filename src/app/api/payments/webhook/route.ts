@@ -48,7 +48,7 @@ type ReceiptContext = Omit<Parameters<typeof logWebhookReceipt>[1], "outcome" | 
  * event was handled, so it never redelivers and the payment is lost silently.
  * Returning 500 makes Razorpay retry, and every write in this handler is safe
  * to repeat: payments are de-duplicated on razorpay_payment_id (unique index,
- * migration 00570) and status changes are conditional.
+ * migration 00571) and status changes are conditional.
  */
 function failForRetry(
   supabase: SupabaseClient,
@@ -398,7 +398,7 @@ export async function POST(request: NextRequest) {
       const receipt: ReceiptContext = { ...linkReceipt, entity: "billing_statement" };
 
       // Record payment — once per Razorpay payment. The lookup covers the
-      // common redelivery; the unique index on razorpay_payment_id (00570)
+      // common redelivery; the unique index on razorpay_payment_id (00571)
       // catches two deliveries racing past it.
       let alreadyRecorded = false;
       if (razorpayPaymentId) {

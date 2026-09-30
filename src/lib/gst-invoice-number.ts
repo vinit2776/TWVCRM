@@ -24,7 +24,7 @@ export function gstInvoiceFyPrefix(now: Date = new Date()): string {
 /**
  * Allocate the next GST tax invoice number for the current FY.
  *
- * Goes through the next_gst_invoice_number RPC (migration 00570), which bumps a
+ * Goes through the next_gst_invoice_number RPC (migration 00571), which bumps a
  * per-FY counter under a row lock, so concurrent issuances can never get the
  * same number. The old COUNT(existing)+1 could, and lagged behind the highest
  * issued number whenever one was cleared. Throws if the RPC fails — issuing a
