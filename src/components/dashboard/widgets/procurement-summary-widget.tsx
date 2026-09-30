@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ShoppingCart, FileText, ReceiptText, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface ProcurementSummary {
   pending_prs: number;
@@ -18,7 +19,7 @@ export function ProcurementSummaryWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/procurement")
+    dashboardFetch("/api/dashboard/procurement")
       .then((r) => r.json())
       .then((json) => setData(json.data ?? null))
       .catch(() => setData(null))

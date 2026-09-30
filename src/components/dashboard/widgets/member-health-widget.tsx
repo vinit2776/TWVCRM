@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { HeartPulse, Loader2, Inbox, Star } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface AtRiskMember {
   lead_id: string;
@@ -28,7 +29,7 @@ export function MemberHealthWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/member-health")
+    dashboardFetch("/api/dashboard/member-health")
       .then((r) => r.json())
       .then((j) => setData(j.data ?? null))
       .catch(() => setData(null))

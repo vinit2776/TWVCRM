@@ -48,6 +48,10 @@ import {
   type WidgetId,
 } from "@/lib/dashboard-config";
 import type { DashboardStats, UserRole } from "@/types";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
+
+// Widgets rendered from the page-level /api/dashboard stats payload.
+const STATS_WIDGETS: WidgetId[] = ["kpi_stats", "recent_activities", "notes"];
 
 async function fetchWidgetConfig(role: UserRole): Promise<WidgetId[]> {
   try {
@@ -139,10 +143,15 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userLoading]);
 
+  const widgetIds = widgetConfig;
+  // /api/dashboard is the heaviest dashboard route (lead/task/activity counts),
+  // and most roles' layouts — admin's included — have no widget that reads it.
+  const needsStats = widgetIds.some((id) => STATS_WIDGETS.includes(id));
+
   const fetchStats = useCallback(async () => {
     const params = new URLSearchParams();
     if (locationFilter) params.set("location_id", locationFilter);
-    const res = await fetch(`/api/dashboard?${params}`);
+    const res = await dashboardFetch(`/api/dashboard?${params}`);
     if (res.ok) {
       const json = await res.json();
       setStats(json.data);
@@ -150,10 +159,8 @@ export default function DashboardPage() {
   }, [locationFilter]);
 
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
-
-  const widgetIds = widgetConfig;
+    if (needsStats) fetchStats();
+  }, [fetchStats, needsStats]);
 
   // Only block on role/widget config — that's what gates widget layout.
   // Stats-dependent widgets self-render null until stats load; widgets that
