@@ -10,6 +10,7 @@ import { computeSettlement } from "@/lib/settlement";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { istTodayYmd } from "@/lib/gst-invoice-number";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,31 @@ function logWebhookReceipt(
     () => {},
     (err) => console.error("[webhook-log] insert failed:", err)
   );
+}
+
+type ReceiptContext = Omit<Parameters<typeof logWebhookReceipt>[1], "outcome" | "outcome_detail">;
+
+/**
+ * A failed database write must not be acknowledged. Any 2xx tells Razorpay the
+ * event was handled, so it never redelivers and the payment is lost silently.
+ * Returning 500 makes Razorpay retry, and every write in this handler is safe
+ * to repeat: payments are de-duplicated on razorpay_payment_id (unique index,
+ * migration 00570) and status changes are conditional.
+ */
+function failForRetry(
+  supabase: SupabaseClient,
+  receipt: ReceiptContext,
+  step: string,
+  error: { message?: string } | null,
+) {
+  console.error(`[webhook] ${step} failed:`, error);
+  logWebhookReceipt(supabase, { ...receipt, outcome: "error", outcome_detail: `${step}: ${error?.message ?? "unknown error"}` });
+  return NextResponse.json({ error: `${step} failed` }, { status: 500 });
+}
+
+/** Postgres unique_violation — this Razorpay payment is already recorded. */
+function isDuplicate(error: { code?: string } | null): boolean {
+  return error?.code === "23505";
 }
 
 // POST — Razorpay webhook handler
@@ -94,56 +120,77 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ignored", reason: "No order_id in payment" });
     }
 
+    const receipt: ReceiptContext = { event, razorpay_payment_id: paymentId, razorpay_order_id: orderId, entity: "booking" };
+
     // Find the booking_payment by razorpay_order_id
-    const { data: bookingPayment } = await supabase
+    const { data: bookingPayment, error: bookingPaymentErr } = await supabase
       .from("booking_payments")
       .select("id, booking_id, status")
       .eq("razorpay_order_id", orderId)
-      .single();
+      .maybeSingle();
+    if (bookingPaymentErr) return failForRetry(supabase, receipt, "Booking payment lookup", bookingPaymentErr);
 
     if (!bookingPayment) {
       logWebhookReceipt(supabase, { event, razorpay_payment_id: paymentId, razorpay_order_id: orderId, outcome: "ignored", outcome_detail: "No matching payment record" });
       return NextResponse.json({ status: "ignored", reason: "No matching payment record" });
     }
 
-    // Only update if still pending
+    // Flip pending → verified. The status filter makes the flip atomic: of two
+    // concurrent deliveries, only one sees a row come back.
+    let justVerified = false;
     if (bookingPayment.status === "pending") {
-      await supabase
+      const { data: verified, error: verifyErr } = await supabase
         .from("booking_payments")
         .update({
           status: "verified",
           razorpay_payment_id: paymentId,
           payment_reference: paymentId,
         })
-        .eq("id", bookingPayment.id);
+        .eq("id", bookingPayment.id)
+        .eq("status", "pending")
+        .select("id");
+      if (verifyErr) return failForRetry(supabase, receipt, "Booking payment verify", verifyErr);
+      justVerified = (verified?.length ?? 0) > 0;
+    }
 
+    // Also runs on a redelivery of an already-verified payment, so a retry
+    // after a failed write below still marks the booking paid.
+    if (bookingPayment.status === "pending" || bookingPayment.status === "verified") {
       // Check if booking is now fully paid
-      const { data: booking } = await supabase
+      const { data: booking, error: bookingErr } = await supabase
         .from("bookings")
         .select("id, total_amount")
         .eq("id", bookingPayment.booking_id)
-        .single();
+        .maybeSingle();
+      if (bookingErr) return failForRetry(supabase, receipt, "Booking lookup", bookingErr);
 
       if (booking) {
-        const { data: verifiedPayments } = await supabase
+        const { data: verifiedPayments, error: verifiedErr } = await supabase
           .from("booking_payments")
           .select("amount")
           .eq("booking_id", bookingPayment.booking_id)
           .eq("status", "verified");
+        if (verifiedErr) return failForRetry(supabase, receipt, "Booking payments lookup", verifiedErr);
 
         const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
 
         if (totalPaid >= Number(booking.total_amount)) {
-          await supabase
+          const { data: markedPaid, error: bookingPaidErr } = await supabase
             .from("bookings")
             .update({ payment_status: "paid", payment_mode: "razorpay" })
-            .eq("id", bookingPayment.booking_id);
+            .eq("id", bookingPayment.booking_id)
+            .or("payment_status.is.null,payment_status.neq.paid")
+            .select("id");
+          if (bookingPaidErr) return failForRetry(supabase, receipt, "Booking paid update", bookingPaidErr);
 
-          // Provision COSEC access PIN now that booking is confirmed paid.
+          // Provision COSEC access PIN now that booking is confirmed paid —
+          // once, by whichever delivery verified the payment or paid the booking.
           // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
-          provisionBookingAccess(bookingPayment.booking_id).catch((err) =>
-            console.error("[webhook] COSEC provision failed:", err)
-          );
+          if (justVerified || (markedPaid?.length ?? 0) > 0) {
+            provisionBookingAccess(bookingPayment.booking_id).catch((err) =>
+              console.error("[webhook] COSEC provision failed:", err)
+            );
+          }
         }
       }
     }
@@ -168,29 +215,36 @@ export async function POST(request: NextRequest) {
         ? paymentEntity.amount / 100
         : 0;
     const razorpayPaymentId = paymentEntity?.id || null;
+    const linkReceipt: ReceiptContext = { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId };
+    // IST calendar date — a payment at 00:30 IST belongs to that day, not the
+    // previous UTC day (which on the 1st is the previous GST period).
+    const paymentDate = istTodayYmd();
 
     // Gap 2: Check if this payment link belongs to a prepaid purchase first
-    const { data: purchase } = await supabase
+    const { data: purchase, error: purchaseErr } = await supabase
       .from("prepaid_purchases")
       .select("id, payment_status")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
+    if (purchaseErr) return failForRetry(supabase, linkReceipt, "Prepaid purchase lookup", purchaseErr);
 
     if (purchase && purchase.payment_status !== "paid") {
-      await supabase
+      const { error: purchaseUpdateErr } = await supabase
         .from("prepaid_purchases")
         .update({ payment_status: "paid", updated_at: new Date().toISOString() })
         .eq("id", purchase.id);
+      if (purchaseUpdateErr) return failForRetry(supabase, { ...linkReceipt, entity: "prepaid_purchase" }, "Prepaid purchase update", purchaseUpdateErr);
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "prepaid_purchase", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "prepaid_purchase" });
     }
 
     // Check if this payment link belongs to a proposal (main payment)
-    const { data: proposal } = await supabase
+    const { data: proposal, error: proposalErr } = await supabase
       .from("proposals")
       .select("id, proposal_number, lead_id, status, payment_status, payment_amount, payment_reference, payment_received_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
+    if (proposalErr) return failForRetry(supabase, linkReceipt, "Proposal lookup", proposalErr);
 
     if (proposal && proposal.payment_status !== "paid") {
       const now = new Date().toISOString();
@@ -202,10 +256,11 @@ export async function POST(request: NextRequest) {
         payment_amount: amountPaid,
         payment_reference: razorpayPaymentId || paymentLinkId,
       };
-      await supabase
+      const { error: proposalUpdateErr } = await supabase
         .from("proposals")
         .update(proposalUpdate)
         .eq("id", proposal.id);
+      if (proposalUpdateErr) return failForRetry(supabase, { ...linkReceipt, entity: "proposal" }, "Proposal update", proposalUpdateErr);
 
       logAudit(supabase, {
         entityType: "proposal",
@@ -220,11 +275,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if this payment link belongs to a proposal security deposit
-    const { data: depositProposal } = await supabase
+    const { data: depositProposal, error: depositProposalErr } = await supabase
       .from("proposals")
       .select("id, proposal_number, status, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_received_at, deposit_payment_medium")
       .eq("deposit_razorpay_link_id", paymentLinkId)
       .maybeSingle();
+    if (depositProposalErr) return failForRetry(supabase, linkReceipt, "Deposit proposal lookup", depositProposalErr);
 
     if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
       const now = new Date().toISOString();
@@ -265,10 +321,11 @@ export async function POST(request: NextRequest) {
         deposit_payment_medium: "razorpay",
         ...(resurrects ? {} : { status: "accepted", accepted_at: now }),
       };
-      await supabase
+      const { error: depositUpdateErr } = await supabase
         .from("proposals")
         .update(depositUpdate)
         .eq("id", depositProposal.id);
+      if (depositUpdateErr) return failForRetry(supabase, { ...linkReceipt, entity: "proposal_deposit" }, "Deposit update", depositUpdateErr);
 
       logAudit(supabase, {
         entityType: "proposal",
@@ -286,10 +343,11 @@ export async function POST(request: NextRequest) {
     // mark_deposit_topup_paid is idempotent (only acts on status='pending'),
     // and also handles the atomic deposit_shortfall decrement if this
     // top-up was collecting a renewal-escalation shortfall.
-    const { data: topupResult } = await supabase.rpc("mark_deposit_topup_paid", {
+    const { data: topupResult, error: topupErr } = await supabase.rpc("mark_deposit_topup_paid", {
       p_razorpay_payment_link_id: paymentLinkId,
       p_razorpay_payment_id: razorpayPaymentId,
     });
+    if (topupErr) return failForRetry(supabase, linkReceipt, "Deposit top-up update", topupErr);
     const topupOutcome = topupResult?.[0];
     if (topupOutcome?.success) {
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "deposit_topup", outcome: "processed" });
@@ -304,11 +362,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if this payment link belongs to a billing statement (invoice)
-    const { data: billingStatement } = await supabase
+    const { data: billingStatement, error: billingStatementErr } = await supabase
       .from("billing_statements")
       .select("id, total_amount, payment_status, voided_at")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .maybeSingle();
+    if (billingStatementErr) return failForRetry(supabase, linkReceipt, "Billing statement lookup", billingStatementErr);
 
     // A voided statement is no longer a receivable. Its Razorpay link is
     // cancelled at void time, but a payment already in flight (or a link the
@@ -327,20 +386,48 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "billing_statement", ignored: "voided" });
     }
 
-    if (billingStatement && billingStatement.payment_status !== "paid") {
-      // Record payment
-      const { data: insertedPayment } = await supabase
-        .from("billing_payments")
-        .insert({
-          billing_statement_id: billingStatement.id,
-          amount: amountPaid,
-          payment_date: new Date().toISOString().slice(0, 10),
-          payment_mode: "razorpay",
-          payment_reference: razorpayPaymentId || paymentLinkId,
-          razorpay_payment_id: razorpayPaymentId,
-        })
-        .select("id")
-        .single();
+    // Already settled — a redelivery (or a concurrent delivery that lost the
+    // race). Acknowledge under the right entity instead of falling through to
+    // the checks below, which would log it as "no matching entity".
+    if (billingStatement?.payment_status === "paid") {
+      logWebhookReceipt(supabase, { ...linkReceipt, entity: "billing_statement", outcome: "ignored", outcome_detail: "Statement already paid — duplicate webhook delivery" });
+      return NextResponse.json({ status: "ok", entity: "billing_statement", reason: "Payment already recorded" });
+    }
+
+    if (billingStatement) {
+      const receipt: ReceiptContext = { ...linkReceipt, entity: "billing_statement" };
+
+      // Record payment — once per Razorpay payment. The lookup covers the
+      // common redelivery; the unique index on razorpay_payment_id (00570)
+      // catches two deliveries racing past it.
+      let alreadyRecorded = false;
+      if (razorpayPaymentId) {
+        const { data: existingPayment, error: existingErr } = await supabase
+          .from("billing_payments")
+          .select("id")
+          .eq("razorpay_payment_id", razorpayPaymentId)
+          .limit(1);
+        if (existingErr) return failForRetry(supabase, receipt, "Existing payment lookup", existingErr);
+        alreadyRecorded = (existingPayment?.length ?? 0) > 0;
+      }
+
+      let insertedPayment: { id: string } | null = null;
+      if (!alreadyRecorded) {
+        const { data, error: insertErr } = await supabase
+          .from("billing_payments")
+          .insert({
+            billing_statement_id: billingStatement.id,
+            amount: amountPaid,
+            payment_date: paymentDate,
+            payment_mode: "razorpay",
+            payment_reference: razorpayPaymentId || paymentLinkId,
+            razorpay_payment_id: razorpayPaymentId,
+          })
+          .select("id")
+          .single();
+        if (insertErr && !isDuplicate(insertErr)) return failForRetry(supabase, receipt, "Payment insert", insertErr);
+        insertedPayment = data;
+      }
 
       // Handoff v2: when the flag is on, the legacy bridge-writer path and
       // the CRM-side GST auto-gen are both bypassed. The new flow routes the
@@ -348,13 +435,13 @@ export async function POST(request: NextRequest) {
       // path stays for v1 contracts and during the migration window.
       const v2Enabled = await isHandoffV2Enabled(supabase);
 
-      if (!v2Enabled) {
+      if (!v2Enabled && insertedPayment) {
         // Reverse-sync to Tally as a receipt voucher (no-op unless this statement's
         // GST invoice was issued by Tally and sync is active). Fire-and-forget.
         void enqueueTallyReceiptVoucher(billingStatement.id, {
-          paymentId: insertedPayment?.id || (razorpayPaymentId as string) || paymentLinkId,
+          paymentId: insertedPayment.id,
           amount: amountPaid,
-          date: new Date().toISOString().slice(0, 10),
+          date: paymentDate,
           mode: "razorpay",
           reference: razorpayPaymentId || paymentLinkId,
         });
@@ -363,21 +450,41 @@ export async function POST(request: NextRequest) {
       // Check if fully paid. TDS counts toward settlement (a prior manual
       // payment may carry a TDS deduction), and the statement settles on the
       // whole-rupee amount — same definition as the manual payment route.
-      const { data: allPayments } = await supabase
+      const { data: allPayments, error: allPaymentsErr } = await supabase
         .from("billing_payments")
         .select("amount, tds_amount")
         .eq("billing_statement_id", billingStatement.id);
+      if (allPaymentsErr) return failForRetry(supabase, receipt, "Payments lookup", allPaymentsErr);
 
       const settlement = computeSettlement(billingStatement.total_amount, allPayments);
       // A payment just landed, so anything short of "paid" is "partially_paid".
       const newStatus = settlement.paymentStatus === "paid" ? "paid" : "partially_paid";
 
-      await supabase
+      // If this statement is a renewal pro-rata, mark the contract as paid.
+      // Done before the statement flips to paid: once it is paid, a redelivery
+      // is acknowledged above without reaching here, so this must not be the
+      // write a retry depends on.
+      if (newStatus === "paid") {
+        const { error: prorataErr } = await supabase
+          .from("contracts")
+          .update({ prorata_payment_status: "paid" })
+          .eq("prorata_billing_statement_id", billingStatement.id);
+        if (prorataErr) return failForRetry(supabase, receipt, "Pro-rata contract update", prorataErr);
+      }
+
+      // Conditional on the status actually changing, so of two concurrent
+      // deliveries only the one that moved the statement to "paid" fires the
+      // GST invoice / handoff / VO renewal chain below.
+      const { data: transitionedRows, error: statusErr } = await supabase
         .from("billing_statements")
         .update({ payment_status: newStatus })
-        .eq("id", billingStatement.id);
+        .eq("id", billingStatement.id)
+        .or(`payment_status.is.null,payment_status.neq.${newStatus}`)
+        .select("id");
+      if (statusErr) return failForRetry(supabase, receipt, "Statement status update", statusErr);
+      const becamePaid = newStatus === "paid" && (transitionedRows?.length ?? 0) > 0;
 
-      if (newStatus === "paid") {
+      if (becamePaid) {
         if (v2Enabled) {
           // v2: set handoff_state based on billing_mode. Accounts handles the
           // GST issuance / receipt recording from the inbox. No CRM-side gen,
@@ -402,7 +509,7 @@ export async function POST(request: NextRequest) {
       }
 
       // If this billing statement is linked to a VO case, complete the renewal
-      if (newStatus === "paid") {
+      if (becamePaid) {
         const { data: stmtFull } = await supabase
           .from("billing_statements")
           .select("case_id, statement_type")
@@ -422,22 +529,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If this statement is a renewal pro-rata, mark the contract as paid
-      if (newStatus === "paid") {
-        const { data: prorataContract } = await supabase
-          .from("contracts")
-          .select("id")
-          .eq("prorata_billing_statement_id", billingStatement.id)
-          .maybeSingle();
-        if (prorataContract) {
-          await supabase
-            .from("contracts")
-            .update({ prorata_payment_status: "paid" })
-            .eq("id", prorataContract.id);
-        }
-      }
-
-      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "billing_statement", outcome: "processed", outcome_detail: newStatus });
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "billing_statement", outcome: "processed", outcome_detail: alreadyRecorded ? `${newStatus} (payment already recorded)` : newStatus });
       return NextResponse.json({ status: "ok", entity: "billing_statement" });
     }
 
@@ -447,11 +539,12 @@ export async function POST(request: NextRequest) {
     // unlike every other entity above, nothing else in the CRM ever recorded
     // this payment, so it silently fell through to "no matching entity"
     // below and the invoice stayed "sent" forever.
-    const { data: adhocInvoice } = await supabase
+    const { data: adhocInvoice, error: adhocInvoiceErr } = await supabase
       .from("proforma_invoices")
       .select("id, invoice_number, status, title, items, subtotal, tax_percentage, tax_amount, total_amount, due_date, proposal_id")
       .eq("razorpay_link_id", paymentLinkId)
       .maybeSingle();
+    if (adhocInvoiceErr) return failForRetry(supabase, linkReceipt, "Ad-hoc invoice lookup", adhocInvoiceErr);
 
     // A cancelled invoice's Razorpay link is best-effort cancelled at cancel
     // time, but a payment already in flight must not resurrect it — same
@@ -485,20 +578,23 @@ export async function POST(request: NextRequest) {
     }
 
     if (adhocInvoice) {
+      const receipt: ReceiptContext = { ...linkReceipt, entity: "adhoc_invoice" };
       // Find (or defensively create) the linked billing_statements row —
       // mirrors POST /api/invoices/[id]/payment (the manual "Record payment"
       // route) so both paths settle identically and land in the same Tally
       // Inbox flow. Normally this already exists (created when the invoice
       // was emailed), but the payment link is live from creation, so a
       // customer can in principle pay before the invoice was ever sent.
-      let { data: statement } = await supabase
+      const { data: existingStatement, error: adhocStatementErr } = await supabase
         .from("billing_statements")
         .select("id, total_amount, payment_status")
         .eq("invoice_id", adhocInvoice.id)
         .maybeSingle();
+      if (adhocStatementErr) return failForRetry(supabase, receipt, "Ad-hoc statement lookup", adhocStatementErr);
+      let statement = existingStatement;
 
       if (!statement) {
-        const todayYmd = new Date().toISOString().slice(0, 10);
+        const todayYmd = paymentDate;
         const lineItems = ((adhocInvoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
           description: item.description,
           qty: item.quantity,
@@ -506,7 +602,7 @@ export async function POST(request: NextRequest) {
           amount: item.total,
           hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
         }));
-        const { data: newStatement } = await supabase
+        const { data: newStatement, error: newStatementErr } = await supabase
           .from("billing_statements")
           .insert({
             invoice_id: adhocInvoice.id,
@@ -529,28 +625,48 @@ export async function POST(request: NextRequest) {
           })
           .select("id, total_amount, payment_status")
           .single();
+        if (newStatementErr) return failForRetry(supabase, receipt, "Ad-hoc statement insert", newStatementErr);
         statement = newStatement;
       }
 
       if (statement) {
-        await supabase.from("billing_payments").insert({
-          billing_statement_id: statement.id,
-          amount: amountPaid,
-          payment_date: new Date().toISOString().slice(0, 10),
-          payment_mode: "razorpay",
-          payment_reference: razorpayPaymentId || paymentLinkId,
-          razorpay_payment_id: razorpayPaymentId,
-        });
+        // Once per Razorpay payment, as in the billing_statement branch above.
+        // On a retry after a failed write further down, the payment is
+        // already there and settlement just re-runs.
+        let alreadyRecorded = false;
+        if (razorpayPaymentId) {
+          const { data: existingPayment, error: existingErr } = await supabase
+            .from("billing_payments")
+            .select("id")
+            .eq("razorpay_payment_id", razorpayPaymentId)
+            .limit(1);
+          if (existingErr) return failForRetry(supabase, receipt, "Existing payment lookup", existingErr);
+          alreadyRecorded = (existingPayment?.length ?? 0) > 0;
+        }
+
+        let inserted = false;
+        if (!alreadyRecorded) {
+          const { error: insertErr } = await supabase.from("billing_payments").insert({
+            billing_statement_id: statement.id,
+            amount: amountPaid,
+            payment_date: paymentDate,
+            payment_mode: "razorpay",
+            payment_reference: razorpayPaymentId || paymentLinkId,
+            razorpay_payment_id: razorpayPaymentId,
+          });
+          if (insertErr && !isDuplicate(insertErr)) return failForRetry(supabase, receipt, "Payment insert", insertErr);
+          inserted = !insertErr;
+        }
 
         // Reverse-sync to Tally as a receipt voucher, same as the
         // billing_statement branch above — no-op unless this statement's
         // GST invoice was issued by Tally and sync is active.
         const v2Enabled = await isHandoffV2Enabled(supabase);
-        if (!v2Enabled) {
+        if (!v2Enabled && inserted) {
           void enqueueTallyReceiptVoucher(statement.id, {
             paymentId: razorpayPaymentId || paymentLinkId,
             amount: amountPaid,
-            date: new Date().toISOString().slice(0, 10),
+            date: paymentDate,
             mode: "razorpay",
             reference: razorpayPaymentId || paymentLinkId,
           });
@@ -559,12 +675,13 @@ export async function POST(request: NextRequest) {
         // Shared settlement tail — persists payment_status and fires the
         // paid-transition chain (GST auto-gen / v2 handoff) identically to
         // every other payment-creation path.
-        await finalizeBillingPayment(supabase, {
+        const settled = await finalizeBillingPayment(supabase, {
           statementId: statement.id,
           statementTotalAmount: statement.total_amount,
           previousPaymentStatus: statement.payment_status,
           reason: "razorpay_payment_link_paid",
         });
+        if (settled.persistError) return failForRetry(supabase, receipt, "Ad-hoc settlement", { message: settled.persistError });
       }
 
       const now = new Date().toISOString();
@@ -573,7 +690,8 @@ export async function POST(request: NextRequest) {
         paid_at: now,
         payment_reference: razorpayPaymentId || paymentLinkId,
       };
-      await supabase.from("proforma_invoices").update(invoiceUpdate).eq("id", adhocInvoice.id);
+      const { error: invoiceUpdateErr } = await supabase.from("proforma_invoices").update(invoiceUpdate).eq("id", adhocInvoice.id);
+      if (invoiceUpdateErr) return failForRetry(supabase, receipt, "Ad-hoc invoice update", invoiceUpdateErr);
 
       logAudit(supabase, {
         entityType: "invoice",
@@ -588,32 +706,35 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the booking by razorpay_payment_link_id
-    const { data: booking } = await supabase
+    const { data: booking, error: linkBookingErr } = await supabase
       .from("bookings")
       .select("id, total_amount")
       .eq("razorpay_payment_link_id", paymentLinkId)
-      .single();
+      .maybeSingle();
+    if (linkBookingErr) return failForRetry(supabase, linkReceipt, "Booking lookup", linkBookingErr);
+    const bookingReceipt: ReceiptContext = { ...linkReceipt, entity: "booking" };
 
     if (!booking) {
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, outcome: "ignored", outcome_detail: "No matching entity for payment link" });
       return NextResponse.json({ status: "ignored", reason: "No matching entity for payment link" });
     }
 
-    // Check if we already recorded this payment (idempotency)
+    // Check if we already recorded this payment (idempotency). A redelivery
+    // still runs the paid check below, so a retry after a failed booking
+    // update completes it.
+    let bookingPaymentRecorded = false;
     if (razorpayPaymentId) {
-      const { data: existing } = await supabase
+      const { data: existing, error: existingErr } = await supabase
         .from("booking_payments")
         .select("id")
         .eq("razorpay_payment_id", razorpayPaymentId)
-        .maybeSingle();
-
-      if (existing) {
-        return NextResponse.json({ status: "ok", reason: "Payment already recorded" });
-      }
+        .limit(1);
+      if (existingErr) return failForRetry(supabase, bookingReceipt, "Existing booking payment lookup", existingErr);
+      bookingPaymentRecorded = (existing?.length ?? 0) > 0;
     }
 
     // Create a verified payment record
-    await supabase
+    const { error: bookingInsertErr } = bookingPaymentRecorded ? { error: null } : await supabase
       .from("booking_payments")
       .insert({
         booking_id: booking.id,
@@ -623,21 +744,24 @@ export async function POST(request: NextRequest) {
         razorpay_payment_id: razorpayPaymentId,
         payment_reference: razorpayPaymentId || paymentLinkId,
       });
+    if (bookingInsertErr) return failForRetry(supabase, bookingReceipt, "Booking payment insert", bookingInsertErr);
 
     // Check if booking is now fully paid
-    const { data: verifiedPayments } = await supabase
+    const { data: verifiedPayments, error: verifiedErr } = await supabase
       .from("booking_payments")
       .select("amount")
       .eq("booking_id", booking.id)
       .eq("status", "verified");
+    if (verifiedErr) return failForRetry(supabase, bookingReceipt, "Booking payments lookup", verifiedErr);
 
     const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
 
     if (totalPaid >= Number(booking.total_amount)) {
-      await supabase
+      const { error: bookingPaidErr } = await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode: "razorpay" })
         .eq("id", booking.id);
+      if (bookingPaidErr) return failForRetry(supabase, bookingReceipt, "Booking paid update", bookingPaidErr);
     }
 
     logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "booking", outcome: "processed" });
