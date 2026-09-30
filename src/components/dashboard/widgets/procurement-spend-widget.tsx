@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { PiggyBank, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface DeptRow {
   department: string;
@@ -40,7 +41,7 @@ export function ProcurementSpendWidget({ locationFilter }: ProcurementSpendWidge
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/procurement-spend?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/procurement-spend?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

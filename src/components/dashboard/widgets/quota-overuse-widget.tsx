@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Gauge, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface OveruseItem {
   id: string;
@@ -29,7 +30,7 @@ export function QuotaOveruseWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/quota-overuse")
+    dashboardFetch("/api/dashboard/quota-overuse")
       .then((r) => r.json())
       .then((j) => setData(j.data ?? null))
       .catch(() => setData(null))

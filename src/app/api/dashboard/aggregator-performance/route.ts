@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/server";
+import { getDashboardAuth } from "@/lib/dashboard-auth";
 
 /**
  * GET /api/dashboard/aggregator-performance
@@ -9,16 +10,10 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  * Access: admin, manager, accounts.
  */
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, dbUser } = await getDashboardAuth();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const adminSupabase = await createAdminClient();
-  const { data: dbUser } = await adminSupabase
-    .from("users")
-    .select("id, role")
-    .eq("auth_id", user.id)
-    .single();
 
   if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
