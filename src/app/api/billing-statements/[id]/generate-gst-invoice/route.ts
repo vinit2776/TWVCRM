@@ -9,6 +9,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { allocateGstInvoiceNumber, istTodayYmd } from "@/lib/gst-invoice-number";
 
 export const maxDuration = 30;
 
@@ -134,18 +135,15 @@ export async function POST(
     });
   }
 
-  // Generate sequential GST invoice number
-  const fyStart = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-  const fyEnd = fyStart + 1;
-  const fyPrefix = `TWV/INV/${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}/`;
-
-  const { count: existingCount } = await adminSupabase
-    .from("billing_statements")
-    .select("id", { count: "exact", head: true })
-    .like("gst_invoice_number", `${fyPrefix}%`);
-
-  const seqNum = (existingCount || 0) + 1;
-  const invoiceNumber = `${fyPrefix}${String(seqNum).padStart(4, "0")}`;
+  // Generate sequential GST invoice number (IST financial year, race-free)
+  const issuedAt = new Date();
+  let invoiceNumber: string;
+  try {
+    invoiceNumber = await allocateGstInvoiceNumber(adminSupabase, issuedAt);
+  } catch (err) {
+    console.error("[generate-gst-invoice]", err);
+    return NextResponse.json({ error: "Could not allocate a GST invoice number. Try again." }, { status: 500 });
+  }
 
   // Recalculate totals — derive from the structured line_items sections (the
   // same data the table below is built from) so the totals box can never
@@ -205,7 +203,7 @@ export async function POST(
   // Generate GST invoice PDF
   const invoiceData: GstInvoiceData = {
     invoiceNumber,
-    invoiceDate: new Date().toISOString().slice(0, 10),
+    invoiceDate: istTodayYmd(issuedAt),
     isProforma: false,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerAddress: [lead?.street, lead?.city, lead?.state, lead?.zip_code].filter(Boolean).join(", ") || undefined,
@@ -295,8 +293,10 @@ export async function POST(
     }
   }
 
-  // Update statement — mark GST invoice generated + exported
-  await adminSupabase
+  // Update statement — mark GST invoice generated + exported. Conditional on
+  // no number being set yet, so a concurrent generation for the same statement
+  // can't overwrite the number that was already issued.
+  const { data: savedRows, error: saveErr } = await adminSupabase
     .from("billing_statements")
     .update({
       gst_invoice_number: invoiceNumber,
@@ -315,7 +315,18 @@ export async function POST(
       buyer_gstin: lead?.gst_number || null,
       ...(dbUserId ? { gst_generated_by: dbUserId } : {}),
     })
-    .eq("id", id);
+    .eq("id", id)
+    .is("gst_invoice_number", null)
+    .select("id");
+
+  if (saveErr) {
+    console.error(`[generate-gst-invoice] Saving ${invoiceNumber} on statement ${id} failed:`, saveErr);
+    return NextResponse.json({ error: `GST invoice ${invoiceNumber} was generated but could not be saved on the statement` }, { status: 500 });
+  }
+  if (!savedRows || savedRows.length === 0) {
+    console.error(`[generate-gst-invoice] Statement ${id} got a GST number concurrently; ${invoiceNumber} was not saved`);
+    return NextResponse.json({ error: "GST invoice already generated" }, { status: 409 });
+  }
 
   // next_billing_date is deliberately NOT touched here — see the same note in
   // the statement confirm route. The rent generator owns the anchor and derives

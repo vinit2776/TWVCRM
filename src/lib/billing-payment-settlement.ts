@@ -29,10 +29,17 @@ export async function finalizeBillingPayment(
      *  settlement (Razorpay webhook), which has no human actor. */
     performedBy?: string | null;
   }
-): Promise<{ paymentStatus: SettlementPaymentStatus; totalPaid: number; balanceDue: number }> {
+): Promise<{
+  paymentStatus: SettlementPaymentStatus;
+  totalPaid: number;
+  balanceDue: number;
+  /** Set when reading payments or saving the status failed. The Razorpay
+   *  webhook turns this into a non-2xx so Razorpay redelivers. */
+  persistError?: string;
+}> {
   const { statementId, statementTotalAmount, previousPaymentStatus, reason, performedBy = null } = params;
 
-  const { data: allPayments } = await supabase
+  const { data: allPayments, error: paymentsErr } = await supabase
     .from("billing_payments")
     .select("amount, tds_amount")
     .eq("billing_statement_id", statementId);
@@ -40,14 +47,31 @@ export async function finalizeBillingPayment(
   const settlement = computeSettlement(statementTotalAmount, allPayments);
   const newPaymentStatus = settlement.paymentStatus;
 
-  if (newPaymentStatus !== previousPaymentStatus) {
-    await supabase
-      .from("billing_statements")
-      .update({ payment_status: newPaymentStatus })
-      .eq("id", statementId);
+  if (paymentsErr) {
+    console.error(`[billing-payment-settlement] Reading payments for ${statementId} failed:`, paymentsErr);
+    return { paymentStatus: newPaymentStatus, totalPaid: settlement.totalPaid, balanceDue: settlement.balanceDue, persistError: paymentsErr.message };
   }
 
-  if (newPaymentStatus === "paid" && previousPaymentStatus !== "paid") {
+  // Conditional on the stored status actually changing, so when two payment
+  // paths (or two deliveries of one webhook) settle the same statement at once,
+  // only the one that really moved it into "paid" fires the chain below — the
+  // GST invoice is generated once, not once per caller.
+  let transitioned = false;
+  if (newPaymentStatus !== previousPaymentStatus) {
+    const { data: changed, error: updateErr } = await supabase
+      .from("billing_statements")
+      .update({ payment_status: newPaymentStatus })
+      .eq("id", statementId)
+      .or(`payment_status.is.null,payment_status.neq.${newPaymentStatus}`)
+      .select("id");
+    if (updateErr) {
+      console.error(`[billing-payment-settlement] Saving payment status for ${statementId} failed:`, updateErr);
+      return { paymentStatus: newPaymentStatus, totalPaid: settlement.totalPaid, balanceDue: settlement.balanceDue, persistError: updateErr.message };
+    }
+    transitioned = (changed?.length ?? 0) > 0;
+  }
+
+  if (newPaymentStatus === "paid" && transitioned) {
     // Every route that settles a payment funnels through here, so this is the
     // one place a VO case's stage needs to learn about it.
     const { data: stmt } = await supabase

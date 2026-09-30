@@ -7,6 +7,7 @@ import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
+import { allocateGstInvoiceNumber, istTodayYmd } from "@/lib/gst-invoice-number";
 
 /**
  * POST /api/billing-statements/[id]/confirm
@@ -70,18 +71,15 @@ export async function POST(
     return NextResponse.json({ error: "No contract linked to this statement" }, { status: 400 });
   }
 
-  // 1. Generate GST invoice number (based on count of existing invoices this FY)
-  const fyStart = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-  const fyEnd = fyStart + 1;
-  const fyPrefix = `TWV/INV/${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}/`;
-
-  const { count: existingCount } = await adminSupabase
-    .from("billing_statements")
-    .select("id", { count: "exact", head: true })
-    .like("gst_invoice_number", `${fyPrefix}%`);
-
-  const seqNum = (existingCount || 0) + 1;
-  const invoiceNumber = `${fyPrefix}${String(seqNum).padStart(4, "0")}`;
+  // 1. Generate GST invoice number (IST financial year, race-free)
+  const issuedAt = new Date();
+  let invoiceNumber: string;
+  try {
+    invoiceNumber = await allocateGstInvoiceNumber(adminSupabase, issuedAt);
+  } catch (err) {
+    console.error("[billing confirm]", err);
+    return NextResponse.json({ error: "Could not allocate a GST invoice number. Try again." }, { status: 500 });
+  }
 
   // 2. Recalculate totals — derive from the structured line_items sections
   // (the same data the table below is built from) so the totals box can
@@ -228,7 +226,7 @@ export async function POST(
   // 6. Generate GST invoice PDF
   const invoiceData: GstInvoiceData = {
     invoiceNumber,
-    invoiceDate: new Date().toISOString().slice(0, 10),
+    invoiceDate: istTodayYmd(issuedAt),
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
     buyerState: lead?.state || undefined,
@@ -261,9 +259,11 @@ export async function POST(
     console.error("[billing confirm] PDF upload failed:", uploadErr);
   }
 
-  // 8. Update billing statement
+  // 8. Update billing statement. Conditional on it still being an unnumbered
+  // draft, so a concurrent confirm can't overwrite an issued number or email
+  // the customer a second invoice.
   const now = new Date().toISOString();
-  await adminSupabase
+  const { data: savedRows, error: saveErr } = await adminSupabase
     .from("billing_statements")
     .update({
       status: "finalized",
@@ -282,7 +282,18 @@ export async function POST(
       razorpay_payment_link_id: razorpayLinkId || null,
       razorpay_payment_link_url: razorpayLinkUrl || null,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("status", "draft")
+    .is("gst_invoice_number", null)
+    .select("id");
+
+  if (saveErr) {
+    console.error(`[billing confirm] Saving ${invoiceNumber} on statement ${id} failed:`, saveErr);
+    return NextResponse.json({ error: "Could not save the finalized statement. Nothing was sent to the customer." }, { status: 500 });
+  }
+  if (!savedRows || savedRows.length === 0) {
+    return NextResponse.json({ error: "Statement was already confirmed" }, { status: 409 });
+  }
 
   // 9. Email to customer + CC accounts/managers
   const customerEmail = lead?.email;

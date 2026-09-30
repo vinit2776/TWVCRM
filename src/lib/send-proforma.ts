@@ -24,6 +24,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { allocateGstInvoiceNumber, istTodayYmd } from "@/lib/gst-invoice-number";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
  *  slow/hung Razorpay or email call must not stall the whole batch loop. */
@@ -298,6 +299,20 @@ export async function dispatchProforma(
     }
   }
 
+  // Save the link on the statement before anything is sent. The webhook
+  // matches a payment to its statement by this id, so a link the customer can
+  // pay (Razorpay notifies them itself) must never exist only in an email.
+  if (razorpayLinkId) {
+    const { error: linkSaveErr } = await adminSupabase
+      .from("billing_statements")
+      .update({ razorpay_payment_link_id: razorpayLinkId, razorpay_payment_link_url: razorpayLinkUrl })
+      .eq("id", statementId);
+    if (linkSaveErr) {
+      console.error(`[send-proforma] Saving Razorpay link ${razorpayLinkId} on statement ${statementId} failed:`, linkSaveErr);
+      return { success: false, proformaRef, totalAmount, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact, error: "Could not save the payment link on the statement. Nothing was emailed; try again." };
+    }
+  }
+
   // ── Build PDF line items ─────────────────────────────────────────────────
   const lineItems: GstInvoiceData["lineItems"] = [];
 
@@ -350,7 +365,7 @@ export async function dispatchProforma(
     //   the invoice was actually raised, not the period it covers.
     invoiceDate: (statement.statement_type as string) === "rent"
       ? (statement.period_start as string)
-      : new Date().toISOString().slice(0, 10),
+      : istTodayYmd(),
     isProforma: true,
     // Reimbursement PIs collapse to Description | Amount — no per-line
     // qty/rate/HSN/tax breakdown, just the consolidated totals block below.
@@ -522,12 +537,16 @@ export async function dispatchProforma(
     buyer_gstin: lead?.gst_number || null,
   };
   if (delivered) updatePayload.proforma_sent_at = now;
-  if (delivered) updatePayload.due_date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (delivered) updatePayload.due_date = istTodayYmd(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
   if (delivered && dispatchedBy) updatePayload.proforma_sent_by = dispatchedBy;
   if (razorpayLinkId) updatePayload.razorpay_payment_link_id = razorpayLinkId;
   if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
 
-  await adminSupabase.from("billing_statements").update(updatePayload).eq("id", statementId);
+  // The link id is already saved above; this records delivery. The customer
+  // has been emailed at this point, so a failure is logged rather than
+  // surfaced as a failed send (which would invite a duplicate re-send).
+  const { error: finalSaveErr } = await adminSupabase.from("billing_statements").update(updatePayload).eq("id", statementId);
+  if (finalSaveErr) console.error(`[send-proforma] Recording delivery on statement ${statementId} failed:`, finalSaveErr);
 
   if (dispatchedBy) {
     logAudit(adminSupabase, {
@@ -688,22 +707,26 @@ export async function dispatchGstDirect(
   const isRent = (statement.statement_type as string) === "rent";
   const issueDateYmd = isRent
     ? (statement.period_start as string)
-    : new Date().toISOString().slice(0, 10);
+    : istTodayYmd();
   const [iy, im, id2] = issueDateYmd.split("-").map(Number);
   const dueDate = new Date(Date.UTC(iy, im - 1, id2 + 7)).toISOString().slice(0, 10);
 
-  // ── Generate GST invoice number ───────────────────────────────────────────
-  const now = new Date();
-  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  const fyEnd = fyStart + 1;
-  const fyPrefix = `TWV/INV/${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}/`;
-
-  const { count: existingCount } = await adminSupabase
-    .from("billing_statements")
-    .select("id", { count: "exact", head: true })
-    .like("gst_invoice_number", `${fyPrefix}%`);
-  const seqNum = (existingCount || 0) + 1;
-  const invoiceNumber = `${fyPrefix}${String(seqNum).padStart(4, "0")}`;
+  // ── GST invoice number ────────────────────────────────────────────────────
+  // A re-send keeps the number the statement was already issued under — one
+  // statement is one tax invoice. Otherwise allocate the next number for the
+  // IST financial year (race-free, see allocateGstInvoiceNumber).
+  const existingInvoiceNumber = (statement.gst_invoice_number as string | null) || null;
+  let invoiceNumber: string;
+  if (existingInvoiceNumber) {
+    invoiceNumber = existingInvoiceNumber;
+  } else {
+    try {
+      invoiceNumber = await allocateGstInvoiceNumber(adminSupabase);
+    } catch (err) {
+      console.error("[gst-direct]", err);
+      return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact, error: "Could not allocate a GST invoice number" };
+    }
+  }
 
   // ── Fetch UPI ID and Razorpay keys from app_settings (single cached call) ─
   const appSettings = await getCachedSettings(adminSupabase, [
@@ -725,7 +748,9 @@ export async function dispatchGstDirect(
       const auth = Buffer.from(`${rzpKeyId}:${rzpKeySecret}`).toString("base64");
       const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
       const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
-      const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
+      // Razorpay reference_id must be unique, so a re-send under the same
+      // invoice number needs its own suffix.
+      const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst${existingInvoiceNumber ? `-${Date.now()}` : ""}`;
       const payload: Record<string, unknown> = {
         amount: Math.round(totalAmount * 100),
         currency: "INR",
@@ -762,6 +787,27 @@ export async function dispatchGstDirect(
     }
   } catch (err) {
     console.error("[gst-direct] Razorpay error:", err);
+  }
+
+  // Record the invoice number and link on the statement before anything is
+  // sent: the webhook matches payments by the link id, and a number that
+  // reaches a customer must be on the statement. Conditional on the statement
+  // not having been numbered by a concurrent dispatch in the meantime.
+  {
+    let claim = adminSupabase
+      .from("billing_statements")
+      .update({
+        gst_invoice_number: invoiceNumber,
+        gst_invoice_date: issueDateYmd,
+        ...(razorpayLinkId ? { razorpay_payment_link_id: razorpayLinkId, razorpay_payment_link_url: razorpayLinkUrl } : {}),
+      })
+      .eq("id", statementId);
+    claim = existingInvoiceNumber ? claim.eq("gst_invoice_number", existingInvoiceNumber) : claim.is("gst_invoice_number", null);
+    const { data: claimed, error: claimErr } = await claim.select("id");
+    if (claimErr || !claimed || claimed.length === 0) {
+      console.error(`[gst-direct] Recording ${invoiceNumber} on statement ${statementId} failed:`, claimErr ?? "numbered concurrently");
+      return { success: false, proformaRef: stmtRef, totalAmount, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact, error: claimErr ? "Could not save the GST invoice on the statement. Nothing was emailed; try again." : "This statement was just issued a GST invoice by another send" };
+    }
   }
 
   // ── Build PDF line items ──────────────────────────────────────────────────
@@ -944,7 +990,9 @@ export async function dispatchGstDirect(
   if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
   if (delivered) updatePayload.emailed_at = nowIso;
 
-  await adminSupabase.from("billing_statements").update(updatePayload).eq("id", statementId);
+  // Number and link are already saved above; see the note in dispatchProforma.
+  const { error: finalSaveErr } = await adminSupabase.from("billing_statements").update(updatePayload).eq("id", statementId);
+  if (finalSaveErr) console.error(`[gst-direct] Recording delivery on statement ${statementId} failed:`, finalSaveErr);
 
   if (dispatchedBy) {
     logAudit(adminSupabase, {
