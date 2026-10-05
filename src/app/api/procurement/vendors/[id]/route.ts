@@ -15,6 +15,7 @@ const updateVendorSchema = z.object({
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
   is_active: z.boolean().optional(),
+  is_service_provider: z.boolean().optional(),
   // Bank details
   bank_name: z.string().optional(),
   bank_account_holder: z.string().optional(),
