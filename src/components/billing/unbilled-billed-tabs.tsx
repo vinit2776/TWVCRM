@@ -23,6 +23,7 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
+import { WaiveRentMonthDialog } from "@/components/billing/waive-rent-month-dialog";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import type { UnbilledCategory, UnbilledRow } from "@/lib/unbilled-queue";
 
@@ -85,6 +86,9 @@ const BILLING_ROLES = ["admin", "manager", "accounts"];
 export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">(type === "usage" ? "billed" : "unbilled");
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
+  // Waiving a gap is admin-only (enforced again by the API).
+  const canWaive = userRole === "admin";
+  const [waiveRow, setWaiveRow] = useState<UnbilledRow | null>(null);
 
   // ── Unbilled ─────────────────────────────────────────────────────────────
   const [unbilledRows, setUnbilledRows] = useState<UnbilledRow[]>([]);
@@ -306,6 +310,14 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                                 Send invoice
                               </button>
                             )}
+                            {row.category === "rent_gap" && row.gapMonth && canWaive && (
+                              <button
+                                onClick={() => setWaiveRow(row)}
+                                className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                              >
+                                Waive
+                              </button>
+                            )}
                             {row.statementId && onViewStatement && (
                               <button
                                 onClick={() => onViewStatement(row.statementId!)}
@@ -403,7 +415,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             <DialogDescription>
               {backfillRow && (
                 <>
-                  <span className="font-mono text-xs text-teal-700">{backfillRow.contractNumber}</span> → {backfillRow.customerName}: this contract&rsquo;s renewal hasn&rsquo;t been activated yet, and {backfillRow.periodLabel.split(" · ")[0]} never got a rent statement. Raises that missed month&rsquo;s rent proforma at the renewal&rsquo;s terms. Sending it creates the payment link and emails the client.
+                  <span className="font-mono text-xs text-teal-700">{backfillRow.contractNumber}</span> → {backfillRow.customerName}: {backfillRow.periodLabel.split(" · ")[0]} never got a rent statement. Raises that missed month&rsquo;s rent proforma, priced exactly as shown below. Sending it creates the payment link and emails the client.
                 </>
               )}
             </DialogDescription>
@@ -482,6 +494,17 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <WaiveRentMonthDialog
+        target={waiveRow?.gapMonth ? {
+          contractId: waiveRow.contractId,
+          contractNumber: waiveRow.contractNumber,
+          month: waiveRow.gapMonth,
+          monthLabel: monthLabel(Number(waiveRow.gapMonth.slice(0, 4)), Number(waiveRow.gapMonth.slice(5, 7))),
+        } : null}
+        onClose={() => setWaiveRow(null)}
+        onWaived={loadUnbilled}
+      />
     </div>
   );
 }

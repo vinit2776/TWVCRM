@@ -168,6 +168,9 @@ export function unbilledMonths(opts: {
    *  unknown; the window then falls back to capping at `endDate`, same as
    *  every non-`renewal_in_progress` status. */
   contractStatus?: string;
+  /** Months an admin waived (contract_rent_waivers.waived_month, YYYY-MM-DD):
+   *  deliberately not billed through the CRM, so not reported as missed. */
+  waivedMonths?: string[];
 }): BillingMonth[] {
   const ownFirst = ymOf(firstBillingAnchor(opts.startDate));
   const firstRunnable = monthAfter(ymOf(opts.createdAt.slice(0, 10)));
@@ -185,6 +188,7 @@ export function unbilledMonths(opts: {
     if (!countsTowards(s, opts.contractId, opts.startDate)) continue;
     for (const m of monthsCoveredByStatement(s)) covered.add(monthKey(m));
   }
+  for (const w of opts.waivedMonths ?? []) covered.add(monthKey(ymOf(w)));
 
   const missing: BillingMonth[] = [];
   let cur = first;
@@ -193,4 +197,48 @@ export function unbilledMonths(opts: {
     cur = monthAfter(cur);
   }
   return missing;
+}
+
+/**
+ * First month a missed rent month may be raised one at a time from the
+ * contract page or the rent-gap list. CRM rent billing began with prepaid
+ * month June 2026; anything earlier was invoiced outside the CRM, so a "gap"
+ * before it is history to waive, not rent to raise.
+ */
+export const RENT_BACKFILL_FLOOR: BillingMonth = { year: 2026, month: 6 };
+
+/** Statuses the rent generator will bill — a button for any other status would preview nothing. */
+const BACKFILL_STATUSES = new Set(["active", "renewal_in_progress", "renewed"]);
+
+/**
+ * Of a contract's missed months (from unbilledMonths), the ones that may be
+ * raised one at a time — "Bill this month" on the contract page, "Send
+ * invoice" on Billing → Unbilled. Monthly contracts only, from
+ * RENT_BACKFILL_FLOOR onward, and only for statuses the generator bills:
+ *
+ *   • active — any missed month of its term. Once a month has started, the
+ *     ordinary "Bill next cycle" targets the FOLLOWING month, so without this
+ *     a month whose month-end run was missed could never be raised at all.
+ *   • renewal_in_progress — also months after its own end_date: the renewal
+ *     isn't active yet, so the parent keeps billing at the renewal's terms.
+ *   • renewed — only up to its own end_date. A renewal activated early leaves
+ *     the parent owing its remaining tenure at its own rate; the renewal bills
+ *     from its own start date and can't reach those months.
+ *
+ * Every month is still previewed before anything is sent, and a waived month
+ * never reaches here (unbilledMonths treats it as handled).
+ */
+export function backfillableRentMonths(opts: {
+  missed: BillingMonth[];
+  billingCycle: string | null | undefined;
+  contractStatus: string | null | undefined;
+  endDate: string | null | undefined;
+}): BillingMonth[] {
+  const { missed, billingCycle, contractStatus, endDate } = opts;
+  if (billingCycle !== "monthly" || !contractStatus || !BACKFILL_STATUSES.has(contractStatus) || !endDate) return [];
+  const floorKey = monthKey(RENT_BACKFILL_FLOOR);
+  const endKey = monthKey(ymOf(endDate));
+  return missed.filter((m) =>
+    monthKey(m) >= floorKey && (contractStatus === "renewal_in_progress" || monthKey(m) <= endKey)
+  );
 }

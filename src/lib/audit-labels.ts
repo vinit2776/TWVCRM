@@ -39,6 +39,16 @@ function summarizeContract(c: AuditChanges, action: string): AuditSummary | null
       detail: [newEndDate ? `now expires ${newEndDate}` : null, reason].filter(Boolean).join(" · ") || undefined,
     };
   }
+  if (action === "rent_month_waived" && has(c, "waived_month")) {
+    return {
+      label: `Rent billing waived for ${String(c.waived_month.new).slice(0, 7)}`,
+      tone: "amber",
+      detail: (c.reason?.new as string | null) ?? undefined,
+    };
+  }
+  if (action === "rent_month_waiver_revoked" && has(c, "waived_month")) {
+    return { label: `Rent waiver undone for ${String(c.waived_month.old).slice(0, 7)}`, tone: "grey" };
+  }
   return null;
 }
 
