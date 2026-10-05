@@ -1588,7 +1588,6 @@ export default function ContractDetailPage({
             startDate={contract.start_date}
             endDate={contract.end_date}
             createdAt={contract.created_at}
-            renewedAt={contract.renewed_at}
           />
 
           {/* Ad-hoc lead invoices attributed to this contract */}

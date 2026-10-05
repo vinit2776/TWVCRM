@@ -21,7 +21,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { unbilledMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
+import { unbilledMonths, backfillableRentMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
 
 export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal";
 export type UnbilledType = "rent";
@@ -42,20 +42,20 @@ export interface UnbilledRow {
   /** Secondary text, e.g. "12 days late", "starts in 2 days". */
   detail?: string;
   /**
-   * Present only on rent_gap rows safe to bill directly from this list —
-   * a renewal_in_progress contract, for a gap month after ITS OWN end_date
-   * (the same rule contract-invoices-section.tsx's backfillableMonths uses).
-   * An ordinary active contract's gap never gets this: per that file's own
-   * reasoning, a gap inside a normal term may mean rent was collected
-   * outside the CRM, or a different bug — auto-offering to bill it there
-   * risks double-charging the customer or masking the real cause, so it's
-   * deliberately left to manual investigation instead.
+   * Present only on rent_gap rows that may be billed directly from this list
+   * — decided by backfillableRentMonths() in billing-months.ts, the same rule
+   * the contract page uses (monthly contracts, June 2026 onward, statuses the
+   * generator bills). Older gaps are history: an admin waives them instead.
+   * Every send is previewed first.
    *
    * Carries the /api/billing/auto-generate TARGET month/year — one behind
    * the prepaid month this gap actually owes, since a rent run always bills
    * the month after the one it targets.
    */
   backfillTarget?: { month: number; year: number };
+  /** rent_gap rows only: the missed prepaid month as YYYY-MM-01 — what an
+   *  admin's "Waive" records (contract_rent_waivers.waived_month). */
+  gapMonth?: string;
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -231,6 +231,19 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     : { data: [] };
   const leadById = new Map((leads ?? []).map((l) => [l.id as string, l]));
 
+  // Live (un-revoked) admin waivers — a waived month is handled, not a gap.
+  const { data: waivers } = await supabase
+    .from("contract_rent_waivers")
+    .select("contract_id, waived_month")
+    .in("contract_id", eligible.map((c) => c.id))
+    .is("revoked_at", null);
+  const waivedByContract = new Map<string, string[]>();
+  for (const w of waivers ?? []) {
+    const list = waivedByContract.get(w.contract_id as string) ?? [];
+    list.push(w.waived_month as string);
+    waivedByContract.set(w.contract_id as string, list);
+  }
+
   const rows: InternalRow[] = [];
   for (const c of eligible) {
     const chain = chainByContract.get(c.id) ?? [c.id];
@@ -243,19 +256,17 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       statements: chainStatements,
       contractId: c.id,
       contractStatus: c.status,
+      waivedMonths: waivedByContract.get(c.id),
     });
-    // A gap is safe to bill directly from this list only for a
-    // renewal_in_progress, monthly contract, and only for a month AFTER its
-    // own end_date — the exact case contract-invoices-section.tsx already
-    // trusts (see backfillTarget's own doc comment for why the rest aren't).
-    let endKey: number | null = null;
-    if (c.billing_cycle === "monthly" && c.status === "renewal_in_progress" && c.end_date) {
-      const [endY, endM] = c.end_date.split("-").map(Number);
-      if (endY && endM) endKey = endY * 12 + endM;
-    }
+    // Same rule the contract page uses, so the two can never disagree about
+    // which gaps can be raised directly (see backfillableRentMonths).
+    const backfillableKeys = new Set(
+      backfillableRentMonths({ missed: missing, billingCycle: c.billing_cycle, contractStatus: c.status, endDate: c.end_date })
+        .map((m) => m.year * 12 + m.month),
+    );
 
     for (const m of missing) {
-      const backfillable = endKey != null && (m.year * 12 + m.month) > endKey;
+      const backfillable = backfillableKeys.has(m.year * 12 + m.month);
       rows.push({
         id: `rent_gap:${c.id}:${m.year}-${m.month}`,
         category: "rent_gap",
@@ -266,6 +277,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         amount: null,
         detail: "No rent statement of any kind",
         sortKey: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
+        gapMonth: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
         ...(backfillable ? { backfillTarget: prepaidToApiTarget(m) } : {}),
       });
     }

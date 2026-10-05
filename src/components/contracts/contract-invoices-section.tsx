@@ -19,6 +19,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { unbilledMonths, backfillableRentMonths, type BillingMonth } from "@/lib/billing-months";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
+import { WaiveRentMonthDialog } from "@/components/billing/waive-rent-month-dialog";
 
 interface Statement {
   id: string;
@@ -102,8 +103,15 @@ interface ContractInvoicesSectionProps {
   startDate?: string | null;
   endDate?: string | null;
   createdAt?: string | null;
-  /** When this contract's renewal was activated (status → renewed). */
-  renewedAt?: string | null;
+}
+
+/** A live admin waiver — a missed rent month deliberately not billed through the CRM. */
+interface RentWaiver {
+  id: string;
+  waived_month: string;
+  reason: string;
+  waived_at: string;
+  waived_by_user: { full_name: string | null } | null;
 }
 
 /** One rent line the upcoming-cycle preview would bill. */
@@ -141,7 +149,6 @@ export function ContractInvoicesSection({
   startDate,
   endDate,
   createdAt,
-  renewedAt,
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -159,6 +166,9 @@ export function ContractInvoicesSection({
   const [cyclePreview, setCyclePreview] = useState<CyclePreview | null>(null);
   const [cycleBlockedReason, setCycleBlockedReason] = useState<string | null>(null);
   const [cycleSending, setCycleSending] = useState(false);
+  const [waivers, setWaivers] = useState<RentWaiver[]>([]);
+  const [waiveTarget, setWaiveTarget] = useState<{ contractId: string; month: string; monthLabel: string } | null>(null);
+  const [undoingWaiverId, setUndoingWaiverId] = useState<string | null>(null);
 
   useEffect(() => {
     setCurrentMode(billingMode || 'proforma_first');
@@ -174,8 +184,16 @@ export function ContractInvoicesSection({
       .catch(() => setStatements([]));
   };
 
+  const refreshWaivers = () => {
+    return fetch(`/api/contracts/${contractId}/rent-waivers`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setWaivers(Array.isArray(d) ? (d as RentWaiver[]) : []))
+      .catch(() => setWaivers([]));
+  };
+
   useEffect(() => {
     refreshStatements().finally(() => setLoading(false));
+    refreshWaivers();
     fetch("/api/me")
       .then((r) => r.json())
       .then((d) => setUserRole(d.role ?? null))
@@ -275,7 +293,9 @@ export function ContractInvoicesSection({
   // Months already past their billing run with no rent statement against them.
   // Surfaced rather than auto-billed: rent is sometimes invoiced outside the
   // CRM, so this is a prompt to check, not proof of lost revenue.
-  const missedMonths = useMemo(() => {
+  // Computed without waivers first, so a waived month that's still unbilled
+  // can be listed (and billed anyway) below; missedMonths then drops them.
+  const unbilledIncludingWaived = useMemo(() => {
     if (!startDate || !endDate || !createdAt) return [];
     return unbilledMonths({
       startDate, endDate, createdAt,
@@ -286,13 +306,32 @@ export function ContractInvoicesSection({
     });
   }, [startDate, endDate, createdAt, statements, contractId, contractStatus]);
 
-  // Missed months this card may raise one at a time — the tail after a
-  // renewal_in_progress parent's own end_date, or the remaining tenure of a
-  // parent renewed early. Everything else is surfaced above but never offered
-  // here; see backfillableRentMonths() in billing-months.ts for why.
+  const waiverByMonthKey = useMemo(
+    () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),
+    [waivers],
+  );
+  const monthKeyOf = (m: BillingMonth) => `${m.year}-${String(m.month).padStart(2, "0")}`;
+
+  const missedMonths = useMemo(
+    () => unbilledIncludingWaived.filter((m) => !waiverByMonthKey.has(monthKeyOf(m))),
+    [unbilledIncludingWaived, waiverByMonthKey],
+  );
+  // Waived months that still have no statement — shown so they can be billed anyway or undone.
+  const waivedOpenMonths = useMemo(
+    () => unbilledIncludingWaived.filter((m) => waiverByMonthKey.has(monthKeyOf(m))),
+    [unbilledIncludingWaived, waiverByMonthKey],
+  );
+
+  // Missed months this card may raise one at a time — June 2026 onward, for
+  // statuses the generator bills. See backfillableRentMonths() in
+  // billing-months.ts for the per-status rules.
   const backfillableMonths = useMemo(
-    () => backfillableRentMonths({ missed: missedMonths, billingCycle, contractStatus, endDate, renewedAt }),
-    [missedMonths, billingCycle, contractStatus, endDate, renewedAt],
+    () => backfillableRentMonths({ missed: missedMonths, billingCycle, contractStatus, endDate }),
+    [missedMonths, billingCycle, contractStatus, endDate],
+  );
+  const backfillableWaivedKeys = useMemo(
+    () => new Set(backfillableRentMonths({ missed: waivedOpenMonths, billingCycle, contractStatus, endDate }).map(monthKeyOf)),
+    [waivedOpenMonths, billingCycle, contractStatus, endDate],
   );
 
   // Converts a PREPAID month (what's actually owed, e.g. September) into the
@@ -429,6 +468,36 @@ export function ContractInvoicesSection({
     !!contractStatus &&
     ["active", "renewal_in_progress", "renewed"].includes(contractStatus);
   const isRenewedParent = contractStatus === "renewed";
+  const canWaive = userRole === "admin";
+
+  // The month "Bill next cycle" will actually bill — named on the button so
+  // nobody raises November believing it's October. A rent run bills the month
+  // after its target; with no explicit target the API targets the current month.
+  const nextCycleLabel = useMemo(() => {
+    const nowIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const t = cycleTarget ?? { month: nowIst.getUTCMonth() + 1, year: nowIst.getUTCFullYear() };
+    const m = t.month === 12 ? 1 : t.month + 1;
+    const y = t.month === 12 ? t.year + 1 : t.year;
+    return `${MONTH_LABELS[m - 1]} ${y}`;
+  }, [cycleTarget]);
+
+  const undoWaiver = async (waiver: RentWaiver) => {
+    setUndoingWaiverId(waiver.id);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/rent-waivers/${waiver.id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Couldn't undo the waiver");
+        return;
+      }
+      toast.success("Waiver undone");
+      await refreshWaivers();
+    } catch {
+      toast.error("Couldn't undo the waiver");
+    } finally {
+      setUndoingWaiverId(null);
+    }
+  };
 
   return (
     <Card>
@@ -441,7 +510,7 @@ export function ContractInvoicesSection({
           {canBillCycle && (
             <Button variant="outline" size="sm" onClick={() => openCycleDialog()}>
               <CalendarPlus className="h-3.5 w-3.5 mr-1" />
-              Bill next cycle
+              Bill {nextCycleLabel}
             </Button>
           )}
           <Link href={`/billing?contract_id=${contractId}`}>
@@ -523,20 +592,37 @@ export function ContractInvoicesSection({
                 </span>
                 <p className="text-xs mt-1 text-amber-800">
                   These months are past their billing run. If the rent was collected outside the CRM,
-                  no action is needed — otherwise raise it before it ages further.
+                  {canWaive ? " waive the month" : " no action is needed"} — otherwise raise it before it ages further.
                 </p>
+                {canWaive && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {missedMonths.map((m) => (
+                      <Button
+                        key={`waive-${m.year}-${m.month}`}
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-xs bg-white"
+                        onClick={() => setWaiveTarget({
+                          contractId,
+                          month: `${monthKeyOf(m)}-01`,
+                          monthLabel: `${MONTH_LABELS[m.month - 1]} ${m.year}`,
+                        })}
+                      >
+                        Waive {MONTH_LABELS[m.month - 1]} {m.year}
+                      </Button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Of the months above, the subset that fall after this contract's own
-          end_date — i.e. caused by the renewal sitting unactivated, the one
-          class of gap this feature actually knows how to raise. Every month
-          gets its own explicit action, in full view of the others still
-          outstanding, rather than one button silently picking one for you —
-          you choose which to bill and in what order. */}
+      {/* Of the months above, the ones that can be raised from here (June 2026
+          onward — see backfillableRentMonths). Every month gets its own
+          explicit action, in full view of the others still outstanding,
+          rather than one button silently picking one for you. */}
       {canBackfill && backfillableMonths.length > 0 && (
         <div className="px-6 pb-3">
           <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
@@ -544,7 +630,11 @@ export function ContractInvoicesSection({
               <CalendarPlus className="h-4 w-4 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <span className="font-medium">
-                  {isRenewedParent ? "Missing rent — remaining tenure after renewal" : "Missing rent — renewal not yet activated"}
+                  {isRenewedParent
+                    ? "Missing rent — remaining tenure after renewal"
+                    : contractStatus === "renewal_in_progress"
+                    ? "Missing rent — renewal not yet activated"
+                    : "Missing rent — month-end run missed"}
                 </span>
                 <p className="text-xs mt-1 text-blue-800">
                   {isRenewedParent ? (
@@ -552,6 +642,11 @@ export function ContractInvoicesSection({
                       This contract was renewed before its own term ended. The renewal only bills
                       from its own start date, so each month below is billed here, at this
                       contract&apos;s own rate. Raise them individually, in any order.
+                    </>
+                  ) : contractStatus !== "renewal_in_progress" ? (
+                    <>
+                      No rent invoice was raised for the months below. Check each preview and raise
+                      them individually, in any order.
                     </>
                   ) : (
                     <>
@@ -582,6 +677,52 @@ export function ContractInvoicesSection({
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Months an admin waived that still have no statement. Still billable
+          from here (same rule as above) — a waiver hides the gap, it never
+          blocks billing. Only an admin can undo one. */}
+      {waivedOpenMonths.length > 0 && (
+        <div className="px-6 pb-3">
+          <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
+            <span className="font-medium">Waived — not billed through the CRM</span>
+            <div className="mt-2 space-y-1.5">
+              {waivedOpenMonths.map((m) => {
+                const waiver = waiverByMonthKey.get(monthKeyOf(m))!;
+                return (
+                  <div key={waiver.id} className="flex items-center justify-between gap-2 rounded border bg-background px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <span className="text-xs font-medium">{MONTH_LABELS[m.month - 1]} {m.year}</span>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {waiver.reason}
+                        {waiver.waived_by_user?.full_name ? ` · ${waiver.waived_by_user.full_name}` : ""}
+                        {` · ${formatDate(waiver.waived_at)}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {canBackfill && backfillableWaivedKeys.has(monthKeyOf(m)) && (
+                        <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => openCycleDialog(prepaidToApiTarget(m))}>
+                          Bill this month
+                        </Button>
+                      )}
+                      {canWaive && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs"
+                          disabled={undoingWaiverId === waiver.id}
+                          onClick={() => undoWaiver(waiver)}
+                        >
+                          Undo
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -739,7 +880,9 @@ export function ContractInvoicesSection({
               {dialogIsBackfill ? "Bill a missed month" : "Bill the upcoming cycle"}
             </DialogTitle>
             <DialogDescription>
-              {dialogIsBackfill && isRenewedParent
+              {dialogIsBackfill && contractStatus === "active"
+                ? "This month never got a rent statement. Raises that month's rent proforma at this contract's rate, without running the month's batch. Sending it creates the payment link and emails the client."
+                : dialogIsBackfill && isRenewedParent
                 ? "This contract was renewed before its own term ended, and this month of its remaining tenure never got a rent statement. Raises that month's rent proforma at this contract's own rate, without running the month's batch. Sending it creates the payment link and emails the client."
                 : dialogIsBackfill
                 ? "This contract's renewal hasn't been activated yet, and this past month never got a rent statement. Raises that missed month's rent proforma at the renewal's terms, without running the month's batch. Sending it creates the payment link and emails the client."
@@ -911,6 +1054,11 @@ export function ContractInvoicesSection({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <WaiveRentMonthDialog
+        target={waiveTarget}
+        onClose={() => setWaiveTarget(null)}
+        onWaived={refreshWaivers}
+      />
     </Card>
   );
 }
