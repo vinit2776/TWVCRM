@@ -22,6 +22,8 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { unbilledMonths, backfillableRentMonths, RENT_BACKFILL_FLOOR, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
+import { computeRenewalSplitRentSegments, fetchRatePhasesByContract } from "@/lib/billing";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export type UnbilledCategory =
   | "current_cycle"
@@ -68,6 +70,11 @@ export interface UnbilledRow {
   /** current_cycle rows only: the statement's status, which decides how
    *  "Review & send" sends it (draft → finalize-and-send, finalized → send-proforma). */
   statementStatus?: string;
+  /** rent_gap rows: the expected invoice, estimated the way the rent run would
+   *  price it (rate phases, part months, add-ons, contract GST rate). `amount`
+   *  carries the total. Absent when it can't be priced from the contract alone
+   *  (e.g. a renewal's rate) — the Send invoice preview always has the exact figure. */
+  estimate?: { subtotal: number; tax: number; taxPercentage: number; total: number };
   /** current_cycle_sent / current_cycle_tally rows: ISO timestamp of the send
    *  (or of the hand-off to accounts). */
   sentAt?: string;
@@ -223,6 +230,53 @@ interface EligibleContract {
   created_at: string;
   lead_id: string | null;
   billing_cycle: string | null;
+  subtotal: number | null;
+  total_amount: number;
+  phase_start_date: string | null;
+  tax_percentage: number | null;
+}
+
+export interface GapAddon { amount: number; effective_from: string; effective_until: string | null }
+
+/**
+ * Expected rent invoice for one missed month — the same pricing the monthly
+ * rent run uses: the contract's own rate (rate phases and part months via
+ * computeRenewalSplitRentSegments), plus recurring add-ons pro-rated within the
+ * month, plus GST at the contract's rate. Returns null when the contract's own
+ * terms don't cover the month (e.g. a renewal_in_progress month past its own
+ * end_date, priced at the renewal's rate) — the preview prices those.
+ */
+export function estimateGapRent(
+  c: Pick<EligibleContract, "id" | "start_date" | "end_date" | "subtotal" | "total_amount" | "phase_start_date" | "tax_percentage">,
+  m: BillingMonth,
+  ratePhasesByContract: Parameters<typeof computeRenewalSplitRentSegments>[8],
+  addons: GapAddon[],
+): { subtotal: number; tax: number; taxPercentage: number; total: number } | null {
+  const days = new Date(m.year, m.month, 0).getDate();
+  const mm = String(m.month).padStart(2, "0");
+  const first = `${m.year}-${mm}-01`;
+  const last = `${m.year}-${mm}-${days}`;
+  const split = computeRenewalSplitRentSegments(
+    c.id, c.start_date, c.end_date, c.subtotal, c.total_amount, c.phase_start_date,
+    c.tax_percentage, undefined, ratePhasesByContract, first, last, days,
+  );
+  if (split.amount <= 0) return null;
+
+  // Add-ons: same pro-rating as generateRentProformas (days live in the month / days in month).
+  const wFirst = Date.parse(first + "T00:00:00Z");
+  const wLast = Date.parse(last + "T00:00:00Z");
+  let addonsTotal = 0;
+  for (const a of addons) {
+    const from = Math.max(Date.parse(a.effective_from + "T00:00:00Z"), wFirst);
+    const until = Math.min(a.effective_until ? Date.parse(a.effective_until + "T00:00:00Z") : wLast, wLast);
+    const billDays = Math.floor((until - from) / 86400000) + 1;
+    if (billDays <= 0) continue;
+    addonsTotal += billDays < days ? Math.round((a.amount / days) * billDays * 100) / 100 : a.amount;
+  }
+
+  const subtotal = Math.round((split.amount + addonsTotal) * 100) / 100;
+  const gst = computeGstAndRounding(subtotal, split.taxPercentage);
+  return { subtotal, tax: gst.taxAmount, taxPercentage: split.taxPercentage, total: gst.totalAmount };
 }
 
 /** Converts a PREPAID month (what's actually owed, e.g. September) into the
@@ -274,7 +328,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // an audit of history, so expired/terminated contracts must be included.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, start_date, end_date, created_at, lead_id, billing_cycle")
+    .select("id, contract_number, status, start_date, end_date, created_at, lead_id, billing_cycle, subtotal, total_amount, phase_start_date, tax_percentage")
     .in("status", ["active", "renewal_in_progress", "renewed", "expired", "terminated"]);
 
   if (!contracts || contracts.length === 0) return [];
@@ -328,6 +382,21 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
 
   const currentYm = { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
 
+  // Pricing inputs for the expected-amount estimate, batched (no N+1).
+  const eligibleIds = eligible.map((c) => c.id);
+  const ratePhasesByContract = await fetchRatePhasesByContract(supabase, eligibleIds);
+  const { data: addonRows } = await supabase
+    .from("contract_addons")
+    .select("contract_id, amount, effective_from, effective_until")
+    .in("contract_id", eligibleIds)
+    .eq("is_active", true);
+  const addonsByContract = new Map<string, GapAddon[]>();
+  for (const a of addonRows ?? []) {
+    const list = addonsByContract.get(a.contract_id as string) ?? [];
+    list.push({ amount: Number(a.amount), effective_from: a.effective_from as string, effective_until: (a.effective_until as string | null) ?? null });
+    addonsByContract.set(a.contract_id as string, list);
+  }
+
   const rows: InternalRow[] = [];
   for (const c of eligible) {
     const chain = chainByContract.get(c.id) ?? [c.id];
@@ -352,6 +421,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     for (const m of missing) {
       const backfillable = backfillableKeys.has(m.year * 12 + m.month);
       const beforeCrmBilling = m.year * 12 + m.month < RENT_BACKFILL_FLOOR.year * 12 + RENT_BACKFILL_FLOOR.month;
+      const estimate = estimateGapRent(c, m, ratePhasesByContract, addonsByContract.get(c.id) ?? []);
       rows.push({
         id: `rent_gap:${c.id}:${m.year}-${m.month}`,
         category: "rent_gap",
@@ -359,7 +429,8 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         contractNumber: c.contract_number,
         customerName: customerNameOf(c.lead_id ? leadById.get(c.lead_id) : null),
         periodLabel: periodLabel(m.month, m.year, "rent_gap"),
-        amount: null,
+        amount: estimate?.total ?? null,
+        ...(estimate ? { estimate } : {}),
         detail: rentGapReason({
           backfillable, beforeCrmBilling, status: c.status, billingCycle: c.billing_cycle,
           isCurrentMonth: m.year === currentYm.year && m.month === currentYm.month,

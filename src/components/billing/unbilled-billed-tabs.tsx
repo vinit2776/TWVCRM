@@ -286,9 +286,22 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         </p>
       </div>
       <div className="flex items-center gap-3 shrink-0">
-        <span className="text-sm font-mono">
-          {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
-        </span>
+        {row.category === "rent_gap" ? (
+          row.estimate ? (
+            <span className="text-right leading-tight" title="Estimated from the contract — the Send invoice preview shows the exact figure">
+              <span className="block text-sm font-mono">≈ {formatCurrency(row.estimate.total)}</span>
+              <span className="block text-[11px] text-muted-foreground font-mono">
+                {formatCurrency(row.estimate.subtotal)} + GST {formatCurrency(row.estimate.tax)} ({row.estimate.taxPercentage}%)
+              </span>
+            </span>
+          ) : (
+            <span className="text-xs italic text-muted-foreground">amount in preview</span>
+          )
+        ) : (
+          <span className="text-sm font-mono">
+            {row.amount != null ? formatCurrency(row.amount) : <span className="text-xs italic text-muted-foreground">unknown</span>}
+          </span>
+        )}
         {row.category === "current_cycle_tally" ? (
           <Link href="/accounting/inbox" className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
             Open Tally Inbox
@@ -375,6 +388,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         {ordered.map(([key, g]) => {
           const isOpen = openGapGroups[key] ?? key === newestKey;
           const canSend = g.rows.filter((r) => r.backfillTarget).length;
+          const estTotal = g.rows.reduce((sum, r) => sum + (r.estimate?.total ?? 0), 0);
           return (
             <div key={key}>
               <div className={`flex items-center justify-between gap-2 px-4 py-2.5 ${isOpen ? "bg-background" : "bg-muted/30"}`}>
@@ -387,6 +401,11 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                 </button>
                 <div className="flex items-center gap-1.5">
                   <Badge variant="outline" className="text-[11px] font-normal">{g.rows.length} gap{g.rows.length === 1 ? "" : "s"}</Badge>
+                  {estTotal > 0 && (
+                    <Badge variant="outline" className="text-[11px] font-normal font-mono" title="Sum of the estimated invoices (incl. GST) in this month">
+                      ≈ {formatCurrency(estTotal)}
+                    </Badge>
+                  )}
                   {canSend > 0 && canBill && (
                     <Badge variant="outline" className="text-[11px] font-normal text-teal-800 border-teal-200">{canSend} can send</Badge>
                   )}
