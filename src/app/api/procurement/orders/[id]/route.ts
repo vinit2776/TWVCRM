@@ -227,6 +227,51 @@ export async function PATCH(
         }
       }
 
+      // Nothing reduced → nothing to cancel. Without this the PO flipped to
+      // "partially_cancelled" while still ordering its full qty.
+      const reducesSomething = confirmed_items.some(
+        (ci) => ci.confirmed_qty < Number(poItemMap[ci.po_item_id].quantity_ordered)
+      );
+      if (!reducesSomething) {
+        return NextResponse.json({
+          error: "Nothing to cancel. Lower a quantity, or set every quantity to 0 to cancel the whole PO.",
+        }, { status: 422 });
+      }
+
+      // Every item at 0 → this is a full cancel: release the PR and retire any
+      // unpaid bill, since a PO with an invoice can't use the plain cancel.
+      const confirmedQtyById = Object.fromEntries(confirmed_items.map((ci) => [ci.po_item_id, ci.confirmed_qty]));
+      const allZero = (poItems ?? []).every(
+        (i) => (confirmedQtyById[i.id] ?? Number(i.quantity_ordered)) === 0
+      );
+      if (allZero) {
+        const { data: bills } = await supabase
+          .from("vendor_bills")
+          .select("id, bill_number, approval_status")
+          .eq("po_id", id);
+        const blocking = (bills ?? []).find((b) => !["pending", "rejected"].includes(b.approval_status));
+        if (blocking) {
+          return NextResponse.json({
+            error: `Bill ${blocking.bill_number} is already approved. Accounts must reverse it before this PO can be cancelled.`,
+          }, { status: 422 });
+        }
+        for (const b of (bills ?? []).filter((b) => b.approval_status === "pending")) {
+          await supabase
+            .from("vendor_bills")
+            .update({
+              approval_status: "rejected",
+              approved_by: dbUser.id,
+              approved_at: new Date().toISOString(),
+              rejection_reason: `PO ${po.po_number} was cancelled`,
+              rejection_outcome: null,
+            })
+            .eq("id", b.id);
+        }
+        await supabase.from("purchase_order_items").update({ quantity_ordered: 0 }).eq("po_id", id);
+        updatePayload = { status: "cancelled", total_ordered_amount: 0 };
+        break;
+      }
+
       // Reduce quantity_ordered to confirmed_qty on each item
       for (const ci of confirmed_items) {
         await supabase.from("purchase_order_items")
