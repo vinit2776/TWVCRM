@@ -671,6 +671,10 @@ export interface Contract {
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;
+  // Customer's pooled deposit applied to this contract before activation (00576)
+  deposit_pool_applied_amount?: number | null;
+  deposit_pool_applied_at?: string | null;
+  deposit_pool_applied_by?: string | null;
   // Deposit ledger — owned by the contract from activation onward (snapshotted
   // from the linked proposal at that moment; see contracts/[id]/route.ts).
   // The proposal only bridges the commercial gap until activation — once

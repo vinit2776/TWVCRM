@@ -131,6 +131,51 @@ export function ContractDepositSection({ proposal, contract, depositCarriedFrom,
     );
   }
 
+  // Covered (fully or partly) by the customer's pooled deposit, applied before
+  // activation — the contract's own payment fields stay "pending" on purpose
+  // (nothing was collected on it), so without this the card would read as
+  // uncollected right next to a green "applied" line.
+  const poolApplied = Number(contract?.deposit_pool_applied_amount || 0);
+  if (required && status !== "paid" && poolApplied > 0) {
+    const expected = Number(source.security_deposit_amount || 0);
+    // Later top-ups land in the customer's pool, not on this contract, so the
+    // pool's own shortfall is what says whether the rest has been collected.
+    const uncovered = Math.max(0, expected - poolApplied);
+    const remaining = pooledShortfall === null ? uncovered : Math.min(uncovered, pooledShortfall);
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            {remaining > 0
+              ? <ShieldAlert className="h-4 w-4 text-amber-500" />
+              : <ShieldCheck className="h-4 w-4 text-green-600" />
+            }
+            Security Deposit
+            <Badge
+              variant="outline"
+              className={remaining > 0
+                ? "ml-auto bg-amber-50 text-amber-700 border-amber-200"
+                : "ml-auto bg-green-50 text-green-700 border-green-200"
+              }
+            >
+              {remaining > 0 ? "Partly covered" : "Covered by pooled deposit"}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-sm text-muted-foreground">
+            <span className="font-semibold text-foreground">{formatCurrency(poolApplied)}</span>
+            {" "}of the {formatCurrency(expected)} deposit is covered by deposit already collected under another of this customer&apos;s contracts.
+            {remaining > 0 && (
+              <> <strong className="text-amber-700">{formatCurrency(remaining)}</strong> is still to be collected.</>
+            )}
+          </div>
+          {siblingPointer}
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (!required || status === "not_required") {
     return (
       <Card>

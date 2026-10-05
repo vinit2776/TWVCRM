@@ -198,6 +198,76 @@ export default function ContractDetailPage({
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
+
+  // Customer's already-collected deposit that could cover this contract's
+  // security deposit at activation (see /api/contracts/[id]/apply-pooled-deposit).
+  // Only fetched while the deposit leg of the activation gate is the blocker.
+  const [poolDeposit, setPoolDeposit] = useState<{ applicable: number; required: number; available: number } | null>(null);
+  const [applyingPool, setApplyingPool] = useState(false);
+  const poolDepositApplied = Number(contract?.deposit_pool_applied_amount || 0);
+  const canApplyPooledDeposit = ["admin", "manager", "sales_rep"].includes(userRole ?? "");
+  const depositGateBlocked =
+    contract?.status === "accepted" &&
+    !contract.deposit_carried_from &&
+    !!contract.proposal_id &&
+    !!linkedProposal &&
+    Number(linkedProposal.security_deposit_months || 0) > 0 &&
+    (linkedProposal.deposit_payment_status !== "paid" ||
+      (!!linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id));
+  useEffect(() => {
+    if (!depositGateBlocked || !canApplyPooledDeposit) { setPoolDeposit(null); return; }
+    let cancelled = false;
+    fetch(`/api/contracts/${id}/apply-pooled-deposit`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        setPoolDeposit(json.data
+          ? { applicable: json.data.applicable, required: json.data.required, available: json.data.available }
+          : null);
+      })
+      .catch(() => { if (!cancelled) setPoolDeposit(null); });
+    return () => { cancelled = true; };
+  }, [depositGateBlocked, canApplyPooledDeposit, id, poolDepositApplied]);
+
+  // After a partial apply, later top-ups join the customer's pool rather than
+  // this contract, so "still to collect" is read from the pool's shortfall.
+  const [poolShortfall, setPoolShortfall] = useState<number | null>(null);
+  useEffect(() => {
+    if (poolDepositApplied <= 0 || !contract?.lead_id) { setPoolShortfall(null); return; }
+    let cancelled = false;
+    fetch(`/api/leads/${contract.lead_id}/deposit-summary`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setPoolShortfall(j.data?.total_shortfall ?? null); })
+      .catch(() => { if (!cancelled) setPoolShortfall(null); });
+    return () => { cancelled = true; };
+  }, [poolDepositApplied, contract?.lead_id]);
+  const poolUncovered = contract
+    ? Math.max(0, Number(contract.security_deposit_amount || 0) - poolDepositApplied)
+    : 0;
+  const poolStillToCollect = poolShortfall === null ? poolUncovered : Math.min(poolUncovered, poolShortfall);
+
+  const handleApplyPooledDeposit = async () => {
+    setApplyingPool(true);
+    try {
+      const res = await fetch(`/api/contracts/${id}/apply-pooled-deposit`, { method: "POST" });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        const d = json?.data;
+        toast.success(
+          d?.shortfall > 0
+            ? `Applied ${formatCurrency(d.applied_amount)} — ${formatCurrency(d.shortfall)} of the deposit is still to be collected`
+            : `Applied ${formatCurrency(d?.applied_amount ?? 0)} of the customer's deposit`
+        );
+        fetchContract(false);
+      } else {
+        toast.error(json?.error || "Failed to apply deposit");
+      }
+    } catch {
+      toast.error("Failed to apply deposit");
+    } finally {
+      setApplyingPool(false);
+    }
+  };
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
   const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
   const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string } | null>(null);
@@ -1119,7 +1189,7 @@ export default function ContractDetailPage({
             // status doesn't cover this contract too.
             const depositClaimedByOther = !!linkedProposal?.deposit_claimed_by_contract_id
               && linkedProposal.deposit_claimed_by_contract_id !== contract.id;
-            const depositPaid = isRenewal || !depositRequired
+            const depositPaid = isRenewal || !depositRequired || poolDepositApplied > 0
               || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             // Renewals don't gate on pro-rata: it's a continuation, not a new
@@ -1207,11 +1277,31 @@ export default function ContractDetailPage({
                       </div>
                     )}
                     {!proposalMissing && !depositPaid && (
-                      <p>
-                        • {depositClaimedByOther
-                          ? "Security deposit — already claimed by another contract activated from this same proposal. Collect a separate deposit for this contract."
-                          : "Security deposit collected"}
-                      </p>
+                      <div>
+                        <p>
+                          • {depositClaimedByOther
+                            ? "Security deposit — already claimed by another contract activated from this same proposal. Collect a separate deposit for this contract, or apply the customer's available deposit."
+                            : "Security deposit collected"}
+                        </p>
+                        {canApplyPooledDeposit && poolDeposit && poolDeposit.applicable > 0 && (
+                          <div className="mt-1.5 pl-3 border-l-2 border-amber-200 flex flex-wrap items-center gap-2">
+                            <span className="text-amber-800">
+                              Customer has {formatCurrency(poolDeposit.available)} of deposit already collected —
+                              {" "}covers {formatCurrency(poolDeposit.applicable)} of the {formatCurrency(poolDeposit.required)} required
+                              {poolDeposit.applicable < poolDeposit.required ? " (the rest must still be collected)" : ""}.
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[11px] border-amber-400 text-amber-800 hover:bg-amber-100"
+                              disabled={applyingPool}
+                              onClick={handleApplyPooledDeposit}
+                            >
+                              {applyingPool ? <Loader2 className="h-3 w-3 animate-spin" /> : `Apply ${formatCurrency(poolDeposit.applicable)}`}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     )}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
@@ -1497,10 +1587,25 @@ export default function ContractDetailPage({
                         </p>
                         <p className="text-[10px] text-green-600 mt-0.5">✓ Received</p>
                       </>
+                    ) : poolDepositApplied > 0 ? (
+                      <>
+                        <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                        {poolStillToCollect > 0.01 ? (
+                          <p className="text-[10px] text-amber-600 mt-0.5">
+                            Pending — {formatCurrency(poolStillToCollect)} still to collect
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-green-600 mt-0.5">✓ Covered by customer&apos;s pooled deposit</p>
+                        )}
+                      </>
                     ) : (
-                      <p className="font-medium text-amber-600">Pending</p>
+                      <>
+                        <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                        <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                      </>
                     )
-                  ) : linkedProposal?.deposit_payment_status === "paid" ? (
+                  ) : linkedProposal?.deposit_payment_status === "paid"
+                    && !(linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id) ? (
                     <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block hover:underline">
                       <p className="font-medium">
                         {formatCurrency(Number(linkedProposal.deposit_payment_amount || linkedProposal.security_deposit_amount || securityDeposit))}
@@ -1508,7 +1613,17 @@ export default function ContractDetailPage({
                       <p className="text-[10px] text-green-600 mt-0.5">✓ Received — view payment details</p>
                     </Link>
                   ) : (
-                    <p className="font-medium text-amber-600">Pending</p>
+                    <>
+                      <p className="font-medium">
+                        {formatCurrency(Number(linkedProposal?.security_deposit_amount || securityDeposit))}
+                      </p>
+                      <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                    </>
+                  )}
+                  {poolDepositApplied > 0 && (
+                    <p className="text-[10px] text-green-600 mt-0.5">
+                      ✓ {formatCurrency(poolDepositApplied)} applied from customer&apos;s pooled deposit
+                    </p>
                   )}
                   {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
                     <p className="text-[10px] text-amber-600 mt-0.5">
