@@ -89,6 +89,8 @@ interface BilledStatement {
   period_start: string;
   total_amount: number;
   contract?: { contract_number: string } | null;
+  /** Renewal this rent was raised for, when billed on its parent (00508). */
+  on_behalf?: { contract_number: string } | null;
   lead?: { first_name?: string; last_name?: string; company?: string } | null;
 }
 
@@ -278,11 +280,11 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
 
   const matchesSearch = (r: UnbilledRow) =>
     !searchTerm ||
-    [r.contractNumber, r.customerName, r.periodLabel, r.detail ?? ""].some((v) => v.toLowerCase().includes(searchTerm));
+    [r.contractNumber, r.customerName, r.periodLabel, r.detail ?? "", r.onBehalfOfContractNumber ?? ""]
+      .some((v) => v.toLowerCase().includes(searchTerm));
   const rowsByCategory = (cat: UnbilledCategory) => unbilledRows.filter((r) => r.category === cat && matchesSearch(r));
-  const unbilledMatchCount = searchTerm
-    ? unbilledRows.filter((r) => r.category !== "current_cycle_sent" && matchesSearch(r)).length
-    : 0;
+  // Counts every row the search leaves on screen, including "Already sent".
+  const unbilledMatchCount = searchTerm ? unbilledRows.filter(matchesSearch).length : 0;
 
   const renderRow = (row: UnbilledRow) => (
     <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
@@ -290,6 +292,14 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         <p className="text-sm font-medium truncate">
           <span className="font-mono text-xs text-teal-700">{row.contractNumber}</span>
           {" → "}{row.customerName}
+          {row.onBehalfOfContractNumber && (
+            <span
+              className="ml-1.5 text-xs font-normal text-muted-foreground"
+              title={`Raised on ${row.contractNumber} for its renewal's period — the rent belongs to ${row.onBehalfOfContractNumber}`}
+            >
+              · for <span className="font-mono">{row.onBehalfOfContractNumber}</span>
+            </span>
+          )}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {row.category === "current_cycle_sent" || row.category === "current_cycle_tally" ? (
@@ -602,7 +612,12 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                           <span className="font-mono text-xs">{s.statement_number}</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs">{s.contract?.contract_number ?? "—"}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs">
+                        {s.contract?.contract_number ?? "—"}
+                        {s.on_behalf?.contract_number && (
+                          <span className="block font-sans text-[11px] text-muted-foreground">for {s.on_behalf.contract_number}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5">{s.lead?.company || `${s.lead?.first_name ?? ""} ${s.lead?.last_name ?? ""}`.trim() || "—"}</td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatDate(s.period_start)}</td>
                       <td className="px-4 py-2.5 text-right font-mono">{formatCurrency(s.total_amount)}</td>

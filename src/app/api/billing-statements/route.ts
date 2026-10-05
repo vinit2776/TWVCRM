@@ -5,7 +5,7 @@ import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 const SELECT_FIELDS =
-  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(id, contract_number), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -66,7 +66,11 @@ export async function GET(request: NextRequest) {
     const contractIds = (contractHits ?? []).map((c) => c.id as string);
     const leadIds = (leadHits ?? []).map((l) => l.id as string);
     const ors = [`statement_number.ilike.${like}`, `gst_invoice_number.ilike.${like}`];
-    if (contractIds.length) ors.push(`contract_id.in.(${contractIds.join(",")})`);
+    if (contractIds.length) {
+      ors.push(`contract_id.in.(${contractIds.join(",")})`);
+      // Rent raised on a parent for a renewal's period is found by the renewal's number too.
+      ors.push(`billed_on_behalf_of_contract_id.in.(${contractIds.join(",")})`);
+    }
     if (leadIds.length) ors.push(`lead_id.in.(${leadIds.join(",")})`);
     query = query.or(ors.join(","));
   }
