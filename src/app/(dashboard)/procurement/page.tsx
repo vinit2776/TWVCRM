@@ -23,6 +23,7 @@ import {
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { PreApprovedVendorsStrip } from "@/components/procurement/pre-approved-vendors";
 import type { Company } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -433,6 +434,8 @@ export default function ProcurementDashboard() {
           <Button variant="outline" size="sm" onClick={() => fetchData(companyId)}>Refresh</Button>
         </div>
       </div>
+
+      <PreApprovedVendorsStrip />
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

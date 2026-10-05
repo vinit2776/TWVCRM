@@ -19,6 +19,7 @@ import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } fr
 import type { VendorBill } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { PreApprovedVendorsStrip } from "@/components/procurement/pre-approved-vendors";
 
 const today = new Date().toISOString().split("T")[0];
 
@@ -94,6 +95,8 @@ function VendorBillsPageInner() {
           <Plus className="h-4 w-4 mr-1" /> New Bill
         </Button>
       </div>
+
+      <PreApprovedVendorsStrip />
 
       {/* Search bar */}
       <BillSearchBar

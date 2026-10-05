@@ -31,6 +31,7 @@ import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_IT
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { PreApprovedBillCallout } from "@/components/procurement/pre-approved-vendors";
 
 interface LineItem {
   id: string; // local draft id (in edit mode, seeded from the existing row id)
@@ -750,6 +751,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           </p>
         </div>
       </div>
+
+      {!isEdit && <PreApprovedBillCallout />}
 
       {/* Request Details */}
       <Card>
