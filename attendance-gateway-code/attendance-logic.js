@@ -34,6 +34,23 @@ function saturdayOccurrenceInMonth(dateStr) {
   return Math.ceil(Number(dateStr.split('-')[2]) / 7);
 }
 
+// A synthetic auto-checkout (source 'auto') only ever fills a gap — it never outranks
+// a real punch. The biometric device buffers punches and re-sends them when the office
+// relay or internet is down, so a real check-out stamped 18:30 can land *after* the 19:00
+// auto-checkout already closed the day. Counting both left three punches (odd), and the
+// day showed Punch Error. So: if the real punches pair up on their own, use them and
+// ignore the auto-checkout; only if they leave a check-in open does the auto-checkout
+// close it — and only when it comes after the last real punch, or it would pair with
+// the wrong one.
+function effectivePunches(dayPunches) {
+  const real = dayPunches.filter(p => p.source !== 'auto');
+  if (real.length % 2 === 0) return real;
+  const autos = dayPunches.filter(p => p.source === 'auto');
+  const auto = autos[autos.length - 1];
+  if (auto && auto.timestamp > real[real.length - 1].timestamp) return [...real, auto];
+  return real;
+}
+
 function createAttendanceLogic(db) {
   function getEmployee(id) {
     return db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
@@ -74,7 +91,7 @@ function createAttendanceLogic(db) {
   async function computeDayStatus(employeeId, dateStr) {
     const employee = await getEmployee(employeeId);
     if (!employee) return null;
-    const punches = await getPunchesForDay(employeeId, dateStr);
+    const punches = effectivePunches(await getPunchesForDay(employeeId, dateStr));
 
     if (punches.length === 0) {
       // An employee's own join date is authoritative for "no attendance obligation
@@ -198,4 +215,5 @@ module.exports = {
   isSunday,
   isSaturday,
   saturdayOccurrenceInMonth,
+  effectivePunches,
 };

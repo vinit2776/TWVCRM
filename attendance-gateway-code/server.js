@@ -13,6 +13,7 @@ const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
+  effectivePunches,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const ONBOARDING = require('./onboarding-content');
@@ -783,14 +784,22 @@ function correctDeviceTimestamp(raw) {
   asDate.setMinutes(asDate.getMinutes() - CONFIG.DEVICE_CLOCK_OFFSET_MINUTES);
   return formatTimestamp(asDate);
 }
-async function lastPunch(employeeId) {
-  return await db.prepare('SELECT * FROM punches WHERE employee_id = ? ORDER BY timestamp DESC LIMIT 1').get(employeeId);
+// In/out for a punch whose caller didn't say which. Counts only that day's real punches
+// before this one, so every day starts with 'in' — the old "flip the last punch ever"
+// rule let a stray evening punch turn the next morning's check-in into an 'out'. Auto-
+// checkouts are skipped for the same reason computeDayStatus skips them (see
+// effectivePunches): a late-arriving real check-out shouldn't be labelled 'in' just
+// because the 19:00 auto-checkout got recorded first.
+async function inferPunchDirection(employeeId, timestamp) {
+  const earlierReal = (await getPunchesForDay(employeeId, timestamp.slice(0, 10)))
+    .filter(p => p.source !== 'auto' && p.timestamp < timestamp);
+  return earlierReal.length % 2 === 0 ? 'in' : 'out';
 }
 // A retried device push or a double-tapped on-site button can submit the same
 // punch twice; treat two punches for the same employee within a few seconds of
 // each other as one event rather than two. Deliberately ignores direction: when
 // the caller doesn't specify one (the ADMS device path), it's inferred from
-// whatever the last recorded punch is — so a retry landing after the first
+// that day's earlier punches — so a retry landing after the first
 // attempt's insert would infer the opposite direction and slip past a
 // direction-scoped check entirely, which defeats the point of deduping retries.
 const PUNCH_DEDUP_WINDOW_SECONDS = 5;
@@ -814,12 +823,8 @@ async function recordPunch(employeeId, timestamp, direction, source, note = '', 
 async function getEmployeeByDevicePin(pin) {
   return await db.prepare('SELECT * FROM employees WHERE device_pin = ?').get(String(pin));
 }
-// Same in/out inference /api/punch uses when the caller doesn't say which — kept
-// separate rather than shared, since /api/punch's version also honors an explicit
-// direction override from the request body, which ADMS pushes never provide.
 async function ingestBiometricPunch(employeeId, timestamp) {
-  const last = await lastPunch(employeeId);
-  const direction = (last && last.direction === 'in') ? 'out' : 'in';
+  const direction = await inferPunchDirection(employeeId, timestamp);
   const inserted = await recordPunch(employeeId, timestamp, direction, 'biometric');
   return { direction, inserted };
 }
@@ -929,7 +934,7 @@ const OVERTIME_ROUND_MINUTES = 15; // ignore anything under a quarter-hour past 
 // (authorized/unauthorized hours worked beyond the shift), not an attendance status,
 // so it never overrides or interacts with Late/Half Day/Present.
 async function computeOvertimeMinutes(employee, dateStr, fetchPunches = getPunchesForDay) {
-  const punches = await fetchPunches(employee.id, dateStr);
+  const punches = effectivePunches(await fetchPunches(employee.id, dateStr));
   // Unresolved day (no punches, or an odd count — still "in progress" or a punch error):
   // no verified overtime until the day actually resolves to a real checkout.
   if (punches.length === 0 || punches.length % 2 !== 0) return 0;
@@ -1258,23 +1263,43 @@ function computeMusterReport(grid) {
 }
 
 // --- Auto-checkout: unmatched punch-in gets a synthetic punch-out once per day at/after AUTO_CHECKOUT_HOUR ---
+// Also sweeps the previous AUTO_CHECKOUT_CATCHUP_DAYS days: a run that didn't fire or
+// failed (2026-09-29: no auto-checkouts for anyone, open days left as Punch Error), or
+// a check-in the device only uploaded after that evening's run, would otherwise stay
+// open forever — each run only ever looked at its own day.
+const AUTO_CHECKOUT_CATCHUP_DAYS = 7;
 let lastAutoCheckoutDate = null;
 async function performAutoCheckout() {
-  const today = todayStr();
-  // Vercel's Hobby cron only guarantees per-hour precision, so this can actually run
-  // any time in the 19:00-19:59 window. Pin the recorded time to AUTO_CHECKOUT_HOUR
-  // sharp rather than stamping whenever the invocation happened to land.
-  const cutoff = new Date();
-  cutoff.setHours(AUTO_CHECKOUT_HOUR, 0, 0, 0);
-  const cutoffTs = formatTimestamp(cutoff);
+  const now = new Date();
+  const today = todayStr(now);
+  const dateStrs = [];
+  for (let i = AUTO_CHECKOUT_CATCHUP_DAYS; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    dateStrs.push(todayStr(d));
+  }
   const employees = await db.prepare('SELECT id FROM employees').all();
   for (const emp of employees) {
-    const punches = await getPunchesForDay(emp.id, today);
-    if (punches.length % 2 !== 0) {
-      await recordPunch(emp.id, cutoffTs, 'out', 'auto', 'auto-checkout');
-      await createNotification(emp.id, `You were auto-checked out at ${AUTO_CHECKOUT_HOUR}:00. Make sure that you check out next time.`);
-      console.log(`Auto-checked-out ${emp.id} (forgot to punch out)`);
+    const recent = await db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp >= ? ORDER BY timestamp ASC')
+      .all(emp.id, `${dateStrs[0]} 00:00:00`);
+    for (const dateStr of dateStrs) {
+      const dayPunches = recent.filter(p => p.timestamp.startsWith(dateStr));
+      // An auto-checkout already recorded means this day was handled once; if it's
+      // still open (a real punch after 19:00), leave it for an admin rather than
+      // stacking a second synthetic punch — and a second notification — every night.
+      if (effectivePunches(dayPunches).length % 2 === 0 || dayPunches.some(p => p.source === 'auto')) continue;
+      // Vercel's Hobby cron only guarantees per-hour precision, so this can actually run
+      // any time in the 19:00-19:59 window. Pin the recorded time to AUTO_CHECKOUT_HOUR
+      // sharp rather than stamping whenever the invocation happened to land.
+      const cutoffTs = `${dateStr} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
+      // A check-in after the cutoff can't be closed by a checkout stamped before it.
+      if (dayPunches[dayPunches.length - 1].timestamp >= cutoffTs) continue;
+      if (!await recordPunch(emp.id, cutoffTs, 'out', 'auto', 'auto-checkout')) continue;
+      const when = dateStr === today ? `${AUTO_CHECKOUT_HOUR}:00` : `${AUTO_CHECKOUT_HOUR}:00 on ${dateStr}`;
+      await createNotification(emp.id, `You were auto-checked out at ${when}. Make sure that you check out next time.`);
+      console.log(`Auto-checked-out ${emp.id} for ${dateStr} (forgot to punch out)`);
     }
+    const cutoffTs = `${today} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
     // Also close out any break left open past end of day, so it doesn't linger open
     // forever and keep skewing tomorrow's queries (breaks are looked up by start_ts).
     // Same pinned cutoff as above, so a break never appears to end after the
@@ -3816,11 +3841,7 @@ async function handleRequest(req, res) {
     }
 
     const ts = timestamp || formatTimestamp(new Date());
-    let dir = direction;
-    if (!dir) {
-      const last = await lastPunch(employee_id);
-      dir = (last && last.direction === 'in') ? 'out' : 'in';
-    }
+    const dir = direction || await inferPunchDirection(employee_id, ts);
     // For on-site punches, turn the captured "lat,lng" into a readable address so a
     // manager sees a place, not coordinates. Best-effort: never blocks the punch.
     let locationAddress = '';
