@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
+import { createRentWaiver } from "@/lib/rent-waivers";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 
@@ -57,54 +57,7 @@ export async function POST(
   if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   const { waived_month, reason } = parsed.data;
 
-  const { data: contract } = await admin
-    .from("contracts").select("id, contract_number, start_date").eq("id", contractId).single();
-  if (!contract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
-
-  // Only months that can actually be gaps: not before the contract's first
-  // month, and not after the current month (future months aren't owed yet).
-  const currentMonthFirst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 7) + "-01";
-  if (waived_month < `${String(contract.start_date).slice(0, 7)}-01` || waived_month > currentMonthFirst) {
-    return NextResponse.json({ error: "Only a past or current month within the contract can be waived" }, { status: 422 });
-  }
-
-  // A month that already has a rent statement isn't a gap — void/discard that instead.
-  const [y, m] = waived_month.split("-").map(Number);
-  const { data: covering } = await admin
-    .from("billing_statements")
-    .select("id")
-    .eq("contract_id", contractId)
-    .in("statement_type", ["rent", "combined"])
-    .eq("prepaid_year", y)
-    .eq("prepaid_month", m)
-    .is("voided_at", null)
-    .neq("status", "discarded")
-    .limit(1);
-  if ((covering ?? []).length > 0) {
-    return NextResponse.json({ error: "This month already has a rent statement — nothing to waive" }, { status: 409 });
-  }
-
-  const { data: waiver, error } = await admin
-    .from("contract_rent_waivers")
-    .insert({ contract_id: contractId, waived_month, reason, waived_by: dbUser.id })
-    .select("id, waived_month, reason, waived_at")
-    .single();
-
-  if (error) {
-    // 23505 = the live-waiver unique index: this month is already waived.
-    if (error.code === "23505") {
-      return NextResponse.json({ error: "This month is already waived" }, { status: 409 });
-    }
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  logAudit(admin, {
-    entityType: "contract",
-    entityId: contractId,
-    action: "rent_month_waived",
-    performedBy: dbUser.id,
-    changes: { waived_month: { old: null, new: waived_month }, reason: { old: null, new: reason } },
-  });
-
-  return NextResponse.json(waiver, { status: 201 });
+  const result = await createRentWaiver(admin, { contractId, waivedMonth: waived_month, reason, userId: dbUser.id });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  return NextResponse.json(result.waiver, { status: 201 });
 }
