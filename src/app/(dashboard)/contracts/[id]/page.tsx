@@ -69,6 +69,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
   CONTRACT_QUOTA_LOCKED_STATUSES,
   CONTRACT_QUOTA_ROLES,
@@ -964,8 +965,8 @@ export default function ContractDetailPage({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-bold font-mono whitespace-nowrap">{contract.contract_number}</h1>
-              <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contract.status]}>
-                {CONTRACT_STATUS_LABELS[contract.status]}
+              <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(contract)]}>
+                {CONTRACT_STATUS_LABELS[contractDisplayStatus(contract)]}
               </Badge>
               {contract.signed_document && (
                 <Badge className="bg-green-100 text-green-700 border-green-200">

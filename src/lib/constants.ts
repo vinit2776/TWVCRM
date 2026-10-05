@@ -414,6 +414,8 @@ export const CONTRACT_STATUS_LABELS: Record<string, string> = {
   renewed: "Renewed",
   expired: "Expired",
   terminated: "Terminated",
+  // Display-only: never a stored status. See contractDisplayStatus().
+  withdrawn: "Withdrawn",
 };
 
 export const CONTRACT_STATUS_COLORS: Record<string, string> = {
@@ -427,7 +429,18 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
   renewed: "bg-blue-100 text-blue-800",
   expired: "bg-orange-100 text-orange-800",
   terminated: "bg-red-100 text-red-800",
+  withdrawn: "bg-gray-100 text-gray-700",
 };
+
+/**
+ * The status to *show* for a contract. Withdrawing a contract that never
+ * activated is stored as `terminated` (so every existing terminal-state rule
+ * keeps working), but it was never a live contract — label it "Withdrawn".
+ * Use this for labels/badges only; never to branch business logic.
+ */
+export function contractDisplayStatus(c: { status: string; activated_at?: string | null }): string {
+  return c.status === "terminated" && !c.activated_at ? "withdrawn" : c.status;
+}
 
 // Valid status transitions for the contract state machine.
 // Mirrors the CASE_STATUS_TRANSITIONS pattern. Used by the PATCH
