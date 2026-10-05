@@ -42,10 +42,12 @@ function NewVendorBillForm() {
   const searchParams = useSearchParams();
   const poId = searchParams.get("po_id");
   const replacesId = searchParams.get("replaces");
+  const presetVendorId = searchParams.get("vendor_id");
 
   const today = new Date().toISOString().split("T")[0];
 
-  const [vendorId, setVendorId] = useState("");
+  // ?vendor_id= comes from the "Pre-approved vendors" shortcuts; a PO still wins.
+  const [vendorId, setVendorId] = useState(poId ? "" : (presetVendorId ?? ""));
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(today);
   const [dueDate, setDueDate] = useState("");
