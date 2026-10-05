@@ -14,7 +14,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, ChevronRight, ChevronDown, CalendarPlus } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, ChevronDown, CalendarPlus, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,6 +103,15 @@ const BILLING_ROLES = ["admin", "manager", "accounts"];
 
 export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">(type === "usage" ? "billed" : "unbilled");
+  // One search box for whichever tab is open. Unbilled filters in the browser
+  // (the whole queue is already loaded); Billed searches server-side.
+  const [search, setSearch] = useState("");
+  const [billedSearch, setBilledSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setBilledSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const searchTerm = search.trim().toLowerCase();
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
   // Waiving a gap is admin-only (enforced again by the API).
   const canWaive = userRole === "admin";
@@ -235,7 +245,8 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   const loadBilled = useCallback(async () => {
     setBilledLoading(true);
     try {
-      const res = await fetch(`/api/billing-statements?statement_type=${billedStatementTypes}&page=${billedPage}&limit=25`);
+      const q = billedSearch ? `&search=${encodeURIComponent(billedSearch)}` : "";
+      const res = await fetch(`/api/billing-statements?statement_type=${billedStatementTypes}&page=${billedPage}&limit=25${q}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setBilledRows(json.data || []);
@@ -245,7 +256,10 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
     } finally {
       setBilledLoading(false);
     }
-  }, [billedPage, billedStatementTypes]);
+  }, [billedPage, billedStatementTypes, billedSearch]);
+
+  // A new search starts from the first page of results.
+  useEffect(() => { setBilledPage(1); }, [billedSearch]);
 
   useEffect(() => { if (tab === "billed") loadBilled(); }, [tab, loadBilled]);
 
@@ -262,7 +276,13 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
     .reduce((s, [, n]) => s + n, 0);
   const hasAnyRows = unbilledRows.length > 0;
 
-  const rowsByCategory = (cat: UnbilledCategory) => unbilledRows.filter((r) => r.category === cat);
+  const matchesSearch = (r: UnbilledRow) =>
+    !searchTerm ||
+    [r.contractNumber, r.customerName, r.periodLabel, r.detail ?? ""].some((v) => v.toLowerCase().includes(searchTerm));
+  const rowsByCategory = (cat: UnbilledCategory) => unbilledRows.filter((r) => r.category === cat && matchesSearch(r));
+  const unbilledMatchCount = searchTerm
+    ? unbilledRows.filter((r) => r.category !== "current_cycle_sent" && matchesSearch(r)).length
+    : 0;
 
   const renderRow = (row: UnbilledRow) => (
     <div key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
@@ -386,7 +406,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
     return (
       <div className="rounded-md border divide-y">
         {ordered.map(([key, g]) => {
-          const isOpen = openGapGroups[key] ?? key === newestKey;
+          const isOpen = searchTerm ? true : (openGapGroups[key] ?? key === newestKey);
           const canSend = g.rows.filter((r) => r.backfillTarget).length;
           const estTotal = g.rows.reduce((sum, r) => sum + (r.estimate?.total ?? 0), 0);
           return (
@@ -488,13 +508,39 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             {type === "usage" ? "Usage invoices" : "Billed"}
           </button>
         </div>
-        {type === "usage" && <p className="text-xs text-muted-foreground">Unbilled usage is in Usage Charges → Unbilled.</p>}
+        <div className="flex items-center gap-3">
+          {type === "usage" && <p className="text-xs text-muted-foreground">Unbilled usage is in Usage Charges → Unbilled.</p>}
+          {tab === "unbilled" && searchTerm && (
+            <span className="text-xs text-muted-foreground whitespace-nowrap">{unbilledMatchCount} match{unbilledMatchCount === 1 ? "" : "es"}</span>
+          )}
+          <div className="relative w-64">
+            <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={tab === "billed" ? "Search invoice no., contract, customer" : "Search contract or customer"}
+              className="h-8 pl-8 pr-7 text-sm"
+              aria-label="Search"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {tab === "unbilled" && (
         <div className="space-y-5">
           {unbilledLoading ? (
             <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : searchTerm && CATEGORY_ORDER.every((c) => rowsByCategory(c).length === 0) ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">No unbilled items match &ldquo;{search.trim()}&rdquo;.</p>
           ) : !hasAnyRows ? (
             <p className="text-sm text-muted-foreground py-6 text-center">Nothing outstanding — every contract is current.</p>
           ) : (
@@ -502,7 +548,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
               const rows = rowsByCategory(cat);
               if (rows.length === 0) return null;
               const collapsible = cat === "current_cycle_sent";
-              const open = !collapsible || showSent;
+              const open = !collapsible || showSent || !!searchTerm;
               return (
                 <div key={cat} className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -543,7 +589,9 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                 {billedLoading ? (
                   <tr><td colSpan={6} className="text-center py-8"><Loader2 className="h-4 w-4 animate-spin inline-block text-muted-foreground" /></td></tr>
                 ) : billedRows.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">No statements yet</td></tr>
+                  <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">
+                    {billedSearch ? `No statements match “${billedSearch}”` : "No statements yet"}
+                  </td></tr>
                 ) : (
                   billedRows.map((s) => (
                     <tr key={s.id} className="hover:bg-muted/20">
