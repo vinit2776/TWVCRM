@@ -22,6 +22,7 @@ import { ContractFacilitiesSection } from "@/components/contracts/contract-facil
 import {
   CONTRACT_STATUSES,
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
   CONTRACT_QUOTA_LOCKED_STATUSES,
   CONTRACT_QUOTA_ROLES,
@@ -281,8 +282,8 @@ export default function ContractsPage() {
                   <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{c.location?.name || "—"}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
-                      <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
-                        {CONTRACT_STATUS_LABELS[c.status]}
+                      <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
+                        {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                       </Badge>
                       {c.is_renewal && (
                         <span title={`Renewal V${c.renewal_sequence || 2}`}>

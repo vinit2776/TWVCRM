@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
   BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
@@ -204,8 +205,8 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
-                          {CONTRACT_STATUS_LABELS[c.status]}
+                        <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
+                          {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                         </Badge>
                         {c.status === "renewal_in_progress" && (
                           renewalDraft ? (
@@ -350,8 +351,8 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                   <CardTitle className="text-sm font-mono">{c.contract_number}</CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5">{c.title}</p>
                 </div>
-                <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
-                  {CONTRACT_STATUS_LABELS[c.status]}
+                <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
+                  {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                 </Badge>
               </CardHeader>
               <CardContent>

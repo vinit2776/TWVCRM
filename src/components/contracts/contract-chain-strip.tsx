@@ -8,6 +8,7 @@ import { RefreshCw, ChevronRight, Minus } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   CONTRACT_STATUS_LABELS,
+  contractDisplayStatus,
   CONTRACT_STATUS_COLORS,
 } from "@/lib/constants";
 
@@ -205,9 +206,9 @@ export function ContractChainStrip({ contractId, leadId }: ContractChainStripPro
                     </span>
                     <Badge
                       variant="secondary"
-                      className={`${CONTRACT_STATUS_COLORS[c.status]} text-[9px] px-1.5 py-0 h-4`}
+                      className={`${CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]} text-[9px] px-1.5 py-0 h-4`}
                     >
-                      {CONTRACT_STATUS_LABELS[c.status]}
+                      {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                     </Badge>
                   </div>
                   <div className="space-y-0.5">
