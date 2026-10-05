@@ -92,6 +92,11 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(openQueryId ?? null);
+  // Guards against out-of-order responses: two fetches fired close together
+  // (e.g. clicking a tab, then immediately a filter chip) can resolve in
+  // either order. Only the response for the most recently fired request is
+  // allowed to touch state.
+  const requestIdRef = useRef(0);
 
   const loadStats = useCallback(async () => {
     try {
@@ -116,18 +121,21 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
 
   const loadFirstPage = useCallback(
     async (activeTab: Tab) => {
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       try {
         const res = await fetch(buildUrl(activeTab), { cache: "no-store" });
         if (!res.ok) throw new Error();
         const json = (await res.json()) as { items: QueryListItem[]; next_cursor: string | null };
+        if (requestId !== requestIdRef.current) return;
         setItems(json.items);
         setNextCursor(json.next_cursor);
       } catch {
+        if (requestId !== requestIdRef.current) return;
         setItems([]);
         setNextCursor(null);
       } finally {
-        setLoading(false);
+        if (requestId === requestIdRef.current) setLoading(false);
       }
     },
     [buildUrl],
@@ -135,17 +143,19 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
 
   const loadMore = useCallback(async () => {
     if (!nextCursor) return;
+    const requestId = ++requestIdRef.current;
     setLoadingMore(true);
     try {
       const res = await fetch(buildUrl(tab, nextCursor), { cache: "no-store" });
       if (!res.ok) throw new Error();
       const json = (await res.json()) as { items: QueryListItem[]; next_cursor: string | null };
+      if (requestId !== requestIdRef.current) return;
       setItems((prev) => [...prev, ...json.items]);
       setNextCursor(json.next_cursor);
     } catch {
       // Button stays visible to retry.
     } finally {
-      setLoadingMore(false);
+      if (requestId === requestIdRef.current) setLoadingMore(false);
     }
   }, [buildUrl, tab, nextCursor]);
 
