@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { ITEM_UNIT_GROUPS, ITEM_UNIT_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
+import Link from "next/link";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 interface LineItem {
@@ -231,6 +232,8 @@ function NewPurchaseOrderFormWithPr({
   // Blank-price warning dialog
   const [showPriceWarning, setShowPriceWarning] = useState(false);
   const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
+
+  const selectedVendor = vendors.find((v) => v.id === vendorId);
 
   const handleVendorChange = async (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
@@ -488,6 +491,24 @@ function NewPurchaseOrderFormWithPr({
                 ))}
               </SelectContent>
             </Select>
+            {selectedVendor?.is_service_provider && (
+              <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <p>
+                  <strong>{selectedVendor.name}</strong> is a service provider. Services (internet, AMC, etc.)
+                  shouldn&apos;t be ordered on a goods PO — it would be received as goods with quantities
+                  instead of being tracked as a service.{" "}
+                  <Link
+                    href={prData?.department === "amc" && prId
+                      ? `/procurement/orders/new-service?from_mr=${prId}`
+                      : "/procurement/orders/new-service"}
+                    className="font-medium underline"
+                  >
+                    Create a service PO instead
+                  </Link>
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
