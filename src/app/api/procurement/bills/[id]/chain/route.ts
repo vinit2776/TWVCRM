@@ -77,11 +77,17 @@ export async function GET(
 
       // Fetch delivery challans (goods) or service reports (services) in parallel
       const [dcRes, srRes] = await Promise.all([
+        // This is a historical/audit view of the bill's chain — reversed
+        // receipts (from a force-cancelled PO) are still shown here since the
+        // delivery genuinely happened; reversed_at is selected so the UI can
+        // mark them rather than presenting them as live goods.
         supabase
           .from("po_delivery_receipts")
           .select(`
             id, dc_number, dc_date, file_url, notes, received_at,
+            reversed_at, reversed_by, reversal_reason,
             receiver:users!po_delivery_receipts_received_by_fkey(id, full_name),
+            reverser:users!po_delivery_receipts_reversed_by_fkey(id, full_name),
             po_delivery_receipt_items(id, po_item_id, qty_received, purchase_order_items(item_name, unit))
           `)
           .eq("po_id", bill.po_id)

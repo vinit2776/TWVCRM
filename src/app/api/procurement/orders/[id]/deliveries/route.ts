@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
+import { reverseDeliveryReceipt } from "@/lib/procurement/reverse-delivery";
 import { z } from "zod";
 
 const createDeliverySchema = z.object({
@@ -443,77 +444,18 @@ export async function DELETE(
     return NextResponse.json({ error: "Deliveries can only be rejected on partially received or received POs" }, { status: 422 });
   }
 
-  // Fetch delivery receipt + items (including the stock location/item
-  // resolved and stored at creation time)
-  const { data: receipt, error: receiptErr } = await supabase
-    .from("po_delivery_receipts")
-    .select("*, po_delivery_receipt_items(id, po_item_id, qty_received, stock_item_id)")
-    .eq("id", deliveryId)
-    .eq("po_id", poId)
-    .single();
-
-  if (receiptErr || !receipt) {
-    return NextResponse.json({ error: "Delivery receipt not found" }, { status: 404 });
+  // Reverses quantity_received + location_stock for this receipt, then
+  // deletes the receipt's line items and the receipt row — see
+  // src/lib/procurement/reverse-delivery.ts for the fallback chains this
+  // mirrors from the original inline implementation.
+  const reverseResult = await reverseDeliveryReceipt(supabase, {
+    receiptId: deliveryId,
+    poId,
+    disposition: "delete",
+  });
+  if (!reverseResult.ok) {
+    return NextResponse.json({ error: reverseResult.error }, { status: 404 });
   }
-
-  // Resolve the location to reverse stock at. Prefer the value stored on the
-  // receipt when it was recorded; for legacy receipts (before it was stored)
-  // re-derive with the SAME fallback chain the POST path uses: PO's
-  // location_id, else the linked Purchase Request's location_id.
-  let stockLocationId: string | null = receipt.stock_location_id ?? po.location_id ?? null;
-  if (!stockLocationId && po.pr_id) {
-    const { data: prRow } = await supabase
-      .from("purchase_requests")
-      .select("location_id")
-      .eq("id", po.pr_id)
-      .maybeSingle();
-    stockLocationId = prRow?.location_id ?? null;
-  }
-
-  // Reverse quantity_received on each PO item + reverse location_stock
-  for (const item of receipt.po_delivery_receipt_items ?? []) {
-    const { data: poItem } = await supabase
-      .from("purchase_order_items")
-      .select("item_id, quantity_received, purchase_request_items(item_id)")
-      .eq("id", item.po_item_id)
-      .eq("po_id", poId)
-      .single();
-    if (poItem) {
-      // Atomic decrement (floors at 0) — mirrors the POST-path increment
-      await supabase.rpc("increment_po_item_received", {
-        p_po_item_id: item.po_item_id,
-        p_po_id: poId,
-        p_delta: -Number(item.qty_received),
-      });
-      // Reverse location_stock against the item stock was credited to:
-      // stored stock_item_id, else re-derive via the POST path's fallback
-      // (PO item's item_id, else the linked PR item's item_id).
-      const stockItemId: string | null =
-        item.stock_item_id ??
-        poItem.item_id ??
-        (poItem.purchase_request_items as unknown as { item_id: string | null } | null)?.item_id ??
-        null;
-      if (stockLocationId && stockItemId) {
-        // Services never had a location_stock write in the first place — skip the reversal too.
-        const { data: catalogRow } = await supabase
-          .from("procurement_items")
-          .select("item_type")
-          .eq("id", stockItemId)
-          .maybeSingle();
-        if (catalogRow?.item_type !== "service") {
-          await supabase.rpc("upsert_location_stock", {
-            p_location_id: stockLocationId,
-            p_item_id: stockItemId,
-            p_quantity_delta: -Number(item.qty_received),
-          });
-        }
-      }
-    }
-  }
-
-  // Delete receipt items, then receipt
-  await supabase.from("po_delivery_receipt_items").delete().eq("delivery_receipt_id", deliveryId);
-  await supabase.from("po_delivery_receipts").delete().eq("id", deliveryId).eq("po_id", poId);
 
   // Recalculate PO status based on remaining quantities
   const { data: updatedItems } = await supabase

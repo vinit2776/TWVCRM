@@ -2538,6 +2538,12 @@ export interface PoDeliveryReceipt {
   created_at: string;
   receiver?: { id: string; full_name?: string; email?: string } | null;
   po_delivery_receipt_items?: PoDeliveryReceiptItem[];
+  /** When set, this receipt's stock/quantity_received effect has been reversed
+   *  (e.g. PO force-cancel) — NULL means the receipt is live. */
+  reversed_at?: string | null;
+  reversed_by?: string | null;
+  reversal_reason?: string | null;
+  reverser?: { id: string; full_name?: string } | null;
 }
 
 export interface PoBillSummary {

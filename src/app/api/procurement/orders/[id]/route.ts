@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
+import { getBillVoidBlocker, voidBill } from "@/lib/procurement/void-bill";
+import { reverseDeliveryReceipt } from "@/lib/procurement/reverse-delivery";
 
 const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mark_ordered") }),
@@ -10,7 +12,17 @@ const patchPoSchema = z.discriminatedUnion("action", [
     action: z.literal("mark_received"),
     actual_delivery_date: z.string().nullish(),
   }),
-  z.object({ action: z.literal("cancel"), force: z.boolean().optional() }),
+  z.object({
+    action: z.literal("cancel"),
+    force: z.boolean().optional(),
+    /**
+     * Optional today so existing UI callers keep working unchanged. When
+     * present it's recorded on the audit trail and reused as the void reason
+     * for any child vendor bills; when absent a derived reason mentioning the
+     * PO number is used instead.
+     */
+    reason: z.string().min(10, "A reason of at least 10 characters is required").optional(),
+  }),
   z.object({
     action: z.literal("partial_cancel"),
     confirmed_items: z.array(z.object({
@@ -104,6 +116,9 @@ export async function PATCH(
 
   const { action } = parsed.data;
   let updatePayload: Record<string, unknown> = {};
+  // Extra audit-trail entries that don't come from the purchase_orders row diff
+  // (e.g. the cancel reason isn't a column on purchase_orders).
+  const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
 
   switch (action) {
     case "mark_ordered": {
@@ -164,35 +179,131 @@ export async function PATCH(
     }
 
     case "cancel": {
-      if (!["pending", "ordered", "partially_received", "received"].includes(po.status)) {
-        return NextResponse.json({ error: "Only pre-invoice POs can be cancelled" }, { status: 422 });
+      // invoice_received / invoice_approved are included here (widened from the
+      // original pre-invoice-only list) because the blanket "has vendor bills"
+      // block below has been replaced with a per-bill voidability check —
+      // cancellation is allowed as long as no money has moved on any bill, no
+      // matter how far along the PO's invoice status is.
+      if (!["pending", "ordered", "partially_received", "received", "invoice_received", "invoice_approved"].includes(po.status)) {
+        return NextResponse.json({ error: "This PO cannot be cancelled from its current status" }, { status: 422 });
       }
       if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
 
-      // Block cancellation if vendor bills exist — must handle bills first
-      const { count: billCount } = await supabase
+      // Fail fast on the cheapest, most-likely-to-fail check before any write.
+      // NOTE (Phase 2 follow-up): this handler is not transactional — writes
+      // below happen sequentially, same as the existing partial_cancel case.
+      // If a later write fails, earlier ones (e.g. a voided bill) are not
+      // rolled back. Wrapping this in an RPC is deferred to Phase 2.
+      const { data: poBills } = await supabase
         .from("vendor_bills")
-        .select("id", { count: "exact", head: true })
+        .select("id, bill_number, approval_status")
         .eq("po_id", id);
-      if (billCount && billCount > 0) {
+      const bills = poBills ?? [];
+
+      const blockedBills: { bill_number: string; reason: string }[] = [];
+      for (const b of bills) {
+        const blocker = await getBillVoidBlocker(supabase, b.id);
+        if (blocker) {
+          blockedBills.push({ bill_number: b.bill_number, reason: blocker });
+        }
+      }
+      if (blockedBills.length > 0) {
         return NextResponse.json({
-          error: "This PO has vendor bills. Delete or void the bills before cancelling.",
+          error: `This PO cannot be cancelled — ${blockedBills.length} bill${blockedBills.length > 1 ? "s" : ""} blocked: ${blockedBills.map((b) => `${b.bill_number} (${b.reason})`).join("; ")}`,
+          blocked_bills: blockedBills,
         }, { status: 422 });
       }
 
-      // If PO has received goods, require force flag
+      // Voiding an already-approved bill reverses an admin-only decision, so
+      // escalate the role gate for this PO's cancel action specifically when
+      // any of its bills have been approved. A PO whose bills are all still
+      // pending (or has no bills) stays cancellable by manager/office_admin.
+      const hasApprovedBill = bills.some((b) => b.approval_status === "approved");
+      if (hasApprovedBill && dbUser.role !== "admin") {
+        return NextResponse.json({
+          error: "This PO has an approved vendor bill — only admin can cancel it (voiding an approved bill requires admin).",
+        }, { status: 403 });
+      }
+
+      const cancelReason = parsed.data.reason?.trim() || `PO ${po.po_number} cancelled`;
+
+      // If PO has received goods, require force flag. force:true no longer
+      // ignores the received stock — it reverses it (see below), same as
+      // rejecting each delivery would.
       if (["partially_received", "received"].includes(po.status)) {
-        const { count: deliveryCount } = await supabase
+        const { data: receipts } = await supabase
           .from("po_delivery_receipts")
-          .select("id", { count: "exact", head: true })
+          .select("id, dc_number, dc_date, po_delivery_receipt_items(po_item_id, qty_received)")
           .eq("po_id", id);
-        if (deliveryCount && deliveryCount > 0 && !parsed.data.force) {
+        const deliveryReceipts = receipts ?? [];
+
+        if (deliveryReceipts.length > 0 && !parsed.data.force) {
           return NextResponse.json({
-            error: "This PO has received goods. Use force cancel or reject deliveries first.",
+            error: "This PO has received goods. Use force cancel to reverse the received stock, or reject deliveries first.",
             has_deliveries: true,
           }, { status: 422 });
+        }
+
+        if (deliveryReceipts.length > 0 && parsed.data.force) {
+          // Snapshot what was physically received BEFORE reversing. The
+          // po_delivery_receipt(_items) rows themselves now SURVIVE
+          // cancellation (disposition: "retain" — stamped reversed_at /
+          // reversed_by / reversal_reason instead of deleted), but this
+          // snapshot is kept anyway: it records the exact state at the
+          // moment of cancellation directly on the audit_trail entry,
+          // independent of whatever the receipt rows look like later.
+          extraAuditChanges.reversed_delivery_receipts = {
+            old: null,
+            new: deliveryReceipts.map((r) => ({
+              receipt_id: r.id,
+              dc_number: r.dc_number,
+              dc_date: r.dc_date,
+              items: (r.po_delivery_receipt_items ?? []).map((i) => ({
+                po_item_id: i.po_item_id,
+                qty_received: i.qty_received,
+              })),
+            })),
+          };
+
+          // NOTE (Phase 2 follow-up, same as the bill-voiding loop above):
+          // this handler is not transactional — each receipt is reversed
+          // sequentially. If one fails partway through, earlier reversals
+          // are not rolled back. Wrapping this in an RPC is deferred to
+          // Phase 2.
+          for (const receipt of deliveryReceipts) {
+            const reverseResult = await reverseDeliveryReceipt(supabase, {
+              receiptId: receipt.id,
+              poId: id,
+              disposition: "retain",
+              reversedBy: dbUser.id,
+              reason: cancelReason,
+            });
+            if (!reverseResult.ok) {
+              return NextResponse.json({
+                error: `Failed to reverse delivery receipt ${receipt.dc_number ?? receipt.id}: ${reverseResult.error}`,
+              }, { status: 500 });
+            }
+          }
+        }
+      }
+
+      extraAuditChanges.cancel_reason = { old: null, new: cancelReason };
+
+      // All bills passed the blocker check above — void each one now, before
+      // flipping the PO's own status.
+      for (const b of bills) {
+        const voidResult = await voidBill(supabase, {
+          billId: b.id,
+          actorId: dbUser.id,
+          reason: cancelReason,
+        });
+        if (!voidResult.ok) {
+          // Should be rare given the pre-check above, but surfaces cleanly if
+          // state changed between the check and the write (no transaction —
+          // see Phase 2 note above).
+          return NextResponse.json({ error: `Failed to void bill ${b.bill_number}: ${voidResult.error}` }, { status: 500 });
         }
       }
 
@@ -422,7 +533,10 @@ export async function PATCH(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
-    changes: diffChanges(po as Record<string, unknown>, { ...po, ...updatePayload } as Record<string, unknown>),
+    changes: {
+      ...diffChanges(po as Record<string, unknown>, { ...po, ...updatePayload } as Record<string, unknown>),
+      ...extraAuditChanges,
+    },
   });
 
   return NextResponse.json({ data: updated });
