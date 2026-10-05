@@ -199,3 +199,47 @@ test('break: an open break on today is reported as onBreak with a breakStart', a
   assert.equal(result.onBreak, true);
   assert.equal(result.breakStart, `${today} 12:00:00`);
 });
+
+function rawPunch(db, dateStr, time, direction, source) {
+  db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source) VALUES (?, ?, ?, ?)')
+    .run(EMP, `${dateStr} ${time}`, direction, source);
+}
+
+test('auto-checkout: closes a day the employee forgot to punch out of', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  rawPunch(db, d, '09:30:00', 'in', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.checkOut, `${d} 19:00:00`);
+  assert.equal(result.checkOutAuto, true);
+});
+
+test('auto-checkout: a real check-out that arrived after the auto-checkout wins, not Punch Error', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  // Device buffered the 18:30 check-out and only uploaded it after the 19:00 auto-checkout
+  // ran — the Surya 2026-09-28 case. Inserted in arrival order, labelled as it was then.
+  rawPunch(db, d, '09:30:00', 'in', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  rawPunch(db, d, '18:30:00', 'in', 'biometric');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.checkOut, `${d} 18:30:00`);
+  assert.equal(result.checkOutAuto, false);
+  assert.equal(result.hoursWorked, 9);
+});
+
+test('auto-checkout: a real punch after the auto-checkout is still a Punch Error', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  // in / out / in-again at 19:30 — the 19:00 auto-checkout predates the open check-in,
+  // so it can't close it.
+  rawPunch(db, d, '09:30:00', 'in', 'biometric');
+  rawPunch(db, d, '13:00:00', 'out', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  rawPunch(db, d, '19:30:00', 'in', 'biometric');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Punch Error');
+});

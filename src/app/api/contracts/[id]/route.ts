@@ -352,9 +352,13 @@ export async function PATCH(
         // this contract too. It needs its own separate deposit collection.
         const depositClaimedByOther = !!proposal.deposit_claimed_by_contract_id
           && proposal.deposit_claimed_by_contract_id !== id;
-        if (depositRequired && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
+        // Staff can cover this contract's deposit from the customer's pooled,
+        // already-collected deposit (Apply button → apply-pooled-deposit route)
+        // instead of collecting it again or asking an admin for an override.
+        const depositCoveredByPool = Number(oldContract.deposit_pool_applied_amount || 0) > 0;
+        if (depositRequired && !depositCoveredByPool && (proposal.deposit_payment_status !== "paid" || depositClaimedByOther)) {
           missing.push(depositClaimedByOther
-            ? "security deposit (already claimed by another contract activated from this same proposal — collect a separate deposit for this contract, or use the override with a clear reason)"
+            ? "security deposit (already claimed by another contract activated from this same proposal — apply the customer's available deposit to this contract, or collect a separate one)"
             : "security deposit");
         }
         if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
@@ -395,11 +399,16 @@ export async function PATCH(
           // Nothing to claim (not_required/waived/still-pending) or already
           // claimed by this same contract — no DB round-trip needed, this
           // contract is entitled to the proposal's payment fields as-is.
-          let claimGranted =
-            depositSnapshot.deposit_payment_status !== "paid" ||
-            depositSnapshot.deposit_claimed_by_contract_id === id;
+          // When the customer's pooled deposit was applied to this contract,
+          // it must not also claim the proposal's own payment — that would
+          // count the same deposit twice.
+          const poolApplied = Number(oldContract.deposit_pool_applied_amount || 0);
+          let claimGranted = poolApplied > 0
+            ? false
+            : depositSnapshot.deposit_payment_status !== "paid" ||
+              depositSnapshot.deposit_claimed_by_contract_id === id;
 
-          if (!claimGranted) {
+          if (!claimGranted && poolApplied <= 0) {
             // Paid, and not yet claimed by this contract — a proposal's
             // collected deposit can only ever belong to one contract, so
             // claim it atomically. WHERE ... IS NULL means only the request
@@ -417,6 +426,10 @@ export async function PATCH(
           }
 
           Object.assign(allowedFields, buildContractDepositSnapshot(depositSnapshot, claimGranted));
+          if (poolApplied > 0) {
+            allowedFields.deposit_internal_notes =
+              `₹${poolApplied} of this contract's security deposit is covered by the customer's pooled deposit (applied before activation); it was collected under another of their contracts.`;
+          }
         }
 
         // Lock start_date to the paid pro-rata invoice's occupation date —
@@ -501,6 +514,9 @@ export async function PATCH(
     // If admin used the payment override, record the reason explicitly in the audit trail
     if (body.payment_override_reason && body.status === "active") {
       auditChanges["payment_override_reason"] = { old: null, new: body.payment_override_reason };
+    }
+    if (body.status === "active" && Number(oldContract.deposit_pool_applied_amount || 0) > 0 && !oldContract.deposit_carried_from) {
+      auditChanges["deposit_covered_by_pool"] = { old: null, new: Number(oldContract.deposit_pool_applied_amount) };
     }
     if (prorataSatisfiedByInvoice) {
       auditChanges["prorata_satisfied_by_invoice"] = { old: null, new: prorataSatisfiedByInvoice };
