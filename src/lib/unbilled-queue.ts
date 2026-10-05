@@ -75,6 +75,10 @@ export interface UnbilledRow {
    *  carries the total. Absent when it can't be priced from the contract alone
    *  (e.g. a renewal's rate) — the Send invoice preview always has the exact figure. */
   estimate?: { subtotal: number; tax: number; taxPercentage: number; total: number };
+  /** current_cycle rows: when the statement was raised on a parent for a
+   *  renewal's period (billed_on_behalf_of_contract_id, 00508), the renewal's
+   *  contract number — shown as "for TWV-C-…" and matched by search. */
+  onBehalfOfContractNumber?: string;
   /** current_cycle_sent / current_cycle_tally rows: ISO timestamp of the send
    *  (or of the hand-off to accounts). */
   sentAt?: string;
@@ -174,7 +178,8 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
     .select(`
       id, statement_type, status, total_amount, prepaid_month, prepaid_year,
       proforma_sent_at, gst_invoice_sent_at, gst_invoice_number, handoff_state, finalized_at,
-      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company))
+      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
+      on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(contract_number)
     `)
     .in("status", ["draft", "finalized", "exported"])
     .is("held_at", null)
@@ -191,9 +196,11 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
     contract_id: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     contract: any;
+    on_behalf: { contract_number: string } | { contract_number: string }[] | null;
   }>) {
     if (!s.contract_id || !s.contract) continue;
     const cls = classifyCurrentCycleStatement(s);
+    const onBehalf = Array.isArray(s.on_behalf) ? s.on_behalf[0] : s.on_behalf;
     if (!cls) continue;
     const month = s.prepaid_month ?? cycleMonth;
     const year = s.prepaid_year ?? cycleYear;
@@ -209,6 +216,7 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
       amount: s.total_amount ?? null,
       statementId: s.id,
       statementStatus: s.status,
+      ...(onBehalf?.contract_number ? { onBehalfOfContractNumber: onBehalf.contract_number } : {}),
       detail: cls.detail,
       ...(cls.at ? { sentAt: cls.at } : {}),
       // Sent/handed-off rows sort newest first; ready rows keep month order.

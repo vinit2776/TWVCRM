@@ -5,7 +5,7 @@ import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 const SELECT_FIELDS =
-  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(id, contract_number), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -27,6 +27,10 @@ export async function GET(request: NextRequest) {
   // months are often billed on its parent while it awaits activation, so
   // "everything billed for this contract" is a chain question, not a row one.
   const includeChain  = searchParams.get("include_chain") === "1";
+  // Free-text search (Billing → Billed): statement / GST invoice number,
+  // contract number, or customer name. Characters that are syntax inside a
+  // PostgREST or() filter are stripped so user text can't alter the filter.
+  const search = (searchParams.get("search") || "").replace(/[,()*%\\:"']/g, " ").trim().slice(0, 60);
 
   const offset = (page - 1) * limit;
 
@@ -50,6 +54,25 @@ export async function GET(request: NextRequest) {
   if (statementType) {
     const types = statementType.split(",").map((t) => t.trim()).filter(Boolean);
     query = types.length > 1 ? query.in("statement_type", types) : query.eq("statement_type", types[0]);
+  }
+  if (search) {
+    const like = `%${search}%`;
+    // Contract number and customer name live on other tables — resolve them to
+    // ids first (capped), then OR them with the statement's own number fields.
+    const [{ data: contractHits }, { data: leadHits }] = await Promise.all([
+      supabase.from("contracts").select("id").ilike("contract_number", like).limit(200),
+      supabase.from("leads").select("id").or(`company.ilike.${like},first_name.ilike.${like},last_name.ilike.${like}`).limit(200),
+    ]);
+    const contractIds = (contractHits ?? []).map((c) => c.id as string);
+    const leadIds = (leadHits ?? []).map((l) => l.id as string);
+    const ors = [`statement_number.ilike.${like}`, `gst_invoice_number.ilike.${like}`];
+    if (contractIds.length) {
+      ors.push(`contract_id.in.(${contractIds.join(",")})`);
+      // Rent raised on a parent for a renewal's period is found by the renewal's number too.
+      ors.push(`billed_on_behalf_of_contract_id.in.(${contractIds.join(",")})`);
+    }
+    if (leadIds.length) ors.push(`lead_id.in.(${leadIds.join(",")})`);
+    query = query.or(ors.join(","));
   }
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
