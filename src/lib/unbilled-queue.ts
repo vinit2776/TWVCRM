@@ -21,9 +21,15 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { unbilledMonths, backfillableRentMonths, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
+import { unbilledMonths, backfillableRentMonths, RENT_BACKFILL_FLOOR, type RentCoverage, type BillingMonth } from "@/lib/billing-months";
 
-export type UnbilledCategory = "current_cycle" | "rent_gap" | "renewal_drift" | "no_renewal";
+export type UnbilledCategory =
+  | "current_cycle"
+  | "current_cycle_tally"
+  | "current_cycle_sent"
+  | "rent_gap"
+  | "renewal_drift"
+  | "no_renewal";
 export type UnbilledType = "rent";
 
 export interface UnbilledRow {
@@ -56,6 +62,15 @@ export interface UnbilledRow {
   /** rent_gap rows only: the missed prepaid month as YYYY-MM-01 — what an
    *  admin's "Waive" records (contract_rent_waivers.waived_month). */
   gapMonth?: string;
+  /** rent_gap rows only: the month is before CRM rent billing began
+   *  (RENT_BACKFILL_FLOOR) — the UI folds these into one bucket. */
+  beforeCrmBilling?: boolean;
+  /** current_cycle rows only: the statement's status, which decides how
+   *  "Review & send" sends it (draft → finalize-and-send, finalized → send-proforma). */
+  statementStatus?: string;
+  /** current_cycle_sent / current_cycle_tally rows: ISO timestamp of the send
+   *  (or of the hand-off to accounts). */
+  sentAt?: string;
 }
 
 /** Internal-only: a YYYY-MM-DD sort key so rows sort chronologically within
@@ -63,9 +78,11 @@ export interface UnbilledRow {
  *  sorted lexicographically ("September" < "August"). Stripped before return. */
 type InternalRow = UnbilledRow & { sortKey: string };
 
-const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "rent_gap", "renewal_drift", "no_renewal"];
+const CATEGORY_ORDER: UnbilledCategory[] = ["current_cycle", "current_cycle_tally", "current_cycle_sent", "rent_gap", "renewal_drift", "no_renewal"];
 const STATUS_WORD: Record<UnbilledCategory, string> = {
   current_cycle: "current cycle",
+  current_cycle_tally: "current cycle",
+  current_cycle_sent: "current cycle",
   rent_gap: "gap",
   renewal_drift: "drift",
   no_renewal: "no renewal",
@@ -96,34 +113,72 @@ function customerNameOf(lead: { first_name?: string | null; last_name?: string |
   return lead.company || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() || "—";
 }
 
-// ─── 1. Current cycle, ready to send ────────────────────────────────────────
+// ─── 1. Current cycle ───────────────────────────────────────────────────────
 
-async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalRow[]> {
+/** Accounts-inbox states in which a GST Direct statement is with accounts to
+ *  issue in Tally — nothing for the billing team to send (00255). */
+const WITH_ACCOUNTS_HANDOFF_STATES = new Set(["direct_gst_requested", "name_check_pending", "ready_to_send"]);
+
+export interface CurrentCycleStatement {
+  status: string;
+  proforma_sent_at: string | null;
+  gst_invoice_sent_at: string | null;
+  gst_invoice_number: string | null;
+  handoff_state: string | null;
+  finalized_at: string | null;
+}
+
+/**
+ * Which current-cycle group a rent statement belongs to:
+ *   sent  — reached the customer (proforma or GST invoice), or a GST invoice
+ *           already exists for it. Shown with its date, not counted as unbilled.
+ *   tally — GST Direct, handed to accounts in the Tally Inbox; the CRM
+ *           deliberately sends nothing itself.
+ *   ready — draft or finalized and not sent: someone needs to send it.
+ *   null  — none of the above (e.g. exported without a send) — not listed.
+ */
+export function classifyCurrentCycleStatement(
+  s: CurrentCycleStatement,
+): { group: "ready" | "tally" | "sent"; at: string | null; detail: string } | null {
+  if (s.proforma_sent_at) return { group: "sent", at: s.proforma_sent_at, detail: "Proforma sent" };
+  if (s.gst_invoice_sent_at) return { group: "sent", at: s.gst_invoice_sent_at, detail: "GST invoice sent" };
+  if (s.gst_invoice_number) return { group: "sent", at: null, detail: `GST invoice ${s.gst_invoice_number} issued` };
+  if (s.handoff_state && WITH_ACCOUNTS_HANDOFF_STATES.has(s.handoff_state)) {
+    return { group: "tally", at: s.finalized_at, detail: "GST Direct · with accounts" };
+  }
+  if (s.status === "draft") return { group: "ready", at: null, detail: "Draft · not sent" };
+  if (s.status === "finalized") return { group: "ready", at: null, detail: "Finalized · never sent" };
+  return null;
+}
+
+async function getCurrentCycle(supabase: SupabaseClient): Promise<{
+  ready: InternalRow[]; tally: InternalRow[]; sent: InternalRow[];
+}> {
   // Rent's "current cycle" is the calendar month we're in right now — its
   // proforma was generated last ops-month with prepaid_month = this month
   // (see generateRentProformas).
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
   const cycleYear = todayIst.getUTCFullYear();
   const cycleMonth = todayIst.getUTCMonth() + 1;
+  const out = { ready: [] as InternalRow[], tally: [] as InternalRow[], sent: [] as InternalRow[] };
 
   const { data, error } = await supabase
     .from("billing_statements")
     .select(`
-      id, statement_type, total_amount, prepaid_month, prepaid_year,
+      id, statement_type, status, total_amount, prepaid_month, prepaid_year,
+      proforma_sent_at, gst_invoice_sent_at, gst_invoice_number, handoff_state, finalized_at,
       contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company))
     `)
-    .in("status", ["draft", "finalized"])
-    .is("proforma_sent_at", null)
+    .in("status", ["draft", "finalized", "exported"])
     .is("held_at", null)
     .is("voided_at", null)
     .in("statement_type", ["rent", "combined"])
     .eq("prepaid_month", cycleMonth)
     .eq("prepaid_year", cycleYear);
 
-  if (error || !data) return [];
+  if (error || !data) return out;
 
-  const rows: InternalRow[] = [];
-  for (const s of data as unknown as Array<{
+  for (const s of data as unknown as Array<CurrentCycleStatement & {
     id: string; statement_type: string; total_amount: number | null;
     prepaid_month: number | null; prepaid_year: number | null;
     contract_id: string | null;
@@ -131,22 +186,30 @@ async function getCurrentCycleReady(supabase: SupabaseClient): Promise<InternalR
     contract: any;
   }>) {
     if (!s.contract_id || !s.contract) continue;
+    const cls = classifyCurrentCycleStatement(s);
+    if (!cls) continue;
     const month = s.prepaid_month ?? cycleMonth;
     const year = s.prepaid_year ?? cycleYear;
-    rows.push({
+    const category: UnbilledCategory =
+      cls.group === "ready" ? "current_cycle" : cls.group === "tally" ? "current_cycle_tally" : "current_cycle_sent";
+    const row: InternalRow = {
       id: s.id,
-      category: "current_cycle",
+      category,
       contractId: s.contract_id,
       contractNumber: s.contract.contract_number,
       customerName: customerNameOf(s.contract.lead),
-      periodLabel: periodLabel(month, year, "current_cycle"),
+      periodLabel: periodLabel(month, year, category),
       amount: s.total_amount ?? null,
       statementId: s.id,
-      detail: "Rent statement",
-      sortKey: `${year}-${String(month).padStart(2, "0")}-01`,
-    });
+      statementStatus: s.status,
+      detail: cls.detail,
+      ...(cls.at ? { sentAt: cls.at } : {}),
+      // Sent/handed-off rows sort newest first; ready rows keep month order.
+      sortKey: cls.at ? `~${String(9e15 - new Date(cls.at).getTime()).padStart(16, "0")}` : `${year}-${String(month).padStart(2, "0")}-01`,
+    };
+    out[cls.group].push(row);
   }
-  return rows;
+  return out;
 }
 
 // ─── 2. Rent gap ─────────────────────────────────────────────────────────────
@@ -183,6 +246,25 @@ export function buildChain(contractId: string, parentOf: Map<string, string | nu
     cursor = parentId;
   }
   return chain;
+}
+
+/**
+ * One-line reason shown on a rent-gap row, so a row without "Send invoice"
+ * says why. Order matters: the first matching reason wins.
+ */
+export function rentGapReason(opts: {
+  backfillable: boolean;
+  beforeCrmBilling: boolean;
+  status: string;
+  billingCycle: string | null;
+  isCurrentMonth: boolean;
+}): string {
+  if (opts.backfillable) return opts.isCurrentMonth ? "Missed month-end run" : "No rent invoice raised";
+  if (opts.beforeCrmBilling) return "Before CRM billing — waive if billed outside";
+  if (opts.status === "terminated") return "Contract terminated";
+  if (opts.status === "expired") return "Contract expired";
+  if (opts.billingCycle && opts.billingCycle !== "monthly") return "Advance-billed contract — check its cycle on the contract page";
+  return "No rent invoice — check the contract";
 }
 
 async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
@@ -244,6 +326,8 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
     waivedByContract.set(w.contract_id as string, list);
   }
 
+  const currentYm = { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
+
   const rows: InternalRow[] = [];
   for (const c of eligible) {
     const chain = chainByContract.get(c.id) ?? [c.id];
@@ -267,6 +351,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
 
     for (const m of missing) {
       const backfillable = backfillableKeys.has(m.year * 12 + m.month);
+      const beforeCrmBilling = m.year * 12 + m.month < RENT_BACKFILL_FLOOR.year * 12 + RENT_BACKFILL_FLOOR.month;
       rows.push({
         id: `rent_gap:${c.id}:${m.year}-${m.month}`,
         category: "rent_gap",
@@ -275,7 +360,11 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
         customerName: customerNameOf(c.lead_id ? leadById.get(c.lead_id) : null),
         periodLabel: periodLabel(m.month, m.year, "rent_gap"),
         amount: null,
-        detail: "No rent statement of any kind",
+        detail: rentGapReason({
+          backfillable, beforeCrmBilling, status: c.status, billingCycle: c.billing_cycle,
+          isCurrentMonth: m.year === currentYm.year && m.month === currentYm.month,
+        }),
+        ...(beforeCrmBilling ? { beforeCrmBilling: true } : {}),
         sortKey: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
         gapMonth: `${m.year}-${String(m.month).padStart(2, "0")}-01`,
         ...(backfillable ? { backfillTarget: prepaidToApiTarget(m) } : {}),
@@ -381,14 +470,16 @@ export async function getUnbilledQueue(supabase: SupabaseClient): Promise<{
   counts: Record<UnbilledCategory, number>;
 }> {
   const [currentCycle, rentGaps, renewalDrift, noRenewal] = await Promise.all([
-    getCurrentCycleReady(supabase),
+    getCurrentCycle(supabase),
     getRentGaps(supabase),
     getRenewalDrift(supabase),
     getNoRenewalOnFile(supabase),
   ]);
 
   const byCategory: Record<UnbilledCategory, InternalRow[]> = {
-    current_cycle: currentCycle,
+    current_cycle: currentCycle.ready,
+    current_cycle_tally: currentCycle.tally,
+    current_cycle_sent: currentCycle.sent,
     rent_gap: rentGaps,
     renewal_drift: renewalDrift,
     no_renewal: noRenewal,
