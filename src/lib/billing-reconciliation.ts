@@ -26,6 +26,8 @@
  *
  * Row inclusion:
  *   - status IN (active, renewal_in_progress) — always shown.
+ *   - status renewed whose own end_date reaches the window — shown for its
+ *     remaining tenure (an early renewal leaves those months on the parent).
  *   - ANY status with at least one finalized, non-voided statement that's
  *     still unpaid/partially_paid, no matter how old — shown until that
  *     balance settles, at which point it drops off the next cycle. This is
@@ -237,10 +239,15 @@ export async function buildBillingReconciliationReport(
   const windowLast = months[months.length - 1].last;
 
   // ── 1. Base row set: currently billable contracts ────────────────────────
+  // Plus `renewed` parents whose own term still reaches into the window: a
+  // renewal activated early leaves the parent owing its remaining tenure
+  // (the renewal only bills from its own start date), and without this the
+  // row only appeared once a statement for it was unpaid — so a month that
+  // was never billed at all was invisible here.
   const { data: baseContracts } = await supabase
     .from("contracts")
     .select(CONTRACT_SELECT)
-    .in("status", BILLABLE_STATUSES);
+    .or(`status.in.(${BILLABLE_STATUSES.join(",")}),and(status.eq.renewed,end_date.gte.${windowFirst})`);
 
   // ── 2. Every unpaid/partial statement, ANY period, ANY contract status ───
   // Drives two things: which extra (non-billable-status) contracts to pull

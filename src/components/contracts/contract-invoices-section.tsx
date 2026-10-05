@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap, AlertTriangle, CalendarPlus } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { unbilledMonths, type BillingMonth } from "@/lib/billing-months";
+import { unbilledMonths, backfillableRentMonths, type BillingMonth } from "@/lib/billing-months";
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
 
@@ -102,6 +102,8 @@ interface ContractInvoicesSectionProps {
   startDate?: string | null;
   endDate?: string | null;
   createdAt?: string | null;
+  /** When this contract's renewal was activated (status → renewed). */
+  renewedAt?: string | null;
 }
 
 /** One rent line the upcoming-cycle preview would bill. */
@@ -139,6 +141,7 @@ export function ContractInvoicesSection({
   startDate,
   endDate,
   createdAt,
+  renewedAt,
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -283,36 +286,14 @@ export function ContractInvoicesSection({
     });
   }, [startDate, endDate, createdAt, statements, contractId, contractStatus]);
 
-  // Monthly + renewal_in_progress with real detected gaps: the one case
-  // where a missed month can sit behind "now" with nothing else able to
-  // reach it. The batch cron only ever bills forward from today, and a plain
-  // monthly contract's next_billing_date is never advanced (see below), so
-  // there is no anchor to walk back from — "Bill next cycle" alone can only
-  // ever raise TODAY's next month, never one actually owed. Scoped tightly
-  // to renewal_in_progress + missedMonths (itself now aware of the
-  // renewal-continues-billing rule, see the window note on unbilledMonths()
-  // in billing-months.ts) so this can't be used to backfill an unrelated
-  // missed month on an ordinary active contract — those need their own
-  // investigation, not a one-click resend.
-  //
-  // Only ever lists gaps AFTER the contract's own end_date — never a gap
-  // still inside its original term. A month inside the term went missing for
-  // some other reason (rent invoiced outside the CRM before the billing
-  // rollout, a different bug, etc.) and isn't this feature's problem to fix;
-  // offering to auto-raise it here would silently paper over whatever that
-  // reason actually was. Only the portion the renewal-in-progress rule
-  // itself creates — the period after the parent's term lapsed — belongs to
-  // this list. Every listed month gets its own explicit action (see the
-  // "missing rent" block below) rather than one button that auto-picks —
-  // deliberately: the person billing gets to choose which month, in full
-  // view of every other one still outstanding, instead of a hidden pick.
-  const backfillableMonths = useMemo(() => {
-    if (billingCycle !== "monthly" || contractStatus !== "renewal_in_progress" || missedMonths.length === 0 || !endDate) return [];
-    const [endY, endM] = endDate.split("-").map(Number);
-    if (!endY || !endM) return [];
-    const endKey = endY * 12 + endM;
-    return missedMonths.filter((m) => m.year * 12 + m.month > endKey);
-  }, [billingCycle, contractStatus, missedMonths, endDate]);
+  // Missed months this card may raise one at a time — the tail after a
+  // renewal_in_progress parent's own end_date, or the remaining tenure of a
+  // parent renewed early. Everything else is surfaced above but never offered
+  // here; see backfillableRentMonths() in billing-months.ts for why.
+  const backfillableMonths = useMemo(
+    () => backfillableRentMonths({ missed: missedMonths, billingCycle, contractStatus, endDate, renewedAt }),
+    [missedMonths, billingCycle, contractStatus, endDate, renewedAt],
+  );
 
   // Converts a PREPAID month (what's actually owed, e.g. September) into the
   // auto-generate API's TARGET month (September's proforma is raised by a run
@@ -440,6 +421,14 @@ export function ContractInvoicesSection({
     BILLING_ROLES.includes(userRole) &&
     !!contractStatus &&
     ["active", "renewal_in_progress"].includes(contractStatus);
+  // A renewed contract has no "next cycle" of its own left to bill, but it can
+  // still owe its remaining tenure — see backfillableMonths above.
+  const canBackfill =
+    !!userRole &&
+    BILLING_ROLES.includes(userRole) &&
+    !!contractStatus &&
+    ["active", "renewal_in_progress", "renewed"].includes(contractStatus);
+  const isRenewedParent = contractStatus === "renewed";
 
   return (
     <Card>
@@ -548,17 +537,29 @@ export function ContractInvoicesSection({
           gets its own explicit action, in full view of the others still
           outstanding, rather than one button silently picking one for you —
           you choose which to bill and in what order. */}
-      {canBillCycle && backfillableMonths.length > 0 && (
+      {canBackfill && backfillableMonths.length > 0 && (
         <div className="px-6 pb-3">
           <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
             <div className="flex items-start gap-2">
               <CalendarPlus className="h-4 w-4 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <span className="font-medium">Missing rent — renewal not yet activated</span>
+                <span className="font-medium">
+                  {isRenewedParent ? "Missing rent — remaining tenure after renewal" : "Missing rent — renewal not yet activated"}
+                </span>
                 <p className="text-xs mt-1 text-blue-800">
-                  This contract&apos;s own term ended, but its renewal hasn&apos;t been activated —
-                  each month below is billed at the renewal&apos;s terms until it is. Raise them
-                  individually, in any order.
+                  {isRenewedParent ? (
+                    <>
+                      This contract was renewed before its own term ended. The renewal only bills
+                      from its own start date, so each month below is billed here, at this
+                      contract&apos;s own rate. Raise them individually, in any order.
+                    </>
+                  ) : (
+                    <>
+                      This contract&apos;s own term ended, but its renewal hasn&apos;t been activated —
+                      each month below is billed at the renewal&apos;s terms until it is. Raise them
+                      individually, in any order.
+                    </>
+                  )}
                 </p>
                 <div className="mt-2 space-y-1.5">
                   {backfillableMonths.map((m) => (
@@ -738,7 +739,9 @@ export function ContractInvoicesSection({
               {dialogIsBackfill ? "Bill a missed month" : "Bill the upcoming cycle"}
             </DialogTitle>
             <DialogDescription>
-              {dialogIsBackfill
+              {dialogIsBackfill && isRenewedParent
+                ? "This contract was renewed before its own term ended, and this month of its remaining tenure never got a rent statement. Raises that month's rent proforma at this contract's own rate, without running the month's batch. Sending it creates the payment link and emails the client."
+                : dialogIsBackfill
                 ? "This contract's renewal hasn't been activated yet, and this past month never got a rent statement. Raises that missed month's rent proforma at the renewal's terms, without running the month's batch. Sending it creates the payment link and emails the client."
                 : "Raises this contract's next rent proforma on its own, without running the month's batch. Sending it creates the payment link and emails the client."}
             </DialogDescription>

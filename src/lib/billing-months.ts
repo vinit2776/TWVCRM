@@ -194,3 +194,46 @@ export function unbilledMonths(opts: {
   }
   return missing;
 }
+
+/**
+ * Of a contract's missed months (from unbilledMonths), the ones its contract
+ * page may offer to raise one at a time. Two cases, both monthly-only:
+ *
+ *   • renewal_in_progress — months AFTER the contract's own end_date. The
+ *     renewal hasn't activated, so the parent keeps billing at the renewal's
+ *     terms; nothing else can reach those months.
+ *   • renewed — months from the renewal's activation month through the
+ *     contract's own end_date. Activating a renewal early flips the parent to
+ *     `renewed` while it still has tenure left (e.g. renewed in September,
+ *     own term ends Oct 31, renewal starts Nov 1). The renewal can't bill
+ *     those months — they're before its start — so they belong on the parent,
+ *     at the parent's own rate, and the parent's page is the only place left
+ *     to raise them.
+ *
+ * Gaps inside an ordinary active term are deliberately never offered: they
+ * went missing for some other reason and need investigating, not a one-click
+ * resend. For `renewed` the same rule holds for months before the renewal was
+ * activated — only the tail the renewal itself left behind is offered.
+ */
+export function backfillableRentMonths(opts: {
+  missed: BillingMonth[];
+  billingCycle: string | null | undefined;
+  contractStatus: string | null | undefined;
+  endDate: string | null | undefined;
+  /** contracts.renewed_at — when the renewal was activated. */
+  renewedAt?: string | null;
+}): BillingMonth[] {
+  const { missed, billingCycle, contractStatus, endDate, renewedAt } = opts;
+  if (billingCycle !== "monthly" || missed.length === 0 || !endDate) return [];
+  const endKey = monthKey(ymOf(endDate));
+
+  if (contractStatus === "renewal_in_progress") {
+    return missed.filter((m) => monthKey(m) > endKey);
+  }
+  if (contractStatus === "renewed") {
+    if (!renewedAt) return [];
+    const fromKey = monthKey(ymOf(renewedAt.slice(0, 10)));
+    return missed.filter((m) => monthKey(m) >= fromKey && monthKey(m) <= endKey);
+  }
+  return [];
+}
