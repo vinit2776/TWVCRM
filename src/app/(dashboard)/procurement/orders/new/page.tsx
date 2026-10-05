@@ -263,9 +263,12 @@ function NewPurchaseOrderFormWithPr({
             items.map((li: LineItem) => {
               if (!li.item_id || !map.has(li.item_id)) return li;
               const known = map.get(li.item_id)!;
+              // A line from an approved request keeps its approved price; the
+              // vendor's remembered price is only a hint there (it was silently
+              // undercutting approvals, e.g. PO-2610-002).
               return {
                 ...li,
-                unit_price: String(known.price),
+                unit_price: li.estimated_price ? li.unit_price : String(known.price),
                 gst_rate:   String(known.gst_rate),
               };
             })
