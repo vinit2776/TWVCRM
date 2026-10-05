@@ -229,6 +229,10 @@ export async function POST(
         line_items: statement.line_items,
         prepaid_month: statement.prepaid_month,
         prepaid_year: statement.prepaid_year,
+        // Keep the renewal attribution (00508): rent billed on a parent for a
+        // renewal's period stays that renewal's on the re-issued copy too —
+        // dropping it made the copy read as the parent's own rent.
+        billed_on_behalf_of_contract_id: statement.billed_on_behalf_of_contract_id ?? null,
         status: "draft",
         notes: `Re-issued from voided ${statement.statement_number || statement.gst_invoice_number || id.slice(0, 8)}.\nOriginal void reason: ${voidReason}`,
         created_by: dbUser.id,

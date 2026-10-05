@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -42,6 +43,7 @@ const emptyForm = {
   payment_terms: "",
   notes: "",
   terms_and_conditions: "",
+  is_service_provider: false,
   // Bank details
   bank_name: "",
   bank_account_holder: "",
@@ -201,6 +203,7 @@ export default function VendorsPage() {
       payment_terms: vendor.payment_terms || "",
       notes: vendor.notes || "",
       terms_and_conditions: vendor.terms_and_conditions || "",
+      is_service_provider: vendor.is_service_provider ?? false,
       bank_name: vendor.bank_name || "",
       bank_account_holder: vendor.bank_account_holder || "",
       bank_account_number: vendor.bank_account_number || "",
@@ -370,6 +373,9 @@ export default function VendorsPage() {
                         <Badge className={CATEGORY_COLORS[v.category]}>
                           {VENDOR_CATEGORY_LABELS[v.category]}
                         </Badge>
+                        {v.is_service_provider && (
+                          <Badge variant="outline" className="ml-1 text-xs">Service provider</Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                         {v.contact_name || "—"}
@@ -450,6 +456,16 @@ export default function VendorsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="col-span-2 flex items-start gap-2">
+                <Checkbox
+                  id="is_service_provider"
+                  checked={form.is_service_provider}
+                  onCheckedChange={(c) => setForm((f) => ({ ...f, is_service_provider: c === true }))}
+                />
+                <Label htmlFor="is_service_provider" className="font-normal leading-snug">
+                  Service provider (internet, AMC, security…) — orders go through the service PO flow, not goods POs
+                </Label>
               </div>
               <div className="space-y-1">
                 <Label>Payment Terms</Label>

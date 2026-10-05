@@ -2339,6 +2339,8 @@ export interface ProcurementVendor {
   terms_and_conditions?: string;
   notes?: string;
   is_active: boolean;
+  // True for service providers (internet, AMC, ...) — should use the service PO flow, not goods POs
+  is_service_provider?: boolean;
   // Bank details
   bank_name?: string;
   bank_account_holder?: string;
