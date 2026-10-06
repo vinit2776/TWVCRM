@@ -22,24 +22,50 @@ export interface LedgerDeltaRow {
 //
 // Recomputing delta locally as the difference between consecutive
 // cumulative readings sidesteps whatever OneGrid's wide-query delta
-// computation is doing. `previousCumulativeWh` seeds the very first row of
-// the batch — pass the last cumulative_wh already on record (from the
-// ledger, or the prior chunk in a multi-chunk sync) so that row gets a real
-// delta too, not just rows 2..n of the batch.
+// computation is doing. `previous` seeds the very first row of the batch —
+// pass the last row already on record (from the ledger, or the prior chunk
+// in a multi-chunk sync) so that row gets a real delta too, not just rows
+// 2..n of the batch.
+//
+// A cumulative diff is only a per-bucket delta if the two readings are
+// adjacent. When the previous reading is more than MAX_DELTA_GAP_MS older
+// (the meter was offline, or the capture simply didn't run for days), the
+// diff is the whole gap's usage — on 2026-10-03 one 15-minute row held ~9
+// days (1,269,500 Wh). Such a row stores a null delta instead: its
+// cumulative_wh stays intact (still the true meter reading, and the seed for
+// the next row), and every consumer already skips null deltas. OneGrid's own
+// value is deliberately not substituted — it is the field known to smooth
+// across gaps.
+export const MAX_DELTA_GAP_MS = 60 * 60 * 1000;
+
+export interface LedgerSeed {
+  ts: string;
+  cumulative_wh: number | null;
+}
+
 export function recomputeDeltasFromCumulative(
   series: OnegridSeriesRow[],
-  previousCumulativeWh: number | null
+  previous: LedgerSeed | null
 ): LedgerDeltaRow[] {
-  let prevCumulative = previousCumulativeWh;
+  let prevCumulative = previous?.cumulative_wh ?? null;
+  let prevMs = previous?.ts ? new Date(previous.ts).getTime() : null;
   return series.map((r) => {
     const cumulative = r.Energy_Consumption_Cumulative_Wh ?? null;
-    // No local ground truth to diff against yet (the very first bucket of
-    // this location+device's whole history) — OneGrid's own value is the
-    // best available for just this one row.
-    const delta = cumulative != null && prevCumulative != null
-      ? cumulative - prevCumulative
-      : (r.energy_delta_wh ?? null);
-    if (cumulative != null) prevCumulative = cumulative;
+    const ms = new Date(r.ts).getTime();
+    let delta: number | null;
+    if (cumulative != null && prevCumulative != null) {
+      const spansGap = prevMs != null && ms - prevMs > MAX_DELTA_GAP_MS;
+      delta = spansGap ? null : cumulative - prevCumulative;
+    } else {
+      // No local ground truth to diff against yet (the very first bucket of
+      // this location+device's whole history) — OneGrid's own value is the
+      // best available for just this one row.
+      delta = r.energy_delta_wh ?? null;
+    }
+    if (cumulative != null) {
+      prevCumulative = cumulative;
+      prevMs = ms;
+    }
     return { ts: r.ts, cumulative_wh: cumulative, energy_delta_wh: delta };
   });
 }

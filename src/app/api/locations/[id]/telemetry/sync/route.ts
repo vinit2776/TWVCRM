@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { fetchOnegridDevices, fetchOnegridTelemetry } from "@/lib/onegrid";
-import { recomputeDeltasFromCumulative } from "@/lib/energy-ledger";
+import { recomputeDeltasFromCumulative, type LedgerSeed } from "@/lib/energy-ledger";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
@@ -80,18 +80,19 @@ export async function POST(
   // Seed local delta recomputation with the ledger's own last-known
   // cumulative reading before this range, if any — see
   // recomputeDeltasFromCumulative for why OneGrid's own delta field isn't
-  // trusted directly for a backfill. Threaded across chunks below so the
+  // trusted directly for a backfill, and why a row that follows a >1h gap
+  // gets a null delta. Threaded across chunks below so the
   // second and later chunks seed from the previous chunk's own last row.
   const { data: priorRow } = await supabase
     .from("location_energy_readings")
-    .select("cumulative_wh")
+    .select("ts, cumulative_wh")
     .eq("location_id", id)
     .eq("device_id", deviceId)
     .lt("ts", cursor.toISOString())
     .order("ts", { ascending: false })
     .limit(1)
     .maybeSingle();
-  let previousCumulativeWh: number | null = priorRow?.cumulative_wh ?? null;
+  let previous: LedgerSeed | null = priorRow ?? null;
 
   const totalDays = Math.ceil((rangeEnd.getTime() - cursor.getTime()) / 86_400_000);
   const chunksTotal = Math.max(1, Math.ceil(totalDays / CHUNK_DAYS));
@@ -119,7 +120,7 @@ export async function POST(
       });
       const recomputed = recomputeDeltasFromCumulative(
         telemetry.series.filter((r) => r.ts),
-        previousCumulativeWh
+        previous
       );
       const rows = recomputed.map((r) => ({
         location_id: id,
@@ -134,7 +135,8 @@ export async function POST(
           .upsert(rows, { onConflict: "location_id,device_id,ts" });
         if (upsertError) throw new Error(upsertError.message);
         rowsUpserted += rows.length;
-        previousCumulativeWh = rows[rows.length - 1].cumulative_wh ?? previousCumulativeWh;
+        const last = rows[rows.length - 1];
+        if (last.cumulative_wh != null) previous = { ts: last.ts, cumulative_wh: last.cumulative_wh };
       }
       syncedThrough = clampedEnd.toISOString().split("T")[0];
     } catch (err) {

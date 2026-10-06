@@ -69,7 +69,7 @@ export async function captureHeadcountEnergy(headcountId: string, locationId: st
     const series = telemetry.series.filter((r) => r.ts);
     if (series.length === 0) return;
 
-    const recomputed = recomputeDeltasFromCumulative(series, lastRow?.cumulative_wh ?? null);
+    const recomputed = recomputeDeltasFromCumulative(series, lastRow ?? null);
 
     const ledgerRows = recomputed.map((r) => ({
       location_id: locationId,
