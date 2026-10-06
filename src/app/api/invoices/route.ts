@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -153,17 +154,12 @@ export async function POST(request: NextRequest) {
           process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app"
         ).trim();
 
-        // Expire at the due date if set, else 30 days from now. Due dates under
-        // a day away (or already past) are clamped to a 1-day minimum so the
-        // link isn't created already-expired — but a due date further out than
-        // that is honored as-is; it must NOT be pushed further out to 30 days
-        // (that previously let the link stay payable well past the due date).
-        const nowSeconds = Math.floor(Date.now() / 1000);
-        const defaultExpiry = nowSeconds + 30 * 24 * 60 * 60;
-        const minExpiry = nowSeconds + 24 * 60 * 60;
-        const expireBy = result.data.due_date
-          ? Math.max(Math.floor(new Date(result.data.due_date).getTime() / 1000), minExpiry)
-          : defaultExpiry;
+        // Longest validity Razorpay allows, deliberately NOT tied to due_date:
+        // a date-only due_date parses as 00:00 UTC (05:30 IST), which expired
+        // INV-0060's link at the start of its own due day. The customer must
+        // still be able to pay after the due date; overdue handling is ours.
+        const expireBy =
+          Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {

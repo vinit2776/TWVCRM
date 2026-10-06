@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 import { mirrorInvoiceToStatement } from "@/lib/adhoc-invoice-mirror";
@@ -95,7 +95,7 @@ export async function POST(
         const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
-        const expireBy = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
+        const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -296,6 +296,23 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   };
 
   // ── Cancel Invoice ──
+  const handleRenewInvoiceLink = async (inv: ProformaInvoice) => {
+    if (!window.confirm(
+      `Create a new payment link for ${inv.invoice_number}? The old link will stop working. ` +
+      `The customer is not notified — copy the new link or use "Email to Lead" to share it.`
+    )) return;
+
+    const res = await fetch(`/api/invoices/${inv.id}/renew-link`, { method: "POST" });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      await navigator.clipboard.writeText(json.razorpay_link_url).catch(() => {});
+      toast.success("New payment link created and copied");
+      fetchData();
+    } else {
+      toast.error(json.error || "Failed to renew payment link");
+    }
+  };
+
   const handleCancelInvoice = async (inv: ProformaInvoice) => {
     if (!window.confirm(`Cancel invoice ${inv.invoice_number}? This cannot be undone.`)) return;
     const reason = window.prompt("Reason for cancelling (optional):") || undefined;
@@ -585,6 +602,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <DropdownMenuItem onClick={() => { navigator.clipboard.writeText(inv.razorpay_link_url!); toast.success("Payment link copied"); }}>
                                 <CreditCard className="mr-2 h-4 w-4" />
                                 Copy Payment Link
+                              </DropdownMenuItem>
+                            )}
+                            {canCancelInvoice && inv.razorpay_link_url && ["sent", "overdue"].includes(inv.status) && (
+                              <DropdownMenuItem onClick={() => handleRenewInvoiceLink(inv)}>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Renew Payment Link
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />
