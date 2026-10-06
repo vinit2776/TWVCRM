@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { computeGstAndRounding } from "@/lib/gst-math";
@@ -138,7 +138,7 @@ export async function POST(
         currency: "INR",
         description: `Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
         reference_id: invoiceNumber.replace(/\//g, "-"),
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60, // 15 days
+        expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
         notify: { sms: !!customerPhone, email: !!customerEmail },
         reminder_enable: true,
         notes: { statement_id: id, contract_number: contract.contract_number, invoice_number: invoiceNumber },

@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
@@ -288,7 +289,7 @@ export async function POST(
           currency: "INR",
           description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
           reference_id: refId,
-          expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!recipientEmail },
           reminder_enable: true,
           notes: { statement_id: id, contract_number: contractNumber, gst_invoice: invoiceNumber },

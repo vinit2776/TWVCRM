@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit, logWhatsAppActivity } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
@@ -146,7 +146,7 @@ export async function POST(
       currency: "INR",
       description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
       reference_id: `${proposal.proposal_number}-DEP-${Date.now()}`,
-      expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+      expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
       notify: { sms: !!customerPhone, email: !!customerEmail },
       reminder_enable: true,
       notes: { proposal_id: id, proposal_number: proposal.proposal_number, type: "security_deposit" },

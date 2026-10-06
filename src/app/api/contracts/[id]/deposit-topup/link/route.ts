@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
@@ -94,7 +95,7 @@ export async function POST(
     currency: "INR",
     description: `Additional Security Deposit — ${contract.contract_number} — The WorkVilla`,
     reference_id: `${contract.contract_number}-DEPTOPUP-${Date.now()}`,
-    expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
     notify: { sms: !!customerPhone, email: true },
     reminder_enable: true,
     notes: { contract_id: contractId, contract_number: contract.contract_number, type: "deposit_topup" },

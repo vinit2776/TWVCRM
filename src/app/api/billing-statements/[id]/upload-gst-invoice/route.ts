@@ -4,7 +4,7 @@ import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/norm
 import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 /**
@@ -431,7 +431,7 @@ export async function POST(
           currency: "INR",
           description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
           reference_id: refId,
-          expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
           notes: {

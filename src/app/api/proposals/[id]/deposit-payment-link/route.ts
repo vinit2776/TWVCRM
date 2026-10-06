@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -88,7 +89,7 @@ export async function POST(
     currency: "INR",
     description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
     reference_id: `${proposal.proposal_number}-DEP-${Date.now()}`,
-    expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
     // Never auto-notify — this route is also called silently on every page
     // view. Actual customer notification happens only via /deposit-link.
     notify: { sms: false, email: false },

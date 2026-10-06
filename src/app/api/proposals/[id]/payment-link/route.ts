@@ -1,3 +1,4 @@
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -71,9 +72,9 @@ export async function POST(
   const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
-  const expireDate = proposal.valid_until
-    ? new Date(proposal.valid_until + "T23:59:59Z")
-    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  // Max Razorpay validity, deliberately not tied to proposal.valid_until: an
+  // offer lapsing must not strand a customer with a dead payment link.
+  const expireDate = new Date(Date.now() + RAZORPAY_MAX_LINK_VALIDITY_SECONDS * 1000);
   const expireBy = Math.floor(expireDate.getTime() / 1000);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
