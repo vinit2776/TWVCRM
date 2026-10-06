@@ -1611,6 +1611,22 @@ function isValidEmail(str) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
 }
 
+// Short tags shown after each punch time on the calendar: [desktop, phone].
+const PUNCH_SOURCE_TAGS = {
+  'biometric': ['BIO', 'B'],
+  'wifi': ['WIFI', 'W'],
+  'on-site': ['SITE', 'S'],
+  'auto': ['AUTO', 'A'],
+  'correction': ['CORR', 'C'],
+};
+function punchSourceTag(source) {
+  const [long, short] = PUNCH_SOURCE_TAGS[source] || [String(source).slice(0, 4).toUpperCase(), String(source).slice(0, 1).toUpperCase()];
+  return `<span class="cal-src"><span class="cal-long">${escapeHtml(long)}</span><span class="cal-short">${escapeHtml(short)}</span></span>`;
+}
+function punchSourceName(source, lang) {
+  return PUNCH_SOURCE_TAGS[source] ? t(lang, `calendar.source.${source}`) : source;
+}
+
 const STATUS_STYLE = {
   'Present':     { fg: '#2E7D32', bg: '#E8F5E9' },
   'Late':        { fg: '#B26A00', bg: '#FFF3E0' },
@@ -1774,6 +1790,12 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
       .grid-table { table-layout: fixed; width: auto; font-size: 0.85em; }
       .grid-table th, .grid-table td { border: 1px solid #E1E5E9; padding: 5px 4px; text-align: center; white-space: nowrap; }
       .grid-table th:first-child, .grid-table td:first-child { text-align: left; width: 170px; }
+      /* Calendar punch times: a source tag after each time, short letter on phones. */
+      .cal-src { display: inline-block; font-size: 0.85em; font-weight: 700; padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,0.75); margin-left: 3px; color: #1B2430; }
+      .cal-short { display: none; }
+      .cal-legend .cal-src { background: #EEF1F3; margin: 0 3px 0 0; }
+      .cal-day.has-times { cursor: pointer; }
+      .cal-day.cal-selected { box-shadow: inset 0 0 0 2px #1B2430; }
       #navToggle, #navBackdrop { display: none; }
       /* Phones: the sidebar becomes an off-canvas rail (translateX(-100%)) by
          default and only slides into view when #navToggle is tapped, so pages get
@@ -1827,6 +1849,12 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         .cal-grid { gap: 4px; }
         .cal-grid > div { padding: 5px 3px !important; min-height: 42px !important; font-size: 0.9em; }
         .cal-grid .cal-status { font-size: 0.62em !important; line-height: 1.15; }
+        /* No room for the status word and two times: the colour carries the status
+           (see the legend), and source tags shrink to one letter. */
+        .cal-grid .has-times .cal-status { display: none; }
+        .cal-grid .cal-times { font-size: 0.6em !important; }
+        .cal-grid .cal-long, .cal-legend .cal-long { display: none; }
+        .cal-grid .cal-short, .cal-legend .cal-short { display: inline; }
       }
     </style></head>
     <body>
@@ -2244,19 +2272,68 @@ async function renderCalendar(employee, year, month, user) {
   // which is what made Calendar slow — especially over a phone's higher-latency network.
   const dateStrs = [];
   for (let d = 1; d <= daysInMonth; d++) dateStrs.push(`${year}-${monthStr}-${String(d).padStart(2, '0')}`);
-  const dayStatuses = await Promise.all(dateStrs.map(dateStr => computeDayStatus(employee.id, dateStr)));
+  const monthPrefix = `${year}-${monthStr}`;
+  const [dayStatuses, monthPunches, monthBreaks] = await Promise.all([
+    Promise.all(dateStrs.map(dateStr => computeDayStatus(employee.id, dateStr))),
+    // The month's punches and breaks in one query each, for the times, sources and
+    // tap-a-day details, rather than per day on top of computeDayStatus's own queries.
+    db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp LIKE ? ORDER BY timestamp ASC').all(employee.id, `${monthPrefix}%`),
+    db.prepare('SELECT * FROM breaks WHERE employee_id = ? AND start_ts LIKE ? ORDER BY start_ts ASC').all(employee.id, `${monthPrefix}%`),
+  ]);
+  // On-site locations are for admins only, not the employee's own view.
+  const showLocation = isManagementRole(user);
+  const hhmm = ts => ts.slice(11, 16);
 
   const cells = [];
+  const details = [];
   for (let i = 0; i < startWeekday; i++) cells.push('<div></div>');
   dayStatuses.forEach((status, i) => {
     const d = i + 1;
     const dateStr = dateStrs[i];
     const s = STATUS_STYLE[status.status] || STATUS_STYLE['Upcoming'];
     const isToday = dateStr === todayStr();
-    cells.push(`<div style="background:${s.bg};color:${s.fg};border-radius:8px;padding:8px 6px;min-height:52px;overflow-wrap:break-word;${isToday ? 'outline:2px solid #1565C0;' : ''}">
+    // Same punches computeDayStatus counts: first is the check-in, last the check-out
+    // (only once they pair up).
+    const punches = effectivePunches(monthPunches.filter(p => p.timestamp.startsWith(dateStr)));
+    const breaks = monthBreaks.filter(b => b.start_ts.startsWith(dateStr));
+    const checkIn = punches[0];
+    const checkOut = punches.length % 2 === 0 ? punches[punches.length - 1] : null;
+    const timesHtml = checkIn ? `
+      <div class="cal-times" style="font-size:0.7em;margin-top:3px;line-height:1.4;font-variant-numeric:tabular-nums;">
+        <span title="${t(lang, 'calendar.check_in')}" style="white-space:nowrap;">${hhmm(checkIn.timestamp)}${punchSourceTag(checkIn.source)}</span><br>
+        <span title="${t(lang, 'calendar.check_out')}" style="white-space:nowrap;">${checkOut ? `${hhmm(checkOut.timestamp)}${punchSourceTag(checkOut.source)}` : '—'}</span>
+      </div>` : '';
+    cells.push(`<div class="cal-day${checkIn ? ' has-times' : ''}" data-day="${dateStr}" style="background:${s.bg};color:${s.fg};border-radius:8px;padding:8px 6px;min-height:52px;overflow-wrap:break-word;${isToday ? 'outline:2px solid #1565C0;' : ''}">
       <div style="font-weight:700;">${d}</div>
-      <div class="cal-status" style="font-size:0.72em;font-weight:600;overflow-wrap:break-word;hyphens:auto;">${escapeHtml(t(lang, `status.${status.status}`))}</div>
+      <div class="cal-status" style="font-size:0.72em;font-weight:600;overflow-wrap:break-word;hyphens:auto;">${escapeHtml(t(lang, `status.${status.status}`))}</div>${timesHtml}
     </div>`);
+    if (!checkIn) return;
+
+    const events = [
+      ...punches.map((p, idx) => {
+        let detail = '';
+        if (p.source === 'correction') detail = t(lang, 'calendar.correction_by', { name: p.marked_by || '—' });
+        else if (p.source === 'on-site' && showLocation) detail = p.location_address || p.location || '';
+        return { time: p.timestamp, cells: [t(lang, idx % 2 === 0 ? 'calendar.check_in' : 'calendar.check_out'), hhmm(p.timestamp), punchSourceName(p.source, lang), detail] };
+      }),
+      ...breaks.map(b => {
+        const minutes = b.end_ts ? Math.round((parseTimestamp(b.end_ts) - parseTimestamp(b.start_ts)) / 60000) : null;
+        return {
+          time: b.start_ts,
+          cells: [t(lang, 'calendar.break'), `${hhmm(b.start_ts)} – ${b.end_ts ? hhmm(b.end_ts) : ''}`, '—',
+            minutes == null ? t(lang, 'calendar.break_open') : t(lang, 'calendar.break_minutes', { n: minutes })],
+        };
+      }),
+    ].sort((a, b) => a.time.localeCompare(b.time));
+    const dateLabel = new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    details.push(`
+      <div class="cal-detail" data-day="${dateStr}" hidden>
+        <div style="font-weight:700;margin-bottom:8px;">${escapeHtml(dateLabel)} · ${escapeHtml(t(lang, `status.${status.status}`))}</div>
+        <table>
+          <tr><th>${t(lang, 'calendar.col_event')}</th><th>${t(lang, 'calendar.col_time')}</th><th>${t(lang, 'calendar.col_source')}</th><th>${t(lang, 'calendar.col_details')}</th></tr>
+          ${events.map(e => `<tr>${e.cells.map(c => `<td>${escapeHtml(c || '—')}</td>`).join('')}</tr>`).join('')}
+        </table>
+      </div>`);
   });
 
   const prevMonth = month === 1 ? 12 : month - 1;
@@ -2269,6 +2346,10 @@ async function renderCalendar(employee, year, month, user) {
     <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.8em;margin-right:14px;margin-bottom:6px;">
       <span style="width:10px;height:10px;border-radius:50%;background:${STATUS_STYLE[status].fg};display:inline-block;"></span>${t(lang, `status.${status}`)}
     </span>`).join('');
+  const sourceLegend = Object.keys(PUNCH_SOURCE_TAGS).map(source => `
+    <span style="display:inline-flex;align-items:center;gap:3px;font-size:0.8em;margin-right:14px;margin-bottom:6px;color:#4C5A68;">
+      ${punchSourceTag(source)}${escapeHtml(punchSourceName(source, lang))}
+    </span>`).join('');
 
   const body = `
     ${isManagementRole(user) ? calendarViewToggle(employee.id, 'mine') : ''}
@@ -2280,7 +2361,25 @@ async function renderCalendar(employee, year, month, user) {
       </div>
       <div class="cal-grid" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;">${headerCells.join('')}${cells.join('')}</div>
     </div>
-    <div class="card">${legend}</div>`;
+    <div class="card" id="calDetails">
+      <div class="cal-detail-hint" style="color:#7C8896;font-size:0.9em;">${t(lang, 'calendar.tap_hint')}</div>
+      ${details.join('')}
+    </div>
+    <div class="card">${legend}<div class="cal-legend" style="margin-top:8px;">${sourceLegend}</div></div>
+    <script>
+      (function () {
+        document.querySelectorAll('.cal-day.has-times').forEach(function (cell) {
+          cell.addEventListener('click', function () {
+            var day = cell.dataset.day;
+            document.querySelectorAll('.cal-day').forEach(function (c) { c.classList.toggle('cal-selected', c === cell); });
+            document.querySelectorAll('.cal-detail').forEach(function (d) { d.hidden = d.dataset.day !== day; });
+            document.querySelector('.cal-detail-hint').hidden = true;
+            var panel = document.getElementById('calDetails');
+            if (panel.getBoundingClientRect().top > window.innerHeight) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+        });
+      })();
+    </script>`;
   return pageShell(t(lang, 'calendar.title'), employee.id, 'calendar', body, user);
 }
 
