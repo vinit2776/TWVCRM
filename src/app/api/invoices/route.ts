@@ -4,6 +4,7 @@ import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { adhocInvoiceTotal } from "@/lib/adhoc-invoice-total";
 import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 
 export async function GET(request: NextRequest) {
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
   const subtotal = items.reduce((sum, item) => sum + item.total, 0);
   const taxAmount = subtotal * (result.data.tax_percentage / 100);
   const discountAmount = subtotal * (result.data.discount_percentage / 100);
-  const totalAmount = subtotal + taxAmount - discountAmount;
+  const totalAmount = adhocInvoiceTotal(subtotal, taxAmount, discountAmount);
 
   // invoice_number is left unset so the generate_invoice_number() DB trigger
   // assigns it atomically within the INSERT — computing it here via a separate
