@@ -53,6 +53,7 @@ interface GatewayTransaction {
   entity_label: string;
   entity_href: string | null;
   customer_name: string;
+  gateway_reference?: string | null;
   amount: number;
   razorpay_payment_id: string | null;
   payment_reference: string | null;
@@ -814,8 +815,13 @@ export default function GatewayActivityPage() {
                         <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                           {formatDate(row.created_at)}
                         </td>
-                        <td className="px-4 py-3 font-medium max-w-[160px] truncate">
-                          {row.customer_name}
+                        <td className="px-4 py-3 font-medium max-w-[160px]">
+                          <div className="truncate">{row.customer_name}</div>
+                          {row.gateway_reference && (
+                            <div className="text-[10px] font-normal text-muted-foreground truncate" title={row.gateway_reference}>
+                              {row.gateway_reference}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">

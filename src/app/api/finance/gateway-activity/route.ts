@@ -3,6 +3,9 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
+// Razorpay link/payment details never change once issued; avoid re-fetching on every page load.
+const razorpayDetailCache = new Map<string, { name: string | null; ref: string | null }>();
+
 /**
  * GET /api/finance/gateway-activity
  *
@@ -452,6 +455,7 @@ export async function GET(request: NextRequest) {
       payment_method:       c.payment_method ?? null,
       in_crm:               crm !== null || viaLink !== null,
       manually_linked:      manual !== null,
+      gateway_reference:    null as string | null,
       link_notes:           manual?.notes ?? null,
       link_linked_at:       manual?.linked_at ?? null,
       link_linked_by:       manual?.linked_by_name ?? null,
@@ -518,6 +522,63 @@ export async function GET(request: NextRequest) {
     const t = new Date(r.created_at).getTime();
     return t >= fromMs && t <= toMs;
   });
+
+  // ── 7c. Razorpay-side details for rows that still have no name ────────────
+  // Every payment link is created with a reference_id / description and the
+  // customer's details, so Razorpay itself can say who a payment was for even
+  // when nothing in the CRM points back (hand-made statements, imports).
+  // Read-only GETs, only for the few rows still blank, cached per process.
+  const stillBlank = allRows.filter((r) => r.customer_name === "—").slice(0, 25);
+  if (stillBlank.length) {
+    const { data: rzpSettings } = await adminSupabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["razorpay_key_id", "razorpay_key_secret"]);
+    const rzp: Record<string, string> = {};
+    (rzpSettings ?? []).forEach((r) => { rzp[r.key] = r.value; });
+
+    if (rzp.razorpay_key_id && rzp.razorpay_key_secret) {
+      const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+      const { data: logRows } = await adminSupabase
+        .from("razorpay_webhook_log")
+        .select("razorpay_payment_id, razorpay_payment_link_id")
+        .in("razorpay_payment_id", stillBlank.map((r) => r.id))
+        .not("razorpay_payment_link_id", "is", null);
+      const linkOf = new Map<string, string>();
+      for (const l of logRows ?? []) {
+        if (l.razorpay_payment_id && l.razorpay_payment_link_id) linkOf.set(l.razorpay_payment_id, l.razorpay_payment_link_id);
+      }
+
+      const details = await Promise.all(stillBlank.map(async (r) => {
+        const linkId = linkOf.get(r.id);
+        const url = linkId
+          ? `https://api.razorpay.com/v1/payment_links/${linkId}`
+          : `https://api.razorpay.com/v1/payments/${r.id}`;
+        const cached = razorpayDetailCache.get(url);
+        if (cached) return { id: r.id, ...cached };
+        try {
+          const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(8000) });
+          if (!res.ok) return { id: r.id, name: null, ref: null };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const d = (await res.json()) as any;
+          const name = (d.customer?.name || d.customer?.email || d.email || d.customer?.contact || d.contact || "").trim() || null;
+          const ref = [d.reference_id, d.description].filter(Boolean).join(" · ") || null;
+          razorpayDetailCache.set(url, { name, ref });
+          return { id: r.id, name, ref };
+        } catch (err) {
+          console.error("[gateway-activity] razorpay detail fetch failed:", err instanceof Error ? err.message : err);
+          return { id: r.id, name: null, ref: null };
+        }
+      }));
+      const byId = new Map(details.map((d) => [d.id, d]));
+      allRows = allRows.map((r) => {
+        const d = byId.get(r.id);
+        return d && (d.name || d.ref)
+          ? { ...r, customer_name: d.name ?? r.customer_name, gateway_reference: d.ref }
+          : r;
+      });
+    }
+  }
 
   // Filter by entity type
   if (entityTypeFilter && entityTypeFilter !== "unmatched") {
