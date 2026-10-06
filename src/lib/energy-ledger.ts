@@ -36,6 +36,15 @@ export interface LedgerDeltaRow {
 // the next row), and every consumer already skips null deltas. OneGrid's own
 // value is deliberately not substituted — it is the field known to smooth
 // across gaps.
+//
+// The same null applies when the seed is not strictly older than the row, or
+// the cumulative diff is negative (a meter only counts up). Production hit
+// this: the manual sync seeded from the last row before UTC midnight while
+// OneGrid's date-only `start` means IST midnight, 5.5h earlier, so the first
+// returned rows (18:30Z-00:00Z) were older than the seed and got a bogus
+// negative delta (-1900 Wh where the real one was 100). Callers should still
+// seed from the last row strictly before the first returned row; this is the
+// backstop.
 export const MAX_DELTA_GAP_MS = 60 * 60 * 1000;
 
 export interface LedgerSeed {
@@ -54,8 +63,11 @@ export function recomputeDeltasFromCumulative(
     const ms = new Date(r.ts).getTime();
     let delta: number | null;
     if (cumulative != null && prevCumulative != null) {
-      const spansGap = prevMs != null && ms - prevMs > MAX_DELTA_GAP_MS;
-      delta = spansGap ? null : cumulative - prevCumulative;
+      const elapsed = prevMs != null ? ms - prevMs : null;
+      const unusable =
+        elapsed != null && (elapsed <= 0 || elapsed > MAX_DELTA_GAP_MS);
+      const diff = cumulative - prevCumulative;
+      delta = unusable || diff < 0 ? null : diff;
     } else {
       // No local ground truth to diff against yet (the very first bucket of
       // this location+device's whole history) — OneGrid's own value is the
