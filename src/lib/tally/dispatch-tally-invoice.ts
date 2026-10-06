@@ -29,7 +29,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
 import { enqueueReceiptsForPaidStatement } from "@/lib/tally/enqueue";
@@ -471,7 +471,7 @@ async function createRazorpayLink(
     accept_partial: false,
     description: `Tax Invoice ${p.invoiceNumber} — ${p.contractNumber} — The WorkVilla`,
     reference_id: `${p.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-tally`,
-    expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
     reminder_enable: true,
     notify: { sms: !!phone, email: !!p.customerEmail },
     notes: { billing_statement_id: p.statementId, invoice_number: p.invoiceNumber, source: "tally" },

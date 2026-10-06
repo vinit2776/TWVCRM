@@ -13,7 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { logCommunication } from "@/lib/communications-log";
 import type { CommunicationLogEntry } from "@/types";
@@ -244,7 +244,7 @@ export async function dispatchProforma(
           currency: "INR",
           description: `Proforma ${proformaRef} — ${partyRef} — The WorkVilla`,
           reference_id: refId,
-          expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+          expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
           notes: { statement_id: statementId, contract_number: partyRef, proforma: "true" },
@@ -731,7 +731,7 @@ export async function dispatchGstDirect(
         currency: "INR",
         description: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
         reference_id: refId,
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+        expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
         notify: { sms: !!customerPhone, email: !!customerEmail },
         reminder_enable: true,
         notes: { statement_id: statementId, contract_number: contract.contract_number, gst_invoice: "true" },

@@ -11,6 +11,12 @@ const GRACE_LATE_MINUTES = 15;
 const GRACE_EARLY_MINUTES = 5;
 const HALF_DAY_SATURDAYS = [2, 4];
 const SATURDAY_HALF_SHIFT = { start: '09:30', end: '13:30' };
+// Missed check-in/check-out corrections an employee can file per month (pending +
+// approved count; rejected don't). Past the limit a correction still fixes the times,
+// but the day counts as a Half Day. A full-day correction (forgot both) is a separate
+// allowance; once it's used, a day with no punches at all stays Absent.
+const CORRECTION_MONTHLY_LIMIT = 2;
+const FULL_DAY_CORRECTION_MONTHLY_LIMIT = 1;
 
 function pad(n) { return String(n).padStart(2, '0'); }
 function todayStr(date = new Date()) {
@@ -42,8 +48,13 @@ function saturdayOccurrenceInMonth(dateStr) {
 // ignore the auto-checkout; only if they leave a check-in open does the auto-checkout
 // close it — and only when it comes after the last real punch, or it would pair with
 // the wrong one.
+// Approved corrections (source 'correction') count as real punches, except when the
+// device's own punches already pair up — that same buffering can deliver the real
+// check-out after a correction for it was approved, and the device wins.
 function effectivePunches(dayPunches) {
   const real = dayPunches.filter(p => p.source !== 'auto');
+  const device = real.filter(p => p.source !== 'correction');
+  if (device.length > 0 && device.length % 2 === 0) return device;
   if (real.length % 2 === 0) return real;
   const autos = dayPunches.filter(p => p.source === 'auto');
   const auto = autos[autos.length - 1];
@@ -83,6 +94,14 @@ function createAttendanceLogic(db) {
     return db.prepare(
       "SELECT * FROM permission_requests WHERE employee_id = ? AND date = ? AND status = 'approved'"
     ).get(employeeId, dateStr);
+  }
+
+  // Pending + approved corrections for the employee's whole month, oldest first — the
+  // order is what decides which ones fall past CORRECTION_MONTHLY_LIMIT.
+  function getActiveCorrectionsForMonth(employeeId, monthPrefix) {
+    return db.prepare(
+      "SELECT * FROM correction_requests WHERE employee_id = ? AND date LIKE ? AND status IN ('pending', 'approved') ORDER BY id ASC"
+    ).all(employeeId, `${monthPrefix}%`);
   }
 
   // Async because the db handle may be the libSQL/Turso client (network-backed,
@@ -146,9 +165,26 @@ function createAttendanceLogic(db) {
       return sum + (e - s) / 60000;
     }, 0));
 
+    const monthCorrections = await getActiveCorrectionsForMonth(employeeId, dateStr.slice(0, 7));
+    // Only a correction whose punch is actually in use counts — see effectivePunches.
+    const correction = punches.some(p => p.source === 'correction')
+      ? monthCorrections.find(c => c.date === dateStr && c.status === 'approved') || null
+      : null;
+    // Only the 19:00 auto-checkout closed the day: the employee forgot to check out.
+    const missedCheckout = !!checkOut && checkOut.source === 'auto';
+
     let isHalfDay = false;
     let hoursWorked = 0;
-    if (checkOut) {
+    if (missedCheckout) {
+      // Counted up to the shift end (or the auto-checkout, if earlier) rather than 19:00,
+      // so forgetting to check out never earns more hours than leaving on time.
+      isHalfDay = true;
+      const inMs = new Date(checkIn.timestamp.replace(' ', 'T')).getTime();
+      const shiftEndMs = new Date(`${dateStr}T${shift.end}:00`).getTime();
+      const autoMs = new Date(checkOut.timestamp.replace(' ', 'T')).getTime();
+      const netMinutes = Math.max(0, (Math.min(shiftEndMs, autoMs) - inMs) / 60000 - breakMinutes);
+      hoursWorked = Math.round((netMinutes / 60) * 100) / 100;
+    } else if (checkOut) {
       const checkOutMin = timeOfDayMinutes(checkOut.timestamp);
       isHalfDay = checkOutMin < shiftEndMin - GRACE_EARLY_MINUTES;
       // An approved permission to leave early excuses the Half Day flag, as long as they
@@ -161,10 +197,15 @@ function createAttendanceLogic(db) {
       const netMinutes = Math.max(0, (outMs - inMs) / 60000 - breakMinutes);
       hoursWorked = Math.round((netMinutes / 60) * 100) / 100;
     }
+    if (correction && correction.kind !== 'both' && correctionOverLimit(monthCorrections, correction)) {
+      isHalfDay = true;
+    }
 
     let status;
     if (punches.length % 2 !== 0) {
       status = dateStr === todayStr() ? 'Active' : 'Punch Error';
+    } else if (missedCheckout) {
+      status = 'Missed Checkout';
     } else if (isHalfDay) {
       status = 'Half Day';
     } else if (isLate) {
@@ -183,6 +224,9 @@ function createAttendanceLogic(db) {
       late: isLate,
       halfDay: isHalfDay,
       permission: permission ? permission.leave_time : null,
+      // Corrected check-outs still count as a missed check-out for the monthly tally.
+      missedCheckout: missedCheckout || (!!correction && correction.kind === 'check_out'),
+      correctionKind: correction ? correction.kind : null,
       breakMinutes,
       onBreak: !!openBreak,
       breakStart: openBreak ? openBreak.start_ts : null,
@@ -197,8 +241,16 @@ function createAttendanceLogic(db) {
     getHoliday,
     getApprovedLeaveForDate,
     getApprovedPermissionForDate,
+    getActiveCorrectionsForMonth,
     computeDayStatus,
   };
+}
+
+// Whether `correction` is past the monthly limit, given that month's pending + approved
+// corrections. Full-day corrections have their own allowance and don't count here.
+function correctionOverLimit(monthCorrections, correction) {
+  const singles = monthCorrections.filter(c => c.kind !== 'both');
+  return singles.findIndex(c => c.id === correction.id) >= CORRECTION_MONTHLY_LIMIT;
 }
 
 module.exports = {
@@ -208,6 +260,9 @@ module.exports = {
   GRACE_EARLY_MINUTES,
   HALF_DAY_SATURDAYS,
   SATURDAY_HALF_SHIFT,
+  CORRECTION_MONTHLY_LIMIT,
+  FULL_DAY_CORRECTION_MONTHLY_LIMIT,
+  correctionOverLimit,
   todayStr,
   pad,
   parseTimeToMinutes,

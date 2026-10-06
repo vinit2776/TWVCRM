@@ -37,6 +37,11 @@ function setup() {
       leave_time TEXT NOT NULL, reason TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
       requested_at TEXT NOT NULL, decided_at TEXT
     );
+    CREATE TABLE correction_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, date TEXT NOT NULL,
+      kind TEXT NOT NULL, check_in_time TEXT, check_out_time TEXT, reason TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending', requested_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT
+    );
     CREATE TABLE breaks (
       id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL,
       start_ts TEXT NOT NULL, end_ts TEXT
@@ -205,15 +210,19 @@ function rawPunch(db, dateStr, time, direction, source) {
     .run(EMP, `${dateStr} ${time}`, direction, source);
 }
 
-test('auto-checkout: closes a day the employee forgot to punch out of', async () => {
+test('auto-checkout: closes a day the employee forgot to punch out of as Missed Checkout', async () => {
   const { db, computeDayStatus } = setup();
   const d = daysAgo(1);
   rawPunch(db, d, '09:30:00', 'in', 'biometric');
   rawPunch(db, d, '19:00:00', 'out', 'auto');
   const result = await computeDayStatus(EMP, d);
-  assert.equal(result.status, 'Present');
+  assert.equal(result.status, 'Missed Checkout');
   assert.equal(result.checkOut, `${d} 19:00:00`);
   assert.equal(result.checkOutAuto, true);
+  assert.equal(result.halfDay, true);
+  assert.equal(result.missedCheckout, true);
+  // Counted to the 18:30 shift end, not the 19:00 auto-checkout.
+  assert.equal(result.hoursWorked, 9);
 });
 
 test('auto-checkout: a real check-out that arrived after the auto-checkout wins, not Punch Error', async () => {
@@ -242,4 +251,97 @@ test('auto-checkout: a real punch after the auto-checkout is still a Punch Error
   rawPunch(db, d, '19:30:00', 'in', 'biometric');
   const result = await computeDayStatus(EMP, d);
   assert.equal(result.status, 'Punch Error');
+});
+
+// --- Missed check-in/check-out corrections ---
+
+function correction(db, dateStr, kind, status, inTime = null, outTime = null) {
+  const { lastInsertRowid } = db.prepare(
+    'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(EMP, dateStr, kind, inTime, outTime, status, `${dateStr} 20:00:00`);
+  if (status === 'approved') {
+    if (inTime) rawPunch(db, dateStr, `${inTime}:00`, 'in', 'correction');
+    if (outTime) rawPunch(db, dateStr, `${outTime}:00`, 'out', 'correction');
+  }
+  return Number(lastInsertRowid);
+}
+
+test('correction: an approved check-out replaces the auto-checkout and the day is no longer Missed Checkout', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = '2026-08-03';
+  rawPunch(db, d, '09:28:00', 'in', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  correction(db, d, 'check_out', 'approved', null, '18:35');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.checkOut, `${d} 18:35:00`);
+  assert.equal(result.missedCheckout, true); // still counts towards the monthly tally
+  assert.equal(result.correctionKind, 'check_out');
+});
+
+test('correction: an approved check-in turns a lone device punch into the check-out', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = '2026-08-03';
+  rawPunch(db, d, '18:40:00', 'in', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  correction(db, d, 'check_in', 'approved', '09:30', null);
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.checkIn, `${d} 09:30:00`);
+  assert.equal(result.checkOut, `${d} 18:40:00`);
+  assert.equal(result.missedCheckout, false);
+});
+
+test('correction: a full-day correction fills a day with no punches', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = '2026-08-03';
+  correction(db, d, 'both', 'approved', '09:30', '18:30');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.hoursWorked, 9);
+});
+
+test('correction: the 3rd correction in a month fixes the times but the day is a Half Day', async () => {
+  const { db, computeDayStatus } = setup();
+  for (const d of ['2026-08-03', '2026-08-04', '2026-08-05']) {
+    rawPunch(db, d, '09:30:00', 'in', 'biometric');
+    correction(db, d, 'check_out', 'approved', null, '18:30');
+  }
+  assert.equal((await computeDayStatus(EMP, '2026-08-04')).status, 'Present');
+  const third = await computeDayStatus(EMP, '2026-08-05');
+  assert.equal(third.status, 'Half Day');
+  assert.equal(third.hoursWorked, 9);
+});
+
+test('correction: rejected ones and the full-day correction don\'t count towards the limit', async () => {
+  const { db, computeDayStatus } = setup();
+  correction(db, '2026-08-03', 'check_out', 'rejected', null, '18:30');
+  correction(db, '2026-08-04', 'both', 'approved', '09:30', '18:30');
+  for (const d of ['2026-08-05', '2026-08-06']) {
+    rawPunch(db, d, '09:30:00', 'in', 'biometric');
+    correction(db, d, 'check_out', 'approved', null, '18:30');
+  }
+  assert.equal((await computeDayStatus(EMP, '2026-08-06')).status, 'Present');
+});
+
+test('correction: a pending one still uses up the limit', async () => {
+  const { db, computeDayStatus } = setup();
+  correction(db, '2026-08-03', 'check_out', 'pending', null, '18:30');
+  correction(db, '2026-08-04', 'check_out', 'pending', null, '18:30');
+  rawPunch(db, '2026-08-05', '09:30:00', 'in', 'biometric');
+  correction(db, '2026-08-05', 'check_out', 'approved', null, '18:30');
+  assert.equal((await computeDayStatus(EMP, '2026-08-05')).status, 'Half Day');
+});
+
+test('correction: a real check-out the device delivers later wins over the correction', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = '2026-08-03';
+  rawPunch(db, d, '09:30:00', 'in', 'biometric');
+  rawPunch(db, d, '19:00:00', 'out', 'auto');
+  correction(db, d, 'check_out', 'approved', null, '18:05');
+  rawPunch(db, d, '18:32:00', 'out', 'biometric');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.checkOut, `${d} 18:32:00`);
+  assert.equal(result.correctionKind, null);
 });

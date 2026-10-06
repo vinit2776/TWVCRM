@@ -13,7 +13,7 @@ const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
   pad, todayStr, parseTimeToMinutes, timeOfDayMinutes, isSunday, isSaturday, saturdayOccurrenceInMonth,
-  effectivePunches,
+  effectivePunches, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const ONBOARDING = require('./onboarding-content');
@@ -491,6 +491,19 @@ const SCHEMA_SQL = `
     requested_at TEXT NOT NULL,
     decided_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS correction_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    check_in_time TEXT,
+    check_out_time TEXT,
+    reason TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT
+  );
   CREATE TABLE IF NOT EXISTS overtime_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     employee_id TEXT NOT NULL,
@@ -586,7 +599,7 @@ const SCHEMA_SQL = `
 
 const {
   getEmployee, getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday,
-  getApprovedLeaveForDate, getApprovedPermissionForDate, computeDayStatus,
+  getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
 } = createAttendanceLogic(db);
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -910,6 +923,88 @@ async function getPermissionRequests(employeeId) {
 async function getAllPermissionRequests() {
   return await db.prepare('SELECT * FROM permission_requests ORDER BY requested_at DESC').all();
 }
+async function getCorrectionRequests(employeeId) {
+  return await db.prepare('SELECT * FROM correction_requests WHERE employee_id = ? ORDER BY requested_at DESC').all(employeeId);
+}
+async function getAllCorrectionRequests() {
+  return await db.prepare('SELECT * FROM correction_requests ORDER BY requested_at DESC').all();
+}
+// From a month's pending + approved corrections (getActiveCorrectionsForMonth).
+function summarizeCorrectionUsage(monthCorrections) {
+  return {
+    used: monthCorrections.filter(c => c.kind !== 'both').length,
+    fullDayUsed: monthCorrections.filter(c => c.kind === 'both').length,
+  };
+}
+
+const CORRECTION_KINDS = ['check_in', 'check_out', 'both'];
+// Checks a correction against the day's punches as they are right now. Runs on submit,
+// and again on approval (forApproval), since the device can upload the real punch in
+// between. forApproval skips the "current month, not in the future" window, which only
+// limits what an employee can file — a request filed on the 31st can be approved on the 1st.
+// Returns null if valid, else { key, vars } for an i18n 'corrections.err_*' message.
+async function validateCorrection(employee, c, { excludeId = null, forApproval = false } = {}) {
+  const err = (key, vars) => ({ key: `corrections.err_${key}`, vars });
+  if (!CORRECTION_KINDS.includes(c.kind)) return err('kind');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date || '')) return err('date');
+  const needIn = c.kind !== 'check_out';
+  const needOut = c.kind !== 'check_in';
+  const isTime = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(v || '');
+  if (needIn && !isTime(c.check_in_time)) return err('in_time');
+  if (needOut && !isTime(c.check_out_time)) return err('out_time');
+  if (c.kind === 'both' && c.check_out_time <= c.check_in_time) return err('out_before_in');
+  const today = todayStr();
+  if (!forApproval) {
+    if (c.date > today) return err('future_date');
+    if (c.date.slice(0, 7) !== today.slice(0, 7)) return err('other_month');
+    if (employee.date_joined && c.date < employee.date_joined) return err('before_joining');
+    const nowHHMM = formatTimestamp(new Date()).slice(11, 16);
+    if (c.date === today && ((needIn && c.check_in_time > nowHHMM) || (needOut && c.check_out_time > nowHHMM))) return err('future_time');
+  }
+
+  const real = (await getPunchesForDay(employee.id, c.date)).filter(p => p.source !== 'auto');
+  const first = real.length ? real[0].timestamp.slice(11, 16) : null;
+  const last = real.length ? real[real.length - 1].timestamp.slice(11, 16) : null;
+  if (c.kind === 'both' && real.length > 0) return err('has_punches');
+  if (c.kind === 'check_out') {
+    if (real.length % 2 === 0) return err('no_open_checkin');
+    if (c.check_out_time <= last) return err('out_before_last', { time: last });
+  }
+  if (c.kind === 'check_in') {
+    // No punches at all is only a missed check-in while the day is still going —
+    // on a past day that's "forgot both".
+    if (real.length === 0 && c.date !== today) return err('no_punches_use_both');
+    if (real.length > 0 && real.length % 2 === 0) return err('day_complete');
+    if (real.length > 0 && c.check_in_time >= first) return err('in_after_first', { time: first });
+  }
+
+  const duplicate = await db.prepare(
+    "SELECT id FROM correction_requests WHERE employee_id = ? AND date = ? AND status IN ('pending', 'approved') AND id != ?"
+  ).get(employee.id, c.date, excludeId ?? -1);
+  if (duplicate) return err('duplicate');
+  if (c.kind === 'both') {
+    const month = await getActiveCorrectionsForMonth(employee.id, c.date.slice(0, 7));
+    if (month.filter(m => m.kind === 'both' && m.id !== excludeId).length >= FULL_DAY_CORRECTION_MONTHLY_LIMIT) return err('full_day_used');
+  }
+  return null;
+}
+
+// Days this month the employee forgot to check out and hasn't filed a correction for —
+// the dashboard nudges them to fix each one.
+async function getUncorrectedMissedCheckouts(employeeId) {
+  const monthPrefix = todayStr().slice(0, 7);
+  const autoDays = await db.prepare(
+    "SELECT DISTINCT substr(timestamp, 1, 10) AS d FROM punches WHERE employee_id = ? AND source = 'auto' AND timestamp LIKE ? ORDER BY d ASC"
+  ).all(employeeId, `${monthPrefix}%`);
+  const filed = new Set((await getActiveCorrectionsForMonth(employeeId, monthPrefix)).map(c => c.date));
+  const days = [];
+  for (const { d } of autoDays) {
+    if (filed.has(d)) continue;
+    const status = await computeDayStatus(employeeId, d);
+    if (status && status.status === 'Missed Checkout') days.push(d);
+  }
+  return days;
+}
 async function getPermissionForDate(employeeId, dateStr) {
   return await db.prepare(
     'SELECT * FROM permission_requests WHERE employee_id = ? AND date = ? ORDER BY requested_at DESC LIMIT 1'
@@ -941,8 +1036,9 @@ async function computeOvertimeMinutes(employee, dateStr, fetchPunches = getPunch
   const checkIn = punches[0];
   const checkOut = punches[punches.length - 1];
   // A synthetic auto-checkout is not a real punch — never count it as verified overtime,
-  // or "forgot to punch out" quietly becomes free overtime hours.
-  if (checkOut.source === 'auto') return 0;
+  // or "forgot to punch out" quietly becomes free overtime hours. Same for a corrected
+  // check-out: it's a time the employee typed in, not one the device recorded.
+  if (checkOut.source === 'auto' || checkOut.source === 'correction') return 0;
 
   const shift = getShiftForDate(employee, dateStr);
   const scheduledMinutes = parseTimeToMinutes(shift.end) - parseTimeToMinutes(shift.start);
@@ -1056,13 +1152,17 @@ function parseMonthParam(parsed) {
 // by memory instead of the network for this call. If attendance-logic.js's internal SQL
 // text ever changes shape, the `sql.includes(...)` routing below needs to change with it.
 async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
-  const [employees, punches, breaks, holidays, leaves, permissions] = await Promise.all([
+  const [employees, punches, breaks, holidays, leaves, permissions, corrections] = await Promise.all([
     allEmployees(),
     db.prepare('SELECT * FROM punches WHERE timestamp LIKE ? ORDER BY timestamp ASC').all(`${likePrefix}%`),
     db.prepare('SELECT * FROM breaks WHERE start_ts LIKE ? ORDER BY start_ts ASC').all(`${likePrefix}%`),
     db.prepare('SELECT * FROM holidays WHERE date LIKE ?').all(`${likePrefix}%`),
     db.prepare("SELECT * FROM leave_requests WHERE status = 'approved' AND start_date <= ? AND end_date >= ?").all(rangeEnd, rangeStart),
     db.prepare("SELECT * FROM permission_requests WHERE status = 'approved' AND date LIKE ?").all(`${likePrefix}%`),
+    // Whole months, even for a one-day range: whether a day's correction is past the
+    // monthly limit depends on every other correction filed that month.
+    db.prepare("SELECT * FROM correction_requests WHERE status IN ('pending', 'approved') AND date >= ? AND date <= ? ORDER BY id ASC")
+      .all(`${rangeStart.slice(0, 7)}-01`, `${rangeEnd.slice(0, 7)}-31`),
   ]);
 
   const employeeById = new Map(employees.map(e => [e.id, e]));
@@ -1079,6 +1179,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
   const breaksByKey = groupByEmpDate(breaks, b => b.start_ts.slice(0, 10));
   const holidayByDate = new Map(holidays.map(h => [h.date, h]));
   const permissionByKey = new Map(permissions.map(p => [`${p.employee_id}|${p.date}`, p]));
+  const correctionsByKey = groupByEmpDate(corrections, c => c.date.slice(0, 7));
   const leavesByEmployee = new Map();
   for (const l of leaves) {
     if (!leavesByEmployee.has(l.employee_id)) leavesByEmployee.set(l.employee_id, []);
@@ -1108,6 +1209,9 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
       if (sql.includes('FROM permission_requests')) {
         return { get: (employeeId, dateStr) => permissionByKey.get(`${employeeId}|${dateStr}`) };
       }
+      if (sql.includes('FROM correction_requests')) {
+        return { all: (employeeId, likeArg) => correctionsByKey.get(`${employeeId}|${likeArg.slice(0, 7)}`) || [] };
+      }
       throw new Error(`createAttendanceSnapshot: unhandled query shape: ${sql}`);
     },
   };
@@ -1115,6 +1219,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
   const snapshotLogic = createAttendanceLogic(snapshotDb);
   return {
     employees,
+    correctionsFor: (employeeId, monthPrefix) => correctionsByKey.get(`${employeeId}|${monthPrefix}`) || [],
     computeDayStatus: snapshotLogic.computeDayStatus,
     computeOvertimeMinutes: (employee, dateStr) => computeOvertimeMinutes(employee, dateStr, snapshotLogic.getPunchesForDay),
   };
@@ -1144,24 +1249,29 @@ async function computeMonthlyStatusGrid(year, month) {
   const perEmployee = await Promise.all(snapshot.employees.map(async employee => {
     const statuses = await Promise.all(dateStrs.map(dateStr => snapshot.computeDayStatus(employee.id, dateStr)));
     const overtimeMinutesByDay = await Promise.all(dateStrs.map(dateStr => snapshot.computeOvertimeMinutes(employee, dateStr)));
-    return { employee, statuses, overtimeMinutesByDay };
+    const corrections = snapshot.correctionsFor(employee.id, `${year}-${monthStr}`);
+    return { employee, statuses, overtimeMinutesByDay, corrections };
   }));
   return { daysInMonth, perEmployee };
 }
 
 function computePunchInReport(grid) {
-  return grid.perEmployee.map(({ employee, statuses, overtimeMinutesByDay }) => {
-    let present = 0, late = 0, halfDay = 0, absent = 0, totalHours = 0;
+  return grid.perEmployee.map(({ employee, statuses, overtimeMinutesByDay, corrections }) => {
+    let present = 0, late = 0, halfDay = 0, absent = 0, totalHours = 0, missedCheckouts = 0;
     for (const status of statuses) {
       if (status.status === 'Present') present++;
       else if (status.status === 'Late') late++;
-      else if (status.status === 'Half Day') halfDay++;
+      else if (status.status === 'Half Day' || status.status === 'Missed Checkout') halfDay++;
       else if (status.status === 'Absent') absent++;
+      if (status.missedCheckout) missedCheckouts++;
       totalHours += status.hoursWorked || 0;
     }
+    const usage = summarizeCorrectionUsage(corrections);
     const overtimeMinutes = overtimeMinutesByDay.reduce((sum, m) => sum + m, 0);
     return {
-      id: employee.id, name: employee.name, present, late, halfDay, absent,
+      id: employee.id, name: employee.name, present, late, halfDay, absent, missedCheckouts,
+      correctionsUsed: `${usage.used} / ${CORRECTION_MONTHLY_LIMIT}${usage.fullDayUsed ? ' + full day' : ''}`,
+      correctionsOverLimit: usage.used > CORRECTION_MONTHLY_LIMIT,
       totalHours: Math.round(totalHours * 100) / 100,
       overtimeHours: Math.round((overtimeMinutes / 60) * 100) / 100,
     };
@@ -1205,11 +1315,13 @@ function formatHHMM(timestamp) {
 const MUSTER_STATUS_CODE = {
   'Present': 'P', 'Late': 'L', 'Half Day': 'HD', 'Absent': 'A',
   'Week Off': 'WO', 'Holiday': 'H', 'Punch Error': 'PE', 'Active': 'AC', 'On Leave': 'OL',
+  'Missed Checkout': 'MC',
 };
 const GRID_CELL_COLOR = {
   'Present': '#E8F5E9',
   'Late': '#FFF9C4',
   'Half Day': '#FBE7DE',
+  'Missed Checkout': '#FBE7DE',
   'Absent': '#FDECEA',
   'Week Off': '#F0F0F0',
   'Holiday': '#E0F2F1',
@@ -1219,7 +1331,7 @@ const GRID_CELL_COLOR = {
   'Upcoming': 'transparent',
 };
 // Present/Late/Half Day/Active all mean "showed up in some form" for headcount purposes.
-const MUSTER_PRESENT_STATUSES = new Set(['Present', 'Late', 'Half Day', 'Active']);
+const MUSTER_PRESENT_STATUSES = new Set(['Present', 'Late', 'Half Day', 'Missed Checkout', 'Active']);
 
 // Grid, not a log: one row per employee, one column per day of the month — each cell
 // is that day's check-in/check-out ("L " prefix = late), or the day's status code
@@ -1231,7 +1343,9 @@ function computePunchInGrid(grid) {
       if (status.checkIn) {
         const inStr = formatHHMM(status.checkIn);
         const outStr = status.checkOut ? formatHHMM(status.checkOut) : '?';
-        text = `${status.late ? 'L ' : ''}${inStr}-${outStr}`;
+        text = status.status === 'Missed Checkout'
+          ? `MC ${inStr}-?`
+          : `${status.late ? 'L ' : ''}${inStr}-${outStr}`;
       } else {
         text = MUSTER_STATUS_CODE[status.status] ?? status.status;
       }
@@ -1241,6 +1355,27 @@ function computePunchInGrid(grid) {
     // still has one cell per calendar day, matching the header.
     while (cells.length < grid.daysInMonth) cells.push({ text: '', status: 'Upcoming' });
     return { id: employee.id, name: employee.name, cells };
+  });
+  return { daysInMonth: grid.daysInMonth, rows };
+}
+
+// Same grid shape as Punch-In Detail, but each cell is that day's net hours worked
+// (HH:MM, breaks already subtracted by computeDayStatus) instead of in/out times.
+// "MC" marks a missed check-out, counted only up to the shift end. Days without a
+// completed in/out pair fall back to a status code.
+function computeWorkingHoursGrid(grid) {
+  const rows = grid.perEmployee.map(({ employee, statuses }) => {
+    let totalMinutes = 0;
+    const cells = statuses.map(status => {
+      if (status.checkIn && status.checkOut) {
+        const minutes = Math.round((status.hoursWorked || 0) * 60);
+        totalMinutes += minutes;
+        return { text: `${status.status === 'Missed Checkout' ? 'MC ' : ''}${formatHoursAsClock(status.hoursWorked)}`, status: status.status };
+      }
+      return { text: MUSTER_STATUS_CODE[status.status] ?? status.status, status: status.status };
+    });
+    while (cells.length < grid.daysInMonth) cells.push({ text: '', status: 'Upcoming' });
+    return { id: employee.id, name: employee.name, cells, total: formatHoursAsClock(totalMinutes / 60) };
   });
   return { daysInMonth: grid.daysInMonth, rows };
 }
@@ -1296,7 +1431,7 @@ async function performAutoCheckout() {
       if (dayPunches[dayPunches.length - 1].timestamp >= cutoffTs) continue;
       if (!await recordPunch(emp.id, cutoffTs, 'out', 'auto', 'auto-checkout')) continue;
       const when = dateStr === today ? `${AUTO_CHECKOUT_HOUR}:00` : `${AUTO_CHECKOUT_HOUR}:00 on ${dateStr}`;
-      await createNotification(emp.id, `You were auto-checked out at ${when}. Make sure that you check out next time.`);
+      await createNotification(emp.id, `You didn't check out, so you were auto-checked out at ${when}. That day counts as a Half Day until you submit a correction from the Corrections page.`);
       console.log(`Auto-checked-out ${emp.id} for ${dateStr} (forgot to punch out)`);
     }
     const cutoffTs = `${today} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
@@ -1362,6 +1497,7 @@ const STATUS_STYLE = {
   'Present':     { fg: '#2E7D32', bg: '#E8F5E9' },
   'Late':        { fg: '#B26A00', bg: '#FFF3E0' },
   'Half Day':    { fg: '#C24914', bg: '#FBE7DE' },
+  'Missed Checkout': { fg: '#C24914', bg: '#FBE7DE' },
   'Absent':      { fg: '#C62828', bg: '#FDECEA' },
   'Week Off':    { fg: '#616161', bg: '#F0F0F0' },
   'Holiday':     { fg: '#00695C', bg: '#E0F2F1' },
@@ -1438,7 +1574,7 @@ async function employeeSwitcher(currentId, basePath) {
   return `<select onchange="location.href='${basePath}?employee_id=' + this.value" style="font-size:0.95em;padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;">${options}</select>`;
 }
 
-const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
+const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
@@ -1597,6 +1733,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         <a id="navCalendar" href="/calendar?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'calendar' || activeNav === 'calendar-company' ? 'active' : ''}"><span class="ico">📅</span> <span class="lbl">${t(lang, 'nav.calendar')}</span></a>
         <a id="navLeave" href="/leave?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'leave' ? 'active' : ''}"><span class="ico">🌴</span> <span class="lbl">${t(lang, 'nav.leave')}</span></a>
         <a href="/permission?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'permission' ? 'active' : ''}"><span class="ico">🕓</span> <span class="lbl">${t(lang, 'nav.permission')}</span></a>
+        <a href="/corrections?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'corrections' ? 'active' : ''}"><span class="ico">✏️</span> <span class="lbl">${t(lang, 'nav.corrections')}</span></a>
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
         <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
         ${CONFIG.LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
@@ -1800,7 +1937,7 @@ function renderChangePassword(error, username) {
     </body></html>`;
 }
 
-async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false) {
+async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr());
   const onBreak = !!dayStatus.onBreak;
@@ -1870,13 +2007,19 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
         <div style="font-size:0.75em;opacity:0.75;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })}</div>
       </div>` : '';
 
-  const autoCheckoutWarning = dayStatus.checkOutAuto ? `
-    <div class="card" style="background:#FFF3E0;border:1px solid #FFCC80;color:#B26A00;">
-      <strong>⚠ ${t(lang, 'dashboard.auto_checkout_warning', { time: escapeHtml(dayStatus.checkOut.split(' ')[1]) })}</strong> ${t(lang, 'dashboard.auto_checkout_reminder')}
-    </div>` : '';
+  // One banner per uncorrected missed check-out this month, each linking to a
+  // pre-filled correction request.
+  const missedCheckoutBanners = missedCheckoutDays.map(d => {
+    const dateLabel = new Date(`${d}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    return `
+    <div class="card" style="background:#FFF3E0;border:1px solid #FFCC80;color:#B26A00;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div><strong>⚠ ${t(lang, 'dashboard.missed_checkout_banner', { date: escapeHtml(dateLabel) })}</strong></div>
+      <a href="/corrections?employee_id=${escapeHtml(employee.id)}&date=${escapeHtml(d)}&kind=check_out" style="padding:6px 14px;border-radius:6px;background:#1565C0;color:#fff;font-weight:600;text-decoration:none;white-space:nowrap;">${t(lang, 'dashboard.fix_it')}</a>
+    </div>`;
+  }).join('');
 
   const body = `
-    ${autoCheckoutWarning}
+    ${missedCheckoutBanners}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
@@ -2802,6 +2945,191 @@ async function renderAdminPermission(requests, hoursReportRows, user) {
   return pageShell('Permission', '', 'permission', body, user);
 }
 
+function correctionTimesText(r, lang) {
+  return [
+    r.check_in_time ? `${t(lang, 'corrections.in')} ${r.check_in_time}` : null,
+    r.check_out_time ? `${t(lang, 'corrections.out')} ${r.check_out_time}` : null,
+  ].filter(Boolean).join(' · ');
+}
+// Whether each request is past the monthly limit, worked out per month from the
+// employee's own pending + approved requests (same rule as computeDayStatus).
+function correctionsOverLimitById(requests) {
+  const active = requests.filter(r => r.status === 'pending' || r.status === 'approved').sort((a, b) => a.id - b.id);
+  const overLimit = new Set();
+  for (const r of active) {
+    if (r.kind === 'both') continue;
+    const sameMonth = active.filter(c => c.date.slice(0, 7) === r.date.slice(0, 7));
+    if (correctionOverLimit(sameMonth, r)) overLimit.add(r.id);
+  }
+  return overLimit;
+}
+
+async function renderCorrections(employee, requests, user, error, prefill = {}) {
+  const lang = langOf(user);
+  const monthPrefix = todayStr().slice(0, 7);
+  const usage = summarizeCorrectionUsage(requests.filter(r => r.date.slice(0, 7) === monthPrefix && (r.status === 'pending' || r.status === 'approved')));
+  const overLimit = correctionsOverLimitById(requests);
+  const kind = CORRECTION_KINDS.includes(prefill.kind) ? prefill.kind : 'check_out';
+
+  const rows = requests.map(r => {
+    let statusHtml = r.status === 'pending'
+      ? statusBadge('Upcoming', t(lang, 'status.awaiting_approval'), lang)
+      : statusBadge(r.status === 'approved' ? 'Present' : 'Absent', t(lang, `status.${r.status}`), lang);
+    if (overLimit.has(r.id)) statusHtml += ` ${statusBadge('Half Day', t(lang, 'corrections.half_day_note'), lang)}`;
+    return `
+    <tr>
+      <td>${escapeHtml(r.date)}</td>
+      <td>${t(lang, `corrections.kind.${r.kind}`)}</td>
+      <td>${escapeHtml(correctionTimesText(r, lang))}</td>
+      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${statusHtml}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">${t(lang, 'corrections.no_requests')}</td></tr>`;
+
+  const remaining = Math.max(0, CORRECTION_MONTHLY_LIMIT - usage.used);
+  const fullDayLeft = Math.max(0, FULL_DAY_CORRECTION_MONTHLY_LIMIT - usage.fullDayUsed);
+  const body = `
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(t(lang, error.key, error.vars))}</div>` : ''}
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'corrections.summary_title')}</div>
+      <div style="display:flex;gap:28px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:1.6em;font-weight:700;${usage.used > CORRECTION_MONTHLY_LIMIT ? 'color:#C62828;' : ''}">${usage.used}</div>
+          <div style="color:#7C8896;font-size:0.85em;">${t(lang, 'corrections.used')}</div>
+        </div>
+        <div>
+          <div style="font-size:1.6em;font-weight:700;">${remaining}</div>
+          <div style="color:#7C8896;font-size:0.85em;">${t(lang, 'corrections.remaining', { limit: CORRECTION_MONTHLY_LIMIT })}</div>
+        </div>
+        <div>
+          <div style="font-size:1.6em;font-weight:700;">${fullDayLeft}</div>
+          <div style="color:#7C8896;font-size:0.85em;">${t(lang, 'corrections.full_day_left', { limit: FULL_DAY_CORRECTION_MONTHLY_LIMIT })}</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'corrections.apply_title')}</div>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'corrections.apply_hint', { limit: CORRECTION_MONTHLY_LIMIT })}</p>
+      <form method="POST" action="/corrections/apply" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.date')}</label>
+          <input type="date" name="date" required value="${escapeHtml(prefill.date || '')}" min="${monthPrefix}-01" max="${todayStr()}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.missed')}</label>
+          <select name="kind" id="corrKind" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+            ${CORRECTION_KINDS.map(k => `<option value="${k}" ${k === kind ? 'selected' : ''}>${t(lang, `corrections.kind.${k}`)}</option>`).join('')}
+          </select>
+        </div>
+        <div id="corrIn">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_in_time')}</label>
+          <input type="time" name="check_in_time" value="${escapeHtml(prefill.check_in_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div id="corrOut">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.check_out_time')}</label>
+          <input type="time" name="check_out_time" value="${escapeHtml(prefill.check_out_time || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+        </div>
+        <div style="flex:1;min-width:160px;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'corrections.reason')}</label>
+          <input type="text" name="reason" required value="${escapeHtml(prefill.reason || '')}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
+        </div>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'corrections.submit')}</button>
+      </form>
+      ${usage.used >= CORRECTION_MONTHLY_LIMIT ? `<div style="background:#FBE7DE;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-top:12px;">${t(lang, 'corrections.over_limit_warning', { limit: CORRECTION_MONTHLY_LIMIT })}</div>` : ''}
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'corrections.my_requests')}</div>
+      <table><tr><th>${t(lang, 'corrections.col_date')}</th><th>${t(lang, 'corrections.col_missed')}</th><th>${t(lang, 'corrections.col_corrected_to')}</th><th>${t(lang, 'corrections.col_reason')}</th><th>${t(lang, 'corrections.col_status')}</th></tr>${rows}</table>
+    </div>
+    <script>
+      (function () {
+        var kind = document.getElementById('corrKind');
+        function update() {
+          document.getElementById('corrIn').style.display = kind.value === 'check_out' ? 'none' : '';
+          document.getElementById('corrOut').style.display = kind.value === 'check_in' ? 'none' : '';
+        }
+        kind.addEventListener('change', update);
+        update();
+      })();
+    </script>`;
+  return pageShell(t(lang, 'corrections.title'), employee.id, 'corrections', body, user);
+}
+
+async function renderAdminCorrections(requests, user, error) {
+  const employeesById = new Map((await allEmployees()).map(e => [e.id, e]));
+  const nameCell = id => {
+    const emp = employeesById.get(id);
+    return `<strong>${escapeHtml(emp ? emp.name : id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(id)})</span>`;
+  };
+  const pending = requests.filter(r => r.status === 'pending');
+  const history = requests.filter(r => r.status !== 'pending');
+
+  const pendingRows = (await Promise.all(pending.map(async r => {
+    const dayPunches = await getPunchesForDay(r.employee_id, r.date);
+    const recorded = dayPunches.map(p => `${p.timestamp.slice(11, 16)}${p.source === 'auto' ? ' (auto)' : ''}`).join(', ') || 'No punches';
+    // What the day will look like once approved, so a mis-filed request (e.g. a
+    // "missed check-in" before what was really a late check-in) is easy to spot.
+    const simulated = [
+      ...dayPunches,
+      ...(r.check_in_time ? [{ timestamp: `${r.date} ${r.check_in_time}:00`, source: 'correction' }] : []),
+      ...(r.check_out_time ? [{ timestamp: `${r.date} ${r.check_out_time}:00`, source: 'correction' }] : []),
+    ].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const after = effectivePunches(simulated);
+    const afterText = after.length
+      ? `In ${after[0].timestamp.slice(11, 16)} · Out ${after.length % 2 === 0 ? after[after.length - 1].timestamp.slice(11, 16) : '?'}`
+      : '—';
+    const monthCorrections = await getActiveCorrectionsForMonth(r.employee_id, r.date.slice(0, 7));
+    const position = monthCorrections.filter(c => c.kind !== 'both').findIndex(c => c.id === r.id) + 1;
+    const usageCell = r.kind === 'both'
+      ? 'Full-day correction'
+      : (correctionOverLimit(monthCorrections, r)
+          ? statusBadge('Half Day', 'Over limit: stays Half Day')
+          : `${position} of ${CORRECTION_MONTHLY_LIMIT}`);
+    return `
+    <tr>
+      <td>${nameCell(r.employee_id)}</td>
+      <td>${escapeHtml(r.date)}</td>
+      <td>${t('en', `corrections.kind.${r.kind}`)}</td>
+      <td>${escapeHtml(recorded)}</td>
+      <td>${escapeHtml(afterText)}</td>
+      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${usageCell}</td>
+      <td>
+        ${actionButton('/corrections/decide', { id: r.id, action: 'approve' }, 'Approve', '#2E7D32', true)}
+        ${actionButton('/corrections/decide', { id: r.id, action: 'reject' }, 'Reject', '#C62828')}
+      </td>
+    </tr>`;
+  }))).join('') || `<tr><td colspan="8" style="color:#9AA5B1;">No pending requests</td></tr>`;
+
+  const historyRows = history.map(r => `
+    <tr>
+      <td>${nameCell(r.employee_id)}</td>
+      <td>${escapeHtml(r.date)}</td>
+      <td>${t('en', `corrections.kind.${r.kind}`)}</td>
+      <td>${escapeHtml(correctionTimesText(r, 'en'))}</td>
+      <td>${escapeHtml(r.reason || '—')}</td>
+      <td>${statusBadge(r.status === 'approved' ? 'Present' : 'Absent', r.status)}</td>
+      <td>${escapeHtml(r.decided_by || '—')}</td>
+    </tr>`).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No history yet</td></tr>`;
+
+  const body = `
+    ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
+    <div class="card" style="color:#7C8896;font-size:0.9em;">
+      Employees file these when they forget to check in or check out. Each employee gets ${CORRECTION_MONTHLY_LIMIT} a month
+      (pending and approved both count); past that, an approved correction fixes the times but the day still counts as a Half Day.
+      They also get ${FULL_DAY_CORRECTION_MONTHLY_LIMIT} full-day correction a month for a day they forgot both.
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px;">Pending — All Employees</div>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Recorded by App</th><th>After Approval</th><th>Reason</th><th>Used This Month</th><th>Action</th></tr>${pendingRows}</table>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px;">History — All Employees</div>
+      <table><tr><th>Employee</th><th>Date</th><th>Missed</th><th>Corrected To</th><th>Reason</th><th>Status</th><th>Decided By</th></tr>${historyRows}</table>
+    </div>`;
+  return pageShell('Corrections', '', 'corrections', body, user);
+}
+
 async function renderAdminOvertime(requests, hoursReportRows, user, error) {
   const pending = requests.filter(r => r.status === 'pending');
   const history = requests.filter(r => r.status !== 'pending');
@@ -3280,7 +3608,7 @@ async function renderAdminEmployeeDocuments(employee, docs, user) {
   return pageShell('Employee Documents', '', 'employee-registration', body, user);
 }
 
-async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, muster, user) {
+async function renderReports(monthStr, punchInRows, punchInGrid, workingHours, leaveRows, muster, user) {
   const punchInTableRows = punchInRows.map(r => `
     <tr>
       <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
@@ -3290,7 +3618,9 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
       <td>${r.absent}</td>
       <td>${r.totalHours}h</td>
       <td>${r.overtimeHours}h</td>
-    </tr>`).join('') || `<tr><td colspan="7" style="color:#9AA5B1;">No employees</td></tr>`;
+      <td>${r.missedCheckouts}</td>
+      <td>${r.correctionsOverLimit ? `<span style="color:#C62828;font-weight:600;">${escapeHtml(r.correctionsUsed)}</span>` : escapeHtml(r.correctionsUsed)}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="color:#9AA5B1;">No employees</td></tr>`;
 
   const punchInDayHeaders = Array.from({ length: punchInGrid.daysInMonth }, (_, i) => `<th style="width:78px;">${i + 1}</th>`).join('');
   const punchInGridRows = punchInGrid.rows.map(r => `
@@ -3298,6 +3628,14 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
       <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
       ${r.cells.map(c => `<td style="background:${GRID_CELL_COLOR[c.status] || 'transparent'};">${escapeHtml(c.text)}</td>`).join('')}
     </tr>`).join('') || `<tr><td colspan="${punchInGrid.daysInMonth + 1}" style="color:#9AA5B1;">No employees</td></tr>`;
+
+  const workingHoursDayHeaders = Array.from({ length: workingHours.daysInMonth }, (_, i) => `<th style="width:66px;">${i + 1}</th>`).join('');
+  const workingHoursRows = workingHours.rows.map(r => `
+    <tr>
+      <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
+      ${r.cells.map(c => `<td style="background:${GRID_CELL_COLOR[c.status] || 'transparent'};">${escapeHtml(c.text)}</td>`).join('')}
+      <td><strong>${r.total}</strong></td>
+    </tr>`).join('') || `<tr><td colspan="${workingHours.daysInMonth + 2}" style="color:#9AA5B1;">No employees</td></tr>`;
 
   const leaveTypeHeaders = LEAVE_TYPES.map(t => `<th>${escapeHtml(t)}</th>`).join('');
   const leaveTableRows = leaveRows.map(r => `
@@ -3334,7 +3672,7 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
         <a href="/admin/reports/muster.csv?month=${escapeHtml(monthStr)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">Download CSV &darr;</a>
       </div>
       <p style="color:#7C8896;font-size:0.85em;margin-top:0;">
-        P=Present, <span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">L=Late</span>, HD=Half Day, A=Absent, WO=Week Off, H=Holiday, OL=On Leave, AC=Active (in progress), PE=Punch Error.
+        P=Present, <span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">L=Late</span>, HD=Half Day, MC=Missed Check-out (counts as Half Day), A=Absent, WO=Week Off, H=Holiday, OL=On Leave, AC=Active (in progress), PE=Punch Error.
         "Present Count" is the row at the bottom — how many employees showed up that day.
       </p>
       <table class="grid-table"><tr><th>Employee</th>${musterDayHeaders}<th style="width:90px;">Present Days</th></tr>${musterTableRows}${musterCountRow}</table>
@@ -3352,10 +3690,28 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <div style="font-weight:700;">Hours Worked</div>
+        <a href="/admin/reports/hours-worked.csv?month=${escapeHtml(monthStr)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">Download CSV &darr;</a>
+      </div>
+      <p style="color:#7C8896;font-size:0.85em;margin-top:0;">
+        Each cell is that day's hours worked (HH:MM, check-in to check-out minus breaks), coloured the same as Punch-In Detail
+        (<span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">late</span>,
+        <span style="background:${GRID_CELL_COLOR['Half Day']};padding:1px 6px;border-radius:4px;">half day</span>).
+        <strong>MC</strong> = missed check-out: hours are counted only up to the shift end, and the day counts as a Half Day until a correction is approved.
+        Days without a completed check-in/check-out show a status code: WO=Week Off, H=Holiday, OL=On Leave, A=Absent, PE=Punch Error, AC=Active (in progress).
+      </p>
+      <table class="grid-table"><tr><th>Employee</th>${workingHoursDayHeaders}<th style="width:74px;">Total</th></tr>${workingHoursRows}</table>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
         <div style="font-weight:700;">Punch-In Summary</div>
         <a href="/admin/reports/punch-in.csv?month=${escapeHtml(monthStr)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">Download CSV &darr;</a>
       </div>
-      <table><tr><th>Employee</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Total Hours</th><th>Overtime</th></tr>${punchInTableRows}</table>
+      <table><tr><th>Employee</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Total Hours</th><th>Overtime</th><th>Missed Check-outs</th><th>Corrections Used</th></tr>${punchInTableRows}</table>
+      <p style="color:#7C8896;font-size:0.85em;margin-bottom:0;">
+        Half Day includes uncorrected missed check-outs. Missed Check-outs counts every day the employee forgot to check out, including ones later corrected.
+        Corrections Used counts pending and approved requests against the monthly limit of ${CORRECTION_MONTHLY_LIMIT}; "+ full day" means the one full-day correction is used too.
+      </p>
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -4301,7 +4657,8 @@ async function handleRequest(req, res) {
     const overtimeAuthorized = await isOvertimeAuthorized(employeeId, todayStr());
     const leaveBalances = await getLeaveBalanceDisplay(employeeId);
     const forceOnboardingTour = parsed.searchParams.get('tour') === '1';
-    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour));
+    const missedCheckoutDays = await getUncorrectedMissedCheckouts(employeeId);
+    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays));
   }
 
   // Marks the current onboarding content as seen — called when the tour finishes
@@ -4473,6 +4830,82 @@ async function handleRequest(req, res) {
       await logAdminAction(user.username, 'reject', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`);
     }
     res.writeHead(302, { Location: '/permission' });
+    return res.end();
+  }
+
+  if (parsed.pathname === '/corrections' && req.method === 'GET') {
+    if (isManagementRole(user)) {
+      return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user));
+    }
+    const employeeId = await resolveEmployeeId();
+    const employee = await getEmployee(employeeId);
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    const prefill = { date: parsed.searchParams.get('date') || '', kind: parsed.searchParams.get('kind') || '' };
+    return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employeeId), user, null, prefill));
+  }
+
+  if (parsed.pathname === '/corrections/apply' && req.method === 'POST') {
+    // Filed by the employee themselves only — same rule as permission requests.
+    if (user.role !== 'employee') { res.writeHead(403); return res.end('Only an employee can request a correction for themselves.'); }
+    const employee = await getEmployee(user.employeeId);
+    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
+    const form = await readFormBody(req);
+    const kind = form.kind;
+    const request = {
+      date: (form.date || '').trim(),
+      kind,
+      check_in_time: kind === 'check_out' ? null : (form.check_in_time || '').trim(),
+      check_out_time: kind === 'check_in' ? null : (form.check_out_time || '').trim(),
+      reason: (form.reason || '').trim(),
+    };
+    const error = request.reason ? await validateCorrection(employee, request) : { key: 'corrections.err_reason' };
+    if (error) {
+      return sendHtml(res, await renderCorrections(employee, await getCorrectionRequests(employee.id), user, error, request));
+    }
+    await db.prepare(
+      'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()));
+    res.writeHead(302, { Location: `/corrections?employee_id=${encodeURIComponent(employee.id)}` });
+    return res.end();
+  }
+
+  if (parsed.pathname === '/corrections/decide' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Only an admin or manager can approve or reject corrections.'); }
+    const form = await readFormBody(req);
+    const request = await db.prepare('SELECT * FROM correction_requests WHERE id = ?').get(form.id);
+    if (!request) { res.writeHead(404); return res.end('Unknown correction request'); }
+    if (request.status !== 'pending') {
+      res.writeHead(302, { Location: '/corrections' });
+      return res.end();
+    }
+    const summary = `${request.employee_id}: ${request.kind} on ${request.date} (${correctionTimesText(request, 'en')})`;
+    if (form.action === 'approve') {
+      const employee = await getEmployee(request.employee_id);
+      const error = employee
+        ? await validateCorrection(employee, request, { excludeId: request.id, forApproval: true })
+        : { key: 'corrections.err_date' };
+      if (error) {
+        const message = `Can't approve ${employee ? employee.name : request.employee_id}'s correction for ${request.date}: ${t('en', error.key, error.vars)} Reject it instead.`;
+        return sendHtml(res, await renderAdminCorrections(await getAllCorrectionRequests(), user, message));
+      }
+      // Claim the request first so a double-click can't insert the punches twice.
+      const claimed = await db.prepare("UPDATE correction_requests SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
+        .run(formatTimestamp(new Date()), user.username, request.id);
+      if (claimed.changes) {
+        if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
+        if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
+        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.`);
+        await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary);
+      }
+    } else if (form.action === 'reject') {
+      const rejected = await db.prepare("UPDATE correction_requests SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
+        .run(formatTimestamp(new Date()), user.username, request.id);
+      if (rejected.changes) {
+        await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.`);
+        await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary);
+      }
+    }
+    res.writeHead(302, { Location: '/corrections' });
     return res.end();
   }
 
@@ -4976,8 +5409,22 @@ async function handleRequest(req, res) {
     const [statusGrid, leaveRows] = await Promise.all([computeMonthlyStatusGrid(year, month), computeLeaveReport(year, month)]);
     const punchInRows = computePunchInReport(statusGrid);
     const punchInGrid = computePunchInGrid(statusGrid);
+    const workingHours = computeWorkingHoursGrid(statusGrid);
     const muster = computeMusterReport(statusGrid);
-    return sendHtml(res, await renderReports(monthStr, punchInRows, punchInGrid, leaveRows, muster, user));
+    return sendHtml(res, await renderReports(monthStr, punchInRows, punchInGrid, workingHours, leaveRows, muster, user));
+  }
+
+  if (parsed.pathname === '/admin/reports/hours-worked.csv' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const { year, month, monthStr } = parseMonthParam(parsed);
+    const grid = computeWorkingHoursGrid(await computeMonthlyStatusGrid(year, month));
+    const dayHeaders = Array.from({ length: grid.daysInMonth }, (_, i) => String(i + 1));
+    const csv = toCsv(
+      ['Employee ID', 'Name', ...dayHeaders, 'Total'],
+      grid.rows.map(r => [r.id, r.name, ...r.cells.map(c => c.text), r.total])
+    );
+    await logAdminAction(user.username, 'download_report', 'hours_worked_report', monthStr, '');
+    return sendCsv(res, `hours-worked-${monthStr}.csv`, csv);
   }
 
   if (parsed.pathname === '/admin/reports/punch-in.csv' && req.method === 'GET') {
@@ -4985,8 +5432,8 @@ async function handleRequest(req, res) {
     const { year, month, monthStr } = parseMonthParam(parsed);
     const rows = computePunchInReport(await computeMonthlyStatusGrid(year, month));
     const csv = toCsv(
-      ['Employee ID', 'Name', 'Present', 'Late', 'Half Day', 'Absent', 'Total Hours Worked', 'Overtime Hours'],
-      rows.map(r => [r.id, r.name, r.present, r.late, r.halfDay, r.absent, r.totalHours, r.overtimeHours])
+      ['Employee ID', 'Name', 'Present', 'Late', 'Half Day', 'Absent', 'Total Hours Worked', 'Overtime Hours', 'Missed Check-outs', 'Corrections Used'],
+      rows.map(r => [r.id, r.name, r.present, r.late, r.halfDay, r.absent, r.totalHours, r.overtimeHours, r.missedCheckouts, r.correctionsUsed])
     );
     await logAdminAction(user.username, 'download_report', 'punch_in_report', monthStr, '');
     return sendCsv(res, `punch-in-report-${monthStr}.csv`, csv);

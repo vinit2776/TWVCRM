@@ -19,7 +19,7 @@ import {
   BRAND_DARK,
   COMPANY_NAME,
 } from "@/lib/pdf-utils";
-import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { renewalRecipients, type RenewalRecipient } from "@/lib/renewal-recipients";
 
 // ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ export async function createRenewalRazorpayLink(params: {
   dueDate: string;
   piNumber: string;
 }): Promise<{ id: string; url: string }> {
-  const { adminSupabase, caseData, statementId, totalAmount, dueDate, piNumber } = params;
+  const { adminSupabase, caseData, statementId, totalAmount, piNumber } = params;
 
   const settings = await getCachedSettings(adminSupabase, [
     "razorpay_enabled",
@@ -342,7 +342,9 @@ export async function createRenewalRazorpayLink(params: {
     throw new Error("Razorpay is not configured");
   }
 
-  const expireBy = Math.floor(new Date(dueDate).getTime() / 1000) + 86400; // due date + 1 day buffer
+  // Max Razorpay validity, deliberately not tied to dueDate (a date-only due
+  // date parses as 00:00 UTC, i.e. already half-way through the day in IST).
+  const expireBy = Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS;
   const amountPaise = Math.round(totalAmount * 100);
 
   const payload = {

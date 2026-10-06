@@ -1,8 +1,8 @@
 # Attendance Gateway
 
 Employee attendance for The WorkVilla: biometric-device punches, self-service
-punch in/out, leave / permission / overtime / field-trip workflows, and admin
-reporting.
+punch in/out, leave / permission / correction / overtime / field-trip workflows,
+and admin reporting.
 
 It is a **satellite** of the TWV CRM, not part of it. It lives in this repo as a
 subdirectory for convenience, but at runtime it shares nothing with the CRM:
@@ -128,6 +128,14 @@ build step so a commit touching only one of them does not redeploy the other.
 
 The single cron (`/internal/auto-checkout`, 19:00 IST) is declared in this
 directory's own [vercel.json](vercel.json) and is protected by `CRON_SECRET`.
+
+A day closed only by that auto-checkout is a **Missed Checkout** (MC): it counts as
+a Half Day, with hours counted up to the shift end, until the employee files a
+correction at `/corrections` and an admin or manager approves it. Each employee
+gets 2 check-in/check-out corrections a month (pending and approved count); past
+that, an approved correction fixes the times but the day stays a Half Day. They
+also get 1 full-day correction a month for a day with no punches at all; any
+other such day stays Absent. The limits live in `attendance-logic.js`.
 
 ## Configuration
 
