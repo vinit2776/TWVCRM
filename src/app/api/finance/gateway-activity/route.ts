@@ -342,7 +342,7 @@ export async function GET(request: NextRequest) {
           .select(`id, razorpay_payment_link_id, ${leadsEmbed}`)
           .in("razorpay_payment_link_id", linkIds),
         adminSupabase.from("deposit_topups")
-          .select(`id, razorpay_payment_link_id, contracts(id, contract_number, ${leadsEmbed})`)
+          .select(`id, razorpay_payment_link_id, contracts!deposit_topups_contract_id_fkey(id, contract_number, ${leadsEmbed})`)
           .in("razorpay_payment_link_id", linkIds),
         adminSupabase.from("proforma_invoices")
           .select(`id, invoice_number, razorpay_link_id, ${leadsEmbed}`)
