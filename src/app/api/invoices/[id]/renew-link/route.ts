@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 
 export const maxDuration = 30;
@@ -193,6 +194,7 @@ export async function POST(
 
   let newLinkId: string;
   let newLinkUrl: string;
+  let newLinkDates: ReturnType<typeof razorpayLinkDates>;
   try {
     const res = await fetch("https://api.razorpay.com/v1/payment_links", {
       method: "POST",
@@ -207,6 +209,7 @@ export async function POST(
     const linkData = await res.json();
     newLinkId = linkData.id;
     newLinkUrl = linkData.short_url;
+    newLinkDates = razorpayLinkDates(linkData);
   } catch (e) {
     console.error("[invoice renew-link] Razorpay error:", e);
     return NextResponse.json({ error: "Could not reach Razorpay to create a new link" }, { status: 502 });
@@ -223,6 +226,11 @@ export async function POST(
     console.error("[invoice renew-link] Could not persist new link:", invErr.message);
     return NextResponse.json({ error: "New link was created but could not be saved — please retry" }, { status: 500 });
   }
+
+  // Separate from the write above: a DB without the date columns must not make
+  // a successfully created link look like a failed renewal.
+  const { error: datesErr } = await admin.from("proforma_invoices").update(newLinkDates).eq("id", id);
+  if (datesErr) console.warn("[invoice renew-link] Could not save link dates:", datesErr.message);
 
   if (statement) {
     const { error: stmtErr } = await admin
@@ -243,5 +251,5 @@ export async function POST(
     },
   });
 
-  return NextResponse.json({ ok: true, razorpay_link_id: newLinkId, razorpay_link_url: newLinkUrl });
+  return NextResponse.json({ ok: true, razorpay_link_id: newLinkId, razorpay_link_url: newLinkUrl, ...newLinkDates });
 }

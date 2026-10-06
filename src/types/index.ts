@@ -452,6 +452,9 @@ export interface ProformaInvoice {
   // Razorpay payment link (auto-created when emailing)
   razorpay_link_id?: string;
   razorpay_link_url?: string;
+  // From Razorpay's response; null for links created before these were stored.
+  razorpay_link_created_at?: string | null;
+  razorpay_link_expires_at?: string | null;
   // GST invoice (sent automatically once payment is confirmed)
   gst_invoice_number?: string;
   gst_invoice_sent_at?: string;
