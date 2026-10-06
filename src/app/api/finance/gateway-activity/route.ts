@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
       ? adminSupabase.from("bookings").select("id, booking_number, leads(first_name, last_name, company)").in("id", manualBookingIds)
       : Promise.resolve({ data: [] }),
     manualStatementIds.length
-      ? adminSupabase.from("billing_statements").select("id, statement_number, contracts(contract_number, leads(first_name, last_name, company))").in("id", manualStatementIds)
+      ? adminSupabase.from("billing_statements").select("id, statement_number, leads(first_name, last_name, company), contracts!billing_statements_contract_id_fkey(id, contract_number, leads(first_name, last_name, company))").in("id", manualStatementIds)
       : Promise.resolve({ data: [] }),
   ]);
 
@@ -162,7 +162,7 @@ export async function GET(request: NextRequest) {
         entity_ref: s?.statement_number ?? null,
         entity_label: s?.statement_number ? `Invoice ${s.statement_number}` : "Invoice",
         entity_href: contract ? `/billing?contract=${contract.id}` : null,
-        customer_name: leadName(getLead(contract)),
+        customer_name: leadName(getLead(contract) ?? getLead(s)),
         notes: ml.notes, linked_at: ml.linked_at, linked_by_name: ml.linked_by_name,
       });
     }
@@ -199,7 +199,8 @@ export async function GET(request: NextRequest) {
       billing_statements!inner(
         id,
         statement_number,
-        contracts(
+        leads(first_name, last_name, company),
+        contracts!billing_statements_contract_id_fkey(
           id,
           contract_number,
           leads(first_name, last_name, company)
@@ -256,9 +257,11 @@ export async function GET(request: NextRequest) {
     const contract = statement?.contracts
       ? (Array.isArray(statement.contracts) ? statement.contracts[0] : statement.contracts)
       : null;
-    const lead = contract?.leads
-      ? (Array.isArray(contract.leads) ? contract.leads[0] : contract.leads)
-      : null;
+    // Contract-less statements (usage / ad-hoc) carry the customer on the
+    // statement's own lead_id instead.
+    const leadOf = (o: { leads?: unknown } | null | undefined) =>
+      o?.leads ? (Array.isArray(o.leads) ? o.leads[0] : o.leads) : null;
+    const lead = leadOf(contract) ?? leadOf(statement);
     const enriched: EnrichedCRM = {
       entity_type:   "billing_statement",
       entity_id:     statement?.id ?? null,
@@ -324,7 +327,7 @@ export async function GET(request: NextRequest) {
       const leadsEmbed = "leads(first_name, last_name, company)";
       const [stmts, books, props, depProps, prepaid, topups, adhoc] = await Promise.all([
         adminSupabase.from("billing_statements")
-          .select(`id, statement_number, razorpay_payment_link_id, contracts(id, contract_number, ${leadsEmbed})`)
+          .select(`id, statement_number, razorpay_payment_link_id, ${leadsEmbed}, contracts!billing_statements_contract_id_fkey(id, contract_number, ${leadsEmbed})`)
           .in("razorpay_payment_link_id", linkIds),
         adminSupabase.from("bookings")
           .select(`id, booking_number, razorpay_payment_link_id, ${leadsEmbed}`)
@@ -360,7 +363,7 @@ export async function GET(request: NextRequest) {
           entity_type: "billing_statement", entity_id: s.id, entity_ref: s.statement_number ?? null,
           entity_label: s.statement_number ? `Invoice ${s.statement_number}` : "Invoice",
           entity_href: c?.id ? `/billing?contract=${c.id}` : null,
-          customer_name: leadName(getLead(c)),
+          customer_name: leadName(getLead(c) ?? getLead(s)),
         });
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
