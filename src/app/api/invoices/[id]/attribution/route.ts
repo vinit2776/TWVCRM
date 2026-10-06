@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { ADHOC_ATTRIBUTION_PURPOSES } from "@/lib/constants";
 
@@ -100,17 +100,57 @@ export async function POST(
     );
   }
 
-  const { data: updated, error } = await supabase
-    .from("proforma_invoices")
-    .update({
-      contract_id,
-      attribution_purpose: purpose,
-      attributed_at: new Date().toISOString(),
-      attributed_by: dbUser!.id,
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
+  // Security-deposit attribution moves money in the customer's deposit pool, so
+  // it runs in one transaction (RPC, service role) rather than as a plain
+  // column update: the credit and the attribution either both happen or neither.
+  const admin = createAdminClient();
+  let depositTopupId: string | null = null;
+
+  if (invoice.attribution_purpose === "security_deposit" && purpose !== "security_deposit") {
+    // Re-labelled away from security deposit: take the credit back out first.
+    const { data: released } = await admin.rpc("release_invoice_security_deposit", {
+      p_invoice_id: id,
+      p_actor: dbUser!.id,
+      p_reason: `Re-attributed as ${purpose}`,
+    });
+    const releaseResult = Array.isArray(released) ? released[0] : released;
+    if (!releaseResult?.success) {
+      return NextResponse.json(
+        { error: releaseResult?.error ?? "Could not remove the existing deposit credit" },
+        { status: 409 }
+      );
+    }
+  }
+
+  if (purpose === "security_deposit") {
+    const { data: credited, error: rpcError } = await admin.rpc("attribute_invoice_as_security_deposit", {
+      p_invoice_id: id,
+      p_contract_id: contract_id,
+      p_actor: dbUser!.id,
+    });
+    const creditResult = Array.isArray(credited) ? credited[0] : credited;
+    if (rpcError || !creditResult?.success) {
+      return NextResponse.json(
+        { error: creditResult?.error ?? rpcError?.message ?? "Could not credit the deposit pool" },
+        { status: creditResult ? 400 : 500 }
+      );
+    }
+    depositTopupId = creditResult.topup_id as string;
+  }
+
+  const { data: updated, error } = purpose === "security_deposit"
+    ? await supabase.from("proforma_invoices").select("*").eq("id", id).single()
+    : await supabase
+        .from("proforma_invoices")
+        .update({
+          contract_id,
+          attribution_purpose: purpose,
+          attributed_at: new Date().toISOString(),
+          attributed_by: dbUser!.id,
+        })
+        .eq("id", id)
+        .select("*")
+        .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -123,6 +163,7 @@ export async function POST(
       contract_id: { old: invoice.contract_id, new: contract_id },
       contract_number: { old: null, new: contract.contract_number },
       attribution_purpose: { old: invoice.attribution_purpose, new: purpose },
+      ...(depositTopupId ? { deposit_pool_credit_topup_id: { old: null, new: depositTopupId } } : {}),
     },
   });
 
@@ -137,6 +178,7 @@ export async function POST(
       invoice_number: { old: null, new: invoice.invoice_number },
       amount: { old: null, new: invoice.total_amount },
       attribution_purpose: { old: null, new: purpose },
+      ...(depositTopupId ? { deposit_pool_credit_topup_id: { old: null, new: depositTopupId } } : {}),
     },
   });
 
@@ -167,6 +209,23 @@ export async function DELETE(
       { error: "This invoice is not attributed to a contract." },
       { status: 400 }
     );
+  }
+
+  // A security-deposit attribution credited the customer's deposit pool; take
+  // that back before clearing the label, and refuse if it has been drawn on.
+  if (invoice.attribution_purpose === "security_deposit") {
+    const { data: released } = await createAdminClient().rpc("release_invoice_security_deposit", {
+      p_invoice_id: id,
+      p_actor: dbUser!.id,
+      p_reason: "Attribution removed",
+    });
+    const releaseResult = Array.isArray(released) ? released[0] : released;
+    if (!releaseResult?.success) {
+      return NextResponse.json(
+        { error: releaseResult?.error ?? "Could not remove the deposit credit" },
+        { status: 409 }
+      );
+    }
   }
 
   // Cleared together — the CHECK constraint forbids a purpose without a contract.
