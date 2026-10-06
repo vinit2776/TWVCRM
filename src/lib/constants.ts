@@ -283,6 +283,11 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
 // NOT the same list as the roles that record *booking* payments at the front
 // desk (see src/components/bookings/record-payment-dialog.tsx) — taking
 // money for a booking is a floor-manager job and is untouched by this.
+// Razorpay rejects expire_by more than six calendar months after creation (the
+// shortest span of six months is 181 days). 180 days leaves a safe margin, so
+// this is the longest validity we can request.
+export const RAZORPAY_MAX_LINK_VALIDITY_SECONDS = 180 * 24 * 60 * 60;
+
 export const PAYMENT_RECORDING_ROLES = ["admin", "accounts"] as const;
 
 export function canRecordPayments(role: string | null | undefined): boolean {
