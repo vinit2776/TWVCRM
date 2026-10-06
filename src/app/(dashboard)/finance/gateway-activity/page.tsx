@@ -40,7 +40,10 @@ import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type EntityType = "contract" | "booking" | "billing_statement" | "unmatched";
+type EntityType =
+  | "contract" | "booking" | "billing_statement"
+  | "proposal" | "deposit_topup" | "prepaid_purchase" | "adhoc_invoice"
+  | "unmatched";
 
 interface GatewayTransaction {
   id: string;
@@ -178,6 +181,18 @@ function EntityTypeBadge({ row }: { row: GatewayTransaction }) {
     return <Badge variant="secondary" className="text-[10px] bg-cyan-100 text-cyan-800">Booking</Badge>;
   }
   if (row.entity_type === "billing_statement") {
+    return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
+  }
+  if (row.entity_type === "proposal") {
+    return <Badge variant="secondary" className="text-[10px] bg-amber-100 text-amber-800">Proposal</Badge>;
+  }
+  if (row.entity_type === "deposit_topup") {
+    return <Badge variant="secondary" className="text-[10px] bg-teal-100 text-teal-800">Deposit top-up</Badge>;
+  }
+  if (row.entity_type === "prepaid_purchase") {
+    return <Badge variant="secondary" className="text-[10px] bg-pink-100 text-pink-800">Prepaid</Badge>;
+  }
+  if (row.entity_type === "adhoc_invoice") {
     return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
   }
   return <Badge variant="secondary" className="text-[10px] bg-orange-100 text-orange-700">Not in CRM</Badge>;
@@ -712,6 +727,10 @@ export default function GatewayActivityPage() {
             <SelectItem value="all">All types</SelectItem>
             <SelectItem value="booking">Bookings</SelectItem>
             <SelectItem value="billing_statement">Invoices</SelectItem>
+            <SelectItem value="proposal">Proposals</SelectItem>
+            <SelectItem value="deposit_topup">Deposit top-ups</SelectItem>
+            <SelectItem value="prepaid_purchase">Prepaid</SelectItem>
+            <SelectItem value="adhoc_invoice">Ad-hoc invoices</SelectItem>
             <SelectItem value="unmatched">Not in CRM</SelectItem>
           </SelectContent>
         </Select>
