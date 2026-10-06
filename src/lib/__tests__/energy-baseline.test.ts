@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  aggregateDaily, classifyDay, computeBaselines, findAnomalies, baselineStats, weekdayProfile, type LedgerBucket,
+  aggregateDaily, markGaps, classifyDay, computeBaselines, findAnomalies, baselineStats, weekdayProfile, type LedgerBucket,
 } from "../energy-baseline";
 
 // 96 buckets for an IST day, each `whPerBucket`. IST 00:00 = previous day 18:30Z.
@@ -42,6 +42,38 @@ describe("aggregateDaily", () => {
     const b = istDay("2026-10-14", 1000);
     b[10].energy_delta_wh = -5000;
     expect(aggregateDaily(b, [], "2026-10-20")[0].complete).toBe(false);
+  });
+});
+
+describe("production-shaped ledger quirks", () => {
+  it("does not count the delta that spans a ledger gap, and marks that day partial", () => {
+    // 24 Sep ends, nothing until 3 Oct, then the first row carries ~9 days of usage.
+    const day3 = istDay("2026-10-03", 1000, 60);
+    day3[0].energy_delta_wh = 1_269_500;
+    const rows = aggregateDaily([...istDay("2026-09-24", 1000, 40), ...day3], [], "2026-10-20");
+    const d = rows.find((r) => r.date === "2026-10-03")!;
+    expect(d.kwh).toBe(59); // 59 normal buckets × 1 kWh, the 1,269 kWh row dropped
+    expect(d.complete).toBe(false);
+  });
+  it("keeps a full day complete when off-grid captures add extra rows", () => {
+    const b = istDay("2026-10-14", 1000);
+    const extras = [3, 40, 70].map((i) => ({
+      ts: new Date(new Date(b[i].ts).getTime() + 7 * 60 * 1000 + 7000).toISOString(),
+      energy_delta_wh: 100,
+    }));
+    const rows = aggregateDaily([...b, ...extras], [], "2026-10-20");
+    expect(rows[0].buckets).toBe(96); // 99 rows, 96 distinct slots
+    expect(rows[0].complete).toBe(true);
+  });
+  it("marks a day partial when an hour-plus hole sits inside it", () => {
+    const b = istDay("2026-10-14", 1000).filter((_, i) => i < 40 || i > 48); // ~2h hole, 87 slots left
+    expect(aggregateDaily(b, [], "2026-10-20")[0].complete).toBe(false);
+  });
+  it("markGaps flags only rows following a >60 min hole", () => {
+    const b = istDay("2026-10-14", 1000).filter((_, i) => i < 5 || i > 8); // rows 4 → 9 = 75 min
+    const flagged = markGaps(b).filter((r) => r.gap);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0].ts).toBe(b[5].ts);
   });
 });
 

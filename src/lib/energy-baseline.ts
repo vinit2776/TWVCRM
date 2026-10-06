@@ -7,6 +7,8 @@ export type DayType = "working" | "sunday" | "holiday";
 export interface LedgerBucket {
   ts: string;
   energy_delta_wh: number | null;
+  // Set by markGaps: this row's delta spans a stretch with no stored readings.
+  gap?: boolean;
 }
 
 export interface HolidayEntry {
@@ -58,10 +60,16 @@ export interface Anomaly {
   deviationPct: number;
 }
 
-const BUCKETS_PER_DAY = 96;
-// A day with a handful of missing buckets (meter hiccup) is still usable;
-// below this it is treated as partial.
-export const MIN_BUCKETS_FOR_COMPLETE_DAY = 92;
+const SLOT_MS = 15 * 60 * 1000;
+// A day with a handful of missing 15-minute slots (meter hiccup) is still
+// usable; below this it is treated as partial.
+export const MIN_SLOTS_FOR_COMPLETE_DAY = 92;
+// A delta is the meter's cumulative change since the previous stored row. When
+// that row is much older, the delta is the whole unobserved stretch dumped into
+// one reading (observed: ~9 days of usage, 1,269 kWh, in a single 15-minute
+// slot after a ledger gap). Past this spacing the delta is not a usable
+// per-interval figure.
+export const MAX_GAP_MS = 60 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 function istParts(ts: string) {
@@ -99,19 +107,33 @@ export function classifyDay(date: string, holidays: Map<string, string>): { dayT
   return { dayType: "working" };
 }
 
+// Sorts by time and flags every row that follows a stretch with no stored
+// readings (see MAX_GAP_MS). Idempotent.
+export function markGaps(buckets: LedgerBucket[]): LedgerBucket[] {
+  const sorted = [...buckets].sort((a, b) => a.ts.localeCompare(b.ts));
+  return sorted.map((b, i) => ({
+    ...b,
+    gap: b.gap || (i > 0 && new Date(b.ts).getTime() - new Date(sorted[i - 1].ts).getTime() > MAX_GAP_MS),
+  }));
+}
+
 // Rolls 15-minute buckets up to IST calendar days. `today` (IST) is never
 // complete: it is still accumulating.
 export function aggregateDaily(buckets: LedgerBucket[], holidays: HolidayEntry[], today: string): DailyUsage[] {
   const holidayMap = new Map(holidays.map((h) => [h.date, h.name]));
-  const byDay = new Map<string, { wh: number; n: number; hasNegative: boolean }>();
-  for (const b of buckets) {
+  const byDay = new Map<string, { wh: number; slots: Set<number>; bad: boolean }>();
+  for (const b of markGaps(buckets)) {
     if (b.energy_delta_wh == null) continue;
     const day = istDateOf(b.ts);
-    const agg = byDay.get(day) ?? { wh: 0, n: 0, hasNegative: false };
-    // A negative delta means a meter reset/rollover — the day's total can't be trusted.
-    if (b.energy_delta_wh < 0) agg.hasNegative = true;
+    const agg = byDay.get(day) ?? { wh: 0, slots: new Set<number>(), bad: false };
+    // Off-grid captures (e.g. taken when headcount is logged) share a slot with
+    // a regular reading, so coverage counts distinct slots, not rows. Their
+    // deltas still sum correctly: each is the cumulative change since the prior row.
+    agg.slots.add(Math.floor(new Date(b.ts).getTime() / SLOT_MS));
+    // A negative delta means a meter reset/rollover, and a gap means the delta
+    // covers unobserved time — either way the day's total can't be trusted.
+    if (b.energy_delta_wh < 0 || b.gap) agg.bad = true;
     else agg.wh += b.energy_delta_wh;
-    agg.n += 1;
     byDay.set(day, agg);
   }
   return [...byDay.entries()]
@@ -119,8 +141,8 @@ export function aggregateDaily(buckets: LedgerBucket[], holidays: HolidayEntry[]
     .map(([date, agg]) => ({
       date,
       kwh: Math.round((agg.wh / 1000) * 100) / 100,
-      buckets: agg.n,
-      complete: date < today && agg.n >= MIN_BUCKETS_FOR_COMPLETE_DAY && agg.n <= BUCKETS_PER_DAY && !agg.hasNegative,
+      buckets: agg.slots.size,
+      complete: date < today && agg.slots.size >= MIN_SLOTS_FOR_COMPLETE_DAY && !agg.bad,
       ...classifyDay(date, holidayMap),
     }));
 }
@@ -151,7 +173,7 @@ export function baselineStats(values: number[]): BaselineStats {
 function baseLoadKw(buckets: LedgerBucket[], completeNonWorkingDays: Set<string>): number | null {
   const kw: number[] = [];
   for (const b of buckets) {
-    if (b.energy_delta_wh == null || b.energy_delta_wh < 0) continue;
+    if (b.energy_delta_wh == null || b.energy_delta_wh < 0 || b.gap) continue;
     const { date, hour } = istParts(b.ts);
     if (hour >= 1 && hour < 5 && completeNonWorkingDays.has(date)) kw.push((b.energy_delta_wh * 4) / 1000);
   }
@@ -167,7 +189,8 @@ export const BASELINE_WINDOWS = [
 ] as const;
 
 // Windows end yesterday (today is partial) and only count complete days.
-export function computeBaselines(daily: DailyUsage[], buckets: LedgerBucket[], today: string): BaselineWindow[] {
+export function computeBaselines(daily: DailyUsage[], rawBuckets: LedgerBucket[], today: string): BaselineWindow[] {
+  const buckets = markGaps(rawBuckets);
   const to = addDays(today, -1);
   return BASELINE_WINDOWS.map((w) => {
     const from = addDays(to, -(w.windowDays - 1));
