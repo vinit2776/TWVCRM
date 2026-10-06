@@ -29,6 +29,11 @@
   https://nssm.cc/download and extract it first — this script does not
   download anything.
 
+.PARAMETER NoSleep
+  Turn off sleep and hibernate on this PC (while plugged in), so the relay keeps
+  running when nobody is using the machine. Recommended unless the PC is already
+  set never to sleep. Changes Windows power settings, so it's opt-in.
+
 .PARAMETER Cutover
   Actually stop the old "AttendanceGateway" service and start the relay. Only
   pass this when you intend to switch the device over to the cloud right now.
@@ -48,6 +53,7 @@ param(
   [string]$CloudUrl = "https://twv-attendance.vercel.app",
   [int]$RelayPort = 3001,
   [string]$NssmPath = "",
+  [switch]$NoSleep,
   [switch]$Cutover
 )
 
@@ -124,13 +130,33 @@ if ($existing) {
 & $NssmPath set AttendanceRelay AppDirectory $InstallDir
 & $NssmPath set AttendanceRelay AppStdout (Join-Path $InstallDir "relay.log")
 & $NssmPath set AttendanceRelay AppStderr (Join-Path $InstallDir "relay.log")
-Write-Host "Installed 'AttendanceRelay' service: CLOUD_URL=$CloudUrl, port $RelayPort."
+# Start with Windows, before anyone logs in: after a power cut the PC restarts on its
+# own and nobody may be there to log in. And restart the relay within 5 seconds if it
+# ever crashes. Punches made while it's down wait on the device and are sent afterwards.
+& $NssmPath set AttendanceRelay Start SERVICE_AUTO_START
+& $NssmPath set AttendanceRelay AppExit Default Restart
+& $NssmPath set AttendanceRelay AppRestartDelay 5000
+Write-Host "Installed 'AttendanceRelay' service: CLOUD_URL=$CloudUrl, port $RelayPort, starts with Windows, restarts on crash."
+
+if ($NoSleep) {
+  powercfg /change standby-timeout-ac 0
+  powercfg /change hibernate-timeout-ac 0
+  Write-Host "Sleep and hibernate turned off on this PC (while plugged in)."
+} else {
+  Write-Host "Tip: if this PC goes to sleep when idle, re-run with -NoSleep so the relay keeps running." -ForegroundColor Yellow
+}
 
 # --- 7. Only actually flip traffic over when explicitly asked ---
 if ($Cutover) {
   if ($oldServiceIsLive) {
     Write-Host "Stopping '$oldServiceName' to free port $RelayPort..."
     Stop-Service -Name $oldServiceName -Force
+  }
+  # Disabled, not just stopped: otherwise it starts again at the next boot (e.g. after
+  # a power cut) and can grab port $RelayPort before the relay does.
+  if ($oldService) {
+    Set-Service -Name $oldServiceName -StartupType Disabled
+    Write-Host "Disabled '$oldServiceName' so it can't start again at boot."
   }
   & $NssmPath start AttendanceRelay
   Start-Sleep -Seconds 2
