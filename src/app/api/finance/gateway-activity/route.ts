@@ -458,6 +458,58 @@ export async function GET(request: NextRequest) {
     };
   });
 
+  // ── 7b. Statements with no contract/lead of their own ────────────────────
+  // Virtual-office renewals hang off a case (client_* columns) and
+  // proposal-originated invoices off a proposal. Neither is reachable via
+  // contract → lead, so those rows read "—" even though the invoice matched.
+  // Separate lookups rather than embeds: billing_statements already has
+  // multiple FKs into other tables, and an ambiguous embed fails the whole
+  // query (see 00508).
+  const blankStatementIds = allRows
+    .filter((r) => r.entity_type === "billing_statement" && r.customer_name === "—" && r.entity_id)
+    .map((r) => r.entity_id as string);
+  if (blankStatementIds.length) {
+    const { data: stmtRefs, error: stmtRefErr } = await adminSupabase
+      .from("billing_statements")
+      .select("id, case_id, proposal_id")
+      .in("id", blankStatementIds);
+    if (stmtRefErr) console.error("[gateway-activity] statement case/proposal lookup error:", stmtRefErr);
+
+    const caseIds     = [...new Set((stmtRefs ?? []).map((r) => r.case_id).filter(Boolean))] as string[];
+    const proposalIds = [...new Set((stmtRefs ?? []).map((r) => r.proposal_id).filter(Boolean))] as string[];
+    const [{ data: caseRows }, { data: proposalRows }] = await Promise.all([
+      caseIds.length
+        ? adminSupabase.from("cases").select("id, client_name, client_company_name").in("id", caseIds)
+        : Promise.resolve({ data: [] }),
+      proposalIds.length
+        ? adminSupabase.from("proposals").select("id, leads(first_name, last_name, company)").in("id", proposalIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const caseName = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const c of (caseRows ?? []) as any[]) {
+      const n = (c.client_company_name || c.client_name || "").trim();
+      if (n) caseName.set(c.id, n);
+    }
+    const proposalName = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const p of (proposalRows ?? []) as any[]) {
+      const n = leadName(getLead(p));
+      if (n !== "—") proposalName.set(p.id, n);
+    }
+    const nameByStatement = new Map<string, string>();
+    for (const r of stmtRefs ?? []) {
+      const n = (r.case_id && caseName.get(r.case_id)) || (r.proposal_id && proposalName.get(r.proposal_id));
+      if (n) nameByStatement.set(r.id, n);
+    }
+    allRows = allRows.map((r) =>
+      r.entity_type === "billing_statement" && r.customer_name === "—" && r.entity_id && nameByStatement.has(r.entity_id)
+        ? { ...r, customer_name: nameByStatement.get(r.entity_id) as string }
+        : r,
+    );
+  }
+
   // Apply date filter in JS — rows with NULL payment_created_at always pass through
   const fromMs = new Date(fromDate + "T00:00:00Z").getTime();
   const toMs   = new Date(toDate   + "T23:59:59Z").getTime();
