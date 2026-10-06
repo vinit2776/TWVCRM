@@ -1,3 +1,4 @@
+import { adhocInvoiceTotal } from "@/lib/adhoc-invoice-total";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -138,7 +139,7 @@ export async function POST(
   const subtotal = Math.round(amount * 100) / 100;
   const taxPercentage = 18;
   const taxAmount = Math.round(subtotal * taxPercentage) / 100;
-  const total = subtotal + taxAmount;
+  const total = adhocInvoiceTotal(subtotal, taxAmount);
 
   // The end client is named in the line item even when a partner is billed —
   // an aggregator holds many cases and a bare description is ambiguous on
