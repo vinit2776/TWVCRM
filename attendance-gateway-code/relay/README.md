@@ -12,6 +12,22 @@ the cloud is down, the device gets no `OK` and retries later — nothing is lost
 The relay holds no queue of its own; the device's built-in buffer is the durable
 store. Run it as an auto-starting service so it recovers on reboot.
 
+**When this PC is off** (power cut, shutdown, sleep), the device keeps recording
+punches in its own memory. When the PC is back and the relay is running again:
+- the device resumes sending, including what it stored meanwhile;
+- the app notices the gap (15+ minutes without hearing from the device) and asks
+  the device to resend that whole period, as a safety net. Duplicates are skipped;
+- the 7 PM auto-checkout waits while the device is offline, so nobody is wrongly
+  marked as having forgotten to check out.
+
+Admins see a warning on the dashboard while the device is offline (08:00–20:00),
+and the device's status and re-sync history under **Settings → Biometric Device**,
+where they can also re-sync any date range by hand.
+
+For this to work after a power cut, the relay must start with Windows without
+anyone logging in. `setup-relay.ps1` sets that up (`SERVICE_AUTO_START`, restart on
+crash), and `-NoSleep` turns off sleep/hibernate if the PC would otherwise doze off.
+
 ## Configure the device
 Point the K40 Pro's `Menu → Comm → ADMS` at **this machine's LAN IP** and the
 relay's port (default `3001`) — exactly like it currently points at the local app.
@@ -37,6 +53,14 @@ office's live attendance capture over to the cloud immediately. Re-run with
 powershell -ExecutionPolicy Bypass -File .\setup-relay.ps1 -NssmPath "C:\path\to\nssm.exe" -Cutover
 ```
 
+Cutover also **disables** the old `AttendanceGateway` service, so it can't start
+again at the next boot and take the relay's port. Add `-NoSleep` to either command
+to turn off sleep/hibernate on the PC.
+
+Already installed the relay before this? Re-run the script (same command, with
+`-Cutover` if the relay is already live) to apply the start-with-Windows and
+restart-on-crash settings.
+
 NSSM itself isn't downloaded by the script — grab `nssm.exe` yourself from
 <https://nssm.cc/download> first. Run `.\setup-relay.ps1 -?` for every
 parameter (install directory, cloud URL, port).
@@ -58,6 +82,11 @@ e.g. `C:\AttendanceRelay\`, then in an **Administrator** command prompt:
 "C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay AppDirectory "C:\AttendanceRelay"
 "C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay AppStdout "C:\AttendanceRelay\relay.log"
 "C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay AppStderr "C:\AttendanceRelay\relay.log"
+
+:: start with Windows (no login needed) and restart within 5s if it crashes
+"C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay Start SERVICE_AUTO_START
+"C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay AppExit Default Restart
+"C:\nssm-2.24\nssm-2.24\win64\nssm.exe" set AttendanceRelay AppRestartDelay 5000
 
 :: start
 "C:\nssm-2.24\nssm-2.24\win64\nssm.exe" start AttendanceRelay

@@ -5,6 +5,7 @@ interface MirrorableInvoice {
   id: string;
   proposal_id: string | null;
   case_id: string | null;
+  lead_id?: string | null;
   subtotal: number;
   tax_percentage: number;
   tax_amount: number;
@@ -73,6 +74,12 @@ export async function mirrorInvoiceToStatement(
     // a case's buyer via voBillParty(). Without it a case-raised invoice
     // would show a blank party downstream.
     case_id: invoice.case_id ?? null,
+    // Names the customer on the statement itself. Without it the mirrored row
+    // has no contract, lead, or case, and every surface that resolves a name
+    // from the statement (Gateway Activity, receivables) shows it blank.
+    // Skipped when a case carries the buyer: voBillParty() already resolves a
+    // case-raised invoice's party from the case, so don't second-guess it.
+    lead_id: invoice.case_id ? null : (invoice.lead_id ?? null),
     statement_type: "usage",
     created_via: "adhoc_invoice",
     status: "finalized",
