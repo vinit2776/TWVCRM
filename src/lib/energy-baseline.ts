@@ -7,6 +7,9 @@ export type DayType = "working" | "sunday" | "holiday";
 export interface LedgerBucket {
   ts: string;
   energy_delta_wh: number | null;
+  // The meter's own running total — the ground truth. Daily totals are derived
+  // from this rather than from summing stored deltas (see aggregateDaily).
+  cumulative_wh: number | null;
   // Set by markGaps: this row's delta spans a stretch with no stored readings.
   gap?: boolean;
 }
@@ -119,30 +122,41 @@ export function markGaps(buckets: LedgerBucket[]): LedgerBucket[] {
 
 // Rolls 15-minute buckets up to IST calendar days. `today` (IST) is never
 // complete: it is still accumulating.
+// A day's usage is the sum of the meter's cumulative steps between consecutive
+// stored readings — never a sum of stored deltas. Stored deltas have proven
+// unreliable in three ways: a gap-spanning delta (≈9 days in one row), a negative
+// delta written at the start of a re-synced range (seed read from after the first
+// fetched row), and off-grid captures whose delta is double counted once a
+// neighbour is recomputed. The cumulative reading is immune to all of them. Steps
+// that cross a hole (see MAX_GAP_MS) are skipped, so a partly observed day shows
+// only what was observed.
 export function aggregateDaily(buckets: LedgerBucket[], holidays: HolidayEntry[], today: string): DailyUsage[] {
   const holidayMap = new Map(holidays.map((h) => [h.date, h.name]));
-  const byDay = new Map<string, { wh: number; slots: Set<number>; bad: boolean }>();
-  for (const b of markGaps(buckets)) {
-    if (b.energy_delta_wh == null) continue;
+  const rows = markGaps(buckets).filter((b) => b.cumulative_wh != null);
+  const byDay = new Map<string, { wh: number; slots: Set<number>; bad: boolean; hasPrev: boolean }>();
+  rows.forEach((b, i) => {
     const day = istDateOf(b.ts);
-    const agg = byDay.get(day) ?? { wh: 0, slots: new Set<number>(), bad: false };
-    // Off-grid captures (e.g. taken when headcount is logged) share a slot with
-    // a regular reading, so coverage counts distinct slots, not rows. Their
-    // deltas still sum correctly: each is the cumulative change since the prior row.
+    const agg = byDay.get(day) ?? { wh: 0, slots: new Set<number>(), bad: false, hasPrev: i > 0 };
     agg.slots.add(Math.floor(new Date(b.ts).getTime() / SLOT_MS));
-    // A negative delta means a meter reset/rollover, and a gap means the delta
-    // covers unobserved time — either way the day's total can't be trusted.
-    if (b.energy_delta_wh < 0 || b.gap) agg.bad = true;
-    else agg.wh += b.energy_delta_wh;
+    if (i > 0) {
+      if (b.gap) {
+        agg.bad = true; // part of the day was never observed
+      } else {
+        const step = b.cumulative_wh! - rows[i - 1].cumulative_wh!;
+        if (step < 0) agg.bad = true; // meter reset/rollover
+        else agg.wh += step;
+      }
+    }
     byDay.set(day, agg);
-  }
+  });
   return [...byDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, agg]) => ({
       date,
       kwh: Math.round((agg.wh / 1000) * 100) / 100,
       buckets: agg.slots.size,
-      complete: date < today && agg.slots.size >= MIN_SLOTS_FOR_COMPLETE_DAY && !agg.bad,
+      // The ledger's very first day has no earlier reading to difference against.
+      complete: agg.hasPrev && date < today && agg.slots.size >= MIN_SLOTS_FOR_COMPLETE_DAY && !agg.bad,
       ...classifyDay(date, holidayMap),
     }));
 }
@@ -174,6 +188,9 @@ function baseLoadKw(buckets: LedgerBucket[], completeNonWorkingDays: Set<string>
   const kw: number[] = [];
   for (const b of buckets) {
     if (b.energy_delta_wh == null || b.energy_delta_wh < 0 || b.gap) continue;
+    // Off-grid captures cover a partial interval, so ×4 would misstate kW.
+    const t = new Date(b.ts);
+    if (t.getUTCMinutes() % 15 !== 0 || t.getUTCSeconds() !== 0) continue;
     const { date, hour } = istParts(b.ts);
     if (hour >= 1 && hour < 5 && completeNonWorkingDays.has(date)) kw.push((b.energy_delta_wh * 4) / 1000);
   }

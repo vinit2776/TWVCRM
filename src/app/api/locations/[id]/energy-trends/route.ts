@@ -32,7 +32,7 @@ export async function GET(
   for (let page = 0; page < MAX_PAGES; page++) {
     const { data, error } = await supabase
       .from("location_energy_readings")
-      .select("ts, energy_delta_wh")
+      .select("ts, energy_delta_wh, cumulative_wh")
       .eq("location_id", id)
       .eq("device_id", deviceId)
       .gte("ts", `${rangeStart}T00:00:00+05:30`)
