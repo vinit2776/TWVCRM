@@ -16,6 +16,11 @@ const {
   effectivePunches, CORRECTION_MONTHLY_LIMIT, FULL_DAY_CORRECTION_MONTHLY_LIMIT, correctionOverLimit,
 } = require('./attendance-logic');
 const { t } = require('./i18n');
+const {
+  DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
+  shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
+  parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
+} = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 
 // Two roles have full run of the app — 'admin' and 'manager' are deliberately
@@ -553,6 +558,29 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_field_trips_emp ON field_trips(employee_id, id);
   -- Admin-editable runtime configuration; see SETTING_DEFS. Only keys defined there
   -- are ever read, so a stale row from a removed setting is inert rather than harmful.
+  CREATE TABLE IF NOT EXISTS device_status (
+    sn TEXT PRIMARY KEY,
+    last_seen TEXT NOT NULL,
+    last_outage_start TEXT,
+    last_outage_end TEXT,
+    auto_checkout_held INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS device_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sn TEXT NOT NULL,
+    command TEXT NOT NULL,
+    range_start TEXT NOT NULL,
+    range_end TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    requested_by TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    return_code TEXT,
+    punches_received INTEGER NOT NULL DEFAULT 0,
+    punches_new INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    done_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -836,6 +864,93 @@ async function recordPunch(employeeId, timestamp, direction, source, note = '', 
 async function getEmployeeByDevicePin(pin) {
   return await db.prepare('SELECT * FROM employees WHERE device_pin = ?').get(String(pin));
 }
+// --- Biometric device outages (office PC or internet down) ---
+// The device keeps every punch in its own memory while it can't reach the app. These
+// track when it was last heard from, so an outage is visible, the device is asked to
+// resend that period once it's back, and the 19:00 auto-checkout waits for it.
+async function getDeviceStatus(sn) {
+  return await db.prepare('SELECT * FROM device_status WHERE sn = ?').get(sn);
+}
+// Queues a "send me your punches for this period again" command, picked up on the
+// device's next /iclock/getrequest poll. Times are app time; the command carries the
+// device's own clock (see DEVICE_CLOCK_OFFSET_MINUTES).
+async function queueDeviceResync(sn, startTs, endTs, reason, requestedBy = null) {
+  const offset = CONFIG.DEVICE_CLOCK_OFFSET_MINUTES;
+  const command = buildAttlogQuery(shiftTs(startTs, offset), shiftTs(endTs, offset));
+  await db.prepare(
+    'INSERT INTO device_commands (sn, command, range_start, range_end, reason, requested_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(sn, command, startTs, endTs, reason, requestedBy, 'queued', formatTimestamp(new Date()));
+}
+// Called on every authenticated /iclock request. Writes at most once a minute.
+async function recordDeviceContact(sn) {
+  const now = new Date();
+  const nowTs = formatTimestamp(now);
+  const row = await getDeviceStatus(sn);
+  if (!row) {
+    await db.prepare('INSERT OR IGNORE INTO device_status (sn, last_seen) VALUES (?, ?)').run(sn, nowTs);
+    return;
+  }
+  const gapMinutes = minutesSince(row.last_seen, now);
+  if (gapMinutes < 1) return;
+  // Conditional on the old value: the device's first few requests after an outage
+  // arrive together, and only one of them should record the outage and queue a re-sync.
+  const updated = await db.prepare('UPDATE device_status SET last_seen = ? WHERE sn = ? AND last_seen = ?').run(nowTs, sn, row.last_seen);
+  if (!updated.changes || gapMinutes < DEVICE_OFFLINE_MINUTES) return;
+  await db.prepare('UPDATE device_status SET last_outage_start = ?, last_outage_end = ? WHERE sn = ?').run(row.last_seen, nowTs, sn);
+  await queueDeviceResync(sn, shiftTs(row.last_seen, -RESYNC_OVERLAP_MINUTES), nowTs, `Automatic: device back after ${formatDuration(gapMinutes)} offline`);
+  console.log(`[adms] device ${sn} back after ${formatDuration(gapMinutes)} offline (since ${row.last_seen}); re-sync queued`);
+}
+// A re-sync still being worked on: queued, sent and not yet answered (or given up on),
+// or answered under a minute ago — its punches may still be on their way in.
+async function hasResyncInFlight(sn) {
+  const now = new Date();
+  const sentCutoff = formatTimestamp(new Date(now.getTime() - DEVICE_COMMAND_TIMEOUT_MINUTES * 60000));
+  const doneCutoff = formatTimestamp(new Date(now.getTime() - 60000));
+  const row = await db.prepare(
+    "SELECT COUNT(*) AS c FROM device_commands WHERE sn = ? AND (status = 'queued' OR (status = 'sent' AND sent_at > ?) OR (status IN ('done', 'failed') AND done_at > ?))"
+  ).get(sn, sentCutoff, doneCutoff);
+  return Number(row.c) > 0;
+}
+// Runs an auto-checkout that was held while the device was offline, once the device
+// is back and any catch-up re-sync has finished.
+async function resumeHeldAutoCheckout(sn) {
+  const row = await getDeviceStatus(sn);
+  if (!row || !row.auto_checkout_held || await hasResyncInFlight(sn)) return;
+  const claimed = await db.prepare('UPDATE device_status SET auto_checkout_held = 0 WHERE sn = ? AND auto_checkout_held = 1').run(sn);
+  if (!claimed.changes) return;
+  console.log('[adms] device back and caught up: running the held auto-checkout');
+  await performAutoCheckout();
+}
+// Attendance records from either the device's regular push or its reply to a re-sync.
+// Counts are added to the re-sync they belong to (cmdId), or else to one sent within
+// the timeout, so the Settings card can show what each re-sync brought in.
+async function ingestAttlogText(sn, text, cmdId = null) {
+  let received = 0, ingested = 0;
+  for (const line of String(text).split('\n')) {
+    const record = parseAttlogLine(line);
+    if (!record) continue;
+    received++;
+    const employee = await getEmployeeByDevicePin(record.pin);
+    if (!employee) {
+      logSecurityEvent('adms_unmapped_pin', { pin: record.pin, timestamp: record.timestamp });
+      continue;
+    }
+    const { inserted } = await ingestBiometricPunch(employee.id, correctDeviceTimestamp(record.timestamp));
+    if (inserted) ingested++;
+  }
+  if (received > 0) {
+    const sentCutoff = formatTimestamp(new Date(Date.now() - DEVICE_COMMAND_TIMEOUT_MINUTES * 60000));
+    const target = cmdId
+      ? await db.prepare('SELECT id FROM device_commands WHERE id = ? AND sn = ?').get(cmdId, sn)
+      : await db.prepare("SELECT id FROM device_commands WHERE sn = ? AND status IN ('sent', 'done') AND sent_at > ? ORDER BY id DESC LIMIT 1").get(sn, sentCutoff);
+    if (target) {
+      await db.prepare('UPDATE device_commands SET punches_received = punches_received + ?, punches_new = punches_new + ? WHERE id = ?')
+        .run(received, ingested, target.id);
+    }
+  }
+  return { received, ingested };
+}
+
 async function ingestBiometricPunch(employeeId, timestamp) {
   const direction = await inferPunchDirection(employeeId, timestamp);
   const inserted = await recordPunch(employeeId, timestamp, direction, 'biometric');
@@ -1413,6 +1528,10 @@ async function performAutoCheckout() {
     d.setDate(d.getDate() - i);
     dateStrs.push(todayStr(d));
   }
+  // Can run before 19:00 when a run held for a device outage resumes in the morning —
+  // today isn't over yet, so leave it alone then.
+  const includeToday = now.getHours() >= AUTO_CHECKOUT_HOUR;
+  if (!includeToday) dateStrs.pop();
   const employees = await db.prepare('SELECT id FROM employees').all();
   for (const emp of employees) {
     const recent = await db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp >= ? ORDER BY timestamp ASC')
@@ -1434,6 +1553,7 @@ async function performAutoCheckout() {
       await createNotification(emp.id, `You didn't check out, so you were auto-checked out at ${when}. That day counts as a Half Day until you submit a correction from the Corrections page.`);
       console.log(`Auto-checked-out ${emp.id} for ${dateStr} (forgot to punch out)`);
     }
+    if (!includeToday) continue;
     const cutoffTs = `${today} ${pad(AUTO_CHECKOUT_HOUR)}:00:00`;
     // Also close out any break left open past end of day, so it doesn't linger open
     // forever and keep skewing tomorrow's queries (breaks are looked up by start_ts).
@@ -1443,12 +1563,26 @@ async function performAutoCheckout() {
       .run(cutoffTs, emp.id, `${today}%`);
   }
 }
+// The scheduled 19:00 run. While the device is offline the evening's real check-outs
+// are probably still sitting on it, so hold off rather than auto-checking everyone out
+// and telling them they forgot — resumeHeldAutoCheckout runs it once the device is back.
+async function runScheduledAutoCheckout() {
+  const sn = CONFIG.ZK_DEVICE_SN;
+  const device = sn ? await getDeviceStatus(sn) : null;
+  if (device && isDeviceOffline(device.last_seen)) {
+    await db.prepare('UPDATE device_status SET auto_checkout_held = 1 WHERE sn = ?').run(sn);
+    console.log(`Auto-checkout held: biometric device offline since ${device.last_seen}`);
+    return 'held';
+  }
+  await performAutoCheckout();
+  return 'ran';
+}
 async function checkAndRunAutoCheckout() {
   const now = new Date();
   const today = todayStr(now);
   if (lastAutoCheckoutDate === today) return;
   if (now.getHours() < AUTO_CHECKOUT_HOUR) return;
-  await performAutoCheckout();
+  await runScheduledAutoCheckout();
   lastAutoCheckoutDate = today;
 }
 // The catch-up call and interval are started after init() (see startup at the bottom),
@@ -2622,6 +2756,22 @@ async function renderAdminFieldTrips(trips, user) {
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
 
+// "18:02" for today, "5 Oct 18:02" otherwise; withDate always includes the date
+// (for ranges, where a bare time next to a dated one is ambiguous).
+function deviceTimeLabel(ts, withDate = false) {
+  if (!withDate && ts.slice(0, 10) === todayStr()) return ts.slice(11, 16);
+  return `${new Date(`${ts.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${ts.slice(11, 16)}`;
+}
+function deviceOfflineBanner(device) {
+  return `
+    <div class="card" style="background:#FDECEA;border:1px solid #F5B7B1;color:#B71C1C;">
+      <strong>⚠ The biometric device hasn't reached the app since ${escapeHtml(deviceTimeLabel(device.last_seen))} (${escapeHtml(formatDuration(minutesSince(device.last_seen)))} ago).</strong>
+      The office PC may be off or asleep, or the internet may be down. Punches are kept on the device and will come in once it reconnects.
+      ${device.auto_checkout_held ? 'The 7 PM auto-checkout is on hold until then.' : ''}
+      <a href="/admin/settings#device" style="color:#B71C1C;font-weight:600;">Device status →</a>
+    </div>`;
+}
+
 async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
   const basePath = opts.basePath || '/dashboard';
   const title = opts.title || 'Dashboard';
@@ -2690,6 +2840,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
     : '';
 
   const body = `
+    ${opts.offlineDevice ? deviceOfflineBanner(opts.offlineDevice) : ''}
     ${statsWidgets}
     ${devicePinsLink}
     <div class="card">
@@ -3658,6 +3809,63 @@ async function renderDevicePins(user, error) {
 // actually coming from — database, environment, or built-in default — because the
 // most confusing failure here is a setting that looks right in the UI while an
 // environment variable of the same name is what the app is really using.
+function deviceCommandStatusBadge(c) {
+  if (c.status === 'done') return statusBadge('Present', `Done · ${c.punches_received} punch${c.punches_received === 1 ? '' : 'es'} received (${c.punches_new} new)`);
+  if (c.status === 'failed') return statusBadge('Absent', `Device returned an error (code ${c.return_code})`);
+  if (c.status === 'sent') {
+    return minutesSince(c.sent_at) >= DEVICE_COMMAND_TIMEOUT_MINUTES
+      ? statusBadge('Absent', 'No reply from device')
+      : statusBadge('Active', 'Sent to device, waiting');
+  }
+  return statusBadge('Upcoming', "Queued for the device's next check-in");
+}
+
+async function renderDeviceCard() {
+  const sn = CONFIG.ZK_DEVICE_SN;
+  if (!sn) {
+    return `<div class="card" id="device"><div style="font-weight:700;margin-bottom:6px;">Biometric Device</div>
+      <div style="color:#7C8896;font-size:0.9em;">No device serial is set yet (Device serial number, below), so the app isn't accepting anything from the device.</div></div>`;
+  }
+  const device = await getDeviceStatus(sn);
+  const commands = await db.prepare('SELECT * FROM device_commands WHERE sn = ? ORDER BY id DESC LIMIT 10').all(sn);
+  const offline = device && isDeviceOffline(device.last_seen);
+  const stat = (label, value) => `<div><div style="color:#7C8896;font-size:0.85em;">${label}</div><div style="font-weight:700;">${value}</div></div>`;
+  const statusValue = !device
+    ? '<span style="color:#7C8896;">Never connected</span>'
+    : (offline ? '<span style="color:#C62828;">● Offline</span>' : '<span style="color:#2E7D32;">● Online</span>');
+  const lastOutage = device && device.last_outage_start
+    ? `${escapeHtml(deviceTimeLabel(device.last_outage_start, true))} → ${escapeHtml(deviceTimeLabel(device.last_outage_end, true))} · ${escapeHtml(formatDuration(minutesSince(device.last_outage_start, new Date(device.last_outage_end.replace(' ', 'T')))))}`
+    : 'None recorded';
+  const rangeLabel = c => `${escapeHtml(deviceTimeLabel(c.range_start, true))} → ${escapeHtml(deviceTimeLabel(c.range_end, true))}`;
+  const commandRows = commands.map(c => `
+    <tr>
+      <td>${escapeHtml(deviceTimeLabel(c.created_at))}</td>
+      <td>${rangeLabel(c)}</td>
+      <td>${escapeHtml(c.reason)}</td>
+      <td>${deviceCommandStatusBadge(c)}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:#9AA5B1;">None yet</td></tr>';
+  const today = todayStr();
+  return `
+    <div class="card" id="device">
+      <div style="font-weight:700;margin-bottom:10px;">Biometric Device</div>
+      <div style="display:flex;gap:32px;flex-wrap:wrap;margin-bottom:14px;">
+        ${stat('Status', statusValue)}
+        ${stat('Last heard from', device ? `${escapeHtml(deviceTimeLabel(device.last_seen))} (${minutesSince(device.last_seen) < 1 ? 'just now' : `${escapeHtml(formatDuration(minutesSince(device.last_seen)))} ago`})` : '—')}
+        ${stat('Last outage', lastOutage)}
+      </div>
+      ${device && device.auto_checkout_held ? '<div style="background:#FFF3E0;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-bottom:12px;">The 7 PM auto-checkout is on hold until the device is back and has sent its punches.</div>' : ''}
+      <div style="font-weight:700;margin:6px 0;">Re-sync punches from the device</div>
+      <p style="color:#7C8896;font-size:0.88em;margin-top:0;">Asks the device to send every punch it has for these dates again. Punches the app already has are skipped, so nothing is counted twice. This also happens automatically whenever the device comes back after being offline for ${DEVICE_OFFLINE_MINUTES}+ minutes.</p>
+      <form method="POST" action="/admin/device/resync" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">From</label><input type="date" name="from" required max="${today}" value="${today}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;"></div>
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">To</label><input type="date" name="to" required max="${today}" value="${today}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;"></div>
+        <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Re-sync</button>
+      </form>
+      <div style="font-weight:700;margin:18px 0 6px;">Recent re-syncs</div>
+      <table><tr><th>Requested</th><th>Dates</th><th>Why</th><th>Status</th></tr>${commandRows}</table>
+    </div>`;
+}
+
 async function renderAdminSettings(user, opts = {}) {
   const { error, notice, revealedKey, revealedValue } = opts;
   const rows = await db.prepare('SELECT key, value, updated_at, updated_by FROM app_settings').all();
@@ -3711,6 +3919,7 @@ async function renderAdminSettings(user, opts = {}) {
       environment. The database connection, cron secret and bootstrap password are not
       listed because they are needed before this page can be read.
     </div>
+    ${await renderDeviceCard()}
     <form method="POST" action="/admin/settings" class="card">
       <div style="font-weight:700;margin-bottom:4px;">Settings</div>
       ${fields}
@@ -4312,6 +4521,7 @@ async function handleRequest(req, res) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       return res.end('unauthorized device');
     }
+    await recordDeviceContact(sn);
 
     // Handshake: the device asks what to do on connect. Limit it to pushing
     // attendance logs only (no user/fingerprint sync) and keep it in plain batch
@@ -4340,19 +4550,9 @@ async function handleRequest(req, res) {
       let ingested = 0;
       let duplicates = 0;
       if (table === 'ATTLOG') {
-        for (const line of text.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          const [pin, timestamp] = trimmed.split('\t');
-          if (!pin || !timestamp) continue;
-          const employee = await getEmployeeByDevicePin(pin);
-          if (!employee) {
-            logSecurityEvent('adms_unmapped_pin', { pin, timestamp });
-            continue;
-          }
-          const { inserted } = await ingestBiometricPunch(employee.id, correctDeviceTimestamp(timestamp));
-          if (inserted) ingested++; else duplicates++;
-        }
+        const counts = await ingestAttlogText(sn, text);
+        ingested = counts.ingested;
+        duplicates = counts.received - counts.ingested;
       }
       if (ingested > 0) console.log(`[adms] ingested ${ingested} punch(es) from device ${sn}`);
       // The device resends its unacknowledged log on every retry, so a batch
@@ -4362,16 +4562,45 @@ async function handleRequest(req, res) {
       return res.end('OK');
     }
 
-    // Command polling — this adapter never queues device commands, so always "no-op".
+    // Command polling: hands the device the oldest queued re-sync, if any. With nothing
+    // to send, this is also where an auto-checkout held during an outage resumes.
     if (parsed.pathname === '/iclock/getrequest' && req.method === 'GET') {
+      const command = await db.prepare("SELECT * FROM device_commands WHERE sn = ? AND status = 'queued' ORDER BY id ASC LIMIT 1").get(sn);
+      if (command) {
+        const claimed = await db.prepare("UPDATE device_commands SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'queued'")
+          .run(formatTimestamp(new Date()), command.id);
+        if (claimed.changes) {
+          console.log(`[adms] sent command #${command.id} to device ${sn}: ${command.command}`);
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          return res.end(`C:${command.id}:${command.command}`);
+        }
+      }
+      await resumeHeldAutoCheckout(sn);
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
 
-    // Command-execution acknowledgements — nothing to do with these since we never
-    // issue commands, but ack with 200 rather than 404 so the device doesn't retry.
+    // The device's answer to a command ("ID=12&Return=0&CMD=DATA" per line).
     if (parsed.pathname === '/iclock/devicecmd' && req.method === 'POST') {
-      await readTextBody(req);
+      const acks = parseDeviceCmdAcks(await readTextBody(req));
+      for (const ack of acks) {
+        await db.prepare("UPDATE device_commands SET status = ?, return_code = ?, done_at = ? WHERE id = ? AND sn = ? AND status IN ('queued', 'sent')")
+          .run(ack.ok ? 'done' : 'failed', ack.returnCode, formatTimestamp(new Date()), ack.id, sn);
+        console.log(`[adms] device ${sn} answered command #${ack.id}: Return=${ack.returnCode}`);
+      }
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end('OK');
+    }
+
+    // Newer firmwares send a re-sync's records here instead of /iclock/cdata.
+    if (parsed.pathname === '/iclock/querydata' && req.method === 'POST') {
+      const text = await readTextBody(req);
+      const tableName = (parsed.searchParams.get('tablename') || parsed.searchParams.get('table') || '').toUpperCase();
+      if (tableName === 'ATTLOG' || tableName === 'TRANSACTION') {
+        const cmdId = Number(parsed.searchParams.get('cmdid')) || null;
+        const { received, ingested } = await ingestAttlogText(sn, text, cmdId);
+        console.log(`[adms] querydata from device ${sn}: ${received} record(s), ${ingested} new`);
+      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('OK');
     }
@@ -4409,8 +4638,8 @@ async function handleRequest(req, res) {
       logSecurityEvent('cron_auth_failed', { ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Unauthorized' });
     }
-    await performAutoCheckout();
-    return sendJson(res, 200, { ok: true, ran: 'auto-checkout' });
+    const outcome = await runScheduledAutoCheckout();
+    return sendJson(res, 200, { ok: true, ran: 'auto-checkout', outcome });
   }
 
   // PWA static assets — unauthenticated on purpose: the browser fetches these
@@ -4546,7 +4775,9 @@ async function handleRequest(req, res) {
       // createAttendanceSnapshot's comment for why this matters on a network-backed db.
       const snapshot = await createAttendanceSnapshot(dateStr, dateStr, dateStr);
       const rows = await Promise.all(snapshot.employees.map(async employee => ({ employee, status: await snapshot.computeDayStatus(employee.id, dateStr) })));
-      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true }));
+      const device = CONFIG.ZK_DEVICE_SN ? await getDeviceStatus(CONFIG.ZK_DEVICE_SN) : null;
+      const offlineDevice = device && shouldShowOfflineAlert(device.last_seen) ? device : null;
+      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, offlineDevice }));
     }
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
@@ -5384,6 +5615,25 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/admin/settings' && req.method === 'GET') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     return sendHtml(res, await renderAdminSettings(user));
+  }
+
+  if (parsed.pathname === '/admin/device/resync' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const form = await readFormBody(req);
+    const from = (form.from || '').trim();
+    const to = (form.to || '').trim();
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    let error = null;
+    if (!CONFIG.ZK_DEVICE_SN) error = 'Set the device serial number first.';
+    else if (!isDate(from) || !isDate(to)) error = 'Choose a From and To date.';
+    else if (from > to) error = 'From must be on or before To.';
+    else if (to > todayStr()) error = "To can't be in the future.";
+    // Keeps one reply from the device to a manageable size.
+    else if ((new Date(`${to}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000 > 31) error = 'Re-sync at most 31 days at a time.';
+    if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
+    await queueDeviceResync(CONFIG.ZK_DEVICE_SN, `${from} 00:00:00`, `${to} 23:59:59`, `Manual (${user.username})`, user.username);
+    await logAdminAction(user.username, 'device_resync', 'device', CONFIG.ZK_DEVICE_SN, `${from} to ${to}`);
+    return sendHtml(res, await renderAdminSettings(user, { notice: `Re-sync for ${from} to ${to} requested. The device picks it up the next time it checks in (about every 30 seconds while it's online).` }));
   }
 
   if (parsed.pathname === '/admin/settings' && req.method === 'POST') {
