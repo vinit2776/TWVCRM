@@ -6,6 +6,7 @@ import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/
 import { messaging } from "@/lib/whatsapp";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 import { mirrorInvoiceToStatement } from "@/lib/adhoc-invoice-mirror";
+import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 
 export const maxDuration = 30;
 
@@ -131,6 +132,12 @@ export async function POST(
             .from("proforma_invoices")
             .update({ razorpay_link_id: linkData.id, razorpay_link_url: linkData.short_url })
             .eq("id", id);
+          // Separate write: a DB without the date columns must not lose the link.
+          const { error: datesErr } = await supabase
+            .from("proforma_invoices")
+            .update(razorpayLinkDates(linkData))
+            .eq("id", id);
+          if (datesErr) console.warn("[invoice email] Could not save link dates:", datesErr.message);
         } else {
           console.warn("[invoice email] Razorpay link creation failed:", await rzpRes.json().catch(() => null));
         }

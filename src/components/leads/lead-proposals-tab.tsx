@@ -36,7 +36,7 @@ import {
   ACCOUNTING_HEAD_COLORS,
   type AccountingHead,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -562,17 +562,36 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                             )}
                           </div>
                         ) : inv.razorpay_link_url ? (
-                          <button
-                            type="button"
-                            className="flex items-center gap-1 text-xs text-primary hover:underline"
-                            onClick={() => {
-                              navigator.clipboard.writeText(inv.razorpay_link_url!);
-                              toast.success("Payment link copied");
-                            }}
-                          >
-                            <Copy className="h-3 w-3" />
-                            Copy link
-                          </button>
+                          <div className="space-y-0.5">
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={() => {
+                                navigator.clipboard.writeText(inv.razorpay_link_url!);
+                                toast.success("Payment link copied");
+                              }}
+                            >
+                              <Copy className="h-3 w-3" />
+                              Copy link
+                            </button>
+                            {/* Null for links created before the dates were stored. */}
+                            {inv.razorpay_link_created_at && (
+                              <p className="text-[11px] text-muted-foreground">
+                                Generated {formatDateTime(inv.razorpay_link_created_at)}
+                              </p>
+                            )}
+                            {inv.razorpay_link_expires_at && (
+                              new Date(inv.razorpay_link_expires_at) < new Date() ? (
+                                <p className="text-[11px] font-medium text-red-600">
+                                  Expired {formatDateTime(inv.razorpay_link_expires_at)}
+                                </p>
+                              ) : (
+                                <p className="text-[11px] text-muted-foreground">
+                                  Valid till {formatDateTime(inv.razorpay_link_expires_at)}
+                                </p>
+                              )
+                            )}
+                          </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}

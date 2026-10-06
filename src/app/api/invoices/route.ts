@@ -4,6 +4,7 @@ import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
+import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -208,6 +209,12 @@ export async function POST(request: NextRequest) {
           // Return the enriched record so the UI can show the link immediately
           data.razorpay_link_id = linkData.id;
           data.razorpay_link_url = linkData.short_url;
+          // Separate from the write above so a DB that hasn't got the date
+          // columns yet can never cost us the link itself.
+          const linkDates = razorpayLinkDates(linkData);
+          const { error: datesErr } = await supabase.from("proforma_invoices").update(linkDates).eq("id", data.id);
+          if (datesErr) console.warn("[invoice create] Could not save link dates:", datesErr.message);
+          else Object.assign(data, linkDates);
         } else {
           console.warn(
             "[invoice create] Razorpay link creation failed:",
