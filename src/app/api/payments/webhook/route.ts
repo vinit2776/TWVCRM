@@ -449,7 +449,7 @@ export async function POST(request: NextRequest) {
     // below and the invoice stayed "sent" forever.
     const { data: adhocInvoice } = await supabase
       .from("proforma_invoices")
-      .select("id, invoice_number, status, title, items, subtotal, tax_percentage, tax_amount, total_amount, due_date, proposal_id")
+      .select("id, invoice_number, status, title, items, subtotal, tax_percentage, tax_amount, total_amount, due_date, proposal_id, lead_id")
       .eq("razorpay_link_id", paymentLinkId)
       .maybeSingle();
 
@@ -512,6 +512,7 @@ export async function POST(request: NextRequest) {
             invoice_id: adhocInvoice.id,
             contract_id: null,
             proposal_id: adhocInvoice.proposal_id ?? null,
+            lead_id: adhocInvoice.lead_id ?? null,
             statement_type: "usage",
             created_via: "adhoc_invoice",
             status: "finalized",
