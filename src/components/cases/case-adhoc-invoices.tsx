@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Loader2, Plus, ReceiptText, MoreHorizontal, Eye, Download, Mail,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -100,6 +101,32 @@ export function CaseAdhocInvoices({ caseId }: { caseId: string }) {
   }, [caseId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Renewing a link is restricted to admin/manager/accounts server-side
+  // (api/invoices/[id]/renew-link) — mirror it so the action isn't offered to
+  // roles that would only get a 403.
+  const [canRenewLink, setCanRenewLink] = useState(false);
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json())
+      .then((j) => setCanRenewLink(["admin", "manager", "accounts"].includes(j.role ?? "")))
+      .catch(() => {});
+  }, []);
+
+  const handleRenewLink = async (inv: AdhocInvoice) => {
+    if (!window.confirm(
+      `Create a new payment link for ${inv.invoice_number}? The old link will stop working. ` +
+      `The customer is not notified — copy the new link or use "Resend" to share it.`
+    )) return;
+    const res = await fetch(`/api/invoices/${inv.id}/renew-link`, { method: "POST" });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      await navigator.clipboard.writeText(json.razorpay_link_url).catch(() => {});
+      toast.success("New payment link created and copied");
+      await load();
+    } else {
+      toast.error(json.error || "Failed to renew payment link");
+    }
+  };
 
   const amountNum = Number(amount);
   const valid = description.trim().length > 0 && Number.isFinite(amountNum) && amountNum > 0;
@@ -239,6 +266,12 @@ export function CaseAdhocInvoices({ caseId }: { caseId: string }) {
                             <Mail className="mr-2 h-4 w-4" />
                             {c.status === "draft" ? "Send" : "Resend"}
                           </DropdownMenuItem>
+                          {canRenewLink && c.razorpay_link_url && ["sent", "overdue"].includes(c.status) && (
+                            <DropdownMenuItem onClick={() => handleRenewLink(c)}>
+                              <RefreshCw className="mr-2 h-4 w-4" />
+                              Renew Payment Link
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </td>
