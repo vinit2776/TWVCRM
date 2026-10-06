@@ -1245,6 +1245,27 @@ function computePunchInGrid(grid) {
   return { daysInMonth: grid.daysInMonth, rows };
 }
 
+// Same grid shape as Punch-In Detail, but each cell is that day's net hours worked
+// (HH:MM, breaks already subtracted by computeDayStatus) instead of in/out times.
+// "*" marks a 19:00 auto-checkout — those hours may be overstated since the employee
+// forgot to punch out. Days without a completed in/out pair fall back to a status code.
+function computeWorkingHoursGrid(grid) {
+  const rows = grid.perEmployee.map(({ employee, statuses }) => {
+    let totalMinutes = 0;
+    const cells = statuses.map(status => {
+      if (status.checkIn && status.checkOut) {
+        const minutes = Math.round((status.hoursWorked || 0) * 60);
+        totalMinutes += minutes;
+        return { text: `${formatHoursAsClock(status.hoursWorked)}${status.checkOutAuto ? '*' : ''}`, status: status.status };
+      }
+      return { text: MUSTER_STATUS_CODE[status.status] ?? status.status, status: status.status };
+    });
+    while (cells.length < grid.daysInMonth) cells.push({ text: '', status: 'Upcoming' });
+    return { id: employee.id, name: employee.name, cells, total: formatHoursAsClock(totalMinutes / 60) };
+  });
+  return { daysInMonth: grid.daysInMonth, rows };
+}
+
 // Muster roll: every employee x every day of the month as a compact status grid,
 // with a per-day "how many were in" headcount row — the classic attendance-register
 // format, distinct from the Punch-In reports' per-employee totals/times.
@@ -3181,7 +3202,7 @@ async function renderAdminEmployeeDocuments(employee, docs, user) {
   return pageShell('Employee Documents', '', 'employee-registration', body, user);
 }
 
-async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, muster, user) {
+async function renderReports(monthStr, punchInRows, punchInGrid, workingHours, leaveRows, muster, user) {
   const punchInTableRows = punchInRows.map(r => `
     <tr>
       <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
@@ -3199,6 +3220,14 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
       <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
       ${r.cells.map(c => `<td style="background:${GRID_CELL_COLOR[c.status] || 'transparent'};">${escapeHtml(c.text)}</td>`).join('')}
     </tr>`).join('') || `<tr><td colspan="${punchInGrid.daysInMonth + 1}" style="color:#9AA5B1;">No employees</td></tr>`;
+
+  const workingHoursDayHeaders = Array.from({ length: workingHours.daysInMonth }, (_, i) => `<th style="width:52px;">${i + 1}</th>`).join('');
+  const workingHoursRows = workingHours.rows.map(r => `
+    <tr>
+      <td><strong>${escapeHtml(r.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.id)})</span></td>
+      ${r.cells.map(c => `<td style="background:${GRID_CELL_COLOR[c.status] || 'transparent'};">${escapeHtml(c.text)}</td>`).join('')}
+      <td><strong>${r.total}</strong></td>
+    </tr>`).join('') || `<tr><td colspan="${workingHours.daysInMonth + 2}" style="color:#9AA5B1;">No employees</td></tr>`;
 
   const leaveTypeHeaders = LEAVE_TYPES.map(t => `<th>${escapeHtml(t)}</th>`).join('');
   const leaveTableRows = leaveRows.map(r => `
@@ -3250,6 +3279,20 @@ async function renderReports(monthStr, punchInRows, punchInGrid, leaveRows, must
         on days with no punches: ${Object.entries(MUSTER_STATUS_CODE).map(([k, v]) => `${escapeHtml(v)}=${escapeHtml(k)}`).join(', ')}.
       </p>
       <table class="grid-table"><tr><th>Employee</th>${punchInDayHeaders}</tr>${punchInGridRows}</table>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <div style="font-weight:700;">Hours Worked</div>
+        <a href="/admin/reports/hours-worked.csv?month=${escapeHtml(monthStr)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">Download CSV &darr;</a>
+      </div>
+      <p style="color:#7C8896;font-size:0.85em;margin-top:0;">
+        Each cell is that day's hours worked (HH:MM, check-in to check-out minus breaks), coloured the same as Punch-In Detail
+        (<span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">late</span>,
+        <span style="background:${GRID_CELL_COLOR['Half Day']};padding:1px 6px;border-radius:4px;">half day</span>).
+        <strong>*</strong> = auto-checked out at ${AUTO_CHECKOUT_HOUR}:00, so the hours may be overstated.
+        Days without a completed check-in/check-out show a status code: WO=Week Off, H=Holiday, OL=On Leave, A=Absent, PE=Punch Error, AC=Active (in progress).
+      </p>
+      <table class="grid-table"><tr><th>Employee</th>${workingHoursDayHeaders}<th style="width:74px;">Total</th></tr>${workingHoursRows}</table>
     </div>
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -4877,8 +4920,22 @@ async function handleRequest(req, res) {
     const [statusGrid, leaveRows] = await Promise.all([computeMonthlyStatusGrid(year, month), computeLeaveReport(year, month)]);
     const punchInRows = computePunchInReport(statusGrid);
     const punchInGrid = computePunchInGrid(statusGrid);
+    const workingHours = computeWorkingHoursGrid(statusGrid);
     const muster = computeMusterReport(statusGrid);
-    return sendHtml(res, await renderReports(monthStr, punchInRows, punchInGrid, leaveRows, muster, user));
+    return sendHtml(res, await renderReports(monthStr, punchInRows, punchInGrid, workingHours, leaveRows, muster, user));
+  }
+
+  if (parsed.pathname === '/admin/reports/hours-worked.csv' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const { year, month, monthStr } = parseMonthParam(parsed);
+    const grid = computeWorkingHoursGrid(await computeMonthlyStatusGrid(year, month));
+    const dayHeaders = Array.from({ length: grid.daysInMonth }, (_, i) => String(i + 1));
+    const csv = toCsv(
+      ['Employee ID', 'Name', ...dayHeaders, 'Total'],
+      grid.rows.map(r => [r.id, r.name, ...r.cells.map(c => c.text), r.total])
+    );
+    await logAdminAction(user.username, 'download_report', 'hours_worked_report', monthStr, '');
+    return sendCsv(res, `hours-worked-${monthStr}.csv`, csv);
   }
 
   if (parsed.pathname === '/admin/reports/punch-in.csv' && req.method === 'GET') {
