@@ -16,6 +16,7 @@ import {
   Loader2, RefreshCw, Zap, Gauge, Activity, AlertTriangle, PlugZap, DatabaseZap,
 } from "lucide-react";
 import { toast } from "sonner";
+import { EnergyBaselineSection } from "./energy-baseline-section";
 
 interface DeviceOption {
   device_id: string;
@@ -356,6 +357,8 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
             </div>
           )}
         </div>
+
+        {selectedDevice && <EnergyBaselineSection locationId={locationId} deviceId={selectedDevice} />}
       </CardContent>
     </Card>
   );
