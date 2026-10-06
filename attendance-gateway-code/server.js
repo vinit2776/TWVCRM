@@ -4435,12 +4435,20 @@ async function handleRequest(req, res) {
     const { employee_id, timestamp, direction, source, location, marked_by } = body;
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
 
+    // Settle what this punch *is* once, before anything is checked against it. The
+    // same missing field used to fall back three different ways in this handler —
+    // 'on-site' for the session whitelist, 'biometric' for the onsite_enabled gate,
+    // and neither for the coordinate and WiFi checks, which compared `source`
+    // directly. Omitting it therefore passed the whitelist, skipped both location
+    // checks, and was then stored as 'biometric' — the most trusted source there is.
+    const punchSource = source || (authorizedViaSession ? 'on-site' : 'biometric');
+
     if (authorizedViaSession) {
       if (employee_id !== sessionUser.employeeId) {
         logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
         return sendJson(res, 403, { error: 'You can only punch your own attendance.' });
       }
-      if (!['on-site', 'wifi'].includes(source || 'on-site')) {
+      if (!['on-site', 'wifi'].includes(punchSource)) {
         return sendJson(res, 403, { error: 'Only on-site duty or WiFi punches are allowed from a logged-in session.' });
       }
     }
@@ -4448,12 +4456,12 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employee_id);
     if (!employee) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
 
-    if ((source || 'biometric') === 'on-site' && !employee.onsite_enabled) {
+    if (punchSource === 'on-site' && !employee.onsite_enabled) {
       return sendJson(res, 403, { error: 'On-site duty punching is not enabled for this employee. Biometric punch-in is required.' });
     }
     // On-site punches must carry the phone's real coordinates — a typed-in place name
     // can't be verified.
-    if (source === 'on-site') {
+    if (punchSource === 'on-site') {
       const coords = String(location || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
       if (!coords || Math.abs(Number(coords[1])) > 90 || Math.abs(Number(coords[2])) > 180) {
         return sendJson(res, 400, { error: "On-site punches need your phone's location. Allow location access and try again." });
@@ -4462,7 +4470,7 @@ async function handleRequest(req, res) {
 
     // WiFi punch: there's no browser API to check SSID, so "on the office network" is
     // verified by matching the caller's public IP against the configured office IP(s).
-    if (source === 'wifi') {
+    if (punchSource === 'wifi') {
       if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
         return sendJson(res, 403, { error: 'WiFi punch-in is not configured yet. Ask your admin to set it up.' });
       }
@@ -4478,11 +4486,11 @@ async function handleRequest(req, res) {
     // For on-site punches, turn the captured "lat,lng" into a readable address so a
     // manager sees a place, not coordinates. Best-effort: never blocks the punch.
     let locationAddress = '';
-    if ((source || 'biometric') === 'on-site' && location) {
+    if (punchSource === 'on-site' && location) {
       const coords = String(location).match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
       if (coords) locationAddress = await reverseGeocode(coords[1], coords[2]);
     }
-    const inserted = await recordPunch(employee_id, ts, dir, source || 'biometric', '', location || '', marked_by || '', locationAddress);
+    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', location || '', marked_by || '', locationAddress);
 
     const dayStatus = await computeDayStatus(employee_id, ts.split(' ')[0]);
     return sendJson(res, 200, { employee_id, name: employee.name, direction: dir, timestamp: ts, dayStatus, duplicate: !inserted });
