@@ -14,7 +14,12 @@ name: Attendance scope
 
 on:
   pull_request_target:
-    branches: [main]
+    # Deliberately unfiltered by base branch. With `branches: [main]` a PR stacked
+    # on another feature branch matched nothing, so this job never ran on it — and
+    # it showed as no check at all rather than a failing one, which reads as fine.
+    # PR #780 reached review that way with the confinement unverified (its files
+    # happened to be in bounds). A restricted user could otherwise push any throwaway
+    # branch, stack a PR on it, and sidestep the check entirely.
     types: [opened, synchronize, reopened, edited]
 
 permissions:
