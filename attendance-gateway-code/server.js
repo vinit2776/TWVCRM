@@ -2043,6 +2043,41 @@ function renderChangePassword(error, username) {
     </body></html>`;
 }
 
+// The office-WiFi punch button's click handler, shared by the employee dashboard and
+// the "My attendance today" card managers get on the admin dashboard. Expects
+// #wifiPunchBtn and #wifiPunchStatus on the page.
+function wifiPunchScript(employeeId, lang) {
+  return `
+      function wifiPunch() {
+        const status = document.getElementById('wifiPunchStatus');
+        const btn = document.getElementById('wifiPunchBtn');
+        if (!status || !btn) return;
+        btn.disabled = true;
+        status.style.color = '';
+        status.textContent = ${JSON.stringify(t(lang, 'dashboard.checking'))};
+        fetch('/api/punch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ employee_id: ${JSON.stringify(employeeId)}, source: 'wifi' })
+        }).then(async r => {
+          const data = await r.json();
+          if (!r.ok) {
+            status.style.color = '#FFCDD2';
+            status.textContent = data.error || ${JSON.stringify(t(lang, 'dashboard.punch_failed'))};
+            btn.disabled = false;
+            return;
+          }
+          status.style.color = '';
+          status.textContent = data.direction === 'in' ? ${JSON.stringify(t(lang, 'dashboard.punched_in'))} : ${JSON.stringify(t(lang, 'dashboard.punched_out'))};
+          setTimeout(() => window.location.reload(), 700);
+        }).catch(() => {
+          status.style.color = '#FFCDD2';
+          status.textContent = ${JSON.stringify(t(lang, 'dashboard.something_wrong'))};
+          btn.disabled = false;
+        });
+      }`;
+}
+
 async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr());
@@ -2160,34 +2195,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${leaveBalanceCards}</div>
     </div>
     <script>
-      function wifiPunch() {
-        const status = document.getElementById('wifiPunchStatus');
-        const btn = document.getElementById('wifiPunchBtn');
-        if (!status || !btn) return;
-        btn.disabled = true;
-        status.style.color = '';
-        status.textContent = ${JSON.stringify(t(lang, 'dashboard.checking'))};
-        fetch('/api/punch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ employee_id: ${JSON.stringify(employee.id)}, source: 'wifi' })
-        }).then(async r => {
-          const data = await r.json();
-          if (!r.ok) {
-            status.style.color = '#FFCDD2';
-            status.textContent = data.error || ${JSON.stringify(t(lang, 'dashboard.punch_failed'))};
-            btn.disabled = false;
-            return;
-          }
-          status.style.color = '';
-          status.textContent = data.direction === 'in' ? ${JSON.stringify(t(lang, 'dashboard.punched_in'))} : ${JSON.stringify(t(lang, 'dashboard.punched_out'))};
-          setTimeout(() => window.location.reload(), 700);
-        }).catch(() => {
-          status.style.color = '#FFCDD2';
-          status.textContent = ${JSON.stringify(t(lang, 'dashboard.something_wrong'))};
-          btn.disabled = false;
-        });
-      }
+      ${wifiPunchScript(employee.id, lang)}
       function toggleBreak() {
         const status = document.getElementById('breakStatus');
         const btn = document.getElementById('breakBtn');
@@ -2493,16 +2501,9 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
   return pageShell(t(lang, 'overtime.title'), employee.id, 'overtime', body, user);
 }
 
-async function renderOnsite(employee, recentPunches, user) {
-  const lang = langOf(user);
-  const rows = recentPunches.map(p => `
-    <tr>
-      <td>${p.direction === 'in' ? t(lang, 'onsite.punch_in') : t(lang, 'onsite.punch_out')}</td>
-      <td>${escapeHtml(p.timestamp)}</td>
-      <td>${escapeHtml(p.marked_by || '—')}</td>
-      <td>${locationCell(p)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'onsite.no_punches')}</td></tr>`;
-
+// The on-site punch card (or "not enabled" note) and its script, shared by an
+// employee's On-Site page and the manager's own section on the admin On-Site page.
+function onsitePunchSection(employee, lang) {
   const punchCard = employee.onsite_enabled ? `
     <div class="card">
       <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'onsite.title')}</div>
@@ -2513,10 +2514,6 @@ async function renderOnsite(employee, recentPunches, user) {
         <div style="font-size:0.78em;color:#9AA5B1;margin-top:4px;">${t(lang, 'onsite.marked_by_hint')}</div>
       </div>
       <div id="onsiteStatus" style="margin-bottom:10px;font-size:0.9em;color:#7C8896;"></div>
-      <div id="manualLocationBox" style="display:none;margin-bottom:10px;">
-        <input id="manualLocation" type="text" placeholder="${escapeHtml(t(lang, 'onsite.manual_location_placeholder'))}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:280px;">
-        <button onclick="submitManualLocation()" style="padding:7px 14px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'onsite.submit')}</button>
-      </div>
       <button id="onsitePunchBtn" onclick="onsitePunch()" style="padding:10px 20px;border-radius:8px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'onsite.punch_btn')}</button>
     </div>` : `
     <div class="card">
@@ -2524,13 +2521,16 @@ async function renderOnsite(employee, recentPunches, user) {
       <p style="color:#7C8896;font-size:0.9em;">${t(lang, 'onsite.disabled_hint')}</p>
     </div>`;
 
-  const body = `
-    ${punchCard}
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'onsite.recent_title')}</div>
-      <table><tr><th>${t(lang, 'onsite.col_event')}</th><th>${t(lang, 'onsite.col_time')}</th><th>${t(lang, 'onsite.col_marked_by')}</th><th>${t(lang, 'onsite.col_location')}</th></tr>${rows}</table>
-    </div>
+  const punchScript = `
     <script>
+      // The location always comes from the phone — there's no way to type one in, and
+      // /api/punch rejects an on-site punch without real coordinates.
+      function showOnsiteError(message) {
+        const status = document.getElementById('onsiteStatus');
+        status.style.color = '#C62828';
+        status.innerHTML = message;
+        document.getElementById('onsitePunchBtn').disabled = false;
+      }
       function send(loc) {
         const status = document.getElementById('onsiteStatus');
         const markedBy = document.getElementById('markedBy').value;
@@ -2539,32 +2539,51 @@ async function renderOnsite(employee, recentPunches, user) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ employee_id: ${JSON.stringify(employee.id)}, source: 'on-site', marked_by: markedBy, location: loc })
-        }).then(r => r.json()).then(data => {
+        }).then(async r => {
+          const data = await r.json();
+          if (!r.ok) return showOnsiteError(data.error || ${JSON.stringify(t(lang, 'onsite.something_wrong'))});
           status.textContent = data.direction === 'in' ? ${JSON.stringify(t(lang, 'onsite.punched_in'))} : ${JSON.stringify(t(lang, 'onsite.punched_out'))};
           setTimeout(() => window.location.reload(), 700);
-        }).catch(() => { status.textContent = ${JSON.stringify(t(lang, 'onsite.something_wrong'))}; });
+        }).catch(() => showOnsiteError(${JSON.stringify(t(lang, 'onsite.something_wrong'))}));
       }
       function onsitePunch() {
         const status = document.getElementById('onsiteStatus');
-        if (navigator.geolocation) {
-          status.textContent = ${JSON.stringify(t(lang, 'onsite.getting_location'))};
-          navigator.geolocation.getCurrentPosition(
-            pos => send(pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5)),
-            () => {
-              status.textContent = ${JSON.stringify(t(lang, 'onsite.location_unavailable'))};
-              document.getElementById('manualLocationBox').style.display = 'block';
-            },
-            { timeout: 8000 }
-          );
-        } else {
-          document.getElementById('onsiteStatus').textContent = ${JSON.stringify(t(lang, 'onsite.geolocation_unsupported'))};
-          document.getElementById('manualLocationBox').style.display = 'block';
-        }
-      }
-      function submitManualLocation() {
-        send(document.getElementById('manualLocation').value || '');
+        if (!navigator.geolocation) return showOnsiteError(${JSON.stringify(escapeHtml(t(lang, 'onsite.geolocation_unsupported')))});
+        document.getElementById('onsitePunchBtn').disabled = true;
+        status.style.color = '';
+        status.textContent = ${JSON.stringify(t(lang, 'onsite.getting_location'))};
+        navigator.geolocation.getCurrentPosition(
+          pos => send(pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5)),
+          err => showOnsiteError(err.code === 1
+            ? ${JSON.stringify(escapeHtml(t(lang, 'onsite.location_denied')) + '<br><span style="font-size:0.88em;color:#7C8896;">' + escapeHtml(t(lang, 'onsite.location_denied_help')) + '</span>')}
+            : ${JSON.stringify(escapeHtml(t(lang, 'onsite.location_failed')))}),
+          // Fresh, GPS-level position: no cached fix from somewhere else.
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
       }
     </script>`;
+  return { punchCard, punchScript };
+}
+
+async function renderOnsite(employee, recentPunches, user) {
+  const lang = langOf(user);
+  const rows = recentPunches.map(p => `
+    <tr>
+      <td>${p.direction === 'in' ? t(lang, 'onsite.punch_in') : t(lang, 'onsite.punch_out')}</td>
+      <td>${escapeHtml(p.timestamp)}</td>
+      <td>${escapeHtml(p.marked_by || '—')}</td>
+      <td>${locationCell(p)}</td>
+    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'onsite.no_punches')}</td></tr>`;
+
+  const { punchCard, punchScript } = onsitePunchSection(employee, lang);
+
+  const body = `
+    ${punchCard}
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'onsite.recent_title')}</div>
+      <table><tr><th>${t(lang, 'onsite.col_event')}</th><th>${t(lang, 'onsite.col_time')}</th><th>${t(lang, 'onsite.col_marked_by')}</th><th>${t(lang, 'onsite.col_location')}</th></tr>${rows}</table>
+    </div>
+    ${punchScript}`;
   return pageShell(t(lang, 'onsite.title'), employee.id, 'onsite', body, user);
 }
 
@@ -2756,6 +2775,37 @@ async function renderAdminFieldTrips(trips, user) {
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
 
+// A manager's own attendance on the admin dashboard, with the same WiFi punch button
+// employees get and a link to punch on-site when their on-site duty is on.
+function myAttendanceCard(employee, dayStatus, lang) {
+  const time = ts => escapeHtml(ts.split(' ')[1].slice(0, 5));
+  const facts = [
+    dayStatus.checkIn ? `In ${time(dayStatus.checkIn)}` : 'Not punched in yet',
+    dayStatus.checkOut ? `Out ${time(dayStatus.checkOut)}` : null,
+    dayStatus.status === 'Active'
+      ? `Working <span class="liveHours" data-checkin="${escapeHtml(dayStatus.checkIn.replace(' ', 'T'))}">00:00:00</span>`
+      : null,
+  ].filter(Boolean).join(' &nbsp;·&nbsp; ');
+  const wifiButton = CONFIG.OFFICE_WIFI_IPS.size > 0 ? `
+      <div id="wifiPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
+      <button id="wifiPunchBtn" onclick="wifiPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
+      <div style="font-size:0.75em;opacity:0.8;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })}</div>`
+    : `<div style="font-size:0.85em;opacity:0.9;">WiFi punching isn't set up yet: add the office IP under <a href="/admin/settings" style="color:#fff;">Settings</a>.</div>`;
+  const onsiteLink = employee.onsite_enabled
+    ? `<div style="margin-top:10px;"><a href="/onsite" style="color:#fff;font-weight:600;font-size:0.9em;">Punch on-site →</a></div>`
+    : '';
+  return `
+    <div class="card" style="background:linear-gradient(135deg,#1565C0,#1E88E5);color:#fff;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:0.85em;opacity:0.85;">My attendance today</div>
+        <div style="font-size:1.25em;font-weight:700;margin:2px 0 6px;">${escapeHtml(employee.name)}</div>
+        <div style="font-size:0.9em;">${statusBadge(dayStatus.status, dayStatus.label, lang)} &nbsp;${facts}</div>
+      </div>
+      <div>${wifiButton}${onsiteLink}</div>
+    </div>
+    ${CONFIG.OFFICE_WIFI_IPS.size > 0 ? `<script>${wifiPunchScript(employee.id, lang)}</script>` : ''}`;
+}
+
 // "18:02" for today, "5 Oct 18:02" otherwise; withDate always includes the date
 // (for ranges, where a bare time next to a dated one is ambiguous).
 function deviceTimeLabel(ts, withDate = false) {
@@ -2841,6 +2891,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
 
   const body = `
     ${opts.offlineDevice ? deviceOfflineBanner(opts.offlineDevice) : ''}
+    ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user)) : ''}
     ${statsWidgets}
     ${devicePinsLink}
     <div class="card">
@@ -3266,7 +3317,7 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
   return pageShell('Overtime', '', 'overtime', body, user);
 }
 
-async function renderAdminOnsite(punches, user) {
+async function renderAdminOnsite(punches, user, selfEmployee = null) {
   const rows = (await Promise.all(punches.map(async p => {
     const emp = await getEmployee(p.employee_id);
     return `
@@ -3279,12 +3330,19 @@ async function renderAdminOnsite(punches, user) {
     </tr>`;
   }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No on-site duty punches yet</td></tr>`;
 
+  // Managers are employees too: their own on-site punch card comes first.
+  const self = selfEmployee ? onsitePunchSection(selfEmployee, langOf(user)) : null;
   const body = `
+    ${self ? (selfEmployee.onsite_enabled ? self.punchCard : `
+    <div class="card" style="color:#7C8896;font-size:0.9em;">
+      Your own on-site duty punching is off. To punch from outside the office, turn it on with the On-Site Duty toggle on your row on the <a href="/dashboard" style="color:#1565C0;">Dashboard</a>.
+    </div>`) : ''}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">On-Site Duty Punches — All Employees</div>
       <table><tr><th>Employee</th><th>Event</th><th>Time</th><th>Marked By</th><th>Location</th></tr>${rows}</table>
     </div>
-    <div class="card" style="color:#7C8896;font-size:0.9em;">To turn on-site duty on or off for someone, use the toggle on <a href="/dashboard" style="color:#1565C0;">Dashboard</a>.</div>`;
+    <div class="card" style="color:#7C8896;font-size:0.9em;">To turn on-site duty on or off for someone, use the toggle on <a href="/dashboard" style="color:#1565C0;">Dashboard</a>.</div>
+    ${self && selfEmployee.onsite_enabled ? self.punchScript : ''}`;
   return pageShell('On-Site', '', 'onsite', body, user);
 }
 
@@ -4353,13 +4411,15 @@ async function handleRequest(req, res) {
   // This is the endpoint the biometric device (or its middleware) calls per punch.
   if (parsed.pathname === '/api/punch' && req.method === 'POST') {
     // Two trust levels call this endpoint: the biometric device (API key, source
-    // defaults to 'biometric') and an employee's own logged-in browser session (the
-    // On-Site Duty and WiFi punch buttons) — session auth is restricted below to the
+    // defaults to 'biometric') and a logged-in employee's or manager's own browser
+    // session (the On-Site Duty and WiFi punch buttons) — session auth is restricted below to the
     // caller's own employee_id and source in ('on-site', 'wifi') only.
     const apiKey = req.headers['x-api-key'];
     const authorizedViaApiKey = apiKey === CONFIG.PUNCH_API_KEY;
     const sessionUser = authorizedViaApiKey ? null : await getSessionUser(req);
-    const authorizedViaSession = !authorizedViaApiKey && !!sessionUser && sessionUser.role === 'employee';
+    // Any logged-in account linked to an employee record can punch for itself:
+    // employees, and managers (who are registered as employees too).
+    const authorizedViaSession = !authorizedViaApiKey && !!sessionUser && !!sessionUser.employeeId;
     if (!authorizedViaApiKey && !authorizedViaSession) {
       logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), hadApiKeyHeader: !!apiKey, hadSession: !!sessionUser });
       return sendJson(res, 401, { error: 'Unauthorized' });
@@ -4375,12 +4435,20 @@ async function handleRequest(req, res) {
     const { employee_id, timestamp, direction, source, location, marked_by } = body;
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
 
+    // Settle what this punch *is* once, before anything is checked against it. The
+    // same missing field used to fall back three different ways in this handler —
+    // 'on-site' for the session whitelist, 'biometric' for the onsite_enabled gate,
+    // and neither for the coordinate and WiFi checks, which compared `source`
+    // directly. Omitting it therefore passed the whitelist, skipped both location
+    // checks, and was then stored as 'biometric' — the most trusted source there is.
+    const punchSource = source || (authorizedViaSession ? 'on-site' : 'biometric');
+
     if (authorizedViaSession) {
       if (employee_id !== sessionUser.employeeId) {
         logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
         return sendJson(res, 403, { error: 'You can only punch your own attendance.' });
       }
-      if (!['on-site', 'wifi'].includes(source || 'on-site')) {
+      if (!['on-site', 'wifi'].includes(punchSource)) {
         return sendJson(res, 403, { error: 'Only on-site duty or WiFi punches are allowed from a logged-in session.' });
       }
     }
@@ -4388,13 +4456,21 @@ async function handleRequest(req, res) {
     const employee = await getEmployee(employee_id);
     if (!employee) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
 
-    if ((source || 'biometric') === 'on-site' && !employee.onsite_enabled) {
+    if (punchSource === 'on-site' && !employee.onsite_enabled) {
       return sendJson(res, 403, { error: 'On-site duty punching is not enabled for this employee. Biometric punch-in is required.' });
+    }
+    // On-site punches must carry the phone's real coordinates — a typed-in place name
+    // can't be verified.
+    if (punchSource === 'on-site') {
+      const coords = String(location || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+      if (!coords || Math.abs(Number(coords[1])) > 90 || Math.abs(Number(coords[2])) > 180) {
+        return sendJson(res, 400, { error: "On-site punches need your phone's location. Allow location access and try again." });
+      }
     }
 
     // WiFi punch: there's no browser API to check SSID, so "on the office network" is
     // verified by matching the caller's public IP against the configured office IP(s).
-    if (source === 'wifi') {
+    if (punchSource === 'wifi') {
       if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
         return sendJson(res, 403, { error: 'WiFi punch-in is not configured yet. Ask your admin to set it up.' });
       }
@@ -4410,11 +4486,11 @@ async function handleRequest(req, res) {
     // For on-site punches, turn the captured "lat,lng" into a readable address so a
     // manager sees a place, not coordinates. Best-effort: never blocks the punch.
     let locationAddress = '';
-    if ((source || 'biometric') === 'on-site' && location) {
+    if (punchSource === 'on-site' && location) {
       const coords = String(location).match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
       if (coords) locationAddress = await reverseGeocode(coords[1], coords[2]);
     }
-    const inserted = await recordPunch(employee_id, ts, dir, source || 'biometric', '', location || '', marked_by || '', locationAddress);
+    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', location || '', marked_by || '', locationAddress);
 
     const dayStatus = await computeDayStatus(employee_id, ts.split(' ')[0]);
     return sendJson(res, 200, { employee_id, name: employee.name, direction: dir, timestamp: ts, dayStatus, duplicate: !inserted });
@@ -4775,9 +4851,13 @@ async function handleRequest(req, res) {
       // createAttendanceSnapshot's comment for why this matters on a network-backed db.
       const snapshot = await createAttendanceSnapshot(dateStr, dateStr, dateStr);
       const rows = await Promise.all(snapshot.employees.map(async employee => ({ employee, status: await snapshot.computeDayStatus(employee.id, dateStr) })));
+      // Managers are registered as employees, so they punch like one; the main admin
+      // login isn't linked to an employee and gets no card.
+      const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
+      const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()) } : null;
       const device = CONFIG.ZK_DEVICE_SN ? await getDeviceStatus(CONFIG.ZK_DEVICE_SN) : null;
       const offlineDevice = device && shouldShowOfflineAlert(device.last_seen) ? device : null;
-      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, offlineDevice }));
+      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, myAttendance, offlineDevice }));
     }
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
@@ -5146,7 +5226,8 @@ async function handleRequest(req, res) {
       const allPunches = await db.prepare(
         "SELECT * FROM punches WHERE source = 'on-site' ORDER BY timestamp DESC LIMIT 50"
       ).all();
-      return sendHtml(res, await renderAdminOnsite(allPunches, user));
+      const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
+      return sendHtml(res, await renderAdminOnsite(allPunches, user, selfEmployee));
     }
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
