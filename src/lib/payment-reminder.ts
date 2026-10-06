@@ -13,6 +13,7 @@
  * Returns a per-statement summary the caller can use for response payloads.
  */
 
+import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
@@ -208,7 +209,7 @@ export async function ensureLivePaymentLink(
     accept_partial: false,
     description: `${statement.statement_number} — ${ref}`,
     reference_id: refId,
-    expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
     notify: { sms: !!phone, email: !!email },
     reminder_enable: true,
     notes: { statement_id: statement.id, contract_number: ref, reminder_regen: "true" },
