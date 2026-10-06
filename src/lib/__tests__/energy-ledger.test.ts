@@ -76,4 +76,40 @@ describe("recomputeDeltasFromCumulative", () => {
     );
     expect(out.map((r) => r.energy_delta_wh)).toEqual([100, null, 200]);
   });
+
+  it("stores null, not a negative delta, when the seed is newer than the first row (18:45Z case)", () => {
+    // Production af667754 / ETG2USP024_5: sync seeded from a row after UTC
+    // midnight while OneGrid returned rows from IST midnight (18:30Z).
+    const out = recomputeDeltasFromCumulative(
+      [
+        { ts: "2026-09-18T18:45:00Z", Energy_Consumption_Cumulative_Wh: 2100, energy_delta_wh: 100 },
+        { ts: "2026-09-18T19:00:00Z", Energy_Consumption_Cumulative_Wh: 2200, energy_delta_wh: 100 },
+      ],
+      { ts: "2026-09-19T00:00:00Z", cumulative_wh: 4000 }
+    );
+    expect(out[0].energy_delta_wh).toBeNull();
+    expect(out[0].cumulative_wh).toBe(2100);
+    expect(out[1].energy_delta_wh).toBe(100);
+  });
+
+  it("computes the real delta when seeded from the row strictly before the first returned row", () => {
+    const [first] = recomputeDeltasFromCumulative(
+      [{ ts: "2026-09-18T18:45:00Z", Energy_Consumption_Cumulative_Wh: 2100, energy_delta_wh: null }],
+      { ts: "2026-09-18T18:30:00Z", cumulative_wh: 2000 }
+    );
+    expect(first.energy_delta_wh).toBe(100);
+  });
+
+  it("stores null for a negative cumulative diff and does not poison the next row", () => {
+    const out = recomputeDeltasFromCumulative(
+      [row(0, 900), row(1, 1000)],
+      { ts: at(-1), cumulative_wh: 1000 }
+    );
+    expect(out.map((r) => r.energy_delta_wh)).toEqual([null, 100]);
+  });
+
+  it("stores null when the seed has the same timestamp as the row", () => {
+    const [first] = recomputeDeltasFromCumulative([row(0, 1100)], { ts: at(0), cumulative_wh: 1000 });
+    expect(first.energy_delta_wh).toBeNull();
+  });
 });
