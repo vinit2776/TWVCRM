@@ -2600,6 +2600,7 @@ export const ACCOUNTING_HEAD_COLORS: Record<AccountingHead, string> = {
 export const ADHOC_ATTRIBUTION_PURPOSES = [
   "prorata_first_invoice",
   "monthly_rent",
+  "security_deposit",
   "other",
 ] as const;
 
@@ -2608,6 +2609,7 @@ export type AdhocAttributionPurpose = (typeof ADHOC_ATTRIBUTION_PURPOSES)[number
 export const ADHOC_ATTRIBUTION_PURPOSE_LABELS: Record<AdhocAttributionPurpose, string> = {
   prorata_first_invoice: "Pro-rata / first invoice",
   monthly_rent: "Monthly rent",
+  security_deposit: "Security deposit",
   other: "Other contract charge",
 };
 
@@ -2615,6 +2617,8 @@ export const ADHOC_ATTRIBUTION_PURPOSE_DESCRIPTIONS: Record<AdhocAttributionPurp
   prorata_first_invoice:
     "The partial first month or first invoice for this contract. Once paid, this satisfies the activation payment gate.",
   monthly_rent: "A regular monthly charge billed ad hoc instead of through a billing statement.",
+  security_deposit:
+    "A security deposit collected through a paid ad-hoc invoice, before deposits were redirected to the proposal deposit link. Adds the amount to the customer's security deposit pool. Must be paid and GST-free.",
   other: "Belongs to this contract, but is neither the first invoice nor monthly rent.",
 };
 

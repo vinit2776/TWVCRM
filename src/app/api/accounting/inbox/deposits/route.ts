@@ -73,6 +73,9 @@ export async function GET(request: NextRequest) {
       )
     `)
     .eq("status", "paid")
+    // Credits created from an already-accounted ad-hoc invoice (legacy deposit
+    // attribution) are not new money to account for.
+    .is("source_invoice_id", null)
     .eq("accounted", tab === "closed");
 
   const accountedByIds = Array.from(new Set([
@@ -173,7 +176,7 @@ export async function GET(request: NextRequest) {
     .eq("deposit_accounted", false);
   const { count: openTopups } = await admin
     .from("deposit_topups").select("id", { count: "exact", head: true })
-    .eq("status", "paid").eq("accounted", false);
+    .eq("status", "paid").is("source_invoice_id", null).eq("accounted", false);
   const openCount = (openDeposits || []).filter(hasMoneyToAccount).length + (openTopups ?? 0);
 
   // Open query counts, one grouped query per entity type rather than a fetch
