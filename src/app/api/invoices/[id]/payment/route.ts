@@ -89,6 +89,7 @@ export async function POST(
         invoice_id: id,
         contract_id: null,
         proposal_id: invoice.proposal_id ?? null,
+        lead_id: invoice.lead_id ?? null,
         statement_type: "usage",
         created_via: "adhoc_invoice",
         status: "finalized",
