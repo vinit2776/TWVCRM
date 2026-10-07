@@ -140,6 +140,10 @@
     {
       "path": "/api/cron/messaging-health",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/energy-ledger-capture",
+      "schedule": "7 * * * *"
     }
   ],
   "headers": [

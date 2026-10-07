@@ -25,6 +25,8 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/billing-dispatch-pump":   3,
   "cron/cosec-booking-cleanup":   3,
   "cron/messaging-health":        3,
+  // hourly at :07 — 3h tolerates one missed run plus a OneGrid blip
+  "cron/energy-ledger-capture":   3 * HOUR,
   "cron/comp-request-expiry":     3 * HOUR,
   // every 6h
   "cron/facility-sla-check":      8,
