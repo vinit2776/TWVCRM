@@ -16,6 +16,7 @@ import {
   Loader2, RefreshCw, Zap, Gauge, Activity, AlertTriangle, PlugZap, DatabaseZap,
 } from "lucide-react";
 import { toast } from "sonner";
+import { describeOnegridError, type FriendlyOnegridError } from "@/lib/onegrid-errors";
 import { EnergyBaselineSection } from "./energy-baseline-section";
 
 interface DeviceOption {
@@ -45,6 +46,41 @@ function daysAgoISO(n: number) {
   return d.toISOString().split("T")[0];
 }
 
+// Carries status/code from our API route through the catch blocks below so the
+// UI can tell "OneGrid is down" apart from "bad key" or a genuine bug.
+class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function toFriendly(err: unknown, fallback: string): FriendlyOnegridError {
+  if (err instanceof ApiError) return describeOnegridError({ status: err.status, code: err.code, message: err.message }, fallback);
+  return describeOnegridError({ message: err instanceof Error ? err.message : null }, fallback);
+}
+
+function OnegridErrorNotice({ error }: { error: FriendlyOnegridError }) {
+  // A OneGrid outage is temporary and not something the user did — amber, not red.
+  const tone = error.kind === "unavailable" ? "text-amber-700" : "text-destructive";
+  return (
+    <div className={`text-sm ${tone}`}>
+      <p className="flex items-start gap-2">
+        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" /> {error.message}
+      </p>
+      {error.detail && (
+        <details className="mt-1 ml-6 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Technical details (for OneGrid support)</summary>
+          <p className="mt-1 break-words">{error.detail}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   locationId: string;
   defaultDeviceId?: string | null;
@@ -56,18 +92,18 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
   const [selectedDevice, setSelectedDevice] = useState<string>("");
   const [savedDefaultDevice, setSavedDefaultDevice] = useState<string | null>(defaultDeviceId ?? null);
   const [devicesLoading, setDevicesLoading] = useState(true);
-  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [devicesError, setDevicesError] = useState<FriendlyOnegridError | null>(null);
 
   const [live, setLive] = useState<TelemetryResponse | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
-  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveError, setLiveError] = useState<FriendlyOnegridError | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [dateFrom, setDateFrom] = useState(daysAgoISO(7));
   const [dateTo, setDateTo] = useState(todayISO());
   const [history, setHistory] = useState<{ date: string; kwh: number }[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<FriendlyOnegridError | null>(null);
   const [syncing, setSyncing] = useState(false);
 
   const fetchDevices = useCallback(async () => {
@@ -76,7 +112,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
     try {
       const res = await fetch(`/api/locations/${locationId}/telemetry/devices`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load devices");
+      if (!res.ok) throw new ApiError(res.status, json.error, json.code);
       const data = json.data as DevicesResponse;
       const options: DeviceOption[] = Object.values(data.by_plant).flatMap((plant) =>
         plant.devices.map((d) => ({ ...d, plant_name: plant.plant_name }))
@@ -89,7 +125,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
         setSelectedDevice((saved || main)?.device_id ?? options[0].device_id);
       }
     } catch (err) {
-      setDevicesError(err instanceof Error ? err.message : "Failed to load devices");
+      setDevicesError(toFriendly(err, "Failed to load devices"));
     } finally {
       setDevicesLoading(false);
     }
@@ -105,11 +141,11 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
       const params = new URLSearchParams({ every: "15m", derive: "delta" });
       const res = await fetch(`/api/locations/${locationId}/telemetry/device/${selectedDevice}?${params}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load live telemetry");
+      if (!res.ok) throw new ApiError(res.status, json.error, json.code);
       setLive(json.data);
       setLastRefreshed(new Date());
     } catch (err) {
-      setLiveError(err instanceof Error ? err.message : "Failed to load live telemetry");
+      setLiveError(toFriendly(err, "Failed to load live telemetry"));
     } finally {
       setLiveLoading(false);
     }
@@ -137,7 +173,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
       });
       const res = await fetch(`/api/locations/${locationId}/telemetry/device/${selectedDevice}?${params}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load history");
+      if (!res.ok) throw new ApiError(res.status, json.error, json.code);
       const data = json.data as TelemetryResponse;
       const byDay = new Map<string, number>();
       for (const row of data.series) {
@@ -150,7 +186,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
         .map(([date, wh]) => ({ date, kwh: Math.round((wh / 1000) * 100) / 100 }));
       setHistory(days);
     } catch (err) {
-      setHistoryError(err instanceof Error ? err.message : "Failed to load history");
+      setHistoryError(toFriendly(err, "Failed to load history"));
     } finally {
       setHistoryLoading(false);
     }
@@ -184,7 +220,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
         body: JSON.stringify({ start: dateFrom, end: dateTo }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(typeof json.error === "string" ? json.error : "Sync failed");
+      if (!res.ok) throw new ApiError(res.status, typeof json.error === "string" ? json.error : "Sync failed", json.code);
       const { rows_upserted, complete, synced_through, chunks_processed, chunks_total } = json.data;
       if (complete) {
         toast.success(`Synced ${rows_upserted.toLocaleString("en-IN")} readings (${dateFrom} to ${dateTo}) to the local ledger`);
@@ -194,7 +230,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
         );
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sync failed");
+      toast.error(toFriendly(err, "Sync failed").message);
     } finally {
       setSyncing(false);
     }
@@ -221,9 +257,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
     return (
       <Card>
         <CardContent className="py-6">
-          <p className="text-sm text-destructive flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" /> {devicesError}
-          </p>
+          <OnegridErrorNotice error={devicesError} />
         </CardContent>
       </Card>
     );
@@ -283,9 +317,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
         </div>
 
         {liveError && (
-          <p className="text-sm text-destructive flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" /> {liveError}
-          </p>
+          <OnegridErrorNotice error={liveError} />
         )}
 
         {!liveError && !latest && !liveLoading && (
@@ -336,9 +368,7 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
             <div className="py-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           )}
           {historyError && (
-            <p className="text-sm text-destructive flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" /> {historyError}
-            </p>
+            <OnegridErrorNotice error={historyError} />
           )}
           {!historyLoading && !historyError && history.length === 0 && (
             <p className="text-sm text-muted-foreground">No consumption data in this range.</p>
