@@ -707,9 +707,6 @@ async function init() {
   // No longer read: anyone can punch from outside the office now (as 'remote'). Kept
   // so older databases still match the schema.
   try { await db.exec('ALTER TABLE employees ADD COLUMN onsite_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
-  // On-site duty punches were folded into remote punches: same location capture,
-  // just no longer switched on per employee.
-  await db.exec("UPDATE punches SET source = 'remote' WHERE source = 'on-site'");
   try { await db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
   // The biometric device's own enrolled user ID (small integer, e.g. "1"), distinct
   // from this app's EMP-00N id, so ADMS pushes can be matched to an employee.
@@ -1622,6 +1619,19 @@ function isValidEmail(str) {
 }
 
 // Short tags shown after each punch time on the calendar: [desktop, phone].
+// 'on-site' was the old name for what is now a remote punch — same location capture,
+// just no longer switched on per employee. Old rows keep the value they were written
+// with and are translated on read, rather than rewritten at startup: a rewrite can't be
+// undone once new remote punches exist (nothing distinguishes a converted row from a
+// genuine one), which would make rolling this release back lossy.
+const LEGACY_SOURCE_ALIASES = { 'on-site': 'remote' };
+function normalizeSource(source) {
+  return LEGACY_SOURCE_ALIASES[source] || source;
+}
+// Every stored value that reads as a remote punch — for queries, which can't call
+// normalizeSource.
+const REMOTE_SOURCE_VALUES = ['remote', 'on-site'];
+
 const PUNCH_SOURCE_TAGS = {
   'biometric': ['BIO', 'B'],
   'wifi': ['WIFI', 'W'],
@@ -1630,16 +1640,18 @@ const PUNCH_SOURCE_TAGS = {
   'correction': ['CORR', 'C'],
 };
 function punchSourceTag(source) {
-  const [long, short] = PUNCH_SOURCE_TAGS[source] || [String(source).slice(0, 4).toUpperCase(), String(source).slice(0, 1).toUpperCase()];
+  const key = normalizeSource(source);
+  const [long, short] = PUNCH_SOURCE_TAGS[key] || [String(key).slice(0, 4).toUpperCase(), String(key).slice(0, 1).toUpperCase()];
   return `<span class="cal-src"><span class="cal-long">${escapeHtml(long)}</span><span class="cal-short">${escapeHtml(short)}</span></span>`;
 }
 function punchSourceName(source, lang) {
-  return PUNCH_SOURCE_TAGS[source] ? t(lang, `calendar.source.${source}`) : source;
+  const key = normalizeSource(source);
+  return PUNCH_SOURCE_TAGS[key] ? t(lang, `calendar.source.${key}`) : key;
 }
 // Biometric, WiFi and the 19:00 auto-checkout all happen at the office; a correction
 // says nothing about where, so only a remote punch counts as away.
 function isRemotePunch(p) {
-  return !!p && p.source === 'remote';
+  return !!p && normalizeSource(p.source) === 'remote';
 }
 // Which STATUS_STYLE a calendar day uses: Present is split by where they checked in;
 // Late stays pink wherever it was.
@@ -5280,8 +5292,8 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const punches = await db.prepare(
-      "SELECT * FROM punches WHERE source = 'remote' ORDER BY timestamp DESC LIMIT ?"
-    ).all(REMOTE_PUNCH_LOG_LIMIT);
+      `SELECT * FROM punches WHERE source IN (${REMOTE_SOURCE_VALUES.map(() => '?').join(',')}) ORDER BY timestamp DESC LIMIT ?`
+    ).all(...REMOTE_SOURCE_VALUES, REMOTE_PUNCH_LOG_LIMIT);
     return sendHtml(res, await renderAdminRemotePunches(punches, user));
   }
 
