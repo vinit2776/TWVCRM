@@ -1,23 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
-interface Summary {
+export interface FollowupSummary {
   overdue: number;
   due_today: number;
 }
 
-export function OverdueFollowupBanner({ onReview }: { onReview: () => void }) {
-  const [summary, setSummary] = useState<Summary | null>(null);
-
-  useEffect(() => {
-    fetch("/api/leads/followup-summary")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setSummary(json))
-      .catch(() => {});
-  }, []);
-
+export function OverdueFollowupBanner({
+  summary,
+  onReview,
+}: {
+  summary: FollowupSummary | null;
+  onReview: () => void;
+}) {
   if (!summary || summary.overdue === 0) return null;
 
   return (

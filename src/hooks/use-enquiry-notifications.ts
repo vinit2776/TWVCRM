@@ -30,6 +30,7 @@ export interface EnquiryItem {
   claimedBy: string | null;
   claimedAt: string | null;
   claimerName: string | null;
+  resolverName: string | null;
   resolvedAt: string | null;
   resolutionOutcome: ResolutionOutcome | null;
 }
@@ -101,6 +102,7 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
     claimedBy: row.claimed_by,
     claimedAt: row.claimed_at,
     claimerName: row.claimer?.full_name ?? null,
+    resolverName: null,
     resolvedAt: row.resolved_at,
     resolutionOutcome: row.resolution_outcome,
   };
@@ -117,6 +119,9 @@ export function useEnquiryNotificationsCore() {
   const [alertQueue, setAlertQueue]             = useState<EnquiryAlert[]>([]);
   const [waInboundCount, setWaInboundCount]     = useState(0);
   const [waInboundItems, setWaInboundItems]     = useState<WhatsAppInboundItem[]>([]);
+  // Bumped after every successful claim/release/resolve so views that keep their own copy
+  // of the enquiry record (the Leads page tracker) know to refetch.
+  const [actionVersion, setActionVersion]       = useState(0);
 
   const graceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -170,6 +175,7 @@ export function useEnquiryNotificationsCore() {
           : i
       )
     );
+    setActionVersion((v) => v + 1);
     toast.success("Marked as on-it");
   }, []);
 
@@ -185,6 +191,7 @@ export function useEnquiryNotificationsCore() {
         i.leadId === leadId ? { ...i, claimedAt: null, claimedBy: null, claimerName: null } : i
       )
     );
+    setActionVersion((v) => v + 1);
   }, []);
 
   const resolve = useCallback(
@@ -203,6 +210,7 @@ export function useEnquiryNotificationsCore() {
         )
       );
       scheduleGraceRemoval(leadId);
+      setActionVersion((v) => v + 1);
       toast.success("Marked resolved");
     },
     [scheduleGraceRemoval]
@@ -369,7 +377,7 @@ export function useEnquiryNotificationsCore() {
   return {
     items, activeCount, unclaimedCount,
     totalCount: activeCount + waInboundCount,
-    claim, unclaim, resolve,
+    claim, unclaim, resolve, actionVersion,
     alertQueue, dismissAlert, dismissAllAlerts,
     waInboundCount, waInboundItems, markWhatsAppSeen,
   };

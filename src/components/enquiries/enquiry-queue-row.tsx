@@ -126,6 +126,14 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         </div>
       </div>
 
+      {isResolved && (item.claimerName || item.resolverName) && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {item.claimerName && <>Claimed by {item.claimerName}</>}
+          {item.claimerName && item.resolverName && " · "}
+          {item.resolverName && <>Resolved by {item.resolverName}</>}
+        </p>
+      )}
+
       {!isResolved && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           {item.claimedAt ? (
