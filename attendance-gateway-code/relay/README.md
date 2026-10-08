@@ -15,14 +15,15 @@ store. Run it as an auto-starting service so it recovers on reboot.
 **When this PC is off** (power cut, shutdown, sleep), the device keeps recording
 punches in its own memory. When the PC is back and the relay is running again:
 - the device resumes sending, including what it stored meanwhile;
-- the app notices the gap (15+ minutes without hearing from the device) and asks
+- the app notices the gap (35+ minutes without hearing from the device) and asks
   the device to resend that whole period, as a safety net. Duplicates are skipped;
 - the 7 PM auto-checkout waits while the device is offline, so nobody is wrongly
   marked as having forgotten to check out.
 
-Admins see a warning on the dashboard while the device is offline (08:00–20:00),
-and the device's status and re-sync history under **Settings → Biometric Device**,
-where they can also re-sync any date range by hand.
+The dashboard shows the device's status, when it last synced and its last re-sync,
+with a button to re-sync today; it turns red while the device is offline
+(08:00–20:00). Its full re-sync history is under **Settings → Biometric Device**,
+where admins can also re-sync any date range by hand.
 
 For this to work after a power cut, the relay must start with Windows without
 anyone logging in. `setup-relay.ps1` sets that up (`SERVICE_AUTO_START`, restart on
