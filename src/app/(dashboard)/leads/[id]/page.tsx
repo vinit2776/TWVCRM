@@ -65,6 +65,7 @@ const LeadDepositSummary = dynamic(
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
+import { LeadEnquiriesCard } from "@/components/leads/lead-enquiries-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
@@ -449,6 +450,9 @@ export default function LeadDetailPage({
 
               {/* Contacts — multiple contact points per lead */}
               <LeadContactsPanel leadId={lead.id} />
+
+              {/* Public-form enquiries and their reference numbers */}
+              <LeadEnquiriesCard leadId={lead.id} />
 
               {/* KYC Document Requirements Preview */}
               {lead.entity_type && (

@@ -43,6 +43,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ data: data ?? [] });
   }
 
+  // Free-text search matches name/email/phone/company, plus any lead that owns an enquiry
+  // whose reference matches (TWV-E-0042, TWV-E-42 or E42).
+  let searchOr = "";
+  if (search && !search.startsWith("#")) {
+    searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
+    if (refMatch) {
+      const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
+      const { data: refRows } = await supabase
+        .from("lead_enquiries")
+        .select("lead_id")
+        .eq("reference", reference)
+        .not("lead_id", "is", null)
+        .limit(1);
+      const leadId = (refRows?.[0] as { lead_id: string } | undefined)?.lead_id;
+      if (leadId) searchOr += `,id.eq.${leadId}`;
+    }
+  }
+
   const offset = (page - 1) * limit;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -90,7 +109,7 @@ export async function GET(request: NextRequest) {
       countQuery = countQuery.eq("id", search.slice(1));
     } else {
       countQuery = countQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+        searchOr
       );
     }
   }
@@ -121,7 +140,7 @@ export async function GET(request: NextRequest) {
       priorityQuery = priorityQuery.eq("leads.id", search.slice(1));
     } else {
       priorityQuery = priorityQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`,
+        searchOr,
         { referencedTable: "leads" }
       );
     }
@@ -182,7 +201,7 @@ export async function GET(request: NextRequest) {
         restQuery = restQuery.eq("id", search.slice(1));
       } else {
         restQuery = restQuery.or(
-          `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+          searchOr
         );
       }
     }

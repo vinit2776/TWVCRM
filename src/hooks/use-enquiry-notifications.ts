@@ -20,6 +20,8 @@ export type ResolutionOutcome = "converted" | "not_interested" | "no_response";
 
 export interface EnquiryItem {
   leadId: string;
+  /** Reference of the lead's latest enquiry (TWV-E-0001); null if it has none yet. */
+  reference: string | null;
   name: string;
   mobile: string | null;
   source: string;
@@ -84,7 +86,15 @@ type RawLeadRow = {
   claimed_by: string | null; claimed_at: string | null;
   resolved_at: string | null; resolution_outcome: ResolutionOutcome | null;
   claimer?: { id: string; full_name: string } | null;
+  enquiries?: { reference: string; received_at: string }[] | null;
 };
+
+export function latestReference(
+  enquiries: { reference: string; received_at: string }[] | null | undefined
+): string | null {
+  if (!enquiries || enquiries.length === 0) return null;
+  return [...enquiries].sort((a, b) => b.received_at.localeCompare(a.received_at))[0].reference;
+}
 
 function toItem(row: RawLeadRow): EnquiryItem | null {
   const matchingTag = (row.tags ?? []).find((t) => FORM_TAGS.includes(t));
@@ -92,6 +102,7 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
   const attentionResetAt = row.attention_reset_at ?? row.created_at;
   return {
     leadId: row.id,
+    reference: latestReference(row.enquiries),
     name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "Unknown",
     mobile: row.mobile,
     source: SOURCE_LABEL[matchingTag] ?? matchingTag,
@@ -111,7 +122,8 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
 const SELECT_COLS =
   "id, first_name, last_name, mobile, tags, created_at, attention_reset_at, " +
   "claimed_by, claimed_at, resolved_at, resolution_outcome, " +
-  "claimer:users!leads_claimed_by_fkey(id, full_name)";
+  "claimer:users!leads_claimed_by_fkey(id, full_name), " +
+  "enquiries:lead_enquiries(reference, received_at)";
 
 export function useEnquiryNotificationsCore() {
   const router = useRouter();
