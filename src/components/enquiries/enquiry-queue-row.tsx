@@ -95,7 +95,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             {item.source}
             {!compact && item.mobile && <> · +91 {item.mobile}</>}
             {" · "}
-            <span className="font-mono">#{item.leadId.slice(0, 6)}</span>
+            <span className="font-mono">{item.reference ?? `#${item.leadId.slice(0, 6)}`}</span>
           </p>
         </button>
 

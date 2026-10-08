@@ -20,6 +20,7 @@ export default function MetaEnquirePage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [reference, setReference] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -65,6 +66,7 @@ export default function MetaEnquirePage() {
         setError(json.error || "Something went wrong. Please try again.");
         return;
       }
+      setReference(typeof json.reference === "string" ? json.reference : null);
       setSubmitted(true);
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -98,6 +100,12 @@ export default function MetaEnquirePage() {
             <p className="text-gray-600 mt-2 text-base">
               Our team will contact you within <span className="font-semibold text-gray-800">24 hours</span>.
             </p>
+            {reference && (
+              <p className="mt-4 text-sm text-gray-600">
+                Your reference number is{" "}
+                <span className="font-mono font-semibold text-[#015E65]">{reference}</span>. Quote it when you speak to us.
+              </p>
+            )}
             <p className="text-gray-400 text-sm mt-4">
               We look forward to helping you find the perfect workspace.
             </p>

@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
         "location_id, " +
         "claimer:users!leads_claimed_by_fkey(id, full_name), " +
         "resolver:users!leads_resolved_by_fkey(id, full_name), " +
+        "enquiries:lead_enquiries(reference, received_at), " +
         "location:locations!leads_location_id_fkey(id, name, code)"
     )
     .overlaps("tags", FORM_TAGS)

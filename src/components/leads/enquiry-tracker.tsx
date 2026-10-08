@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
+import { latestReference } from "@/hooks/use-enquiry-notifications";
 import {
   useEnquiryNotifications,
   type EnquiryItem,
@@ -44,6 +45,7 @@ type LogRow = {
   resolution_outcome: ResolutionOutcome | null;
   claimer: { id: string; full_name: string } | null;
   resolver: { id: string; full_name: string } | null;
+  enquiries: { reference: string; received_at: string }[] | null;
 };
 
 function toItem(row: LogRow): EnquiryItem | null {
@@ -52,6 +54,7 @@ function toItem(row: LogRow): EnquiryItem | null {
   const attentionResetAt = row.attention_reset_at ?? row.created_at;
   return {
     leadId: row.id,
+    reference: latestReference(row.enquiries),
     name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "Unknown",
     mobile: row.mobile,
     source: SOURCE_LABEL[sourceTag] ?? sourceTag,
