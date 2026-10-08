@@ -54,6 +54,8 @@ export default function PurchaseOrdersPage() {
   const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [view, setView] = useState<"active" | "cancelled">("active");
+  const [cancelledCount, setCancelledCount] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [monthFilter, setMonthFilter] = useState("");
@@ -85,25 +87,46 @@ export default function PurchaseOrdersPage() {
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams({ page: String(page), limit: "25", include_totals: "true" });
+    const params = new URLSearchParams({ page: String(page), limit: "25", include_totals: "true", view });
     if (statusFilter) params.set("status", statusFilter);
     if (departmentFilter) params.set("department", departmentFilter);
     if (monthFilter) params.set("month", monthFilter);
     if (companyFilter) params.set("company_id", companyFilter);
     if (search) params.set("search", search);
-    const res = await fetch(`/api/procurement/orders?${params}`);
+    // Cancelled-tab badge follows the same department/month/company/search filters.
+    const countParams = new URLSearchParams({ limit: "1", view: "cancelled" });
+    if (departmentFilter) countParams.set("department", departmentFilter);
+    if (monthFilter) countParams.set("month", monthFilter);
+    if (companyFilter) countParams.set("company_id", companyFilter);
+    if (search) countParams.set("search", search);
+    const [res, countRes] = await Promise.all([
+      fetch(`/api/procurement/orders?${params}`),
+      fetch(`/api/procurement/orders?${countParams}`).catch(() => null),
+    ]);
     if (res.ok) {
       const json = await res.json();
       setOrders(json.data || []);
       setPagination(json.pagination);
       setTotals(json.totals ?? null);
     }
+    if (countRes?.ok) setCancelledCount((await countRes.json()).pagination?.total ?? 0);
     setLoading(false);
-  }, [page, statusFilter, departmentFilter, monthFilter, companyFilter, search]);
+  }, [page, view, statusFilter, departmentFilter, monthFilter, companyFilter, search]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const hasActiveFilters = !!(statusFilter || departmentFilter || monthFilter || companyFilter || search);
+  const cancelledView = view === "cancelled";
+  const statusOptions = PO_STATUSES.filter((s) =>
+    cancelledView ? s === "cancelled" || s === "partially_cancelled" : s !== "cancelled",
+  );
+
+  const switchView = (v: "active" | "cancelled") => {
+    if (v === view) return;
+    setView(v);
+    setStatusFilter("");
+    setPage(1);
+  };
 
   return (
     <div className="space-y-4">
@@ -146,7 +169,7 @@ export default function PurchaseOrdersPage() {
             </SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value="all">All Statuses</SelectItem>
-              {PO_STATUSES.map((s) => (
+              {statusOptions.map((s) => (
                 <SelectItem key={s} value={s}>{PO_STATUS_LABELS[s]}</SelectItem>
               ))}
             </SelectContent>
@@ -230,8 +253,45 @@ export default function PurchaseOrdersPage() {
         </div>
       </div>
 
+      {/* ── Active / Cancelled tabs ───────────────────────────────────────────── */}
+      <div className="flex gap-2">
+        <Button variant={cancelledView ? "outline" : "default"} size="sm" onClick={() => switchView("active")}>
+          Active
+        </Button>
+        <Button
+          variant={cancelledView ? "default" : "outline"}
+          size="sm"
+          onClick={() => switchView("cancelled")}
+        >
+          Cancelled
+          {cancelledCount !== null && cancelledCount > 0 && (
+            <span className={`ml-1.5 rounded-full px-1.5 text-xs ${cancelledView ? "bg-white/20" : "bg-muted text-muted-foreground"}`}>
+              {cancelledCount}
+            </span>
+          )}
+        </Button>
+      </div>
+
+      {/* ── Cancelled tab summary — reference only, never part of the budget ──── */}
+      {cancelledView && !loading && totals && (
+        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm flex flex-wrap items-center gap-3">
+          <IndianRupee className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="font-medium">
+            {totals.poCount} cancelled {totals.poCount === 1 ? "PO" : "POs"}
+          </span>
+          <span className="text-muted-foreground">·</span>
+          <span className="font-semibold">{formatCurrency(totals.totalExGst)}</span>
+          <span className="text-muted-foreground">— not counted in budget</span>
+          {pagination.total > totals.poCount && (
+            <span className="text-muted-foreground text-xs">
+              + {pagination.total - totals.poCount} partially cancelled (shown at remaining amount, not included above)
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Totals strip ──────────────────────────────────────────────────────── */}
-      {!loading && totals && (
+      {!cancelledView && !loading && totals && (
         <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm space-y-2">
           {/* Row 1: PO count + amounts */}
           <div className="flex flex-wrap items-center gap-3">
@@ -298,7 +358,7 @@ export default function PurchaseOrdersPage() {
       ) : orders.length === 0 ? (
         <EmptyState
           icon={Package}
-          title="No purchase orders"
+          title={cancelledView ? "No cancelled purchase orders" : "No purchase orders"}
           description={hasActiveFilters ? "No orders match the selected filters." : "Create your first purchase order to get started."}
           actionLabel={hasActiveFilters ? "Clear Filters" : "New Order"}
           onAction={hasActiveFilters
@@ -366,6 +426,9 @@ export default function PurchaseOrdersPage() {
                     </td>
                     <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
                       {po.total_ordered_amount > 0 ? formatCurrency(po.total_ordered_amount) : "—"}
+                      {cancelledView && po.status === "partially_cancelled" && (
+                        <div className="text-[10px] font-normal text-muted-foreground">remaining</div>
+                      )}
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
                       {po.expected_delivery_date ? formatDate(po.expected_delivery_date) : "—"}
