@@ -2880,7 +2880,7 @@ export default function ContractDetailPage({
       </Dialog>
 
       <Dialog open={stampConfirmOpen} onOpenChange={(open) => { if (!open) closeStampPreview(); }}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>
               {stampMode === "existing"
@@ -2907,6 +2907,7 @@ export default function ContractDetailPage({
               )}
             </DialogDescription>
           </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
           {stampMode === "existing" && stampExistingPageCount > 0 && (
             <div className="rounded-md border bg-amber-50 border-amber-200 p-4 space-y-3">
               <div className="flex items-center gap-3 flex-wrap">
@@ -3006,6 +3007,7 @@ export default function ContractDetailPage({
               {stampError}
             </div>
           )}
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeStampPreview}>
               Cancel
