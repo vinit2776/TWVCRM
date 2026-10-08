@@ -15,6 +15,10 @@ interface ContractConfigRow {
     id: string;
     contract_number: string;
     status: string;
+    activated_at: string | null;
+    start_date: string;
+    end_date: string;
+    terminated_at: string | null;
     billing_mode: string | null;
     leads: { id: string; first_name: string; last_name: string; company: string | null } | null;
   } | null;
@@ -63,7 +67,7 @@ export async function GET(
 
   const { data: bill } = await supabase
     .from("electricity_bills")
-    .select("id, bill_side, location_id")
+    .select("id, bill_side, location_id, bill_month, bill_year")
     .eq("id", id)
     .single();
 
@@ -105,14 +109,28 @@ export async function GET(
       contract_id, enabled, utility_ratio, generator_ratio,
       customer_utility_rate, customer_generator_rate, customer_gst_rate,
       billing_profile_id,
-      contracts(id, contract_number, status, billing_mode, leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
+      contracts(id, contract_number, status, activated_at, start_date, end_date, terminated_at, billing_mode, leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
       electricity_billing_profiles(customer_utility_pct, customer_generator_pct, utility_markup_type, utility_markup_value, generator_markup_type, generator_markup_value, customer_gst_rate)
     `)
     .eq("location_id", bill.location_id)
     .eq("enabled", true);
 
+  // Same rule as approve_electricity_landlord_bill() (00582): live contracts, or
+  // an activated contract that expired/was terminated but served the bill's month.
+  const monthStart = `${bill.bill_year}-${String(bill.bill_month).padStart(2, "0")}-01`;
+  const monthEnd = new Date(Date.UTC(bill.bill_year, bill.bill_month, 0)).toISOString().slice(0, 10);
+  const servedBillMonth = (c: NonNullable<ContractConfigRow["contracts"]>) => {
+    if (!["expired", "terminated"].includes(c.status) || !c.activated_at) return false;
+    const effectiveEnd = c.terminated_at && c.terminated_at.slice(0, 10) < c.end_date
+      ? c.terminated_at.slice(0, 10)
+      : c.end_date;
+    return c.start_date <= monthEnd && effectiveEnd >= monthStart;
+  };
   const enabledRows = ((configs ?? []) as ContractConfigRow[]).filter(
-    (c) => c.enabled && ["active", "renewal_in_progress"].includes(c.contracts?.status ?? ""),
+    (c) =>
+      c.enabled &&
+      c.contracts != null &&
+      (["active", "renewal_in_progress"].includes(c.contracts.status) || servedBillMonth(c.contracts)),
   );
 
   const previews = enabledRows.map((row) => {
