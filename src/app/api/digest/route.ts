@@ -240,6 +240,9 @@ async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string
     supabase
       .from("purchase_orders")
       .select("total_ordered_amount")
+      // A fully cancelled PO is not a commitment — keeps "POs Raised" consistent with the
+      // PO list totals and budget, which also exclude cancelled POs.
+      .neq("status", "cancelled")
       .gte("created_at", rangeStart)
       .lte("created_at", rangeEnd),
     supabase
