@@ -87,7 +87,9 @@ export default function EnquiryLogPage() {
     const res = await fetch(`/api/leads/enquiry-log?${sp}`);
     if (res.ok) {
       const json = await res.json();
-      setRows(json.data ?? []);
+      // Newest enquiry activity first — a re-enquiry on an old lead sorts by when it came back in.
+      const when = (r: EnquiryLogRow) => new Date(r.attention_reset_at ?? r.created_at).getTime();
+      setRows(((json.data ?? []) as EnquiryLogRow[]).sort((a, b) => when(b) - when(a)));
       setSummary(json.summary ?? null);
     }
     setLoading(false);
@@ -212,7 +214,7 @@ export default function EnquiryLogPage() {
                   return (
                     <tr key={row.id} className="border-t hover:bg-muted/30">
                       <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDate(row.created_at)}
+                        {formatDate(isReEnquiry && row.attention_reset_at ? row.attention_reset_at : row.created_at)}
                       </td>
                       <td className="px-3 py-2">
                         <Link href={`/leads/${row.id}`} className="font-medium hover:underline">

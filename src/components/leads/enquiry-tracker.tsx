@@ -93,7 +93,7 @@ export function EnquiryTracker() {
 
   const load = useCallback(async () => {
     const from = new Date(Date.now() - WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
-    const res = await fetch(`/api/leads/enquiry-log?from=${encodeURIComponent(from)}&limit=500`);
+    const res = await fetch(`/api/leads/enquiry-log?from=${encodeURIComponent(from)}&limit=500&include_unresolved=true`);
     if (res.ok) {
       const json = await res.json();
       setRows(
