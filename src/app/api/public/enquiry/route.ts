@@ -27,9 +27,36 @@ const SOURCE_META: Record<AllowedSource, { label: string; tag: string }> = {
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
 
+type AdminClient = Awaited<ReturnType<typeof createAdminClient>>;
+
+/** Records this submission as an enquiry and returns its reference (TWV-E-0001).
+ *  The reference is minted by the database. A failure here must never lose the customer's
+ *  enquiry, so it is logged (no PII) and the submission carries on without a reference. */
+async function recordEnquiry(
+  supabase: AdminClient,
+  args: { leadId: string; source: AllowedSource; isReEnquiry: boolean; payload: Record<string, unknown> }
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("lead_enquiries")
+    .insert({
+      lead_id: args.leadId,
+      source: args.source,
+      is_re_enquiry: args.isReEnquiry,
+      payload: args.payload,
+    })
+    .select("reference")
+    .single();
+  if (error) {
+    console.error("[public/enquiry] could not record enquiry:", error.message);
+    return null;
+  }
+  return data.reference as string;
+}
+
 interface EnquiryEmailParams {
   isReturning: boolean;
   leadId: string;
+  reference: string | null;
   firstName: string;
   lastName: string;
   sourceLabel: string;
@@ -92,6 +119,7 @@ function buildEnquiryEmailHtml(p: EnquiryEmailParams): string {
             </p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+              ${row("Reference",              p.reference ?? undefined)}
               ${row("Name",                   `${p.firstName} ${p.lastName}`)}
               ${row("Mobile",                 p.mobile)}
               ${row("Email",                  p.email || undefined)}
@@ -225,7 +253,25 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  const emailParams: Omit<EnquiryEmailParams, "isReturning" | "leadId"> = {
+  // Exactly what the customer submitted, kept on the enquiry row.
+  const submittedPayload: Record<string, unknown> = Object.fromEntries(
+    Object.entries({
+      name: name.trim(),
+      mobile: normalisedMobile,
+      email: normalisedEmail,
+      company: company?.trim(),
+      workspace_type,
+      seat_capacity,
+      budget_per_seat,
+      preferred_location,
+      working_hours,
+      conference_room_location,
+      start_date,
+      description: description?.trim(),
+    }).filter(([, v]) => v !== undefined && v !== null && v !== "")
+  );
+
+  const emailParams: Omit<EnquiryEmailParams, "isReturning" | "leadId" | "reference"> = {
     firstName, lastName, sourceLabel,
     mobile: normalisedMobile,
     email: normalisedEmail,
@@ -268,12 +314,19 @@ export async function POST(request: NextRequest) {
   }
 
   if (existing) {
+    const reference = await recordEnquiry(supabase, {
+      leadId: existing.id,
+      source,
+      isReEnquiry: true,
+      payload: submittedPayload,
+    });
+
     // Returning enquiry — add a note activity to the existing lead
     await supabase.from("activities").insert({
       lead_id: existing.id,
       type: "note",
       subject: `Re-enquiry via ${sourceLabel} form`,
-      description: enquirySummary,
+      description: reference ? `Reference: ${reference}\n${enquirySummary}` : enquirySummary,
     });
 
     // Re-open the attention window: clear any prior claim/resolve so the
@@ -294,14 +347,14 @@ export async function POST(request: NextRequest) {
     resend.emails.send({
       from: EMAIL_FROM,
       to: ALL_RECIPIENTS,
-      subject: `🔁 Re-Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
-      html: buildEnquiryEmailHtml({ ...emailParams, isReturning: true, leadId: existing.id }),
+      subject: `🔁 Re-Enquiry${reference ? ` ${reference}` : ""} — ${firstName} ${lastName} via ${sourceLabel}`,
+      html: buildEnquiryEmailHtml({ ...emailParams, isReturning: true, leadId: existing.id, reference }),
       replyTo: normalisedEmail || undefined,
     }).catch(() => {});
 
     sendPushToAll({
       title: `🔁 Re-Enquiry — ${firstName} ${lastName}`,
-      body: `Enquiring again via ${sourceLabel}`,
+      body: `Enquiring again via ${sourceLabel}${reference ? ` · ${reference}` : ""}`,
       url: `${APP_URL}/leads/${existing.id}`,
       tag: `re-enquiry-${existing.id}`,
     }).catch(() => {});
@@ -312,7 +365,7 @@ export async function POST(request: NextRequest) {
         .catch(() => {});
     });
 
-    return NextResponse.json({ success: true, returning: true });
+    return NextResponse.json({ success: true, returning: true, reference });
   }
 
   // Build the description field: combine free-text with structured extra fields
@@ -352,18 +405,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
+  const reference = await recordEnquiry(supabase, {
+    leadId: newLead.id,
+    source,
+    isReEnquiry: false,
+    payload: submittedPayload,
+  });
+
   // Fire-and-forget email + push alert — must not block the response
   resend.emails.send({
     from: EMAIL_FROM,
     to: ALL_RECIPIENTS,
-    subject: `🔔 New Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
-    html: buildEnquiryEmailHtml({ ...emailParams, isReturning: false, leadId: newLead.id }),
+    subject: `🔔 New Enquiry${reference ? ` ${reference}` : ""} — ${firstName} ${lastName} via ${sourceLabel}`,
+    html: buildEnquiryEmailHtml({ ...emailParams, isReturning: false, leadId: newLead.id, reference }),
     replyTo: normalisedEmail || undefined,
   }).catch(() => {});
 
   sendPushToAll({
     title: `🔔 New Enquiry — ${firstName} ${lastName}`,
-    body: `New enquiry via ${sourceLabel}`,
+    body: `New enquiry via ${sourceLabel}${reference ? ` · ${reference}` : ""}`,
     url: `${APP_URL}/leads/${newLead.id}`,
     tag: `new-enquiry-${newLead.id}`,
   }).catch(() => {});
@@ -374,5 +434,5 @@ export async function POST(request: NextRequest) {
       .catch(() => {});
   });
 
-  return NextResponse.json({ success: true, returning: false });
+  return NextResponse.json({ success: true, returning: false, reference });
 }

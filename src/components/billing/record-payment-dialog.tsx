@@ -15,6 +15,11 @@ import {
 } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
 import { STATEMENT_PAYMENT_MODES, TDS_CLIENT_SECTIONS } from "@/lib/constants";
+import { DEPOSIT_OVERRIDE_MIN_REASON_LENGTH } from "@/lib/deposit-payment-guard";
+import {
+  DEPOSIT_UNAVAILABLE_LABELS, DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment,
+} from "@/components/billing/deposit-guard-notice";
+import type { DepositBalance } from "@/types";
 
 /**
  * The one Record Payment dialog for billing statements — used by the Billing
@@ -75,7 +80,12 @@ export function RecordPaymentDialog({
   // Adjustment against deposit — available balance gates whether the mode
   // is offered at all; a request over that balance splits the remainder
   // into a normal payment on the secondary leg below.
-  const [depositAvailable, setDepositAvailable] = useState<number | null>(null);
+  const [depositBalance, setDepositBalance] = useState<Pick<DepositBalance, "available" | "unavailable_reason"> | null>(null);
+  const depositAvailable = depositBalance === null ? null : depositBalance.available;
+  // Set when the server refuses a payment that looks like a deposit adjustment.
+  const [guardMessage, setGuardMessage] = useState<string | null>(null);
+  const [overrideConfirmed, setOverrideConfirmed] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
   const [notifyCustomer, setNotifyCustomer] = useState(false);
   const [remainderMode, setRemainderMode] = useState("neft");
   const [remainderReference, setRemainderReference] = useState("");
@@ -104,7 +114,10 @@ export function RecordPaymentDialog({
       setNotifyCustomer(false);
       setRemainderMode("neft");
       setRemainderReference("");
-      setDepositAvailable(null);
+      setDepositBalance(null);
+      setGuardMessage(null);
+      setOverrideConfirmed(false);
+      setOverrideReason("");
     }
   }, [open, balanceDue, prefill]);
 
@@ -112,8 +125,11 @@ export function RecordPaymentDialog({
     if (!open || !statementId) return;
     fetch(`/api/billing-statements/${statementId}/deposit-balance`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setDepositAvailable(json?.data?.available ?? 0))
-      .catch(() => setDepositAvailable(0));
+      .then((json) => setDepositBalance({
+        available: Number(json?.data?.available ?? 0),
+        unavailable_reason: json?.data?.unavailable_reason ?? null,
+      }))
+      .catch(() => setDepositBalance({ available: 0, unavailable_reason: null }));
   }, [open, statementId]);
 
   const isDepositMode = mode === "deposit_adjustment";
@@ -216,6 +232,7 @@ export function RecordPaymentDialog({
         notes: notes.trim() || undefined,
         tds_amount:  tdsAmt,
         tds_section: tdsEnabled ? tdsSection : null,
+        deposit_override_reason: overrideConfirmed ? overrideReason.trim() : undefined,
       }),
     });
     setSubmitting(false);
@@ -231,6 +248,10 @@ export function RecordPaymentDialog({
       onSuccess(recordedPaymentId);
     } else {
       const err = await res.json().catch(() => null);
+      if (res.status === 409 && err?.code === "DEPOSIT_AVAILABLE") {
+        setGuardMessage(err.error);
+        return;
+      }
       toast.error(err?.error || "Failed to record payment");
     }
   };
@@ -239,9 +260,17 @@ export function RecordPaymentDialog({
   const tdsNum  = parseFloat(tdsAmount || "0");
   const settles = balanceDue !== null && Math.abs((cashNum + tdsNum) - balanceDue) < 1;
 
-  const availableModes = (depositAvailable ?? 0) > 0
-    ? [...PAYMENT_MODES, { value: "deposit_adjustment", label: "Adjustment against deposit" }]
-    : PAYMENT_MODES;
+  // The deposit row is always rendered — disabled with the reason when there's
+  // nothing to draw against, so "why can't I adjust this?" is answered in place.
+  // `available` decides selectability; the reason only supplies the wording.
+  const depositUnavailableLabel = depositBalance === null
+    ? "checking balance…"
+    : depositBalance.available > 0
+      ? null
+      : (depositBalance.unavailable_reason && DEPOSIT_UNAVAILABLE_LABELS[depositBalance.unavailable_reason])
+        || "no deposit available";
+  const showGuardWarning = looksLikeDepositAdjustment(mode, depositAvailable, reference, notes);
+  const overrideReady = !guardMessage || (overrideConfirmed && overrideReason.trim().length >= DEPOSIT_OVERRIDE_MIN_REASON_LENGTH);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -271,12 +300,18 @@ export function RecordPaymentDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Payment Mode</Label>
-              <Select value={mode} onValueChange={setMode}>
+              <Select value={mode} onValueChange={(v) => { setMode(v); setGuardMessage(null); setOverrideConfirmed(false); }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {availableModes.map((m) => (
+                  {PAYMENT_MODES.map((m) => (
                     <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                   ))}
+                  <SelectItem value="deposit_adjustment" disabled={depositUnavailableLabel !== null}>
+                    Adjustment against deposit
+                    {depositUnavailableLabel
+                      ? <span className="text-muted-foreground"> — {depositUnavailableLabel}</span>
+                      : <span className="text-muted-foreground"> ({formatCurrency(depositAvailable ?? 0)} available)</span>}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -336,6 +371,17 @@ export function RecordPaymentDialog({
                 balance due until approved.
               </p>
             </div>
+          )}
+
+          {showGuardWarning && !guardMessage && <DepositGuardWarning available={depositAvailable ?? 0} />}
+          {guardMessage && (
+            <DepositOverrideField
+              message={guardMessage}
+              confirmed={overrideConfirmed}
+              onConfirmedChange={setOverrideConfirmed}
+              reason={overrideReason}
+              onReasonChange={setOverrideReason}
+            />
           )}
 
           {/* ── TDS deduction block ──────────────────────────────────── */}
@@ -405,7 +451,7 @@ export function RecordPaymentDialog({
           </div>
           )}
 
-          <Button onClick={handleSubmit} disabled={submitting} className="w-full">
+          <Button onClick={handleSubmit} disabled={submitting || !overrideReady} className="w-full">
             {submitting
               ? (isDepositMode ? "Submitting…" : "Recording…")
               : (isDepositMode ? "Submit for Approval" : "Record Payment")}

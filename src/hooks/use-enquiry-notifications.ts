@@ -20,6 +20,8 @@ export type ResolutionOutcome = "converted" | "not_interested" | "no_response";
 
 export interface EnquiryItem {
   leadId: string;
+  /** Reference of the lead's latest enquiry (TWV-E-0001); null if it has none yet. */
+  reference: string | null;
   name: string;
   mobile: string | null;
   source: string;
@@ -30,6 +32,7 @@ export interface EnquiryItem {
   claimedBy: string | null;
   claimedAt: string | null;
   claimerName: string | null;
+  resolverName: string | null;
   resolvedAt: string | null;
   resolutionOutcome: ResolutionOutcome | null;
 }
@@ -83,7 +86,15 @@ type RawLeadRow = {
   claimed_by: string | null; claimed_at: string | null;
   resolved_at: string | null; resolution_outcome: ResolutionOutcome | null;
   claimer?: { id: string; full_name: string } | null;
+  enquiries?: { reference: string; received_at: string }[] | null;
 };
+
+export function latestReference(
+  enquiries: { reference: string; received_at: string }[] | null | undefined
+): string | null {
+  if (!enquiries || enquiries.length === 0) return null;
+  return [...enquiries].sort((a, b) => b.received_at.localeCompare(a.received_at))[0].reference;
+}
 
 function toItem(row: RawLeadRow): EnquiryItem | null {
   const matchingTag = (row.tags ?? []).find((t) => FORM_TAGS.includes(t));
@@ -91,6 +102,7 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
   const attentionResetAt = row.attention_reset_at ?? row.created_at;
   return {
     leadId: row.id,
+    reference: latestReference(row.enquiries),
     name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "Unknown",
     mobile: row.mobile,
     source: SOURCE_LABEL[matchingTag] ?? matchingTag,
@@ -101,6 +113,7 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
     claimedBy: row.claimed_by,
     claimedAt: row.claimed_at,
     claimerName: row.claimer?.full_name ?? null,
+    resolverName: null,
     resolvedAt: row.resolved_at,
     resolutionOutcome: row.resolution_outcome,
   };
@@ -109,7 +122,8 @@ function toItem(row: RawLeadRow): EnquiryItem | null {
 const SELECT_COLS =
   "id, first_name, last_name, mobile, tags, created_at, attention_reset_at, " +
   "claimed_by, claimed_at, resolved_at, resolution_outcome, " +
-  "claimer:users!leads_claimed_by_fkey(id, full_name)";
+  "claimer:users!leads_claimed_by_fkey(id, full_name), " +
+  "enquiries:lead_enquiries(reference, received_at)";
 
 export function useEnquiryNotificationsCore() {
   const router = useRouter();
@@ -117,6 +131,9 @@ export function useEnquiryNotificationsCore() {
   const [alertQueue, setAlertQueue]             = useState<EnquiryAlert[]>([]);
   const [waInboundCount, setWaInboundCount]     = useState(0);
   const [waInboundItems, setWaInboundItems]     = useState<WhatsAppInboundItem[]>([]);
+  // Bumped after every successful claim/release/resolve so views that keep their own copy
+  // of the enquiry record (the Leads page tracker) know to refetch.
+  const [actionVersion, setActionVersion]       = useState(0);
 
   const graceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -170,6 +187,7 @@ export function useEnquiryNotificationsCore() {
           : i
       )
     );
+    setActionVersion((v) => v + 1);
     toast.success("Marked as on-it");
   }, []);
 
@@ -185,6 +203,7 @@ export function useEnquiryNotificationsCore() {
         i.leadId === leadId ? { ...i, claimedAt: null, claimedBy: null, claimerName: null } : i
       )
     );
+    setActionVersion((v) => v + 1);
   }, []);
 
   const resolve = useCallback(
@@ -203,6 +222,7 @@ export function useEnquiryNotificationsCore() {
         )
       );
       scheduleGraceRemoval(leadId);
+      setActionVersion((v) => v + 1);
       toast.success("Marked resolved");
     },
     [scheduleGraceRemoval]
@@ -369,7 +389,7 @@ export function useEnquiryNotificationsCore() {
   return {
     items, activeCount, unclaimedCount,
     totalCount: activeCount + waInboundCount,
-    claim, unclaim, resolve,
+    claim, unclaim, resolve, actionVersion,
     alertQueue, dismissAlert, dismissAllAlerts,
     waInboundCount, waInboundItems, markWhatsAppSeen,
   };

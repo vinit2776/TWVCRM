@@ -27,6 +27,11 @@ export async function GET(request: NextRequest) {
   const sort_order = searchParams.get("sort_order") || "desc";
   const phone_exact = searchParams.get("phone_exact");
   const include_archived = searchParams.get("include_archived") === "true";
+  // Leads page tabs. "overdue" returns only leads with an overdue/due-today follow-up;
+  // "all" is a plain sort with no follow-up reordering, so a backlog of stale follow-ups
+  // can't push newly created leads off page 1. Absent = legacy overdue-first merge
+  // (other callers: pipeline, task dialog, command palette).
+  const view = searchParams.get("view");
 
   // Quick phone lookup — returns just id, id_proof_path fields
   if (phone_exact) {
@@ -36,6 +41,25 @@ export async function GET(request: NextRequest) {
       .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
+  }
+
+  // Free-text search matches name/email/phone/company, plus any lead that owns an enquiry
+  // whose reference matches (TWV-E-0042, TWV-E-42 or E42).
+  let searchOr = "";
+  if (search && !search.startsWith("#")) {
+    searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
+    if (refMatch) {
+      const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
+      const { data: refRows } = await supabase
+        .from("lead_enquiries")
+        .select("lead_id")
+        .eq("reference", reference)
+        .not("lead_id", "is", null)
+        .limit(1);
+      const leadId = (refRows?.[0] as { lead_id: string } | undefined)?.lead_id;
+      if (leadId) searchOr += `,id.eq.${leadId}`;
+    }
   }
 
   const offset = (page - 1) * limit;
@@ -85,7 +109,7 @@ export async function GET(request: NextRequest) {
       countQuery = countQuery.eq("id", search.slice(1));
     } else {
       countQuery = countQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+        searchOr
       );
     }
   }
@@ -116,14 +140,15 @@ export async function GET(request: NextRequest) {
       priorityQuery = priorityQuery.eq("leads.id", search.slice(1));
     } else {
       priorityQuery = priorityQuery.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`,
+        searchOr,
         { referencedTable: "leads" }
       );
     }
   }
   priorityQuery = priorityQuery.order("follow_up_date", { ascending: true });
 
-  const { data: priorityRows, error: priorityError } = await priorityQuery;
+  const { data: priorityRows, error: priorityError } =
+    view === "all" ? { data: [], error: null } : await priorityQuery;
   if (priorityError) {
     return NextResponse.json({ error: priorityError.message }, { status: 500 });
   }
@@ -144,7 +169,7 @@ export async function GET(request: NextRequest) {
     Math.min(offset, priorityIds.length),
     Math.min(pageEnd, priorityIds.length)
   );
-  const restNeeded = limit - prioritySliceIds.length;
+  const restNeeded = view === "overdue" ? 0 : limit - prioritySliceIds.length;
   const restOffset = Math.max(0, offset - priorityIds.length);
 
   let priorityLeads: LeadRow[] = [];
@@ -176,7 +201,7 @@ export async function GET(request: NextRequest) {
         restQuery = restQuery.eq("id", search.slice(1));
       } else {
         restQuery = restQuery.or(
-          `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
+          searchOr
         );
       }
     }
@@ -199,10 +224,12 @@ export async function GET(request: NextRequest) {
 
   // Within the "rest" group (no overdue/due-today items — those were already pulled out
   // above), still float upcoming-followup leads ahead of leads with no followup at all.
-  restLeads.sort((a, b) => {
-    const priority = (f: LeadRow["_followup"]) => (f?.upcoming ? 0 : 1);
-    return priority(a._followup) - priority(b._followup);
-  });
+  if (view !== "all") {
+    restLeads.sort((a, b) => {
+      const priority = (f: LeadRow["_followup"]) => (f?.upcoming ? 0 : 1);
+      return priority(a._followup) - priority(b._followup);
+    });
+  }
 
   const leads = [...priorityLeads, ...restLeads];
 
@@ -211,8 +238,8 @@ export async function GET(request: NextRequest) {
     pagination: {
       page,
       limit,
-      total: count || 0,
-      totalPages: Math.ceil((count || 0) / limit),
+      total: view === "overdue" ? priorityIds.length : count || 0,
+      totalPages: Math.ceil((view === "overdue" ? priorityIds.length : count || 0) / limit),
     },
   });
 }

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
+import { latestReference } from "@/hooks/use-enquiry-notifications";
 
 type EnquiryLogRow = {
   id: string;
@@ -31,6 +32,7 @@ type EnquiryLogRow = {
   claimer: { id: string; full_name: string } | null;
   resolver: { id: string; full_name: string } | null;
   location: { id: string; name: string; code: string } | null;
+  enquiries: { reference: string; received_at: string }[] | null;
 };
 
 type Summary = {
@@ -87,7 +89,9 @@ export default function EnquiryLogPage() {
     const res = await fetch(`/api/leads/enquiry-log?${sp}`);
     if (res.ok) {
       const json = await res.json();
-      setRows(json.data ?? []);
+      // Newest enquiry activity first — a re-enquiry on an old lead sorts by when it came back in.
+      const when = (r: EnquiryLogRow) => new Date(r.attention_reset_at ?? r.created_at).getTime();
+      setRows(((json.data ?? []) as EnquiryLogRow[]).sort((a, b) => when(b) - when(a)));
       setSummary(json.summary ?? null);
     }
     setLoading(false);
@@ -189,6 +193,7 @@ export default function EnquiryLogPage() {
             <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 text-left">When</th>
+                <th className="px-3 py-2 text-left">Reference</th>
                 <th className="px-3 py-2 text-left">Name</th>
                 <th className="px-3 py-2 text-left">Mobile</th>
                 <th className="px-3 py-2 text-left">Source</th>
@@ -199,10 +204,10 @@ export default function EnquiryLogPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
+                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
               )}
               {!loading &&
                 rows.map((row) => {
@@ -212,7 +217,10 @@ export default function EnquiryLogPage() {
                   return (
                     <tr key={row.id} className="border-t hover:bg-muted/30">
                       <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDate(row.created_at)}
+                        {formatDate(isReEnquiry && row.attention_reset_at ? row.attention_reset_at : row.created_at)}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">
+                        {latestReference(row.enquiries) ?? "—"}
                       </td>
                       <td className="px-3 py-2">
                         <Link href={`/leads/${row.id}`} className="font-medium hover:underline">

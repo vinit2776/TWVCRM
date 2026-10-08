@@ -77,10 +77,13 @@ export async function GET(request: NextRequest) {
   const fetchAll = searchParams.get("all") === "1";
   const ALL_ROWS_CAP = 1000;
 
+  // Opt-in so the many other callers of this list don't pay for the extra join.
+  const includeQuotations = searchParams.get("include_quotations") === "1";
+
   let query = supabase
     .from("purchase_requests")
     .select(
-      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)`,
+      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)${includeQuotations ? ", material_request_quotations(id, vendor_name, amount)" : ""}`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false });
