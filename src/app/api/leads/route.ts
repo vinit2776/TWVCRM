@@ -66,13 +66,31 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
 
   const LEAD_SELECT =
-    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done)";
+    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
 
-  type Followup = { follow_up_date: string | null; is_follow_up_done: boolean };
+  type Followup = {
+    follow_up_date: string | null;
+    is_follow_up_done: boolean;
+    follow_up_notes: string | null;
+    subject: string | null;
+    type: string;
+  };
+  type NextFollowup = {
+    due_at: string;
+    days_overdue: number;
+    notes: string | null;
+    subject: string | null;
+    type: string;
+  };
   type LeadRow = {
     id: string;
     _pending_followups?: Followup[];
-    _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null;
+    _followup?: {
+      overdue: boolean;
+      due_today: boolean;
+      upcoming: boolean;
+      next?: NextFollowup;
+    } | null;
   };
 
   function attachFollowupFlags(rows: LeadRow[]) {
@@ -88,7 +106,26 @@ export async function GET(request: NextRequest) {
           else if (d === today) flags.due_today = true;
           else flags.upcoming = true;
         }
-        l._followup = flags;
+        // The pending follow-up that's due soonest (or longest overdue) — what the Follow-ups
+        // tab shows as "when" and "next action".
+        const soonest = [...pending].sort((a, b) =>
+          (a.follow_up_date as string).localeCompare(b.follow_up_date as string)
+        )[0];
+        const dueDay = (soonest.follow_up_date as string).slice(0, 10);
+        const days_overdue = Math.max(
+          0,
+          Math.round((Date.parse(today) - Date.parse(dueDay)) / 86_400_000)
+        );
+        l._followup = {
+          ...flags,
+          next: {
+            due_at: soonest.follow_up_date as string,
+            days_overdue,
+            notes: soonest.follow_up_notes,
+            subject: soonest.subject,
+            type: soonest.type,
+          },
+        };
       }
       // Remove raw embed from the response — downstream code doesn't need it
       delete l._pending_followups;
