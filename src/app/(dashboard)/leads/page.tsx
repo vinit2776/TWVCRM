@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, AlertTriangle, Clock } from "lucide-react";
@@ -33,10 +33,12 @@ const ImportLeadsDialog = dynamic(
   { ssr: false }
 );
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
-import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
-import { OverdueFollowupBanner } from "@/components/leads/overdue-followup-banner";
+import { OverdueFollowupBanner, type FollowupSummary } from "@/components/leads/overdue-followup-banner";
+import { EnquiryTracker } from "@/components/leads/enquiry-tracker";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+
+type LeadsTab = "enquiries" | "followups" | "all";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -49,6 +51,15 @@ export default function LeadsPage() {
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
   const [importOpen, setImportOpen] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
+  const [tab, setTab] = useState<LeadsTab>("enquiries");
+  const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
+
+  useEffect(() => {
+    fetch("/api/leads/followup-summary")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setFollowupSummary(json))
+      .catch(() => {});
+  }, []);
 
   const { users } = useUsers();
 
@@ -69,7 +80,6 @@ export default function LeadsPage() {
   );
   const isUnreadFormLead = (lead: { id: string }) =>
     unresolvedItems.some((i) => i.leadId === lead.id && !i.isReEnquiry);
-  const hasPinned = enquiryItems.length > 0;
 
   const { data: leads, pagination, loading, refetch } = useLeads({
     page,
@@ -79,6 +89,7 @@ export default function LeadsPage() {
     location_id: locationFilter || undefined,
     assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
+    view: tab === "followups" ? "overdue" : "all",
   });
 
   // Client-side: sort leads — unresolved attention items first
@@ -95,9 +106,15 @@ export default function LeadsPage() {
     setPage(1);
   };
 
-  // Overdue follow-ups sort to the top of page 1 by default, but only within whatever
-  // filters are currently applied — clear them so nothing hides the leads that need action.
+  const switchTab = (next: LeadsTab) => {
+    setTab(next);
+    setPage(1);
+  };
+
+  // The follow-ups tab lists only leads with an overdue/due-today follow-up, but still
+  // within whatever filters are applied — clear them so nothing hides the leads that need action.
   const handleReviewOverdue = () => {
+    setTab("followups");
     setStatusFilter("");
     setSourceFilter([]);
     setLocationFilter(null);
@@ -132,42 +149,42 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* ── Overdue follow-ups need action — visible regardless of default page/filters ── */}
-      <OverdueFollowupBanner onReview={handleReviewOverdue} />
-
-      {/* ── Pinned: Public-form enquiries needing attention (real-time) ── */}
-      {hasPinned && (
-        <div className="rounded-lg border-2 border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/20 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-100/60 dark:bg-emerald-900/30 border-b border-emerald-300/60">
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+      {/* ── View tabs: new enquiries stay discoverable instead of competing with the follow-up backlog ── */}
+      <div className="flex flex-wrap gap-2">
+        {([
+          { key: "enquiries", label: "New enquiries", count: activeCount, tone: "bg-emerald-500 text-white" },
+          {
+            key: "followups",
+            label: "Follow-ups due",
+            count: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
+            tone: "bg-red-500 text-white",
+          },
+          { key: "all", label: "All leads", count: 0, tone: "" },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => switchTab(t.key)}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
+              tab === t.key
+                ? "bg-foreground text-background border-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            {t.label}
+            {t.count > 0 && (
+              <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${t.tone}`}>
+                {t.count}
               </span>
-              <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 uppercase tracking-wider">
-                Public-form enquiries
-              </span>
-              {activeCount > 0 && (
-                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white">
-                  {activeCount}
-                </span>
-              )}
-            </div>
-            <Link
-              href="/leads/enquiry-log"
-              className="text-xs font-medium text-emerald-700 hover:underline underline-offset-2"
-            >
-              Enquiry log →
-            </Link>
-          </div>
+            )}
+          </button>
+        ))}
+      </div>
 
-          <div className="p-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {enquiryItems.map((item) => (
-              <EnquiryQueueRow key={item.leadId} item={item} />
-            ))}
-          </div>
-        </div>
-      )}
+      {tab === "enquiries" && <EnquiryTracker />}
+
+      {tab !== "enquiries" && (
+        <>
+      {tab === "all" && <OverdueFollowupBanner summary={followupSummary} onReview={handleReviewOverdue} />}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -260,10 +277,14 @@ export default function LeadsPage() {
       ) : sortedLeads.length === 0 ? (
         <EmptyState
           icon={Users}
-          title="No leads found"
-          description="Create your first lead or adjust your filters."
-          actionLabel="Create Lead"
-          onAction={() => router.push("/leads/new")}
+          title={tab === "followups" ? "No follow-ups due" : "No leads found"}
+          description={
+            tab === "followups"
+              ? "Nothing is overdue or due today with the current filters."
+              : "Create your first lead or adjust your filters."
+          }
+          actionLabel={tab === "followups" ? undefined : "Create Lead"}
+          onAction={tab === "followups" ? undefined : () => router.push("/leads/new")}
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">
@@ -445,6 +466,9 @@ export default function LeadsPage() {
             </Button>
           </div>
         </div>
+      )}
+
+        </>
       )}
 
       {/* Import Leads Dialog */}
