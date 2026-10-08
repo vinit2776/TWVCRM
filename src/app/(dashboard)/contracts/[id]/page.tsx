@@ -202,7 +202,7 @@ export default function ContractDetailPage({
   // Customer's already-collected deposit that could cover this contract's
   // security deposit at activation (see /api/contracts/[id]/apply-pooled-deposit).
   // Only fetched while the deposit leg of the activation gate is the blocker.
-  const [poolDeposit, setPoolDeposit] = useState<{ applicable: number; required: number; available: number } | null>(null);
+  const [poolDeposit, setPoolDeposit] = useState<{ applicable: number; required: number; available: number; unverified: { amount: number; contract_numbers: string[] } } | null>(null);
   const [applyingPool, setApplyingPool] = useState(false);
   const poolDepositApplied = Number(contract?.deposit_pool_applied_amount || 0);
   const canApplyPooledDeposit = ["admin", "manager", "sales_rep"].includes(userRole ?? "");
@@ -222,7 +222,12 @@ export default function ContractDetailPage({
       .then((json) => {
         if (cancelled) return;
         setPoolDeposit(json.data
-          ? { applicable: json.data.applicable, required: json.data.required, available: json.data.available }
+          ? {
+              applicable: json.data.applicable,
+              required: json.data.required,
+              available: json.data.available,
+              unverified: json.data.unverified ?? { amount: 0, contract_numbers: [] },
+            }
           : null);
       })
       .catch(() => { if (!cancelled) setPoolDeposit(null); });
@@ -1299,6 +1304,13 @@ export default function ContractDetailPage({
                             >
                               {applyingPool ? <Loader2 className="h-3 w-3 animate-spin" /> : `Apply ${formatCurrency(poolDeposit.applicable)}`}
                             </Button>
+                            {poolDeposit.unverified.amount > 0 && (
+                              <p className="basis-full text-red-700 font-medium">
+                                ⚠ {formatCurrency(poolDeposit.unverified.amount)} of this has no payment evidence on file
+                                {poolDeposit.unverified.contract_numbers.length > 0 && ` (${poolDeposit.unverified.contract_numbers.join(", ")})`}
+                                {" "}— it was imported as &ldquo;assumed received&rdquo; or marked paid without an amount. Confirm it reached the bank before applying.
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
