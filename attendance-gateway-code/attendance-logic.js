@@ -220,6 +220,9 @@ function createAttendanceLogic(db) {
       checkIn: checkIn.timestamp,
       checkOut: checkOut ? checkOut.timestamp : null,
       checkOutAuto: checkOut ? checkOut.source === 'auto' : false,
+      // The full punch rows, for where each was made (office vs. a remote location).
+      checkInPunch: checkIn,
+      checkOutPunch: checkOut,
       hoursWorked,
       late: isLate,
       halfDay: isHalfDay,
