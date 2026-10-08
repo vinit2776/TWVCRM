@@ -167,6 +167,11 @@ export const createActivitySchema = z.object({
   meeting_end_at: z.string().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
+}).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {
+  // The Follow-ups due list shows this as the "next action"; without it the person
+  // picking the lead up has to open every lead to find out what the follow-up is for.
+  message: "Add a follow-up note saying what needs to happen",
+  path: ["follow_up_notes"],
 });
 
 export type CreateActivityInput = z.infer<typeof createActivitySchema>;
