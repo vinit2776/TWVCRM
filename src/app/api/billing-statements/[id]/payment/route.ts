@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { canRecordPayments } from "@/lib/constants";
+import { DEPOSIT_ADJUSTMENT_MODE, DEPOSIT_OVERRIDE_NOTE_MARKER, evaluateDepositGuard } from "@/lib/deposit-payment-guard";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -82,16 +83,49 @@ export async function POST(
   if (!amount || amount <= 0) return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
   if (!payment_date) return NextResponse.json({ error: "Payment date is required" }, { status: 400 });
   if (!payment_mode) return NextResponse.json({ error: "Payment mode is required" }, { status: 400 });
+  // Only approve_deposit_adjustment may create a deposit_adjustment payment —
+  // posting one here would settle the invoice without the maker-checker step.
+  if (payment_mode === DEPOSIT_ADJUSTMENT_MODE) {
+    return NextResponse.json(
+      { error: "Deposit adjustments go through \"Adjustment against deposit\", which needs admin or manager approval." },
+      { status: 400 },
+    );
+  }
 
   // Fetch statement to validate
   const { data: statement } = await supabase
     .from("billing_statements")
-    .select("id, total_amount, status, payment_status")
+    .select("id, total_amount, status, payment_status, contract_id")
     .eq("id", id)
     .single();
 
   if (!statement) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
   if (statement.status === "draft") return NextResponse.json({ error: "Cannot record payment for a draft statement" }, { status: 400 });
+
+  // Settling against a customer's deposit must use the deposit-adjustment flow.
+  // Fails open (null) if the balance can't be read — a lookup outage must not
+  // stop genuine receipts being recorded.
+  let depositAvailable: number | null = null;
+  if (statement.contract_id) {
+    const { data: bal, error: balErr } = await createAdminClient()
+      .rpc("get_deposit_available_balance", { p_contract_id: statement.contract_id });
+    if (balErr) console.error("[payment] deposit balance lookup failed:", balErr.message);
+    else depositAvailable = Number(bal?.[0]?.available ?? 0);
+  }
+  const overrideReason = typeof body.deposit_override_reason === "string" ? body.deposit_override_reason : null;
+  const guard = evaluateDepositGuard({
+    mode: payment_mode,
+    reference: payment_reference,
+    notes,
+    depositAvailable,
+    overrideReason,
+  });
+  if (!guard.ok) {
+    return NextResponse.json(
+      { error: guard.message, code: guard.code, deposit_available: depositAvailable },
+      { status: 409 },
+    );
+  }
 
   // Insert payment
   const { data: payment, error: insertErr } = await supabase
@@ -103,7 +137,9 @@ export async function POST(
       payment_mode,
       payment_reference: payment_reference || null,
       proof_path: proof_path || null,
-      notes: notes || null,
+      notes: guard.overridden
+        ? `${notes ? `${notes}\n` : ""}${DEPOSIT_OVERRIDE_NOTE_MARKER} — ${overrideReason!.trim()}]`
+        : notes || null,
       tds_amount: tdsAmount,
       tds_section: tdsSection,
       recorded_by: dbUser.id,
@@ -155,6 +191,9 @@ export async function POST(
     changes: {
       payment_recorded: { old: null, new: `${payment_mode} ₹${amount} ref:${payment_reference || "—"}` },
       payment_status: { old: statement.payment_status, new: newPaymentStatus },
+      ...(guard.overridden
+        ? { deposit_guard_override: { old: null, new: `₹${depositAvailable} deposit available: ${overrideReason!.trim()}` } }
+        : {}),
     },
   });
 

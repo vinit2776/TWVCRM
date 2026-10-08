@@ -45,6 +45,8 @@ import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
 import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
+import { DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment } from "@/components/billing/deposit-guard-notice";
+import { DEPOSIT_OVERRIDE_MIN_REASON_LENGTH } from "@/lib/deposit-payment-guard";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
@@ -262,6 +264,10 @@ export function TallyInboxClient() {
   const [payNotifyCustomer, setPayNotifyCustomer] = useState(false);
   const [payRemainderMode, setPayRemainderMode] = useState("bank_transfer");
   const [payRemainderRef, setPayRemainderRef] = useState("");
+  // Set when the server refuses a payment that looks like a deposit adjustment.
+  const [payGuardMessage, setPayGuardMessage] = useState<string | null>(null);
+  const [payOverrideConfirmed, setPayOverrideConfirmed] = useState(false);
+  const [payOverrideReason, setPayOverrideReason] = useState("");
 
   // Auto-expand the first pi_paid_awaiting_gst row on initial load so accounts
   // can see the upload form without an extra click.
@@ -533,6 +539,9 @@ export function TallyInboxClient() {
     setPayRemainderMode("bank_transfer");
     setPayRemainderRef("");
     setPayDepositAvailable(null);
+    setPayGuardMessage(null);
+    setPayOverrideConfirmed(false);
+    setPayOverrideReason("");
     fetch(`/api/billing-statements/${row.statement_id}/deposit-balance`)
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setPayDepositAvailable(json?.data?.available ?? 0))
@@ -613,9 +622,14 @@ export function TallyInboxClient() {
           notes: payNotes || null,
           tds_amount: tdsAmt,
           tds_section: payTdsEnabled ? payTdsSection : null,
+          deposit_override_reason: payOverrideConfirmed ? payOverrideReason.trim() : undefined,
         }),
       });
       const json = await res.json();
+      if (res.status === 409 && json.code === "DEPOSIT_AVAILABLE") {
+        setPayGuardMessage(json.error);
+        return;
+      }
       if (!res.ok) throw new Error(json.error || "Failed");
       setPayRow(null);
       await refreshRow(payRow.id);
@@ -624,7 +638,7 @@ export function TallyInboxClient() {
     } finally {
       setPaySubmitting(false);
     }
-  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, refreshRow, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, payTdsEnabled, payTdsSection, payTdsAmount, refreshRow, payOverrideConfirmed, payOverrideReason, isPayDepositMode, payDepositLeg, payRemainderLeg, payRemainderMode, payRemainderRef, payNotifyCustomer]);
 
   const handleAccounted = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -1066,7 +1080,7 @@ export function TallyInboxClient() {
               </div>
               <div>
                 <Label>Payment mode</Label>
-                <Select value={payMode} onValueChange={setPayMode}>
+                <Select value={payMode} onValueChange={(v) => { setPayMode(v); setPayGuardMessage(null); setPayOverrideConfirmed(false); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="bank_transfer">Bank transfer / NEFT / RTGS</SelectItem>
@@ -1091,6 +1105,19 @@ export function TallyInboxClient() {
                 <Label>Notes</Label>
                 <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
               </div>
+
+              {looksLikeDepositAdjustment(payMode, payDepositAvailable, payRef, payNotes) && !payGuardMessage && (
+                <DepositGuardWarning available={payDepositAvailable ?? 0} />
+              )}
+              {payGuardMessage && (
+                <DepositOverrideField
+                  message={payGuardMessage}
+                  confirmed={payOverrideConfirmed}
+                  onConfirmedChange={setPayOverrideConfirmed}
+                  reason={payOverrideReason}
+                  onReasonChange={setPayOverrideReason}
+                />
+              )}
 
               {/* ── Adjustment against deposit block ── */}
               {isPayDepositMode && (
@@ -1213,7 +1240,10 @@ export function TallyInboxClient() {
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setPayRow(null)} disabled={paySubmitting}>Cancel</Button>
-            <Button onClick={() => void submitPayment()} disabled={paySubmitting}>
+            <Button
+              onClick={() => void submitPayment()}
+              disabled={paySubmitting || (!!payGuardMessage && !(payOverrideConfirmed && payOverrideReason.trim().length >= DEPOSIT_OVERRIDE_MIN_REASON_LENGTH))}
+            >
               {paySubmitting
                 ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />{isPayDepositMode ? "Submitting…" : "Recording…"}</>
                 : (isPayDepositMode ? "Submit for Approval" : "Record payment")}
