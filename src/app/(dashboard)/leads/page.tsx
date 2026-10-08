@@ -25,8 +25,9 @@ import {
   LEAD_STATUS_LABELS,
   LEAD_SOURCES,
   LEAD_SOURCE_LABELS,
+  ACTIVITY_TYPE_LABELS,
 } from "@/lib/constants";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import dynamic from "next/dynamic";
 const ImportLeadsDialog = dynamic(
   () => import("@/components/leads/import-leads-dialog").then((m) => ({ default: m.ImportLeadsDialog })),
@@ -301,6 +302,12 @@ export default function LeadsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
                   Phone
                 </th>
+                {tab === "followups" && (
+                  <>
+                    <th className="px-4 py-3 text-left font-medium">Follow-up due</th>
+                    <th className="px-4 py-3 text-left font-medium">Next action</th>
+                  </>
+                )}
                 <th className="px-4 py-3 text-left font-medium">Status</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
                   Source
@@ -416,6 +423,44 @@ export default function LeadsPage() {
                     <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
                       {lead.phone || lead.mobile || "-"}
                     </td>
+                    {tab === "followups" && (
+                      <>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {lead._followup?.next ? (
+                            <>
+                              <div className="text-sm">{formatDateTime(lead._followup.next.due_at)}</div>
+                              <div
+                                className={`text-xs font-medium ${
+                                  lead._followup.next.days_overdue > 0 ? "text-red-600" : "text-amber-600"
+                                }`}
+                              >
+                                {lead._followup.next.days_overdue > 0
+                                  ? `${lead._followup.next.days_overdue} day${lead._followup.next.days_overdue === 1 ? "" : "s"} overdue`
+                                  : "Due today"}
+                              </div>
+                            </>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 max-w-[260px]">
+                          {lead._followup?.next ? (
+                            <>
+                              <div className="text-sm line-clamp-2">
+                                {lead._followup.next.notes ||
+                                  lead._followup.next.subject ||
+                                  "No note added"}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                from {ACTIVITY_TYPE_LABELS[lead._followup.next.type] ?? lead._followup.next.type}
+                              </div>
+                            </>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </>
+                    )}
                     <td className="px-4 py-3">
                       <StatusBadge type="lead_status" value={lead.status} />
                     </td>

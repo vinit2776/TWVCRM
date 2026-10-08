@@ -153,7 +153,19 @@ export interface Lead {
   id_proof_path?: string | null;
   id_proof_uploaded_at?: string | null;
   // Followup flag (attached by API, not DB column)
-  _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null;
+  _followup?: {
+    overdue: boolean;
+    due_today: boolean;
+    upcoming: boolean;
+    /** Soonest pending follow-up: when it's due and the note saying what to do. */
+    next?: {
+      due_at: string;
+      days_overdue: number;
+      notes: string | null;
+      subject: string | null;
+      type: string;
+    };
+  } | null;
   // Address
   street?: string;
   city?: string;
