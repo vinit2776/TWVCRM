@@ -100,10 +100,15 @@ function applyPoFilters(
     prIdsFromDept?: string[] | null;
     monthStart?: string | null;
     monthEnd?: string | null;
+    // Opt-in: "active" hides fully cancelled POs, "cancelled" shows cancelled + partially
+    // cancelled ones. Omitted = no restriction, so other callers of this route are unchanged.
+    view?: "active" | "cancelled" | null;
   }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
-  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd, companyId } = opts;
+  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd, companyId, view } = opts;
+  if (view === "active") query = query.neq("status", "cancelled");
+  else if (view === "cancelled") query = query.in("status", ["cancelled", "partially_cancelled"]);
   if (status) query = query.eq("status", status);
   if (vendorId) query = query.eq("vendor_id", vendorId);
   if (locationId) query = query.eq("location_id", locationId);
@@ -145,6 +150,9 @@ export async function GET(request: NextRequest) {
   const department = searchParams.get("department");
   const month = searchParams.get("month"); // YYYY-MM
   const includeTotals = searchParams.get("include_totals") === "true";
+  const viewParam = searchParams.get("view");
+  const view: "active" | "cancelled" | null =
+    viewParam === "active" || viewParam === "cancelled" ? viewParam : null;
   const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
@@ -181,7 +189,7 @@ export async function GET(request: NextRequest) {
     vendorIdsFromSearch = (matchingVendors ?? []).map((v: { id: string }) => v.id);
   }
 
-  const filterOpts = { status, vendorId, locationId, companyId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd };
+  const filterOpts = { status, vendorId, locationId, companyId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd, view };
 
   // ── Main paginated query ────────────────────────────────────────────────────
   let query = supabase
@@ -222,6 +230,9 @@ export async function GET(request: NextRequest) {
       .select("total_ordered_amount, total_amount_with_gst");
 
     totalsQuery = applyPoFilters(totalsQuery, filterOpts);
+    // Cancelled tab: total only the fully cancelled POs. A partially cancelled PO stores just
+    // its reduced amount (not what was cancelled), so it is listed but never summed here.
+    if (view === "cancelled") totalsQuery = totalsQuery.eq("status", "cancelled");
 
     if (search.length >= 3) {
       if (vendorIdsFromSearch && vendorIdsFromSearch.length > 0) {
@@ -236,7 +247,7 @@ export async function GET(request: NextRequest) {
       totalsQuery,
       // Only fetch budget when department + month + company are all selected —
       // department_budgets is now scoped per company_id (00540_procurement_company_scoping.sql).
-      (department && month && companyId)
+      (department && month && companyId && view !== "cancelled")
         ? supabase
             .from("department_budgets")
             .select("monthly_budget, is_active")
