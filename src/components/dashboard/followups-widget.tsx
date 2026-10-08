@@ -58,6 +58,7 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
   const [loading, setLoading] = useState(true);
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [newDate, setNewDate] = useState<string>("");
+  const [newNote, setNewNote] = useState("");
   const [newDateStatus, setNewDateStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [acting, setActing] = useState<string | null>(null);
 
@@ -99,20 +100,27 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
   };
 
   const handleReschedule = async (id: string) => {
-    if (!newDate) return;
+    if (!newDate || !newNote.trim()) return;
     setActing(id);
     try {
       const res = await fetch(`/api/activities/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reschedule", follow_up_date: newDate }),
+        body: JSON.stringify({
+          action: "reschedule",
+          follow_up_date: newDate,
+          follow_up_notes: newNote.trim(),
+        }),
       });
       if (res.ok) {
         setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, follow_up_date: newDate } : i))
+          prev.map((i) =>
+            i.id === id ? { ...i, follow_up_date: newDate, follow_up_notes: newNote.trim() } : i
+          )
         );
         setReschedulingId(null);
         setNewDate("");
+        setNewNote("");
       }
     } finally {
       setActing(null);
@@ -218,8 +226,10 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                           if (isRescheduling) {
                             setReschedulingId(null);
                             setNewDate("");
+                            setNewNote("");
                             setNewDateStatus("empty");
                           } else {
+                            setNewNote(item.follow_up_notes ?? "");
                             setNewDate(toDatetimeLocalValue(item.follow_up_date));
                             setNewDateStatus("valid");
                             setReschedulingId(item.id);
@@ -237,6 +247,14 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                   {/* Reschedule inline date picker */}
                   {isRescheduling && (
                     <div className="mt-2 flex flex-col gap-1.5 pl-7">
+                      <input
+                        value={newNote}
+                        onChange={(e) => setNewNote(e.target.value)}
+                        placeholder="What needs to happen? (required)"
+                        aria-label="Follow-up note"
+                        aria-invalid={!newNote.trim()}
+                        className="h-7 w-full max-w-sm rounded-md border border-input bg-background px-2 text-xs"
+                      />
                       <div className="flex items-center gap-2">
                         <FollowUpDateTimeInput
                           value={newDate}
@@ -247,13 +265,13 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                         />
                         <button
                           onClick={() => handleReschedule(item.id)}
-                          disabled={!newDate || newDateStatus === "incomplete" || acting === item.id}
+                          disabled={!newDate || !newNote.trim() || newDateStatus === "incomplete" || acting === item.id}
                           className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
                         >
                           Confirm
                         </button>
                         <button
-                          onClick={() => { setReschedulingId(null); setNewDate(""); setNewDateStatus("empty"); }}
+                          onClick={() => { setReschedulingId(null); setNewDate(""); setNewNote(""); setNewDateStatus("empty"); }}
                           className="text-xs text-muted-foreground hover:text-foreground"
                         >
                           Cancel

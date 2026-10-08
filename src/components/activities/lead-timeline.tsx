@@ -141,6 +141,7 @@ function ActivityItem({
   const [acting, setActing] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
+  const [newNote, setNewNote] = useState("");
   const [newDateStatus, setNewDateStatus] = useState<FollowUpDateTimeStatus>("empty");
   const [highlighted, setHighlighted] = useState(false);
   const [logActivityOpen, setLogActivityOpen] = useState(false);
@@ -183,17 +184,22 @@ function ActivityItem({
   };
 
   const handleReschedule = async () => {
-    if (!newDate) return;
+    if (!newDate || !newNote.trim()) return;
     setActing(true);
     try {
       const res = await fetch(`/api/activities/${activity.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "reschedule", follow_up_date: newDate }),
+        body: JSON.stringify({
+          action: "reschedule",
+          follow_up_date: newDate,
+          follow_up_notes: newNote.trim(),
+        }),
       });
       if (res.ok) {
         setIsRescheduling(false);
         setNewDate("");
+        setNewNote("");
         onActionComplete();
       }
     } finally {
@@ -359,6 +365,7 @@ function ActivityItem({
                       }
                     >
                       Follow-up: {formatDateTime(activity.follow_up_date)}
+                      {activity.follow_up_notes ? ` — ${activity.follow_up_notes}` : ""}
                       {activity.is_follow_up_done ? " (Done)" : ""}
                     </span>
                   </div>
@@ -378,8 +385,10 @@ function ActivityItem({
                           if (isRescheduling) {
                             setIsRescheduling(false);
                             setNewDate("");
+                            setNewNote("");
                             setNewDateStatus("empty");
                           } else {
+                            setNewNote(activity.follow_up_notes ?? "");
                             setNewDate(toDatetimeLocalValue(activity.follow_up_date));
                             setNewDateStatus("valid");
                             setIsRescheduling(true);
@@ -398,6 +407,14 @@ function ActivityItem({
 
                 {isRescheduling && (
                   <div className="flex flex-col gap-1 pl-4 pt-0.5">
+                    <input
+                      value={newNote}
+                      onChange={(e) => setNewNote(e.target.value)}
+                      placeholder="What needs to happen? (required)"
+                      aria-label="Follow-up note"
+                      aria-invalid={!newNote.trim()}
+                      className="h-6 w-full max-w-sm rounded-md border border-input bg-background px-2 text-xs"
+                    />
                     <div className="flex items-center gap-2">
                       <FollowUpDateTimeInput
                         value={newDate}
@@ -408,7 +425,7 @@ function ActivityItem({
                       />
                       <button
                         onClick={handleReschedule}
-                        disabled={!newDate || newDateStatus === "incomplete" || acting}
+                        disabled={!newDate || !newNote.trim() || newDateStatus === "incomplete" || acting}
                         className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
                       >
                         Confirm
@@ -417,6 +434,7 @@ function ActivityItem({
                         onClick={() => {
                           setIsRescheduling(false);
                           setNewDate("");
+                          setNewNote("");
                           setNewDateStatus("empty");
                         }}
                         className="text-xs text-muted-foreground hover:text-foreground"

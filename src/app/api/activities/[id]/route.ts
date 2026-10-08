@@ -20,9 +20,15 @@ export async function PATCH(
   }
 
   const body = await request.json();
-  const { action, follow_up_date: rawFollowUpDate, note: rawNote } = body as {
+  const {
+    action,
+    follow_up_date: rawFollowUpDate,
+    follow_up_notes: rawFollowUpNotes,
+    note: rawNote,
+  } = body as {
     action: "close" | "reschedule" | "complete_tour";
     follow_up_date?: string;
+    follow_up_notes?: string;
     note?: string;
   };
 
@@ -35,6 +41,25 @@ export async function PATCH(
       { error: "follow_up_date is required for reschedule" },
       { status: 400 }
     );
+  }
+
+  // A rescheduled follow-up must say what it is for. A note sent with the request replaces
+  // the old one; without one, the follow-up must already carry a note (so rescheduling an
+  // old note-less follow-up is what forces someone to fill it in).
+  const newFollowUpNotes =
+    action === "reschedule" && typeof rawFollowUpNotes === "string" ? rawFollowUpNotes.trim() : "";
+  if (action === "reschedule" && !newFollowUpNotes) {
+    const { data: current } = await supabase
+      .from("activities")
+      .select("follow_up_notes")
+      .eq("id", id)
+      .single();
+    if (!current?.follow_up_notes?.trim()) {
+      return NextResponse.json(
+        { error: "Add a follow-up note saying what needs to happen" },
+        { status: 400 }
+      );
+    }
   }
 
   // Mark an existing "Tour" activity as completed in place — appends the
@@ -108,6 +133,7 @@ export async function PATCH(
         }
       : {
           follow_up_date,
+          ...(newFollowUpNotes ? { follow_up_notes: newFollowUpNotes } : {}),
           is_follow_up_done: false,
           follow_up_actioned_by: dbUser?.id ?? null,
           follow_up_actioned_at: now,
