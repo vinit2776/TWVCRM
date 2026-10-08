@@ -272,7 +272,7 @@ const SETTING_DEFS = [
   {
     key: 'OFFICE_WIFI_IPS',
     label: 'Office public IP addresses',
-    help: "Comma-separated. The self-service punch button only succeeds when the employee's public IP matches one of these — there is no browser API for reading the WiFi SSID, so this is how a web app can tell \"on the office network\". Leave empty to hide the punch button entirely rather than show one that can never succeed. Add every ISP if the office has more than one.",
+    help: "Comma-separated. A punch from the Punch button counts as in the office only when the employee's public IP matches one of these — there is no browser API for reading the WiFi SSID, so this is how a web app can tell \"on the office network\". Any other punch is recorded as remote, with the phone's location. Leave empty and every Punch-button punch is remote. Add every ISP if the office has more than one.",
     fallback: '',
     parse: (raw) => new Set(String(raw).split(',').map(x => x.trim()).filter(Boolean)),
   },
@@ -305,7 +305,7 @@ const SETTING_DEFS = [
   {
     key: 'LOCATIONIQ_API_KEY',
     label: 'LocationIQ API key',
-    help: 'Powers the field-trip address type-ahead, road distance, and on-site reverse geocoding. While empty the Field Trips tab is hidden entirely. Nothing else depends on it.',
+    help: 'Powers the field-trip address type-ahead, road distance, and turning remote punch coordinates into addresses. While empty the Field Trips tab is hidden entirely. Nothing else depends on it.',
     secret: true,
     fallback: '',
   },
@@ -391,7 +391,7 @@ function warnAboutUnsetSettings() {
     console.warn('ZK_DEVICE_SN is not configured: the /iclock ADMS endpoints are disabled and reject every push. Set the device serial at /admin/settings once the K40 Pro is installed.');
   }
   if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
-    console.warn('OFFICE_WIFI_IPS is not configured: the WiFi punch button stays hidden. Set the office public IP at /admin/settings.');
+    console.warn('OFFICE_WIFI_IPS is not configured: every Punch-button punch is recorded as remote. Set the office public IP at /admin/settings.');
   }
 }
 
@@ -402,6 +402,11 @@ function getClientIp(req) {
   const xff = req.headers['x-forwarded-for'];
   const ip = xff ? String(xff).split(',')[0].trim() : (req.socket.remoteAddress || '');
   return ip.replace(/^::ffff:/, '');
+}
+// No browser API exposes the WiFi SSID, so "on the office network" means the caller's
+// public IP is one of the configured office IPs.
+function isOnOfficeWifi(req) {
+  return CONFIG.OFFICE_WIFI_IPS.has(getClientIp(req));
 }
 
 function logSecurityEvent(type, details = {}) {
@@ -699,6 +704,8 @@ async function init() {
   for (const col of ["location TEXT DEFAULT ''", "marked_by TEXT DEFAULT ''", "location_address TEXT DEFAULT ''"]) {
     try { await db.exec(`ALTER TABLE punches ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
+  // No longer read: anyone can punch from outside the office now (as 'remote'). Kept
+  // so older databases still match the schema.
   try { await db.exec('ALTER TABLE employees ADD COLUMN onsite_enabled INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
   // The biometric device's own enrolled user ID (small integer, e.g. "1"), distinct
@@ -836,7 +843,7 @@ async function inferPunchDirection(employeeId, timestamp) {
     .filter(p => p.source !== 'auto' && p.timestamp < timestamp);
   return earlierReal.length % 2 === 0 ? 'in' : 'out';
 }
-// A retried device push or a double-tapped on-site button can submit the same
+// A retried device push or a double-tapped Punch button can submit the same
 // punch twice; treat two punches for the same employee within a few seconds of
 // each other as one event rather than two. Deliberately ignores direction: when
 // the caller doesn't specify one (the ADMS device path), it's inferred from
@@ -1425,8 +1432,8 @@ function formatHHMM(timestamp) {
 
 // Shared between the Punch-In and Muster grids: compact status codes and a
 // background tint per status, so both reports read the same way at a glance.
-// Late is a brighter pastel yellow than the rest — deliberately more attention-
-// grabbing than the app's usual amber, since it's the one admins scan for first.
+// Late is pink, matching the Calendar (where yellow now means a remote punch-in) —
+// the one admins scan for first.
 const MUSTER_STATUS_CODE = {
   'Present': 'P', 'Late': 'L', 'Half Day': 'HD', 'Absent': 'A',
   'Week Off': 'WO', 'Holiday': 'H', 'Punch Error': 'PE', 'Active': 'AC', 'On Leave': 'OL',
@@ -1434,7 +1441,7 @@ const MUSTER_STATUS_CODE = {
 };
 const GRID_CELL_COLOR = {
   'Present': '#E8F5E9',
-  'Late': '#FFF9C4',
+  'Late': '#FCE4EC',
   'Half Day': '#FBE7DE',
   'Missed Checkout': '#FBE7DE',
   'Absent': '#FDECEA',
@@ -1612,24 +1619,52 @@ function isValidEmail(str) {
 }
 
 // Short tags shown after each punch time on the calendar: [desktop, phone].
+// 'on-site' was the old name for what is now a remote punch — same location capture,
+// just no longer switched on per employee. Old rows keep the value they were written
+// with and are translated on read, rather than rewritten at startup: a rewrite can't be
+// undone once new remote punches exist (nothing distinguishes a converted row from a
+// genuine one), which would make rolling this release back lossy.
+const LEGACY_SOURCE_ALIASES = { 'on-site': 'remote' };
+function normalizeSource(source) {
+  return LEGACY_SOURCE_ALIASES[source] || source;
+}
+// Every stored value that reads as a remote punch — for queries, which can't call
+// normalizeSource.
+const REMOTE_SOURCE_VALUES = ['remote', 'on-site'];
+
 const PUNCH_SOURCE_TAGS = {
   'biometric': ['BIO', 'B'],
   'wifi': ['WIFI', 'W'],
-  'on-site': ['SITE', 'S'],
+  'remote': ['REMOTE', 'R'],
   'auto': ['AUTO', 'A'],
   'correction': ['CORR', 'C'],
 };
 function punchSourceTag(source) {
-  const [long, short] = PUNCH_SOURCE_TAGS[source] || [String(source).slice(0, 4).toUpperCase(), String(source).slice(0, 1).toUpperCase()];
+  const key = normalizeSource(source);
+  const [long, short] = PUNCH_SOURCE_TAGS[key] || [String(key).slice(0, 4).toUpperCase(), String(key).slice(0, 1).toUpperCase()];
   return `<span class="cal-src"><span class="cal-long">${escapeHtml(long)}</span><span class="cal-short">${escapeHtml(short)}</span></span>`;
 }
 function punchSourceName(source, lang) {
-  return PUNCH_SOURCE_TAGS[source] ? t(lang, `calendar.source.${source}`) : source;
+  const key = normalizeSource(source);
+  return PUNCH_SOURCE_TAGS[key] ? t(lang, `calendar.source.${key}`) : key;
+}
+// Biometric, WiFi and the 19:00 auto-checkout all happen at the office; a correction
+// says nothing about where, so only a remote punch counts as away.
+function isRemotePunch(p) {
+  return !!p && normalizeSource(p.source) === 'remote';
+}
+// Which STATUS_STYLE a calendar day uses: Present is split by where they checked in;
+// Late stays pink wherever it was.
+function calendarStyleKey(status, checkIn) {
+  if (status === 'Present' && isRemotePunch(checkIn)) return 'Present (Remote)';
+  return status;
 }
 
 const STATUS_STYLE = {
   'Present':     { fg: '#2E7D32', bg: '#E8F5E9' },
-  'Late':        { fg: '#B26A00', bg: '#FFF3E0' },
+  // Calendar-only: a Present day whose check-in was remote (see calendarStyleKey).
+  'Present (Remote)': { fg: '#7A5C00', bg: '#FFF4C2', dot: '#E0A800' },
+  'Late':        { fg: '#AD1457', bg: '#FCE4EC' },
   'Half Day':    { fg: '#C24914', bg: '#FBE7DE' },
   'Missed Checkout': { fg: '#C24914', bg: '#FBE7DE' },
   'Absent':      { fg: '#C62828', bg: '#FDECEA' },
@@ -1667,11 +1702,29 @@ function statusBadge(status, label, lang = 'en') {
 
 // A punch's location cell: shows the reverse-geocoded address when available (falling
 // back to raw coords), always linking to the exact coordinates on a map for precision.
-function locationCell(p) {
+// `short` keeps just the address's first part (the area), with the full one on hover,
+// for narrow table columns.
+function locationCell(p, short = false) {
   const label = p.location_address || p.location;
   if (!label) return '—';
   const mapQuery = p.location || p.location_address;
-  return `<a href="https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+  const shown = short && p.location_address ? p.location_address.split(',')[0].trim() : label;
+  return `<a href="https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}" target="_blank" rel="noopener" title="${escapeHtml(label)}">${escapeHtml(shown)}</a>`;
+}
+
+// Where a punch was made, for admin tables: a remote punch shows its location.
+function punchPlaceHtml(p) {
+  if (isRemotePunch(p)) return `<span style="color:#7A5C00;font-weight:600;">Remote</span><br><span style="display:inline-block;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;">${locationCell(p, true)}</span>`;
+  if (p.source === 'correction') return 'Correction';
+  if (p.source === 'auto') return 'Auto check-out';
+  return 'Office';
+}
+// The admin dashboard's "Where" cell: where the day's check-in and check-out were.
+function punchedFromCell(status) {
+  if (!status.checkInPunch) return '<span style="color:#9AA5B1;">—</span>';
+  const lines = [`In: ${punchPlaceHtml(status.checkInPunch)}`];
+  if (status.checkOutPunch) lines.push(`Out: ${punchPlaceHtml(status.checkOutPunch)}`);
+  return lines.join('<br>');
 }
 
 // A same-origin POST wrapped to look and sit like the plain text links it replaces —
@@ -1708,7 +1761,7 @@ async function employeeSwitcher(currentId, basePath) {
   return `<select onchange="location.href='${basePath}?employee_id=' + this.value" style="font-size:0.95em;padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;">${options}</select>`;
 }
 
-const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'onsite', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
+const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'remote-punches', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
@@ -1869,10 +1922,10 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         <a href="/permission?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'permission' ? 'active' : ''}"><span class="ico">🕓</span> <span class="lbl">${t(lang, 'nav.permission')}</span></a>
         <a href="/corrections?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'corrections' ? 'active' : ''}"><span class="ico">✏️</span> <span class="lbl">${t(lang, 'nav.corrections')}</span></a>
         <a href="/overtime?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'overtime' ? 'active' : ''}"><span class="ico">⏱</span> <span class="lbl">${t(lang, 'nav.overtime')}</span></a>
-        <a href="/onsite?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'onsite' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">${t(lang, 'nav.onsite')}</span></a>
         ${CONFIG.LOCATIONIQ_API_KEY ? `<a href="/field-trip?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'field-trip' ? 'active' : ''}"><span class="ico">🚗</span> <span class="lbl">${t(lang, 'nav.field_trips')}</span></a>` : ''}
         ${!isAdmin ? `<a id="navDocuments" href="/documents?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'documents' ? 'active' : ''}"><span class="ico">📁</span> <span class="lbl">${t(lang, 'nav.documents')}${pendingDocs ? ` (${pendingDocs})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
+        ${isAdmin ? `<a href="/admin/remote-punches" class="${activeNav === 'remote-punches' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">Remote Punches</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
@@ -2071,42 +2124,78 @@ function renderChangePassword(error, username) {
     </body></html>`;
 }
 
-// The office-WiFi punch button's click handler, shared by the employee dashboard and
-// the "My attendance today" card managers get on the admin dashboard. Expects
-// #wifiPunchBtn and #wifiPunchStatus on the page.
-function wifiPunchScript(employeeId, lang) {
+// The Punch In/Out button, shared by the employee dashboard and the "My attendance
+// today" card managers get on the admin dashboard. Anyone can punch from anywhere:
+// on the office WiFi it's an office punch, otherwise it's a remote one with the
+// phone's location attached. `onOfficeWifi` is only for the hint under the button —
+// the server checks the network again on every punch.
+function selfPunchBlock(dayStatus, lang, onOfficeWifi) {
+  const hint = onOfficeWifi
+    ? t(lang, 'dashboard.office_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })
+    : escapeHtml(t(lang, 'dashboard.remote_hint'));
   return `
-      function wifiPunch() {
-        const status = document.getElementById('wifiPunchStatus');
-        const btn = document.getElementById('wifiPunchBtn');
+      <div id="selfPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
+      <button id="selfPunchBtn" onclick="selfPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
+      <div style="font-size:0.75em;opacity:0.8;margin-top:6px;">${onOfficeWifi ? '📶' : '📍'} ${hint}</div>`;
+}
+
+// selfPunchBlock's click handler. Always tries an office punch first, without asking
+// for location, so nobody in the office gets a location prompt; only when the server
+// says this isn't the office network does it fetch the location and punch remotely.
+function selfPunchScript(employeeId, lang) {
+  return `
+      function selfPunchPost(fields) {
+        return fetch('/api/punch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({ employee_id: ${JSON.stringify(employeeId)} }, fields))
+        }).then(async r => ({ ok: r.ok, data: await r.json() }));
+      }
+      function selfPunchFail(message, isHtml) {
+        const status = document.getElementById('selfPunchStatus');
+        status.style.color = '#FFCDD2';
+        if (isHtml) status.innerHTML = message; else status.textContent = message;
+        document.getElementById('selfPunchBtn').disabled = false;
+      }
+      function selfPunchDone(res) {
+        if (!res.ok) return selfPunchFail(res.data.error || ${JSON.stringify(t(lang, 'dashboard.punch_failed'))});
+        const status = document.getElementById('selfPunchStatus');
+        status.style.color = '';
+        status.textContent = res.data.direction === 'in' ? ${JSON.stringify(t(lang, 'dashboard.punched_in'))} : ${JSON.stringify(t(lang, 'dashboard.punched_out'))};
+        setTimeout(() => window.location.reload(), 700);
+      }
+      function selfPunchWrong() {
+        selfPunchFail(${JSON.stringify(t(lang, 'dashboard.something_wrong'))});
+      }
+      function selfPunchRemote() {
+        const status = document.getElementById('selfPunchStatus');
+        if (!navigator.geolocation) return selfPunchFail(${JSON.stringify(t(lang, 'dashboard.geolocation_unsupported'))});
+        status.textContent = ${JSON.stringify(t(lang, 'dashboard.getting_location'))};
+        navigator.geolocation.getCurrentPosition(
+          pos => selfPunchPost({ source: 'remote', location: pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5) })
+            .then(selfPunchDone).catch(selfPunchWrong),
+          err => err.code === 1
+            ? selfPunchFail(${JSON.stringify(escapeHtml(t(lang, 'dashboard.location_denied')) + '<br><span style="font-size:0.88em;opacity:0.85;">' + escapeHtml(t(lang, 'dashboard.location_denied_help')) + '</span>')}, true)
+            : selfPunchFail(${JSON.stringify(t(lang, 'dashboard.location_failed'))}),
+          // Fresh, GPS-level position: no cached fix from somewhere else.
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+      }
+      function selfPunch() {
+        const status = document.getElementById('selfPunchStatus');
+        const btn = document.getElementById('selfPunchBtn');
         if (!status || !btn) return;
         btn.disabled = true;
         status.style.color = '';
         status.textContent = ${JSON.stringify(t(lang, 'dashboard.checking'))};
-        fetch('/api/punch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ employee_id: ${JSON.stringify(employeeId)}, source: 'wifi' })
-        }).then(async r => {
-          const data = await r.json();
-          if (!r.ok) {
-            status.style.color = '#FFCDD2';
-            status.textContent = data.error || ${JSON.stringify(t(lang, 'dashboard.punch_failed'))};
-            btn.disabled = false;
-            return;
-          }
-          status.style.color = '';
-          status.textContent = data.direction === 'in' ? ${JSON.stringify(t(lang, 'dashboard.punched_in'))} : ${JSON.stringify(t(lang, 'dashboard.punched_out'))};
-          setTimeout(() => window.location.reload(), 700);
-        }).catch(() => {
-          status.style.color = '#FFCDD2';
-          status.textContent = ${JSON.stringify(t(lang, 'dashboard.something_wrong'))};
-          btn.disabled = false;
-        });
+        selfPunchPost({ source: 'wifi' }).then(res => {
+          if (!res.ok && res.data.code === 'not_on_office_wifi') return selfPunchRemote();
+          selfPunchDone(res);
+        }).catch(selfPunchWrong);
       }`;
 }
 
-async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
+async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = [], onOfficeWifi = false) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr());
   const onBreak = !!dayStatus.onBreak;
@@ -2166,16 +2255,6 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
     ? `<div style="color:#7C8896;font-size:0.85em;margin-top:2px;">${t(lang, 'dashboard.joined', { date: escapeHtml(new Date(`${employee.date_joined}T00:00:00`).toLocaleDateString(lang === 'ta' ? 'ta-IN' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })) })}</div>`
     : '';
 
-  // No browser API exposes WiFi SSID, so "on the office network" is verified
-  // server-side by IP — the button just stays hidden until that's configured,
-  // same pattern as the Field Trips tab hiding until LOCATIONIQ_API_KEY is set.
-  const wifiPunchBlock = CONFIG.OFFICE_WIFI_IPS.size > 0 ? `
-      <div style="margin-top:14px;">
-        <div id="wifiPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
-        <button id="wifiPunchBtn" onclick="wifiPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
-        <div style="font-size:0.75em;opacity:0.75;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })}</div>
-      </div>` : '';
-
   // One banner per uncorrected missed check-out this month, each linking to a
   // pre-filled correction request.
   const missedCheckoutBanners = missedCheckoutDays.map(d => {
@@ -2208,7 +2287,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
         <span style="opacity:0.9;">${t(lang, 'dashboard.overtime', { time: formatMinutesAsHM(overtimeMinutes) })}</span>
         <span style="padding:2px 9px;border-radius:999px;font-size:0.8em;font-weight:600;background:rgba(255,255,255,0.2);">${overtimeAuthorized ? t(lang, 'dashboard.authorized') : t(lang, 'dashboard.unauthorized')}</span>
       </div>` : ''}
-      ${wifiPunchBlock}
+      <div style="margin-top:14px;">${selfPunchBlock(dayStatus, lang, onOfficeWifi)}</div>
       ${breakBlock}
     </div>
     <div class="card">
@@ -2223,7 +2302,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${leaveBalanceCards}</div>
     </div>
     <script>
-      ${wifiPunchScript(employee.id, lang)}
+      ${selfPunchScript(employee.id, lang)}
       function toggleBreak() {
         const status = document.getElementById('breakStatus');
         const btn = document.getElementById('breakBtn');
@@ -2280,7 +2359,7 @@ async function renderCalendar(employee, year, month, user) {
     db.prepare('SELECT * FROM punches WHERE employee_id = ? AND timestamp LIKE ? ORDER BY timestamp ASC').all(employee.id, `${monthPrefix}%`),
     db.prepare('SELECT * FROM breaks WHERE employee_id = ? AND start_ts LIKE ? ORDER BY start_ts ASC').all(employee.id, `${monthPrefix}%`),
   ]);
-  // On-site locations are for admins only, not the employee's own view.
+  // Remote punch locations are for admins only, not the employee's own view.
   const showLocation = isManagementRole(user);
   const hhmm = ts => ts.slice(11, 16);
 
@@ -2290,13 +2369,14 @@ async function renderCalendar(employee, year, month, user) {
   dayStatuses.forEach((status, i) => {
     const d = i + 1;
     const dateStr = dateStrs[i];
-    const s = STATUS_STYLE[status.status] || STATUS_STYLE['Upcoming'];
     const isToday = dateStr === todayStr();
     // Same punches computeDayStatus counts: first is the check-in, last the check-out
     // (only once they pair up).
     const punches = effectivePunches(monthPunches.filter(p => p.timestamp.startsWith(dateStr)));
     const breaks = monthBreaks.filter(b => b.start_ts.startsWith(dateStr));
     const checkIn = punches[0];
+    const styleKey = calendarStyleKey(status.status, checkIn);
+    const s = STATUS_STYLE[styleKey] || STATUS_STYLE['Upcoming'];
     const checkOut = punches.length % 2 === 0 ? punches[punches.length - 1] : null;
     const timesHtml = checkIn ? `
       <div class="cal-times" style="font-size:0.7em;margin-top:3px;line-height:1.4;font-variant-numeric:tabular-nums;">
@@ -2305,7 +2385,7 @@ async function renderCalendar(employee, year, month, user) {
       </div>` : '';
     cells.push(`<div class="cal-day${checkIn ? ' has-times' : ''}" data-day="${dateStr}" style="background:${s.bg};color:${s.fg};border-radius:8px;padding:8px 6px;min-height:52px;overflow-wrap:break-word;${isToday ? 'outline:2px solid #1565C0;' : ''}">
       <div style="font-weight:700;">${d}</div>
-      <div class="cal-status" style="font-size:0.72em;font-weight:600;overflow-wrap:break-word;hyphens:auto;">${escapeHtml(t(lang, `status.${status.status}`))}</div>${timesHtml}
+      <div class="cal-status" style="font-size:0.72em;font-weight:600;overflow-wrap:break-word;hyphens:auto;">${escapeHtml(t(lang, `status.${styleKey}`))}</div>${timesHtml}
     </div>`);
     if (!checkIn) return;
 
@@ -2313,7 +2393,7 @@ async function renderCalendar(employee, year, month, user) {
       ...punches.map((p, idx) => {
         let detail = '';
         if (p.source === 'correction') detail = t(lang, 'calendar.correction_by', { name: p.marked_by || '—' });
-        else if (p.source === 'on-site' && showLocation) detail = p.location_address || p.location || '';
+        else if (isRemotePunch(p) && showLocation) detail = { html: locationCell(p) };
         return { time: p.timestamp, cells: [t(lang, idx % 2 === 0 ? 'calendar.check_in' : 'calendar.check_out'), hhmm(p.timestamp), punchSourceName(p.source, lang), detail] };
       }),
       ...breaks.map(b => {
@@ -2328,10 +2408,10 @@ async function renderCalendar(employee, year, month, user) {
     const dateLabel = new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     details.push(`
       <div class="cal-detail" data-day="${dateStr}" hidden>
-        <div style="font-weight:700;margin-bottom:8px;">${escapeHtml(dateLabel)} · ${escapeHtml(t(lang, `status.${status.status}`))}</div>
+        <div style="font-weight:700;margin-bottom:8px;">${escapeHtml(dateLabel)} · ${escapeHtml(t(lang, `status.${styleKey}`))}</div>
         <table>
           <tr><th>${t(lang, 'calendar.col_event')}</th><th>${t(lang, 'calendar.col_time')}</th><th>${t(lang, 'calendar.col_source')}</th><th>${t(lang, 'calendar.col_details')}</th></tr>
-          ${events.map(e => `<tr>${e.cells.map(c => `<td>${escapeHtml(c || '—')}</td>`).join('')}</tr>`).join('')}
+          ${events.map(e => `<tr>${e.cells.map(c => `<td>${c && c.html ? c.html : escapeHtml(c || '—')}</td>`).join('')}</tr>`).join('')}
         </table>
       </div>`);
   });
@@ -2344,7 +2424,7 @@ async function renderCalendar(employee, year, month, user) {
 
   const legend = Object.keys(STATUS_STYLE).map(status => `
     <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.8em;margin-right:14px;margin-bottom:6px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:${STATUS_STYLE[status].fg};display:inline-block;"></span>${t(lang, `status.${status}`)}
+      <span style="width:10px;height:10px;border-radius:50%;background:${STATUS_STYLE[status].dot || STATUS_STYLE[status].fg};display:inline-block;"></span>${t(lang, `status.${status}`)}
     </span>`).join('');
   const sourceLegend = Object.keys(PUNCH_SOURCE_TAGS).map(source => `
     <span style="display:inline-flex;align-items:center;gap:3px;font-size:0.8em;margin-right:14px;margin-bottom:6px;color:#4C5A68;">
@@ -2600,92 +2680,6 @@ async function renderOvertime(employee, requests, todayOvertimeMinutes, todayAut
   return pageShell(t(lang, 'overtime.title'), employee.id, 'overtime', body, user);
 }
 
-// The on-site punch card (or "not enabled" note) and its script, shared by an
-// employee's On-Site page and the manager's own section on the admin On-Site page.
-function onsitePunchSection(employee, lang) {
-  const punchCard = employee.onsite_enabled ? `
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'onsite.title')}</div>
-      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">${t(lang, 'onsite.hint')}</p>
-      <div style="margin-bottom:10px;">
-        <label style="display:block;font-size:0.8em;color:#7C8896;">${t(lang, 'onsite.marked_by')}</label>
-        <input id="markedBy" type="text" value="${escapeHtml(employee.name)}" style="padding:7px;border-radius:6px;border:1px solid #D0D5DA;width:240px;">
-        <div style="font-size:0.78em;color:#9AA5B1;margin-top:4px;">${t(lang, 'onsite.marked_by_hint')}</div>
-      </div>
-      <div id="onsiteStatus" style="margin-bottom:10px;font-size:0.9em;color:#7C8896;"></div>
-      <button id="onsitePunchBtn" onclick="onsitePunch()" style="padding:10px 20px;border-radius:8px;border:none;background:#1565C0;color:#fff;font-weight:600;">${t(lang, 'onsite.punch_btn')}</button>
-    </div>` : `
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:6px;">${t(lang, 'onsite.title')}</div>
-      <p style="color:#7C8896;font-size:0.9em;">${t(lang, 'onsite.disabled_hint')}</p>
-    </div>`;
-
-  const punchScript = `
-    <script>
-      // The location always comes from the phone — there's no way to type one in, and
-      // /api/punch rejects an on-site punch without real coordinates.
-      function showOnsiteError(message) {
-        const status = document.getElementById('onsiteStatus');
-        status.style.color = '#C62828';
-        status.innerHTML = message;
-        document.getElementById('onsitePunchBtn').disabled = false;
-      }
-      function send(loc) {
-        const status = document.getElementById('onsiteStatus');
-        const markedBy = document.getElementById('markedBy').value;
-        status.textContent = ${JSON.stringify(t(lang, 'onsite.submitting'))};
-        fetch('/api/punch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ employee_id: ${JSON.stringify(employee.id)}, source: 'on-site', marked_by: markedBy, location: loc })
-        }).then(async r => {
-          const data = await r.json();
-          if (!r.ok) return showOnsiteError(data.error || ${JSON.stringify(t(lang, 'onsite.something_wrong'))});
-          status.textContent = data.direction === 'in' ? ${JSON.stringify(t(lang, 'onsite.punched_in'))} : ${JSON.stringify(t(lang, 'onsite.punched_out'))};
-          setTimeout(() => window.location.reload(), 700);
-        }).catch(() => showOnsiteError(${JSON.stringify(t(lang, 'onsite.something_wrong'))}));
-      }
-      function onsitePunch() {
-        const status = document.getElementById('onsiteStatus');
-        if (!navigator.geolocation) return showOnsiteError(${JSON.stringify(escapeHtml(t(lang, 'onsite.geolocation_unsupported')))});
-        document.getElementById('onsitePunchBtn').disabled = true;
-        status.style.color = '';
-        status.textContent = ${JSON.stringify(t(lang, 'onsite.getting_location'))};
-        navigator.geolocation.getCurrentPosition(
-          pos => send(pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5)),
-          err => showOnsiteError(err.code === 1
-            ? ${JSON.stringify(escapeHtml(t(lang, 'onsite.location_denied')) + '<br><span style="font-size:0.88em;color:#7C8896;">' + escapeHtml(t(lang, 'onsite.location_denied_help')) + '</span>')}
-            : ${JSON.stringify(escapeHtml(t(lang, 'onsite.location_failed')))}),
-          // Fresh, GPS-level position: no cached fix from somewhere else.
-          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-        );
-      }
-    </script>`;
-  return { punchCard, punchScript };
-}
-
-async function renderOnsite(employee, recentPunches, user) {
-  const lang = langOf(user);
-  const rows = recentPunches.map(p => `
-    <tr>
-      <td>${p.direction === 'in' ? t(lang, 'onsite.punch_in') : t(lang, 'onsite.punch_out')}</td>
-      <td>${escapeHtml(p.timestamp)}</td>
-      <td>${escapeHtml(p.marked_by || '—')}</td>
-      <td>${locationCell(p)}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">${t(lang, 'onsite.no_punches')}</td></tr>`;
-
-  const { punchCard, punchScript } = onsitePunchSection(employee, lang);
-
-  const body = `
-    ${punchCard}
-    <div class="card">
-      <div style="font-weight:700;margin-bottom:10px;">${t(lang, 'onsite.recent_title')}</div>
-      <table><tr><th>${t(lang, 'onsite.col_event')}</th><th>${t(lang, 'onsite.col_time')}</th><th>${t(lang, 'onsite.col_marked_by')}</th><th>${t(lang, 'onsite.col_location')}</th></tr>${rows}</table>
-    </div>
-    ${punchScript}`;
-  return pageShell(t(lang, 'onsite.title'), employee.id, 'onsite', body, user);
-}
-
 async function renderFieldTrip(employeeId, trips, user) {
   const lang = langOf(user);
   const recentRows = (trips || []).map(trip => {
@@ -2874,9 +2868,9 @@ async function renderAdminFieldTrips(trips, user) {
   return pageShell('Field Trips', '', 'field-trip', body, user);
 }
 
-// A manager's own attendance on the admin dashboard, with the same WiFi punch button
-// employees get and a link to punch on-site when their on-site duty is on.
-function myAttendanceCard(employee, dayStatus, lang) {
+// A manager's own attendance on the admin dashboard, with the same Punch button
+// employees get.
+function myAttendanceCard(employee, dayStatus, lang, onOfficeWifi) {
   const time = ts => escapeHtml(ts.split(' ')[1].slice(0, 5));
   const facts = [
     dayStatus.checkIn ? `In ${time(dayStatus.checkIn)}` : 'Not punched in yet',
@@ -2885,14 +2879,6 @@ function myAttendanceCard(employee, dayStatus, lang) {
       ? `Working <span class="liveHours" data-checkin="${escapeHtml(dayStatus.checkIn.replace(' ', 'T'))}">00:00:00</span>`
       : null,
   ].filter(Boolean).join(' &nbsp;·&nbsp; ');
-  const wifiButton = CONFIG.OFFICE_WIFI_IPS.size > 0 ? `
-      <div id="wifiPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
-      <button id="wifiPunchBtn" onclick="wifiPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
-      <div style="font-size:0.75em;opacity:0.8;margin-top:6px;">${t(lang, 'dashboard.wifi_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })}</div>`
-    : `<div style="font-size:0.85em;opacity:0.9;">WiFi punching isn't set up yet: add the office IP under <a href="/admin/settings" style="color:#fff;">Settings</a>.</div>`;
-  const onsiteLink = employee.onsite_enabled
-    ? `<div style="margin-top:10px;"><a href="/onsite" style="color:#fff;font-weight:600;font-size:0.9em;">Punch on-site →</a></div>`
-    : '';
   return `
     <div class="card" style="background:linear-gradient(135deg,#1565C0,#1E88E5);color:#fff;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
       <div>
@@ -2900,9 +2886,9 @@ function myAttendanceCard(employee, dayStatus, lang) {
         <div style="font-size:1.25em;font-weight:700;margin:2px 0 6px;">${escapeHtml(employee.name)}</div>
         <div style="font-size:0.9em;">${statusBadge(dayStatus.status, dayStatus.label, lang)} &nbsp;${facts}</div>
       </div>
-      <div>${wifiButton}${onsiteLink}</div>
+      <div>${selfPunchBlock(dayStatus, lang, onOfficeWifi)}</div>
     </div>
-    ${CONFIG.OFFICE_WIFI_IPS.size > 0 ? `<script>${wifiPunchScript(employee.id, lang)}</script>` : ''}`;
+    <script>${selfPunchScript(employee.id, lang)}</script>`;
 }
 
 // "18:02" for today, "5 Oct 18:02" otherwise; withDate always includes the date
@@ -2939,7 +2925,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
       : (r.status.hoursWorked ? formatHoursAsClock(r.status.hoursWorked) : '—');
     const checkOutCell = r.status.checkOut
       ? (r.status.checkOutAuto
-          ? statusBadge('Late', `Auto ${r.status.checkOut.split(' ')[1]}`)
+          ? statusBadge('Missed Checkout', `Auto ${r.status.checkOut.split(' ')[1]}`)
           : escapeHtml(r.status.checkOut.split(' ')[1]))
       : '—';
     const permission = await getPermissionForDate(r.employee.id, dateStr);
@@ -2965,7 +2951,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
       <td style="font-variant-numeric:tabular-nums;">${hoursCell}</td>
       <td>${breakCell}</td>
       <td>${permissionCell}</td>
-      <td>${actionButton('/admin/toggle-onsite', { employee_id: r.employee.id, date: dateStr, return: basePath }, r.employee.onsite_enabled ? 'On ✓' : 'Off', r.employee.onsite_enabled ? '#2E7D32' : '#9AA5B1')}</td>
+      <td style="font-size:0.82em;">${punchedFromCell(r.status)}</td>
     </tr>`;
   }))).join('');
 
@@ -2990,7 +2976,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
 
   const body = `
     ${opts.offlineDevice ? deviceOfflineBanner(opts.offlineDevice) : ''}
-    ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user)) : ''}
+    ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user), opts.myAttendance.onOfficeWifi) : ''}
     ${statsWidgets}
     ${devicePinsLink}
     <div class="card">
@@ -3000,7 +2986,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
         <a href="${basePath}?date=${nextStr}" style="text-decoration:none;font-size:1.2em;">&#8250;</a>
         <input type="date" value="${dateStr}" onchange="location.href='${basePath}?date=' + this.value" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
       </div>
-      <table><tr><th>Employee</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Break</th><th>Permission</th><th>On-Site Duty <span style="font-weight:400;">(tap to toggle)</span></th></tr>${tableRows}</table>
+      <table><tr><th>Employee</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Break</th><th>Permission</th><th>Where</th></tr>${tableRows}</table>
     </div>
     <script>
       function tickAll() {
@@ -3416,33 +3402,27 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
   return pageShell('Overtime', '', 'overtime', body, user);
 }
 
-async function renderAdminOnsite(punches, user, selfEmployee = null) {
+const REMOTE_PUNCH_LOG_LIMIT = 100;
+// Every remote punch (made away from the office WiFi), newest first, with where it was.
+async function renderAdminRemotePunches(punches, user) {
   const rows = (await Promise.all(punches.map(async p => {
     const emp = await getEmployee(p.employee_id);
     return `
     <tr>
-      <td><strong>${escapeHtml(emp ? emp.name : p.employee_id)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(p.employee_id)})</span></td>
+      <td><a href="/calendar?employee_id=${escapeHtml(p.employee_id)}" style="color:#1B2430;text-decoration:none;font-weight:600;">${escapeHtml(emp ? emp.name : p.employee_id)}</a> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(p.employee_id)})</span></td>
       <td>${p.direction === 'in' ? 'Punch In' : 'Punch Out'}</td>
       <td>${escapeHtml(p.timestamp)}</td>
-      <td>${escapeHtml(p.marked_by || '—')}</td>
       <td>${locationCell(p)}</td>
     </tr>`;
-  }))).join('') || `<tr><td colspan="5" style="color:#9AA5B1;">No on-site duty punches yet</td></tr>`;
+  }))).join('') || `<tr><td colspan="4" style="color:#9AA5B1;">No remote punches yet</td></tr>`;
 
-  // Managers are employees too: their own on-site punch card comes first.
-  const self = selfEmployee ? onsitePunchSection(selfEmployee, langOf(user)) : null;
   const body = `
-    ${self ? (selfEmployee.onsite_enabled ? self.punchCard : `
-    <div class="card" style="color:#7C8896;font-size:0.9em;">
-      Your own on-site duty punching is off. To punch from outside the office, turn it on with the On-Site Duty toggle on your row on the <a href="/dashboard" style="color:#1565C0;">Dashboard</a>.
-    </div>`) : ''}
     <div class="card">
-      <div style="font-weight:700;margin-bottom:10px;">On-Site Duty Punches — All Employees</div>
-      <table><tr><th>Employee</th><th>Event</th><th>Time</th><th>Marked By</th><th>Location</th></tr>${rows}</table>
-    </div>
-    <div class="card" style="color:#7C8896;font-size:0.9em;">To turn on-site duty on or off for someone, use the toggle on <a href="/dashboard" style="color:#1565C0;">Dashboard</a>.</div>
-    ${self && selfEmployee.onsite_enabled ? self.punchScript : ''}`;
-  return pageShell('On-Site', '', 'onsite', body, user);
+      <div style="font-weight:700;margin-bottom:4px;">Remote Punches — All Employees</div>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Punches made away from the office WiFi, with the location captured from the phone. The latest ${REMOTE_PUNCH_LOG_LIMIT} are shown.</p>
+      <table><tr><th>Employee</th><th>Event</th><th>Time</th><th>Location</th></tr>${rows}</table>
+    </div>`;
+  return pageShell('Remote Punches', '', 'remote-punches', body, user);
 }
 
 // IDs are EMP-00N today, but padding shouldn't cap the count — padStart(3) just
@@ -3580,7 +3560,7 @@ Password: password123</code>
     </div>
     <div class="card" style="color:#7C8896;font-size:0.9em;">
       A login is created automatically (username = employee ID, default password <code>password123</code>),
-      with a forced password change on first sign-in. On-site access and biometric device PIN are set
+      with a forced password change on first sign-in. The biometric device PIN is set
       separately from <a href="/admin/device-pins" style="color:#1565C0;">Device PINs</a>. Company holidays
       are managed from the <a href="/calendar?view=company" style="color:#1565C0;">Calendar</a> tab.
     </div>`;
@@ -3892,7 +3872,7 @@ async function renderReports(monthStr, punchInRows, punchInGrid, workingHours, l
         <a href="/admin/reports/punch-in-detail.csv?month=${escapeHtml(monthStr)}" style="font-size:0.85em;color:#1565C0;text-decoration:none;font-weight:600;">Download CSV &darr;</a>
       </div>
       <p style="color:#7C8896;font-size:0.85em;margin-top:0;">
-        Each cell is that day's check-in&ndash;check-out (highlighted <span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">yellow</span> with an "L" prefix if late), or a status code
+        Each cell is that day's check-in&ndash;check-out (highlighted <span style="background:${GRID_CELL_COLOR['Late']};padding:1px 6px;border-radius:4px;">pink</span> with an "L" prefix if late), or a status code
         on days with no punches: ${Object.entries(MUSTER_STATUS_CODE).map(([k, v]) => `${escapeHtml(v)}=${escapeHtml(k)}`).join(', ')}.
       </p>
       <table class="grid-table"><tr><th>Employee</th>${punchInDayHeaders}</tr>${punchInGridRows}</table>
@@ -3953,7 +3933,7 @@ async function renderDevicePins(user, error) {
     <div class="card" style="color:#7C8896;font-size:0.9em;">
       Each row's PIN is the numeric ID that employee was enrolled under on the biometric device
       (check the device's user list, not this app). Leave blank for anyone who doesn't punch in on
-      the device. See <a href="/admin/attendance" style="color:#1565C0;">Dashboard</a> for on-site duty.
+      the device.
     </div>
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Biometric Device PIN Mappings</div>
@@ -4511,8 +4491,8 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/api/punch' && req.method === 'POST') {
     // Two trust levels call this endpoint: the biometric device (API key, source
     // defaults to 'biometric') and a logged-in employee's or manager's own browser
-    // session (the On-Site Duty and WiFi punch buttons) — session auth is restricted below to the
-    // caller's own employee_id and source in ('on-site', 'wifi') only.
+    // session (the Punch button) — session auth is restricted below to the caller's own
+    // employee_id and source in ('wifi', 'remote') only.
     const apiKey = req.headers['x-api-key'];
     const authorizedViaApiKey = apiKey === CONFIG.PUNCH_API_KEY;
     const sessionUser = authorizedViaApiKey ? null : await getSessionUser(req);
@@ -4534,62 +4514,51 @@ async function handleRequest(req, res) {
     const { employee_id, timestamp, direction, source, location, marked_by } = body;
     if (!employee_id) return sendJson(res, 400, { error: 'employee_id is required' });
 
-    // Settle what this punch *is* once, before anything is checked against it. The
-    // same missing field used to fall back three different ways in this handler —
-    // 'on-site' for the session whitelist, 'biometric' for the onsite_enabled gate,
-    // and neither for the coordinate and WiFi checks, which compared `source`
-    // directly. Omitting it therefore passed the whitelist, skipped both location
-    // checks, and was then stored as 'biometric' — the most trusted source there is.
-    const punchSource = source || (authorizedViaSession ? 'on-site' : 'biometric');
+    // Settle what this punch *is* once, before anything is checked against it. A
+    // missing field used to fall back differently in different checks here, so
+    // omitting it skipped the location check and was then stored as 'biometric' —
+    // the most trusted source there is.
+    let punchSource = source || (authorizedViaSession ? 'remote' : 'biometric');
 
     if (authorizedViaSession) {
       if (employee_id !== sessionUser.employeeId) {
         logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
         return sendJson(res, 403, { error: 'You can only punch your own attendance.' });
       }
-      if (!['on-site', 'wifi'].includes(punchSource)) {
-        return sendJson(res, 403, { error: 'Only on-site duty or WiFi punches are allowed from a logged-in session.' });
+      if (!['wifi', 'remote'].includes(punchSource)) {
+        return sendJson(res, 403, { error: 'Only office WiFi or remote punches are allowed from a logged-in session.' });
       }
     }
 
     const employee = await getEmployee(employee_id);
     if (!employee) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
 
-    if (punchSource === 'on-site' && !employee.onsite_enabled) {
-      return sendJson(res, 403, { error: 'On-site duty punching is not enabled for this employee. Biometric punch-in is required.' });
-    }
-    // On-site punches must carry the phone's real coordinates — a typed-in place name
-    // can't be verified.
-    if (punchSource === 'on-site') {
-      const coords = String(location || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-      if (!coords || Math.abs(Number(coords[1])) > 90 || Math.abs(Number(coords[2])) > 180) {
-        return sendJson(res, 400, { error: "On-site punches need your phone's location. Allow location access and try again." });
-      }
-    }
+    // Already in the office: a remote punch sent from the office network (the page was
+    // opened elsewhere, or the WiFi check raced a network switch) is an office punch.
+    if (punchSource === 'remote' && isOnOfficeWifi(req)) punchSource = 'wifi';
 
     // WiFi punch: there's no browser API to check SSID, so "on the office network" is
     // verified by matching the caller's public IP against the configured office IP(s).
-    if (punchSource === 'wifi') {
-      if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
-        return sendJson(res, 403, { error: 'WiFi punch-in is not configured yet. Ask your admin to set it up.' });
-      }
-      const clientIp = getClientIp(req);
-      if (!CONFIG.OFFICE_WIFI_IPS.has(clientIp)) {
-        logSecurityEvent('wifi_punch_rejected', { employeeId: employee_id, ip: clientIp });
-        return sendJson(res, 403, { error: 'You must be connected to the office WiFi to punch in.' });
+    // Not being on it isn't an error: the Punch button falls back to a remote punch.
+    if (punchSource === 'wifi' && !isOnOfficeWifi(req)) {
+      return sendJson(res, 409, { error: "You're not on the office WiFi.", code: 'not_on_office_wifi' });
+    }
+    // Remote punches must carry the phone's real coordinates — a typed-in place name
+    // can't be verified.
+    let coords = null;
+    if (punchSource === 'remote') {
+      coords = String(location || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+      if (!coords || Math.abs(Number(coords[1])) > 90 || Math.abs(Number(coords[2])) > 180) {
+        return sendJson(res, 400, { error: "Punching from outside the office needs your phone's location. Allow location access and try again." });
       }
     }
 
     const ts = timestamp || formatTimestamp(new Date());
     const dir = direction || await inferPunchDirection(employee_id, ts);
-    // For on-site punches, turn the captured "lat,lng" into a readable address so a
-    // manager sees a place, not coordinates. Best-effort: never blocks the punch.
-    let locationAddress = '';
-    if (punchSource === 'on-site' && location) {
-      const coords = String(location).match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-      if (coords) locationAddress = await reverseGeocode(coords[1], coords[2]);
-    }
-    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', location || '', marked_by || '', locationAddress);
+    // Turn the captured "lat,lng" into a readable address so a manager sees a place,
+    // not coordinates. Best-effort: never blocks the punch.
+    const locationAddress = coords ? await reverseGeocode(coords[1], coords[2]) : '';
+    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', coords ? location : '', marked_by || '', locationAddress);
 
     const dayStatus = await computeDayStatus(employee_id, ts.split(' ')[0]);
     return sendJson(res, 200, { employee_id, name: employee.name, direction: dir, timestamp: ts, dayStatus, duplicate: !inserted });
@@ -4953,7 +4922,7 @@ async function handleRequest(req, res) {
       // Managers are registered as employees, so they punch like one; the main admin
       // login isn't linked to an employee and gets no card.
       const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
-      const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()) } : null;
+      const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()), onOfficeWifi: isOnOfficeWifi(req) } : null;
       const device = CONFIG.ZK_DEVICE_SN ? await getDeviceStatus(CONFIG.ZK_DEVICE_SN) : null;
       const offlineDevice = device && shouldShowOfflineAlert(device.last_seen) ? device : null;
       return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, myAttendance, offlineDevice }));
@@ -4969,7 +4938,7 @@ async function handleRequest(req, res) {
     const leaveBalances = await getLeaveBalanceDisplay(employeeId);
     const forceOnboardingTour = parsed.searchParams.get('tour') === '1';
     const missedCheckoutDays = await getUncorrectedMissedCheckouts(employeeId);
-    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays));
+    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays, isOnOfficeWifi(req)));
   }
 
   // Marks the current onboarding content as seen — called when the tour finishes
@@ -5320,21 +5289,18 @@ async function handleRequest(req, res) {
     return res.end();
   }
 
+  if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const punches = await db.prepare(
+      `SELECT * FROM punches WHERE source IN (${REMOTE_SOURCE_VALUES.map(() => '?').join(',')}) ORDER BY timestamp DESC LIMIT ?`
+    ).all(...REMOTE_SOURCE_VALUES, REMOTE_PUNCH_LOG_LIMIT);
+    return sendHtml(res, await renderAdminRemotePunches(punches, user));
+  }
+
+  // Retired: on-site duty became remote punching from the Dashboard's Punch button.
   if (parsed.pathname === '/onsite' && req.method === 'GET') {
-    if (isManagementRole(user)) {
-      const allPunches = await db.prepare(
-        "SELECT * FROM punches WHERE source = 'on-site' ORDER BY timestamp DESC LIMIT 50"
-      ).all();
-      const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
-      return sendHtml(res, await renderAdminOnsite(allPunches, user, selfEmployee));
-    }
-    const employeeId = await resolveEmployeeId();
-    const employee = await getEmployee(employeeId);
-    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
-    const recentPunches = await db.prepare(
-      "SELECT * FROM punches WHERE employee_id = ? AND source = 'on-site' ORDER BY timestamp DESC LIMIT 10"
-    ).all(employeeId);
-    return sendHtml(res, await renderOnsite(employee, recentPunches, user));
+    res.writeHead(302, { Location: isManagementRole(user) ? '/admin/remote-punches' : '/dashboard' });
+    return res.end();
   }
 
   if (parsed.pathname === '/field-trip' && req.method === 'GET') {
@@ -5395,21 +5361,6 @@ async function handleRequest(req, res) {
   // Retired — merged into /leave. Redirect so old links/bookmarks still land somewhere useful.
   if (parsed.pathname === '/admin/leave' && req.method === 'GET') {
     res.writeHead(302, { Location: '/leave' });
-    return res.end();
-  }
-
-  if (parsed.pathname === '/admin/toggle-onsite' && req.method === 'POST') {
-    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
-    const form = await readFormBody(req);
-    const employeeId = form.employee_id;
-    const dateStr = form.date || todayStr();
-    const employee = await getEmployee(employeeId);
-    if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
-    const newState = employee.onsite_enabled ? 0 : 1;
-    await db.prepare('UPDATE employees SET onsite_enabled = ? WHERE id = ?').run(newState, employeeId);
-    await logAdminAction(user.username, newState ? 'enable' : 'disable', 'onsite_duty', employeeId, employee.name);
-    const returnPath = form.return || '/dashboard';
-    res.writeHead(302, { Location: `${returnPath}?date=${encodeURIComponent(dateStr)}` });
     return res.end();
   }
 
