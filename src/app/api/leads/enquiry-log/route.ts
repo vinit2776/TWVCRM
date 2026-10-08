@@ -6,7 +6,9 @@ const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
 // GET /api/leads/enquiry-log
 //   ?source=google_ads|meta_ads|direct_walkin
 //   &outcome=unresolved|converted|not_interested|no_response
-//   &from=ISO-date
+//   &from=ISO-date   — matches on enquiry ACTIVITY (created, last re-enquiry, or resolved),
+//                      not just first creation, so a re-enquiry on an old lead stays visible
+//   &include_unresolved=true — also return every unresolved enquiry regardless of age
 //   &to=ISO-date
 //   &location_id=UUID
 //   &limit=200 (default 200, max 500)
@@ -23,6 +25,7 @@ export async function GET(request: NextRequest) {
   const from = sp.get("from");
   const to = sp.get("to");
   const locationId = sp.get("location_id");
+  const includeUnresolved = sp.get("include_unresolved") === "true";
   const limit = Math.min(parseInt(sp.get("limit") || "200", 10), 500);
 
   let query = supabase
@@ -41,7 +44,17 @@ export async function GET(request: NextRequest) {
 
   if (source) query = query.eq("source", source);
   if (locationId) query = query.eq("location_id", locationId);
-  if (from) query = query.gte("created_at", from);
+  if (from) {
+    // An old lead that re-submits the form keeps its original created_at; only
+    // attention_reset_at moves. Filtering on created_at alone made those vanish.
+    const parts = [
+      `created_at.gte.${from}`,
+      `attention_reset_at.gte.${from}`,
+      `resolved_at.gte.${from}`,
+    ];
+    if (includeUnresolved) parts.push("resolved_at.is.null");
+    query = query.or(parts.join(","));
+  }
   if (to) query = query.lte("created_at", to);
 
   if (outcome === "unresolved") query = query.is("resolved_at", null);
