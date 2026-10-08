@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { unverifiedPortionOfApplicable, type PoolDepositContractRow } from "@/lib/deposit-evidence";
 
 // Same roles that manage contracts — the point is that sales / managers can
 // unblock activation themselves, without an admin override.
@@ -38,6 +39,10 @@ async function authorise() {
  *
  * Read-only preview: how much of the customer's already-collected, unallocated
  * security deposit could be applied to this contract at activation.
+ *
+ * `unverified` is the part of `applicable` that rests only on deposits with no
+ * real payment evidence (legacy "assumed received" imports, or paid with no
+ * amount) — the page warns on it; it never blocks the apply.
  */
 export async function GET(
   _request: NextRequest,
@@ -52,13 +57,44 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const row = (data?.[0] ?? null) as Applicable | null;
+  const applicable = Number(row?.applicable ?? 0);
+
+  let unverified: { amount: number; contract_numbers: string[] } = { amount: 0, contract_numbers: [] };
+  if (applicable > 0) {
+    const { data: thisContract } = await admin.from("contracts").select("lead_id").eq("id", id).single();
+    if (thisContract?.lead_id) {
+      const [{ data: contracts, error: contractsError }, { data: topups }, { data: adjustments }] = await Promise.all([
+        admin.from("contracts")
+          .select("contract_number, deposit_payment_status, deposit_payment_amount, security_deposit_amount, deposit_refunded_amount, deposit_payment_reference")
+          .eq("lead_id", thisContract.lead_id),
+        admin.from("deposit_topups").select("amount").eq("source_lead_id", thisContract.lead_id).eq("status", "paid"),
+        admin.from("deposit_adjustments").select("amount").eq("source_lead_id", thisContract.lead_id).in("status", ["pending_approval", "approved"]),
+      ]);
+      // The warning is advisory: if its inputs can't be read, don't block the preview.
+      if (contractsError) {
+        console.error("[apply-pooled-deposit] evidence lookup failed:", contractsError.message);
+      } else {
+        const sum = (rows: { amount: number | null }[] | null) => (rows ?? []).reduce((s, r) => s + Number(r.amount ?? 0), 0);
+        const portion = unverifiedPortionOfApplicable(
+          (contracts ?? []) as PoolDepositContractRow[],
+          applicable,
+          Number(row?.other_required ?? 0),
+          sum(topups),
+          sum(adjustments)
+        );
+        unverified = { amount: portion.amount, contract_numbers: portion.contractNumbers };
+      }
+    }
+  }
+
   return NextResponse.json({
     data: {
-      applicable: Number(row?.applicable ?? 0),
+      applicable,
       required: Number(row?.own_required ?? 0),
       other_required: Number(row?.other_required ?? 0),
       available: Number(row?.available ?? 0),
       reason: row?.reason ?? null,
+      unverified,
     },
   });
 }
