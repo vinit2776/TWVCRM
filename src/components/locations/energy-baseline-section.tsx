@@ -5,6 +5,7 @@ import {
   BarChart, Bar, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
 } from "recharts";
 import { AlertTriangle, Loader2, TrendingUp } from "lucide-react";
+import { EnergyTodaySection } from "./energy-today-section";
 import type {
   Anomaly, BaselineWindow, DailyUsage, DayType, HolidayEntry, WeekdayProfile,
 } from "@/lib/energy-baseline";
@@ -85,6 +86,8 @@ export function EnergyBaselineSection({ locationId, deviceId }: { locationId: st
           and public holidays. Only complete days count — today and partially-synced days are left out.
         </p>
       </div>
+
+      <EnergyTodaySection locationId={locationId} deviceId={deviceId} />
 
       {calendarStale && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2 flex items-start gap-2">
