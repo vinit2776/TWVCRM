@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { isBookingPaymentMethodLocked } from "@/lib/booking-payment-method";
 
 const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name), collector:users!booking_payments_collected_by_fkey(id, full_name), handover_receiver:users!booking_payments_handed_over_to_fkey(id, full_name), handover_confirmer:users!booking_payments_handover_confirmed_by_fkey(id, full_name)";
 
@@ -23,7 +24,10 @@ export async function GET(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ data: data || [] });
+  // Tells the UI whether "Correct method" is still available (GST invoice not yet uploaded).
+  const method_locked = await isBookingPaymentMethodLocked(await createAdminClient(), bookingId);
+
+  return NextResponse.json({ data: data || [], method_locked });
 }
 
 // POST — create a payment record
