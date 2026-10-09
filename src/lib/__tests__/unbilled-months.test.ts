@@ -77,6 +77,31 @@ describe("unbilledMonths", () => {
     })).toEqual([]);
   });
 
+  it("reports the first month for a contract created in that very month", () => {
+    // TWV-C-0153: started 7 Sep (pro-rata covers Sep), created 5 Oct. The
+    // October run executed on 28-30 Sep, before the row existed, so October
+    // is billed by nobody.
+    expect(unbilledMonths({
+      startDate: "2026-09-07",
+      endDate: "2027-08-06",
+      createdAt: "2026-10-05T10:00:00Z",
+      today: "2026-10-09",
+      statements: [],
+    })).toEqual([{ year: 2026, month: 10 }]);
+  });
+
+  it("does not report the creation month when the first billing month was earlier", () => {
+    // Entered after the fact: first full month (Aug) was already past when the
+    // row was created, so only months after creation are in scope (Oct, not Aug/Sep).
+    expect(unbilledMonths({
+      startDate: "2026-07-26",
+      endDate: "2027-07-25",
+      createdAt: "2026-09-01T10:00:00Z",
+      today: "2026-10-20",
+      statements: [],
+    })).toEqual([{ year: 2026, month: 10 }]);
+  });
+
   it("does not report next month — it isn't late yet", () => {
     // September is billed by the run at the end of August, which hasn't run.
     const missing = unbilledMonths({
