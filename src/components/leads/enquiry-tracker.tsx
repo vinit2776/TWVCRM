@@ -11,65 +11,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
-import { latestReference } from "@/hooks/use-enquiry-notifications";
+import { EarlierEnquiries } from "@/components/leads/earlier-enquiries";
 import {
-  useEnquiryNotifications,
+  ENQUIRY_SOURCE_LABEL,
+  toEnquiryItem,
   type EnquiryItem,
+  type RawEnquiryRow,
   type ResolutionOutcome,
-} from "@/providers/enquiry-notifications-provider";
+} from "@/lib/enquiries";
+import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 
 const WINDOW_DAYS = 30;
-const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
-const SOURCE_LABEL: Record<string, string> = {
-  "google-ads-form": "Google Ads",
-  "meta-ads-form": "Meta Ads",
-  "walkin-form": "Walk-in",
-};
-const OUTCOME_LABEL: Record<ResolutionOutcome, string> = {
+const SOURCE_KEYS = Object.keys(ENQUIRY_SOURCE_LABEL);
+const OUTCOME_LABEL: Record<ResolutionOutcome | "superseded", string> = {
   converted: "Converted",
   not_interested: "Not interested",
   no_response: "No response",
+  superseded: "Superseded",
 };
-
-type LogRow = {
-  id: string;
-  first_name: string;
-  last_name: string;
-  mobile: string | null;
-  tags: string[] | null;
-  created_at: string;
-  attention_reset_at: string | null;
-  claimed_by: string | null;
-  claimed_at: string | null;
-  resolved_at: string | null;
-  resolution_outcome: ResolutionOutcome | null;
-  claimer: { id: string; full_name: string } | null;
-  resolver: { id: string; full_name: string } | null;
-  enquiries: { reference: string; received_at: string }[] | null;
-};
-
-function toItem(row: LogRow): EnquiryItem | null {
-  const sourceTag = (row.tags ?? []).find((t) => FORM_TAGS.includes(t));
-  if (!sourceTag) return null;
-  const attentionResetAt = row.attention_reset_at ?? row.created_at;
-  return {
-    leadId: row.id,
-    reference: latestReference(row.enquiries),
-    name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "Unknown",
-    mobile: row.mobile,
-    source: SOURCE_LABEL[sourceTag] ?? sourceTag,
-    sourceTag,
-    attentionResetAt,
-    createdAt: row.created_at,
-    isReEnquiry: new Date(attentionResetAt).getTime() - new Date(row.created_at).getTime() > 1000,
-    claimedBy: row.claimed_by,
-    claimedAt: row.claimed_at,
-    claimerName: row.claimer?.full_name ?? null,
-    resolverName: row.resolver?.full_name ?? null,
-    resolvedAt: row.resolved_at,
-    resolutionOutcome: row.resolution_outcome,
-  };
-}
 
 type StateTab = "active" | "resolved" | "all";
 
@@ -91,7 +50,7 @@ export function EnquiryTracker() {
   // Realtime claim / resolve / new-enquiry changes flow through the shared context;
   // this signature changes whenever one does, so the 30-day record refetches with it.
   const liveSignature = liveItems
-    .map((i) => `${i.leadId}:${i.claimedBy ?? ""}:${i.resolvedAt ?? ""}`)
+    .map((i) => `${i.enquiryId}:${i.claimedBy ?? ""}:${i.resolvedAt ?? ""}`)
     .join("|");
 
   const load = useCallback(async () => {
@@ -100,8 +59,8 @@ export function EnquiryTracker() {
     if (res.ok) {
       const json = await res.json();
       setRows(
-        ((json.data ?? []) as LogRow[])
-          .map(toItem)
+        ((json.data ?? []) as RawEnquiryRow[])
+          .map(toEnquiryItem)
           .filter((i): i is EnquiryItem => i !== null)
       );
     }
@@ -120,13 +79,14 @@ export function EnquiryTracker() {
 
   const stats = useMemo(() => {
     const active = rows.filter((r) => !r.resolvedAt);
-    const resolved = rows.filter((r) => r.resolvedAt);
+    // Superseded rows have no recorded outcome, so they stay out of resolved / conversion.
+    const resolved = rows.filter((r) => r.resolvedAt && r.resolutionOutcome !== "superseded");
     const converted = resolved.filter((r) => r.resolutionOutcome === "converted").length;
     return {
       unclaimed: active.filter((r) => !r.claimedBy).length,
       claimed: active.filter((r) => r.claimedBy).length,
       resolved: resolved.length,
-      conversion: rows.length > 0 ? Math.round((converted / rows.length) * 100) : 0,
+      conversion: resolved.length > 0 ? Math.round((converted / resolved.length) * 100) : 0,
     };
   }, [rows]);
 
@@ -160,7 +120,7 @@ export function EnquiryTracker() {
     { label: "Unclaimed", value: stats.unclaimed },
     { label: "Claimed, in progress", value: stats.claimed },
     { label: `Resolved, ${WINDOW_DAYS} days`, value: stats.resolved },
-    { label: `Converted, ${WINDOW_DAYS} days`, value: `${stats.conversion}%` },
+    { label: "Converted of resolved", value: `${stats.conversion}%` },
   ];
 
   return (
@@ -215,9 +175,9 @@ export function EnquiryTracker() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All sources</SelectItem>
-              {FORM_TAGS.map((t) => (
-                <SelectItem key={t} value={t}>
-                  {SOURCE_LABEL[t]}
+              {SOURCE_KEYS.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {ENQUIRY_SOURCE_LABEL[k]}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -243,7 +203,7 @@ export function EnquiryTracker() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="any">Any outcome</SelectItem>
-                {(Object.keys(OUTCOME_LABEL) as ResolutionOutcome[]).map((o) => (
+                {(Object.keys(OUTCOME_LABEL) as (ResolutionOutcome | "superseded")[]).map((o) => (
                   <SelectItem key={o} value={o}>
                     {OUTCOME_LABEL[o]}
                   </SelectItem>
@@ -262,7 +222,10 @@ export function EnquiryTracker() {
         ) : (
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {visible.map((item) => (
-              <EnquiryQueueRow key={item.leadId} item={item} />
+              <div key={item.enquiryId}>
+                <EnquiryQueueRow item={item} />
+                {item.isReEnquiry && <EarlierEnquiries leadId={item.leadId} currentId={item.enquiryId} />}
+              </div>
             ))}
           </div>
         )}

@@ -352,19 +352,8 @@ export async function POST(request: NextRequest) {
       description: reference ? `Reference: ${reference}\n${enquirySummary}` : enquirySummary,
     });
 
-    // Re-open the attention window: clear any prior claim/resolve so the
-    // dashboard surfaces this lead again, and bump the overdue timer.
-    await supabase
-      .from("leads")
-      .update({
-        claimed_by: null,
-        claimed_at: null,
-        resolved_at: null,
-        resolved_by: null,
-        resolution_outcome: null,
-        attention_reset_at: new Date().toISOString(),
-      })
-      .eq("id", existing.id);
+    // No lead-level reset: the new enquiry row above is its own open item, and earlier
+    // enquiries keep their claim / resolve history.
 
     // Fire-and-forget email + push alert — must not block the response
     resend.emails.send({

@@ -10,17 +10,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
+import type { EnquiryOutcome } from "@/lib/enquiries";
 
-const OUTCOME_LABEL: Record<ResolutionOutcome, string> = {
+const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
   not_interested: "Not interested / no fit",
   no_response: "Followed up — no response",
+  superseded: "Superseded by a later enquiry",
 };
 
-const OUTCOME_BG: Record<ResolutionOutcome, string> = {
+const OUTCOME_BG: Record<EnquiryOutcome, string> = {
   converted: "bg-emerald-100 text-emerald-800",
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
+  superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
 };
 
 function timeAgo(iso: string): string {
@@ -95,7 +98,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             {item.source}
             {!compact && item.mobile && <> · +91 {item.mobile}</>}
             {" · "}
-            <span className="font-mono">{item.reference ?? `#${item.leadId.slice(0, 6)}`}</span>
+            <span className="font-mono">{item.reference}</span>
           </p>
         </button>
 
@@ -138,7 +141,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           {item.claimedAt ? (
             <button
-              onClick={() => unclaim(item.leadId)}
+              onClick={() => unclaim(item.enquiryId)}
               className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 transition-colors"
               title="Release this claim"
             >
@@ -148,7 +151,7 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             </button>
           ) : (
             <button
-              onClick={() => claim(item.leadId)}
+              onClick={() => claim(item.enquiryId)}
               className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <UserCheck className="h-3 w-3" />
@@ -164,15 +167,15 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "converted")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "converted")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-2" />
                 Converted to lead
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "not_interested")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "not_interested")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-slate-400 mr-2" />
                 Not interested / no fit
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => resolve(item.leadId, "no_response")}>
+              <DropdownMenuItem onClick={() => resolve(item.enquiryId, "no_response")}>
                 <span className="inline-block w-2 h-2 rounded-full bg-amber-500 mr-2" />
                 Followed up — no response
               </DropdownMenuItem>

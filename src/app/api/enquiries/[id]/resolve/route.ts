@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
+// 'superseded' is written only by the 00584 backfill, never through the API.
 const OUTCOMES = ["converted", "not_interested", "no_response"] as const;
 type Outcome = (typeof OUTCOMES)[number];
 
-// POST /api/leads/[id]/resolve
-// Marks the enquiry as resolved with an outcome. Removes it from the active
-// queue but keeps it in the enquiry log for campaign attribution.
+// POST /api/enquiries/[id]/resolve
+// Marks one enquiry resolved with an outcome. Removes it from the active queue but keeps it
+// in the enquiry log for campaign attribution.
 // Body: { outcome: "converted" | "not_interested" | "no_response" }
-//       Pass { outcome: null } to un-resolve (admin reopen).
+//       Pass { outcome: null } to reopen (admin only).
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -34,6 +35,10 @@ export async function POST(
     return NextResponse.json({ error: "User not found" }, { status: 403 });
   }
 
+  // lead_enquiries is read-only to users under RLS (no blanket UPDATE policy, so nobody can
+  // edit a reference); this route is the one place that writes claim/resolve state.
+  const admin = await createAdminClient();
+
   const body = (await request.json().catch(() => ({}))) as { outcome?: Outcome | null };
 
   if (body.outcome !== null && !OUTCOMES.includes(body.outcome as Outcome)) {
@@ -52,14 +57,14 @@ export async function POST(
     );
   }
 
-  const { data: oldLead } = await supabase
-    .from("leads")
-    .select("resolved_at, resolved_by, resolution_outcome")
+  const { data: old } = await admin
+    .from("lead_enquiries")
+    .select("reference, lead_id, resolved_at, resolution_outcome")
     .eq("id", id)
     .single();
 
-  if (!oldLead) {
-    return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!old) {
+    return NextResponse.json({ error: "Enquiry not found" }, { status: 404 });
   }
 
   const updateData = reopen
@@ -70,27 +75,30 @@ export async function POST(
         resolution_outcome: body.outcome as Outcome,
       };
 
-  const { data, error } = await supabase
-    .from("leads")
+  const { data, error } = await admin
+    .from("lead_enquiries")
     .update(updateData)
     .eq("id", id)
-    .select("id, resolved_at, resolved_by, resolution_outcome")
+    .select("id, reference, resolved_at, resolved_by, resolution_outcome")
     .single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  logAudit(supabase, {
-    entityType: "lead",
-    entityId: id,
-    action: "update",
-    performedBy: dbUser.id,
-    changes: {
-      resolved_at:        { old: oldLead.resolved_at,        new: updateData.resolved_at },
-      resolution_outcome: { old: oldLead.resolution_outcome, new: updateData.resolution_outcome },
-    },
-  });
+  if (old.lead_id) {
+    logAudit(supabase, {
+      entityType: "lead",
+      entityId: old.lead_id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        enquiry: { old: old.reference, new: old.reference },
+        resolved_at: { old: old.resolved_at, new: updateData.resolved_at },
+        resolution_outcome: { old: old.resolution_outcome, new: updateData.resolution_outcome },
+      },
+    });
+  }
 
   return NextResponse.json({ data });
 }

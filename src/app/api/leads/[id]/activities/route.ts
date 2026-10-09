@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
@@ -101,25 +101,24 @@ export async function POST(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Auto-claim the lead to whoever logged the activity.
-  // Transfers ownership even if another user had previously claimed it.
-  // Skips if the user already owns the lead or the lead is resolved.
+  // Auto-claim: whoever logs an activity takes over every OPEN enquiry on this lead.
+  // Transfers ownership even if another user had claimed it; resolved enquiries are left
+  // alone, and nothing happens for a lead that never came through a public form.
   if (dbUser?.id) {
-    const { data: oldLead } = await supabase
-      .from("leads")
-      .select("claimed_by, claimed_at, resolved_at, first_name, last_name, company")
-      .eq("id", id)
-      .single();
+    const admin = await createAdminClient();
+    const { data: openEnquiries } = await admin
+      .from("lead_enquiries")
+      .select("id, reference, claimed_by, claimed_at")
+      .eq("lead_id", id)
+      .is("resolved_at", null)
+      .or(`claimed_by.is.null,claimed_by.neq.${dbUser.id}`);
 
-    const alreadyOwner = oldLead?.claimed_by === dbUser.id;
-    const isResolved = oldLead?.resolved_at != null;
-
-    if (!alreadyOwner && !isResolved) {
+    if (openEnquiries && openEnquiries.length > 0) {
       const claimedAt = new Date().toISOString();
-      const { error: claimError } = await supabase
-        .from("leads")
+      const { error: claimError } = await admin
+        .from("lead_enquiries")
         .update({ claimed_by: dbUser.id, claimed_at: claimedAt })
-        .eq("id", id);
+        .in("id", openEnquiries.map((e) => e.id));
 
       if (claimError) {
         console.error("auto-claim failed", claimError.code, claimError.message);
@@ -130,12 +129,21 @@ export async function POST(
           action: "update",
           performedBy: dbUser.id,
           changes: {
-            claimed_by: { old: oldLead?.claimed_by ?? null, new: dbUser.id },
-            claimed_at: { old: oldLead?.claimed_at ?? null, new: claimedAt },
+            enquiries_claimed: {
+              old: openEnquiries.map((e) => e.reference).join(", "),
+              new: dbUser.id,
+            },
+            claimed_at: { old: openEnquiries[0].claimed_at ?? null, new: claimedAt },
           },
         });
       }
     }
+
+    const { data: oldLead } = await supabase
+      .from("leads")
+      .select("first_name, last_name, company")
+      .eq("id", id)
+      .single();
 
     if (result.data.follow_up_date && dbUser.email) {
       const leadName =
