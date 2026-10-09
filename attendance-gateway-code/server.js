@@ -17,7 +17,7 @@ const {
 } = require('./attendance-logic');
 const { t } = require('./i18n');
 const {
-  DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
+  DEVICE_POLL_SECONDS, DEVICE_OFFLINE_MINUTES, DEVICE_COMMAND_TIMEOUT_MINUTES, RESYNC_OVERLAP_MINUTES,
   shiftTs, minutesSince, formatDuration, isDeviceOffline, shouldShowOfflineAlert,
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
@@ -2897,13 +2897,45 @@ function deviceTimeLabel(ts, withDate = false) {
   if (!withDate && ts.slice(0, 10) === todayStr()) return ts.slice(11, 16);
   return `${new Date(`${ts.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} ${ts.slice(11, 16)}`;
 }
-function deviceOfflineBanner(device) {
+function lastHeardLabel(ts) {
+  return `${escapeHtml(deviceTimeLabel(ts))} (${minutesSince(ts) < 1 ? 'just now' : `${escapeHtml(formatDuration(minutesSince(ts)))} ago`})`;
+}
+// Manager dashboard: device status, last sync, and a one-click re-sync of today. The
+// red alert styling only applies during office hours (shouldShowOfflineAlert), when
+// the PC being off is a problem rather than expected.
+function deviceStatusCard({ device, lastCommand, resyncNotice }) {
+  const offline = device && isDeviceOffline(device.last_seen);
+  const alert = offline && shouldShowOfflineAlert(device.last_seen);
+  const statusValue = !device
+    ? '<span style="color:#7C8896;">● Never connected</span>'
+    : (offline ? '<span style="color:#C62828;">● Offline</span>' : '<span style="color:#2E7D32;">● Online</span>');
+  const lastResync = lastCommand
+    ? `${escapeHtml(deviceTimeLabel(lastCommand.created_at))} · ${deviceCommandStatusBadge(lastCommand)}`
+    : '<span style="color:#7C8896;">None yet</span>';
+  const notice = resyncNotice === 'queued'
+    ? `Re-sync for today requested. The device picks it up at its next check-in (within ${DEVICE_POLL_SECONDS / 60} minutes while it's online).`
+    : resyncNotice === 'pending'
+      ? "A re-sync for today is already waiting for the device's next check-in, so another one wasn't added."
+      : '';
+  const today = todayStr();
   return `
-    <div class="card" style="background:#FDECEA;border:1px solid #F5B7B1;color:#B71C1C;">
-      <strong>⚠ The biometric device hasn't reached the app since ${escapeHtml(deviceTimeLabel(device.last_seen))} (${escapeHtml(formatDuration(minutesSince(device.last_seen)))} ago).</strong>
-      The office PC may be off or asleep, or the internet may be down. Punches are kept on the device and will come in once it reconnects.
-      ${device.auto_checkout_held ? 'The 7 PM auto-checkout is on hold until then.' : ''}
-      <a href="/admin/settings#device" style="color:#B71C1C;font-weight:600;">Device status →</a>
+    <div class="card" style="${alert ? 'background:#FDECEA;border:1px solid #F5B7B1;' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+        <div style="display:flex;gap:28px;flex-wrap:wrap;">
+          <div><div style="color:#7C8896;font-size:0.85em;">Biometric device</div><div style="font-weight:700;">${statusValue}</div></div>
+          <div><div style="color:#7C8896;font-size:0.85em;">Last synced</div><div style="font-weight:700;">${device ? lastHeardLabel(device.last_seen) : '—'}</div></div>
+          <div><div style="color:#7C8896;font-size:0.85em;">Last re-sync</div><div style="font-weight:700;">${lastResync}</div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <form method="POST" action="/admin/device/resync" style="margin:0;">
+            <input type="hidden" name="from" value="${today}"><input type="hidden" name="to" value="${today}"><input type="hidden" name="return" value="dashboard">
+            <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Re-sync today</button>
+          </form>
+          <a href="/admin/settings#device" style="font-size:0.82em;color:#1565C0;font-weight:600;text-decoration:none;">Other dates →</a>
+        </div>
+      </div>
+      ${alert ? `<div style="color:#B71C1C;font-size:0.88em;margin-top:10px;"><strong>⚠ The device hasn't reached the app for ${escapeHtml(formatDuration(minutesSince(device.last_seen)))}.</strong> The office PC may be off or asleep, or the internet may be down. Punches are kept on the device and will come in once it reconnects.${device.auto_checkout_held ? ' The 7 PM auto-checkout is on hold until then.' : ''}</div>` : ''}
+      ${notice ? `<div style="background:#E3F2FD;border-radius:8px;padding:8px 12px;font-size:0.88em;margin-top:10px;">${notice}</div>` : ''}
     </div>`;
 }
 
@@ -2975,7 +3007,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
     : '';
 
   const body = `
-    ${opts.offlineDevice ? deviceOfflineBanner(opts.offlineDevice) : ''}
+    ${opts.deviceCard ? deviceStatusCard(opts.deviceCard) : ''}
     ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user), opts.myAttendance.onOfficeWifi) : ''}
     ${statsWidgets}
     ${devicePinsLink}
@@ -3987,7 +4019,7 @@ async function renderDeviceCard() {
       <div style="font-weight:700;margin-bottom:10px;">Biometric Device</div>
       <div style="display:flex;gap:32px;flex-wrap:wrap;margin-bottom:14px;">
         ${stat('Status', statusValue)}
-        ${stat('Last heard from', device ? `${escapeHtml(deviceTimeLabel(device.last_seen))} (${minutesSince(device.last_seen) < 1 ? 'just now' : `${escapeHtml(formatDuration(minutesSince(device.last_seen)))} ago`})` : '—')}
+        ${stat('Last heard from', device ? lastHeardLabel(device.last_seen) : '—')}
         ${stat('Last outage', lastOutage)}
       </div>
       ${device && device.auto_checkout_held ? '<div style="background:#FFF3E0;border-radius:8px;padding:9px 12px;font-size:0.88em;margin-bottom:12px;">The 7 PM auto-checkout is on hold until the device is back and has sent its punches.</div>' : ''}
@@ -4678,7 +4710,7 @@ async function handleRequest(req, res) {
         'Stamp=9999',
         'OpStamp=9999',
         'ErrorDelay=60',
-        'Delay=30',
+        `Delay=${DEVICE_POLL_SECONDS}`,
         'TransTables=ATTLOG',
         'Realtime=0',
         'Encrypt=0',
@@ -4923,9 +4955,13 @@ async function handleRequest(req, res) {
       // login isn't linked to an employee and gets no card.
       const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
       const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()), onOfficeWifi: isOnOfficeWifi(req) } : null;
-      const device = CONFIG.ZK_DEVICE_SN ? await getDeviceStatus(CONFIG.ZK_DEVICE_SN) : null;
-      const offlineDevice = device && shouldShowOfflineAlert(device.last_seen) ? device : null;
-      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, myAttendance, offlineDevice }));
+      const sn = CONFIG.ZK_DEVICE_SN;
+      const deviceCard = sn ? {
+        device: await getDeviceStatus(sn),
+        lastCommand: await db.prepare('SELECT * FROM device_commands WHERE sn = ? ORDER BY id DESC LIMIT 1').get(sn),
+        resyncNotice: parsed.searchParams.get('resync'),
+      } : null;
+      return sendHtml(res, await renderAdminAttendance(dateStr, rows, user, { basePath: '/dashboard', title: 'Dashboard', activeNav: 'dashboard', showStats: true, myAttendance, deviceCard }));
     }
     const employeeId = await resolveEmployeeId();
     const employee = await getEmployee(employeeId);
@@ -5762,9 +5798,22 @@ async function handleRequest(req, res) {
     // Keeps one reply from the device to a manageable size.
     else if ((new Date(`${to}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000 > 31) error = 'Re-sync at most 31 days at a time.';
     if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
-    await queueDeviceResync(CONFIG.ZK_DEVICE_SN, `${from} 00:00:00`, `${to} 23:59:59`, `Manual (${user.username})`, user.username);
-    await logAdminAction(user.username, 'device_resync', 'device', CONFIG.ZK_DEVICE_SN, `${from} to ${to}`);
-    return sendHtml(res, await renderAdminSettings(user, { notice: `Re-sync for ${from} to ${to} requested. The device picks it up the next time it checks in (about every 30 seconds while it's online).` }));
+    const startTs = `${from} 00:00:00`, endTs = `${to} 23:59:59`;
+    // With the device checking in only every DEVICE_POLL_SECONDS, a repeat click while
+    // the first request is still waiting would just queue the same work twice.
+    const pending = await db.prepare("SELECT id FROM device_commands WHERE sn = ? AND status = 'queued' AND range_start = ? AND range_end = ?")
+      .get(CONFIG.ZK_DEVICE_SN, startTs, endTs);
+    if (!pending) {
+      await queueDeviceResync(CONFIG.ZK_DEVICE_SN, startTs, endTs, `Manual (${user.username})`, user.username);
+      await logAdminAction(user.username, 'device_resync', 'device', CONFIG.ZK_DEVICE_SN, `${from} to ${to}`);
+    }
+    if (form.return === 'dashboard') {
+      res.writeHead(303, { Location: `/dashboard?resync=${pending ? 'pending' : 'queued'}` });
+      return res.end();
+    }
+    return sendHtml(res, await renderAdminSettings(user, { notice: pending
+      ? `A re-sync for ${from} to ${to} is already waiting for the device's next check-in, so another one wasn't added.`
+      : `Re-sync for ${from} to ${to} requested. The device picks it up at its next check-in (within ${DEVICE_POLL_SECONDS / 60} minutes while it's online).` }));
   }
 
   if (parsed.pathname === '/admin/settings' && req.method === 'POST') {
