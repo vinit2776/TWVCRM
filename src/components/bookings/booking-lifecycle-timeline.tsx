@@ -254,9 +254,13 @@ function slotDurationLabel(booking: Booking): string {
 interface BookingLifecycleTimelineProps {
   booking: Booking;
   compRequest?: CompRequestData | null;
+  /** When the payment was actually recorded (latest verified booking_payments row).
+   *  booking.updated_at moves on any edit — including a payment-method correction —
+   *  so it is only a fallback for bookings without payment rows. */
+  paymentReceivedAt?: string | null;
 }
 
-export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecycleTimelineProps) {
+export function BookingLifecycleTimeline({ booking, compRequest, paymentReceivedAt }: BookingLifecycleTimelineProps) {
   const status = booking.status;
   const scheduledStart = slotDateTime(booking.booking_date, booking.start_time);
   const scheduledEnd   = slotDateTime(booking.booking_date, booking.end_time);
@@ -533,7 +537,7 @@ export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecy
         label={paymentLabel}
         timestamp={
           booking.payment_status === "paid"
-            ? formatTs(booking.updated_at)
+            ? formatTs(paymentReceivedAt || booking.updated_at)
             : paymentState === "active"
               ? "Sent — waiting for customer"
               : paymentState === "pending"

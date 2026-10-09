@@ -1367,7 +1367,17 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <CardTitle className="text-sm">Booking Lifecycle</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <BookingLifecycleTimeline booking={booking} compRequest={compRequest} />
+          <BookingLifecycleTimeline
+            booking={booking}
+            compRequest={compRequest}
+            paymentReceivedAt={
+              existingPayments
+                .filter((p) => p.status === "verified")
+                .map((p) => p.created_at)
+                .sort()
+                .at(-1) ?? null
+            }
+          />
         </CardContent>
       </Card>
 
