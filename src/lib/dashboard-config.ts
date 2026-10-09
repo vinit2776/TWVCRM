@@ -23,6 +23,7 @@ export type WidgetId =
   | "sales"
   | "procurement_po"
   | "facility"
+  | "meter_telemetry"
   | "occupancy"
   // New (Tier 2: operational signal)
   | "sla_risk"
@@ -68,6 +69,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   sales:                  { id: "sales",                  title: "Sales" },
   procurement_po:         { id: "procurement_po",         title: "Procurement POs" },
   facility:               { id: "facility",               title: "Facilities" },
+  meter_telemetry:        { id: "meter_telemetry",        title: "Live Meter Telemetry" },
   occupancy:              { id: "occupancy",              title: "Occupancy" },
   sla_risk:               { id: "sla_risk",               title: "SLA Risk Board" },
   member_health:          { id: "member_health",          title: "Member Health" },
@@ -92,11 +94,12 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 // insert its WidgetId into the role's array.
 
 export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
-  // Admin sees only the three management widgets. Every other role keeps its own set.
+  // Admin sees only these four management widgets. Every other role keeps its own set.
   admin: [
     "sales",
     "procurement_po",
     "facility",
+    "meter_telemetry",
   ],
 
   manager: [
