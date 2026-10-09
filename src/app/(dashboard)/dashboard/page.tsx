@@ -23,6 +23,7 @@ import { CashAgingWidget } from "@/components/dashboard/widgets/cash-aging-widge
 import { RevenuePulseWidget } from "@/components/dashboard/widgets/revenue-pulse-widget";
 import { SalesWidget } from "@/components/dashboard/widgets/sales-widget";
 import { ProcurementPoWidget } from "@/components/dashboard/widgets/procurement-po-widget";
+import { FacilityWidget } from "@/components/dashboard/widgets/facility-widget";
 import { OccupancyWidget } from "@/components/dashboard/widgets/occupancy-widget";
 import { SlaRiskWidget } from "@/components/dashboard/widgets/sla-risk-widget";
 import { MemberHealthWidget } from "@/components/dashboard/widgets/member-health-widget";
@@ -213,6 +214,8 @@ export default function DashboardPage() {
         return <SalesWidget key="sales" locationFilter={locationFilter} />;
       case "procurement_po":
         return <ProcurementPoWidget key="procurement_po" locationFilter={locationFilter} />;
+      case "facility":
+        return <FacilityWidget key="facility" locationFilter={locationFilter} />;
       case "revenue_pulse":
         return <RevenuePulseWidget key="revenue_pulse" locationFilter={locationFilter} />;
       case "occupancy":
@@ -253,7 +256,7 @@ export default function DashboardPage() {
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview", "sales", "procurement_po"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review", "accounts_overview", "sales", "procurement_po", "facility"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 
