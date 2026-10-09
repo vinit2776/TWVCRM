@@ -16,10 +16,16 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("lead_enquiries")
-    .select("id, reference, source, is_re_enquiry, received_at")
+    .select("id, reference, source, is_re_enquiry, received_at, payload")
     .eq("lead_id", id)
     .order("received_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ data: data ?? [] });
+  // Only the ad-source summary leaves here — the full submitted form stays on the row.
+  const rows = (data ?? []).map(({ payload, ...rest }) => ({
+    ...rest,
+    attribution: (payload as { attribution?: unknown } | null)?.attribution ?? null,
+  }));
+
+  return NextResponse.json({ data: rows });
 }

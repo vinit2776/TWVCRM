@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { preventEnterSubmit } from "@/lib/utils";
+import { readAttribution } from "@/lib/public-forms/attribution-client";
+import { trackLead } from "@/lib/public-forms/track-lead";
+import { TurnstileWidget } from "@/components/public/turnstile-widget";
 
 interface Location {
   id: string;
@@ -16,6 +19,7 @@ export default function MetaEnquirePage() {
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
   const [preferredLocation, setPreferredLocation] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const [hpField, setHpField] = useState(""); // honeypot
 
   const [submitting, setSubmitting] = useState(false);
@@ -57,6 +61,8 @@ export default function MetaEnquirePage() {
           email: email.trim() || undefined,
           preferred_location: preferredLocation || undefined,
           hp_field: hpField,
+          attribution: readAttribution(),
+          turnstile_token: turnstileToken || undefined,
           source: "meta_ads",
         }),
       });
@@ -67,6 +73,7 @@ export default function MetaEnquirePage() {
         return;
       }
       setReference(typeof json.reference === "string" ? json.reference : null);
+      trackLead({ reference: typeof json.reference === "string" ? json.reference : null, source: "meta_ads" });
       setSubmitted(true);
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -219,6 +226,8 @@ export default function MetaEnquirePage() {
                     {error}
                   </p>
                 )}
+
+                <TurnstileWidget onToken={setTurnstileToken} />
 
                 <button
                   type="submit"
