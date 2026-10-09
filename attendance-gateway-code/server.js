@@ -4226,8 +4226,14 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data, null, 2));
 }
 
+// Quoting alone isn't enough: Excel and Sheets treat a cell starting with = + - @
+// (or a leading tab/CR) as a formula and run it when the file is opened, quotes or
+// not. Employee names reach every one of these exports as typed, so a name entered
+// as =HYPERLINK(...) becomes live in whoever opens the report. A leading apostrophe
+// pins the cell to text; Excel hides it, and the value still reads correctly.
 function csvField(value) {
-  const s = String(value ?? '');
+  const raw = String(value ?? '');
+  const s = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 function toCsv(headers, rows) {
@@ -5967,6 +5973,8 @@ module.exports.serve = serve;
 module.exports.handleRequest = handleRequest;
 module.exports.ensureInit = ensureInit;
 module.exports.init = init;
+// Exported for the unit tests — a pure string function, no server needed.
+module.exports.csvField = csvField;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
