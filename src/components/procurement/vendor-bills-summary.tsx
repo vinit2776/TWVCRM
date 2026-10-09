@@ -35,7 +35,7 @@ function fillMonths(summary: BillsMonthlySummary) {
     const key = `${y}-${String(m).padStart(2, "0")}`;
     out.push(
       byKey.get(key) ?? {
-        month: key, billCount: 0, total: 0, paid: 0, partiallyPaid: 0, unpaid: 0, openQueries: 0,
+        month: key, billCount: 0, total: 0, paid: 0, partiallyPaid: 0, unpaid: 0, rejected: 0, openQueries: 0,
       },
     );
   }
@@ -47,6 +47,7 @@ const SEGMENTS = [
   { key: "unpaid", label: "Unpaid", className: "bg-red-500" },
   { key: "partiallyPaid", label: "Partially paid", className: "bg-yellow-500" },
   { key: "paid", label: "Paid", className: "bg-green-600" },
+  { key: "rejected", label: "Rejected", className: "bg-gray-400" },
 ] as const;
 
 interface Props {
@@ -58,18 +59,20 @@ export function VendorBillsSummary({ summary, onSelectMonth }: Props) {
   const months = fillMonths(summary);
   const max = Math.max(1, ...months.map((m) => m.total));
   const hasPartial = summary.partiallyPaid > 0;
+  const hasRejected = summary.rejected > 0;
   const outstanding = summary.unpaid + summary.partiallyPaid;
 
   const tiles = [
     { label: "Total shown", value: formatCurrency(summary.total), sub: `${summary.billCount} bills · ${summary.months.length} ${summary.months.length === 1 ? "month" : "months"}` },
     { label: "Paid", value: formatCurrency(summary.paid) },
     { label: "Unpaid", value: formatCurrency(outstanding), sub: hasPartial ? "incl. partially paid" : undefined },
+    ...(hasRejected ? [{ label: "Rejected", value: formatCurrency(summary.rejected), sub: "not owed" }] : []),
     { label: "Open queries", value: String(summary.openQueries), sub: summary.openQueries ? `on ${summary.billsWithOpenQueries} ${summary.billsWithOpenQueries === 1 ? "bill" : "bills"}` : undefined },
   ];
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-lg bg-muted/50 px-3 py-2.5">
             <p className="text-xs text-muted-foreground">{t.label}</p>
@@ -83,7 +86,7 @@ export function VendorBillsSummary({ summary, onSelectMonth }: Props) {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <p className="text-sm font-medium">Billed by month and payment status</p>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {SEGMENTS.filter((s) => s.key !== "partiallyPaid" || hasPartial).map((s) => (
+            {SEGMENTS.filter((s) => (s.key !== "partiallyPaid" || hasPartial) && (s.key !== "rejected" || hasRejected)).map((s) => (
               <span key={s.key} className="flex items-center gap-1.5">
                 <span className={cn("inline-block h-2.5 w-2.5 rounded-sm", s.className)} />
                 {s.label}
