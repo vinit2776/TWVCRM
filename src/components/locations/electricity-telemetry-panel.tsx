@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { describeOnegridError, type FriendlyOnegridError } from "@/lib/onegrid-errors";
 import { EnergyBaselineSection } from "./energy-baseline-section";
+import { EnergyPeakSection } from "./energy-peak-section";
 
 interface DeviceOption {
   device_id: string;
@@ -338,6 +339,8 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
             />
           </div>
         )}
+
+        {selectedDevice && <EnergyPeakSection key={selectedDevice} locationId={locationId} deviceId={selectedDevice} />}
 
         <div className="border-t pt-4 space-y-3">
           <div className="flex items-end gap-4">
