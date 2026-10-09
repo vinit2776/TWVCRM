@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { sendPushToProcurementRoles } from "@/lib/push";
 import { z } from "zod";
+import { queryEntityDef } from "@/lib/queries/registry";
+import { canSeeQuery } from "@/lib/queries/audience";
+import { summarizeBillsByMonth } from "@/lib/bills-monthly-summary";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 import { createVendorBill } from "@/lib/vendor-bills";
 import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
@@ -62,6 +65,7 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
   const includeTotals = searchParams.get("include_totals") === "true";
+  const includeMonthly = searchParams.get("include_monthly") === "true";
 
   // Resolve free-text → vendor + PO ids first so both queries share the result
   const { vendorIds, poIds } = await resolveFreeTextIds(supabase, searchParams.get("q"));
@@ -76,6 +80,9 @@ export async function GET(request: NextRequest) {
        vendor_bill_payments(id, payment_reference)`,
       { count: "exact" }
     )
+    // Scoped to one vendor the page groups rows by invoice month, so rows
+    // must arrive in invoice-date order or a month would be split across the list.
+    .order(searchParams.get("vendor_id") ? "invoice_date" : "created_at", { ascending: false })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
@@ -105,6 +112,42 @@ export async function GET(request: NextRequest) {
     };
   }
 
+  // Month-by-month rollup over the whole filtered set (not just this page).
+  let monthly = null;
+  if (includeMonthly) {
+    let monthlyQuery = supabase
+      .from("vendor_bills")
+      .select("id, invoice_date, total_amount, payment_status")
+      .range(0, 4999);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    monthlyQuery = applyBillFilters(monthlyQuery as any, searchParams, { vendorIdsFromQ: vendorIds, poIdsFromQ: poIds }) as typeof monthlyQuery;
+    const { data: monthlyBills, error: monthlyError } = await monthlyQuery;
+    if (monthlyError) return NextResponse.json({ error: monthlyError.message }, { status: 500 });
+
+    // Open queries raised on these bills, limited to the ones this viewer may
+    // read (visibility follows the entity — see canSeeQuery).
+    const openQueriesByBill = new Map<string, number>();
+    const def = queryEntityDef("vendor_bill");
+    if (def && monthlyBills?.length) {
+      const billIds = new Set(monthlyBills.map((b) => b.id));
+      const { data: openQueries, error: queriesError } = await createAdminClient()
+        .from("queries")
+        .select("entity_id, created_by")
+        .eq("entity_type", "vendor_bill")
+        .eq("status", "open");
+      if (queriesError) return NextResponse.json({ error: queriesError.message }, { status: 500 });
+      for (const q of openQueries ?? []) {
+        if (!billIds.has(q.entity_id)) continue;
+        if (!canSeeQuery(def, { id: dbUser.id, role: dbUser.role }, q.created_by)) continue;
+        openQueriesByBill.set(q.entity_id, (openQueriesByBill.get(q.entity_id) ?? 0) + 1);
+      }
+    }
+    monthly = {
+      ...summarizeBillsByMonth(monthlyBills ?? [], openQueriesByBill),
+      openQueriesByBill: Object.fromEntries(openQueriesByBill),
+    };
+  }
+
   return NextResponse.json({
     data,
     pagination: {
@@ -114,6 +157,7 @@ export async function GET(request: NextRequest) {
       totalPages: Math.ceil((count ?? 0) / limit),
     },
     totals,
+    monthly,
   });
 }
 

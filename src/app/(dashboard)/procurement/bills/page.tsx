@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { Fragment, useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Receipt, Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { Receipt, Plus, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -19,6 +19,10 @@ import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } fr
 import type { VendorBill, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { VendorBillsSummary, monthLabel } from "@/components/procurement/vendor-bills-summary";
+import { monthKey, type BillsMonthlySummary } from "@/lib/bills-monthly-summary";
+
+type MonthlyPayload = BillsMonthlySummary & { openQueriesByBill: Record<string, number> };
 
 const today = new Date().toISOString().split("T")[0];
 
@@ -53,6 +57,8 @@ function VendorBillsPageInner() {
   const [rejectedPrs, setRejectedPrs] = useState<PurchaseRequest[]>([]);
   const [rejectedPrTotal, setRejectedPrTotal] = useState(0);
   const rejectedView = quickFilter === "rejected";
+  const [monthly, setMonthly] = useState<MonthlyPayload | null>(null);
+  const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
 
   // Hydrate filters from URL on first render
   const [filters, setFilters] = useState<BillFilters>(
@@ -66,12 +72,16 @@ function VendorBillsPageInner() {
     const qfPatch = quickFilterToFilters(quickFilter);
     Object.entries(qfPatch).forEach(([k, v]) => { if (v) params.set(k, v as string); });
     if (!params.has("limit")) params.set("limit", "25");
+    // Month grouping, totals and the chart only make sense for one vendor's bills.
+    const vendorScoped = !!f.vendor_id && quickFilter !== "rejected";
+    if (vendorScoped) params.set("include_monthly", "true");
 
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
       const json = await res.json();
       setBills(json.data || []);
       setPagination(json.pagination);
+      setMonthly(vendorScoped ? json.monthly ?? null : null);
     }
     setLoading(false);
 
@@ -103,6 +113,40 @@ function VendorBillsPageInner() {
       .catch(() => {});
   }, [rejectedView]);
 
+  const monthByKey = useMemo(
+    () => new Map((monthly?.months ?? []).map((m) => [m.month, m])),
+    [monthly],
+  );
+  const grouped = !!monthly && !rejectedView;
+
+  const toggleMonth = (key: string) =>
+    setCollapsedMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Bar click: jump to the month if its bills are on this page, otherwise
+  // narrow the list to that month so the bills actually appear.
+  const handleSelectMonth = (key: string) => {
+    if (bills.some((b) => monthKey(b.invoice_date) === key)) {
+      setCollapsedMonths((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      requestAnimationFrame(() =>
+        document.getElementById(`bill-month-${key}`)?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      );
+      return;
+    }
+    if (key === "none") return;
+    const [y, m] = key.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    setFilters((f) => ({ ...f, invoice_date_from: `${key}-01`, invoice_date_to: `${key}-${String(last).padStart(2, "0")}`, page: "1" }));
+  };
+
   const handleQuickFilter = (qf: QuickFilter) => {
     setQuickFilter(qf);
     setFilters((f) => ({ ...f, page: "1" }));
@@ -127,6 +171,10 @@ function VendorBillsPageInner() {
         onChange={setFilters}
         showExport
       />
+
+      {grouped && monthly && monthly.billCount > 0 && (
+        <VendorBillsSummary summary={monthly} onSelectMonth={handleSelectMonth} />
+      )}
 
       {/* Quick filter tabs */}
       <div className="flex gap-2">
@@ -193,12 +241,45 @@ function VendorBillsPageInner() {
                 )}
                 <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Total</th>
                 {!rejectedView && <th className="px-4 py-3 text-right font-medium hidden lg:table-cell">Paid</th>}
+                {grouped && <th className="px-4 py-3 text-left font-medium">Queries</th>}
               </tr>
             </thead>
             <tbody>
-              {bills.map((bill) => (
+              {bills.map((bill, i) => {
+                const key = monthKey(bill.invoice_date);
+                const startsMonth = grouped && (i === 0 || monthKey(bills[i - 1].invoice_date) !== key);
+                const m = monthByKey.get(key);
+                const collapsed = grouped && collapsedMonths.has(key);
+                const outstanding = m ? m.unpaid + m.partiallyPaid : 0;
+                return (
+                <Fragment key={bill.id}>
+                {startsMonth && (
+                  <tr
+                    id={`bill-month-${key}`}
+                    className="border-b bg-muted/50 cursor-pointer select-none"
+                    onClick={() => toggleMonth(key)}
+                  >
+                    <td colSpan={9} className="px-4 py-2.5">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <ChevronDown className={cn("h-4 w-4 transition-transform", collapsed && "-rotate-90")} />
+                          {monthLabel(key)} · {m?.billCount ?? 0} {m?.billCount === 1 ? "bill" : "bills"}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {outstanding > 0 ? `${formatCurrency(outstanding)} unpaid` : "all paid"}
+                        </span>
+                        {!!m?.openQueries && (
+                          <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-800">
+                            {m.openQueries} open {m.openQueries === 1 ? "query" : "queries"}
+                          </span>
+                        )}
+                        <span className="ml-auto font-medium">{formatCurrency(m?.total ?? 0)}</span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {!collapsed && (
                 <tr
-                  key={bill.id}
                   className={cn(
                     "border-b hover:bg-muted/30 transition-colors cursor-pointer",
                     isOverdue(bill) && "bg-amber-50/60"
@@ -286,9 +367,35 @@ function VendorBillsPageInner() {
                       {bill.amount_paid > 0 ? formatCurrency(bill.amount_paid) : "—"}
                     </td>
                   )}
+                  {grouped && (
+                    <td className="px-4 py-3">
+                      {monthly?.openQueriesByBill[bill.id] ? (
+                        <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-800">
+                          {monthly.openQueriesByBill[bill.id]} open
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
-              ))}
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
+            {grouped && monthly && (
+              <tfoot>
+                <tr className="bg-muted/50 font-medium">
+                  <td colSpan={6} className="px-4 py-3">
+                    Grand total · {monthly.billCount} {monthly.billCount === 1 ? "bill" : "bills"}
+                    {pagination.totalPages > 1 && <span className="ml-2 text-xs font-normal text-muted-foreground">across all pages</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right hidden md:table-cell">{formatCurrency(monthly.total)}</td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}
