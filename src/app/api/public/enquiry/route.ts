@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
+import { sanitiseAttribution } from "@/lib/public-forms/attribution";
+import { verifyTurnstile } from "@/lib/public-forms/turnstile";
 
 /** Normalise a phone number to a canonical 10-digit Indian mobile number.
  *  Strips all non-digit characters, then removes a leading country code
@@ -177,6 +179,8 @@ export async function POST(request: NextRequest) {
     start_date,               // walk-in specific
     conference_room_location, // walk-in specific (when workspace_type = conference_room)
     hp_field,                 // honeypot — bots fill this, humans don't
+    attribution: rawAttribution, // ad / campaign the visitor came from (untrusted)
+    turnstile_token,          // Cloudflare Turnstile token (optional until configured)
     source: rawSource,
   } = body;
 
@@ -189,6 +193,19 @@ export async function POST(request: NextRequest) {
   // Honeypot check — silently succeed without touching DB
   if (hp_field) {
     return NextResponse.json({ success: true });
+  }
+
+  // Bot check. Fails open: only an explicit "invalid token" from Cloudflare rejects, so a
+  // missing token / Cloudflare outage never costs us a real customer's enquiry.
+  const captcha = await verifyTurnstile(
+    turnstile_token,
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+  );
+  if (captcha === "failed") {
+    return NextResponse.json(
+      { error: "We couldn't verify your submission. Please refresh the page and try again." },
+      { status: 400 }
+    );
   }
 
   // Basic validation
@@ -270,6 +287,12 @@ export async function POST(request: NextRequest) {
       description: description?.trim(),
     }).filter(([, v]) => v !== undefined && v !== null && v !== "")
   );
+
+  // Where the visitor came from. Stored beside the form fields but never mixed into them.
+  const attribution = sanitiseAttribution(rawAttribution);
+  if (Object.keys(attribution).length > 0) submittedPayload.attribution = attribution;
+  // Visible in the data when the bot check was on but the browser sent no token.
+  if (captcha === "missing") submittedPayload.captcha = "missing";
 
   const emailParams: Omit<EnquiryEmailParams, "isReturning" | "leadId" | "reference"> = {
     firstName, lastName, sourceLabel,

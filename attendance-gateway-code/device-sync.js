@@ -6,9 +6,13 @@
 // resend that period once it's back, and hold the 19:00 auto-checkout meanwhile.
 // Kept out of server.js so they can be unit-tested without a database.
 
-// The device polls /iclock/getrequest every ~30s (Delay=30), even when nobody punches,
-// so this much silence means it can't reach the app.
-const DEVICE_OFFLINE_MINUTES = 15;
+// How often the device checks in on /iclock/getrequest (the handshake's Delay), even
+// when nobody punches. Punches are uploaded on their own schedule, not on this poll; it
+// mainly sets how quickly a queued re-sync is picked up.
+const DEVICE_POLL_SECONDS = 15 * 60;
+// This much silence means the device can't reach the app: two missed check-ins plus
+// slack, so one late check-in isn't mistaken for an outage.
+const DEVICE_OFFLINE_MINUTES = 35;
 // The dashboard warning only shows during office hours: [start, end).
 const DEVICE_ALERT_START_HOUR = 8;
 const DEVICE_ALERT_END_HOUR = 20;
@@ -94,6 +98,7 @@ function buildAttlogQuery(startTs, endTs) {
 }
 
 module.exports = {
+  DEVICE_POLL_SECONDS,
   DEVICE_OFFLINE_MINUTES,
   DEVICE_ALERT_START_HOUR,
   DEVICE_ALERT_END_HOUR,

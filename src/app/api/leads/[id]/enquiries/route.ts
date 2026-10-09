@@ -17,7 +17,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("lead_enquiries")
     .select(
-      "id, reference, source, is_re_enquiry, received_at, claimed_by, claimed_at, resolved_at, resolution_outcome, " +
+      "id, reference, source, is_re_enquiry, received_at, payload, claimed_by, claimed_at, resolved_at, resolution_outcome, " +
         "claimer:users!lead_enquiries_claimed_by_fkey(id, full_name), " +
         "resolver:users!lead_enquiries_resolved_by_fkey(id, full_name)"
     )
@@ -25,5 +25,13 @@ export async function GET(
     .order("received_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ data: data ?? [] });
+  // Only the ad-source summary leaves here — the full submitted form stays on the row.
+  // The long select string defeats supabase-js's type parsing, so give the rows their shape.
+  const typed = (data ?? []) as unknown as Array<{ payload?: unknown } & Record<string, unknown>>;
+  const rows = typed.map(({ payload, ...rest }) => ({
+    ...rest,
+    attribution: (payload as { attribution?: unknown } | null)?.attribution ?? null,
+  }));
+
+  return NextResponse.json({ data: rows });
 }

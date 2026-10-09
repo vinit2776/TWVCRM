@@ -47,12 +47,15 @@ The relay is stateless. It passes the cloud's response straight back, so the
 device only clears a log once the cloud has accepted it — if the internet is
 down, nothing is lost and the device retries. Setup: [relay/README.md](relay/README.md).
 
-If the office PC or internet is down, the app notices after 15 minutes without
-hearing from the device (`device_status`): admins get a dashboard warning, the
+The device checks in every 15 minutes (the handshake's `Delay`); punches are
+uploaded on their own schedule, not on that check-in. If the office PC or internet
+is down, the app notices after 35 minutes without hearing from the device
+(`device_status`): admins get a dashboard warning, the
 19:00 auto-checkout is held, and once the device is back the app queues a
 `DATA QUERY ATTLOG` command (`device_commands`) asking it to resend the outage
 period, as a safety net on top of the device's own retries. Admins can also
-re-sync any date range from **Settings → Biometric Device**. The thresholds live
+re-sync today from the dashboard's device card, or any date range from
+**Settings → Biometric Device**. The thresholds live
 in [device-sync.js](device-sync.js).
 
 ## Running locally

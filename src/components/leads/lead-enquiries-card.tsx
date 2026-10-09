@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/utils";
 import { enquiryStateLabel, type EnquiryOutcome } from "@/lib/enquiries";
+import { describeAttribution, sanitiseAttribution } from "@/lib/public-forms/attribution";
 
 const SOURCE_LABEL: Record<string, string> = {
   google_ads: "Google Ads",
@@ -22,6 +23,7 @@ interface LeadEnquiry {
   resolution_outcome: EnquiryOutcome | null;
   claimer: { full_name: string } | null;
   resolver: { full_name: string } | null;
+  attribution?: unknown;
 }
 
 const stateTone = (e: LeadEnquiry) =>
@@ -53,26 +55,32 @@ export function LeadEnquiriesCard({ leadId }: { leadId: string }) {
         <CardTitle className="text-base">Enquiries ({rows.length})</CardTitle>
       </CardHeader>
       <CardContent className="divide-y">
-        {rows.map((r) => (
-          <div key={r.id} className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0 last:pb-0">
-            <span className="font-mono font-medium">{r.reference}</span>
-            <span className="flex-1 text-muted-foreground">
-              {SOURCE_LABEL[r.source] ?? r.source}
-              {r.is_re_enquiry && " · re-enquiry"}
-              {" · "}
-              {formatDate(r.received_at)}
-            </span>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${stateTone(r)}`}>
-              {enquiryStateLabel({
-                claimerName: r.claimer?.full_name ?? null,
-                claimedAt: r.claimed_at,
-                resolvedAt: r.resolved_at,
-                resolutionOutcome: r.resolution_outcome,
-                resolverName: r.resolver?.full_name ?? null,
-              })}
-            </span>
-          </div>
-        ))}
+        {rows.map((r) => {
+          const campaign = describeAttribution(sanitiseAttribution(r.attribution));
+          return (
+            <div key={r.id} className="py-2 text-sm first:pt-0 last:pb-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono font-medium">{r.reference}</span>
+                <span className="flex-1 text-muted-foreground">
+                  {SOURCE_LABEL[r.source] ?? r.source}
+                  {r.is_re_enquiry && " · re-enquiry"}
+                  {" · "}
+                  {formatDate(r.received_at)}
+                </span>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${stateTone(r)}`}>
+                  {enquiryStateLabel({
+                    claimerName: r.claimer?.full_name ?? null,
+                    claimedAt: r.claimed_at,
+                    resolvedAt: r.resolved_at,
+                    resolutionOutcome: r.resolution_outcome,
+                    resolverName: r.resolver?.full_name ?? null,
+                  })}
+                </span>
+              </div>
+              {campaign && <p className="mt-0.5 text-xs text-muted-foreground">Campaign: {campaign}</p>}
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );

@@ -8,9 +8,13 @@ const {
 
 const at = (ts) => { const [d, t] = ts.split(' '); const [y, mo, day] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number); return new Date(y, mo - 1, day, h, mi, 0); };
 
-test('offline: 15+ minutes since the device was last heard from', () => {
-  assert.equal(isDeviceOffline('2026-10-06 10:00:00', at('2026-10-06 10:14')), false);
-  assert.equal(isDeviceOffline('2026-10-06 10:00:00', at('2026-10-06 10:15')), true);
+test('offline: 35+ minutes since the device was last heard from', () => {
+  assert.equal(isDeviceOffline('2026-10-06 10:00:00', at('2026-10-06 10:34')), false);
+  assert.equal(isDeviceOffline('2026-10-06 10:00:00', at('2026-10-06 10:35')), true);
+});
+
+test('offline: one late 15-minute check-in is not an outage', () => {
+  assert.equal(isDeviceOffline('2026-10-06 10:00:00', at('2026-10-06 10:31')), false);
 });
 
 test('offline: a device never heard from is not treated as offline', () => {

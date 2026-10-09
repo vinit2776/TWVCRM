@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { preventEnterSubmit } from "@/lib/utils";
+import { readAttribution } from "@/lib/public-forms/attribution-client";
+import { trackLead } from "@/lib/public-forms/track-lead";
+import { TurnstileWidget } from "@/components/public/turnstile-widget";
 
 const WORKSPACE_TYPES = [
   { value: "hot_desk",        label: "Hot Desk" },
@@ -33,6 +36,7 @@ export default function WalkInEnquirePage() {
   const [conferenceRoomLoc, setConferenceRoomLoc]     = useState("");
   const [startDate, setStartDate]                     = useState("");
   const [description, setDescription]                 = useState("");
+  const [turnstileToken, setTurnstileToken]           = useState("");
   const [hpField, setHpField]                         = useState(""); // honeypot
 
   const [submitting, setSubmitting] = useState(false);
@@ -80,6 +84,8 @@ export default function WalkInEnquirePage() {
           start_date:             startDate || undefined,
           description:            description.trim() || undefined,
           hp_field:               hpField,
+          attribution:            readAttribution(),
+          turnstile_token:        turnstileToken || undefined,
           source:                 "direct_walkin",
         }),
       });
@@ -90,6 +96,7 @@ export default function WalkInEnquirePage() {
         return;
       }
       setReference(typeof json.reference === "string" ? json.reference : null);
+      trackLead({ reference: typeof json.reference === "string" ? json.reference : null, source: "direct_walkin" });
       setSubmitted(true);
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -339,6 +346,8 @@ export default function WalkInEnquirePage() {
                     {error}
                   </p>
                 )}
+
+                <TurnstileWidget onToken={setTurnstileToken} />
 
                 <button
                   type="submit"

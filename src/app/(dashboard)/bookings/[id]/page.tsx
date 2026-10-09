@@ -41,6 +41,7 @@ const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-us
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
+import { CorrectPaymentMethodDialog } from "@/components/bookings/correct-payment-method-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { BookingLifecycleTimeline } from "@/components/bookings/booking-lifecycle-timeline";
@@ -169,6 +170,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
+  // True once accounts has uploaded the GST invoice — payment methods are then frozen.
+  const [paymentMethodLocked, setPaymentMethodLocked] = useState(false);
+  const [correctingPayment, setCorrectingPayment] = useState<BookingPayment | null>(null);
   const [upiId, setUpiId] = useState("");
   const [upiQrCodePath, setUpiQrCodePath] = useState("");
   const [zoomedScreenshotUrl, setZoomedScreenshotUrl] = useState<string | null>(null);
@@ -227,6 +231,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (paymentsRes?.ok) {
       const pJson = await paymentsRes.json();
       setExistingPayments(pJson.data || []);
+      setPaymentMethodLocked(!!pJson.method_locked);
     }
     if (bcRes?.ok) {
       const bcJson = await bcRes.json();
@@ -827,6 +832,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // monthly statement reconciliation). The server enforces the same
   // rules; this is just the UI mirror so the pencil doesn't tease.
   const hasVerifiedPayment = existingPayments.some((p) => p.status === "verified");
+  // The payment the summary banner's "Correct it" acts on: newest manual verified one,
+  // offered only to roles/recorders the API will accept.
+  const latestCorrectablePayment = existingPayments.find((p) =>
+    p.status === "verified" && ["cash", "upi", "card"].includes(p.payment_mode) && !p.razorpay_payment_id &&
+    (userRole === "admin" || userRole === "accounts" || userRole === "manager" || (!!user?.id && p.created_by === user.id)),
+  ) ?? null;
   const isTerminalStatus = ["cancelled", "checked_out", "no_show", "closed"].includes(booking.status);
   const isPaid = booking.payment_status === "paid";
   const canEditPricing = !isTerminalStatus && !isPaid && !hasVerifiedPayment;
@@ -1091,7 +1102,17 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         payments={existingPayments}
         onViewScreenshot={handleViewPaymentScreenshot}
         loadingScreenshotId={loadingScreenshotId}
+        methodLocked={paymentMethodLocked}
+        onCorrectMethod={latestCorrectablePayment ? () => setCorrectingPayment(latestCorrectablePayment) : undefined}
       />
+      {correctingPayment && (
+        <CorrectPaymentMethodDialog
+          open
+          onOpenChange={(o) => { if (!o) setCorrectingPayment(null); }}
+          payment={correctingPayment}
+          onSuccess={fetchBooking}
+        />
+      )}
 
       {/* Outstanding charges from previous bookings */}
       {outstandingCharges.length > 0 && (
@@ -2063,8 +2084,21 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                           </button>
                         </div>
                       )}
-                      <div className="mt-1 text-[10px] text-muted-foreground/70">
-                        {formatDateTime(p.created_at)}
+                      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground/70">
+                        <span>{formatDateTime(p.created_at)}</span>
+                        {p.status === "verified" && ["cash", "upi", "card"].includes(p.payment_mode) && !p.razorpay_payment_id && (
+                          paymentMethodLocked ? (
+                            <span title="A GST invoice has been issued for this booking">Method locked — GST invoice issued</span>
+                          ) : (userRole === "admin" || userRole === "accounts" || userRole === "manager" || (!!user?.id && p.created_by === user.id)) ? (
+                            <button
+                              type="button"
+                              className="text-primary hover:underline underline-offset-2"
+                              onClick={() => setCorrectingPayment(p)}
+                            >
+                              Correct method
+                            </button>
+                          ) : null
+                        )}
                       </div>
                     </div>
                   ))}
