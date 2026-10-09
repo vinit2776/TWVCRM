@@ -109,7 +109,7 @@ function LiveEnquiriesWidget() {
 
         <div className="space-y-2">
           {items.slice(0, 6).map((item) => (
-            <EnquiryQueueRow key={item.leadId} item={item} />
+            <EnquiryQueueRow key={item.enquiryId} item={item} />
           ))}
           {items.length > 6 && (
             <p className="text-xs text-emerald-700 text-center pt-1">

@@ -102,7 +102,7 @@ export function NotificationBell() {
               <div className="space-y-1.5">
                 {items.slice(0, 8).map((item) => (
                   <EnquiryQueueRow
-                    key={item.leadId}
+                    key={item.enquiryId}
                     item={item}
                     onNavigate={handleClose}
                     compact

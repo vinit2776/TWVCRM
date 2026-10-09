@@ -13,27 +13,14 @@ import {
 } from "@/components/ui/select";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
-import { latestReference } from "@/hooks/use-enquiry-notifications";
-
-type EnquiryLogRow = {
-  id: string;
-  first_name: string;
-  last_name: string;
-  mobile: string | null;
-  email: string | null;
-  source: string;
-  tags: string[] | null;
-  created_at: string;
-  attention_reset_at: string | null;
-  claimed_by: string | null;
-  claimed_at: string | null;
-  resolved_at: string | null;
-  resolution_outcome: "converted" | "not_interested" | "no_response" | null;
-  claimer: { id: string; full_name: string } | null;
-  resolver: { id: string; full_name: string } | null;
-  location: { id: string; name: string; code: string } | null;
-  enquiries: { reference: string; received_at: string }[] | null;
-};
+import {
+  ENQUIRY_SOURCE_LABEL,
+  enquiryOutcomeLabel,
+  enquiryStateLabel,
+  toEnquiryItem,
+  type EnquiryItem,
+  type RawEnquiryRow,
+} from "@/lib/enquiries";
 
 type Summary = {
   total: number;
@@ -41,24 +28,14 @@ type Summary = {
   converted: number;
   notInterested: number;
   noResponse: number;
-};
-
-const SOURCE_LABELS: Record<string, string> = {
-  google_ads: "Google Ads",
-  meta_ads: "Meta Ads",
-  direct_walkin: "Walk-in",
-};
-
-const OUTCOME_LABELS: Record<string, string> = {
-  converted: "Converted",
-  not_interested: "Not interested",
-  no_response: "No response",
+  superseded: number;
 };
 
 const OUTCOME_CLASS: Record<string, string> = {
   converted: "bg-emerald-100 text-emerald-800",
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
+  superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
 };
 
 function defaultFromDate(): string {
@@ -68,7 +45,7 @@ function defaultFromDate(): string {
 }
 
 export default function EnquiryLogPage() {
-  const [rows, setRows] = useState<EnquiryLogRow[]>([]);
+  const [rows, setRows] = useState<EnquiryItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -89,9 +66,11 @@ export default function EnquiryLogPage() {
     const res = await fetch(`/api/leads/enquiry-log?${sp}`);
     if (res.ok) {
       const json = await res.json();
-      // Newest enquiry activity first — a re-enquiry on an old lead sorts by when it came back in.
-      const when = (r: EnquiryLogRow) => new Date(r.attention_reset_at ?? r.created_at).getTime();
-      setRows(((json.data ?? []) as EnquiryLogRow[]).sort((a, b) => when(b) - when(a)));
+      setRows(
+        ((json.data ?? []) as RawEnquiryRow[])
+          .map(toEnquiryItem)
+          .filter((i): i is EnquiryItem => i !== null)
+      );
       setSummary(json.summary ?? null);
     }
     setLoading(false);
@@ -102,8 +81,10 @@ export default function EnquiryLogPage() {
   }, [load]);
 
   const conversionRate = useMemo(() => {
-    if (!summary || summary.total === 0) return 0;
-    return Math.round((summary.converted / summary.total) * 100);
+    // Share of enquiries that reached a real outcome; superseded history has none.
+    if (!summary) return 0;
+    const decided = summary.converted + summary.notInterested + summary.noResponse;
+    return decided === 0 ? 0 : Math.round((summary.converted / decided) * 100);
   }, [summary]);
 
   return (
@@ -139,6 +120,9 @@ export default function EnquiryLogPage() {
           <Card className="p-3 border-amber-200">
             <p className="text-xs text-muted-foreground">No response</p>
             <p className="text-xl font-semibold text-amber-700">{summary.noResponse}</p>
+            {summary.superseded > 0 && (
+              <p className="text-[10px] text-muted-foreground">+ {summary.superseded} superseded</p>
+            )}
           </Card>
         </div>
       )}
@@ -168,6 +152,7 @@ export default function EnquiryLogPage() {
                 <SelectItem value="converted">Converted</SelectItem>
                 <SelectItem value="not_interested">Not interested</SelectItem>
                 <SelectItem value="no_response">No response</SelectItem>
+                <SelectItem value="superseded">Superseded</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -197,7 +182,7 @@ export default function EnquiryLogPage() {
                 <th className="px-3 py-2 text-left">Name</th>
                 <th className="px-3 py-2 text-left">Mobile</th>
                 <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Outcome</th>
+                <th className="px-3 py-2 text-left">Status</th>
                 <th className="px-3 py-2 text-left">Resolved by</th>
                 <th className="px-3 py-2 text-left">Resolved at</th>
               </tr>
@@ -210,48 +195,47 @@ export default function EnquiryLogPage() {
                 <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
               )}
               {!loading &&
-                rows.map((row) => {
-                  const isReEnquiry =
-                    row.attention_reset_at &&
-                    new Date(row.attention_reset_at).getTime() - new Date(row.created_at).getTime() > 1000;
-                  return (
-                    <tr key={row.id} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDate(isReEnquiry && row.attention_reset_at ? row.attention_reset_at : row.created_at)}
-                      </td>
-                      <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">
-                        {latestReference(row.enquiries) ?? "—"}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Link href={`/leads/${row.id}`} className="font-medium hover:underline">
-                          {row.first_name} {row.last_name}
-                        </Link>
-                        {isReEnquiry && (
-                          <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Re-enquiry
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
-                      <td className="px-3 py-2 text-xs">{SOURCE_LABELS[row.source] ?? row.source}</td>
-                      <td className="px-3 py-2">
-                        {row.resolution_outcome ? (
-                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${OUTCOME_CLASS[row.resolution_outcome]}`}>
-                            {OUTCOME_LABELS[row.resolution_outcome]}
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800">
-                            Unresolved
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs">{row.resolver?.full_name ?? "—"}</td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {row.resolved_at ? formatDate(row.resolved_at) : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
+                rows.map((row) => (
+                  <tr key={row.enquiryId} className="border-t hover:bg-muted/30">
+                    <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
+                      {formatDate(row.attentionResetAt)}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">{row.reference}</td>
+                    <td className="px-3 py-2">
+                      <Link href={`/leads/${row.leadId}`} className="font-medium hover:underline">
+                        {row.name}
+                      </Link>
+                      {row.isReEnquiry && (
+                        <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                          Re-enquiry
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
+                    <td className="px-3 py-2 text-xs">{ENQUIRY_SOURCE_LABEL[row.sourceTag] ?? row.source}</td>
+                    <td className="px-3 py-2">
+                      {row.resolutionOutcome ? (
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${OUTCOME_CLASS[row.resolutionOutcome]}`}>
+                          {enquiryOutcomeLabel(row.resolutionOutcome)}
+                        </span>
+                      ) : (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            row.claimedAt ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"
+                          }`}
+                        >
+                          {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {row.resolutionOutcome === "superseded" ? "—" : (row.resolverName ?? "—")}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                      {row.resolvedAt ? formatDate(row.resolvedAt) : "—"}
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
