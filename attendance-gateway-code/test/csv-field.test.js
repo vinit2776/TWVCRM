@@ -5,7 +5,7 @@ const assert = require('node:assert');
 // server.js builds its database client at import time, so give it a throwaway URL.
 // Requiring it starts no listener — that's behind `require.main === module`.
 process.env.TURSO_DATABASE_URL = process.env.TURSO_DATABASE_URL || 'file::memory:';
-const { csvField } = require('../server');
+const { csvField, sendCsv } = require('../server');
 
 test('csv: ordinary values pass through untouched', () => {
   assert.strictEqual(csvField('Priya Raman'), 'Priya Raman');
@@ -39,4 +39,37 @@ test('csv: a leading = + - @ is neutralised so Excel treats it as text', () => {
 test('csv: a leading tab or CR is neutralised too', () => {
   assert.strictEqual(csvField('\tTabbed'), "'\tTabbed");
   assert.strictEqual(csvField('\rCarriage'), '"\'\rCarriage"');
+});
+
+// --- sendCsv -------------------------------------------------------------
+
+function captureCsv(body) {
+  const sent = {};
+  sendCsv({ writeHead: (code, headers) => { sent.code = code; sent.headers = headers; },
+            end: (chunk) => { sent.body = chunk; } }, 'report.csv', body);
+  return sent;
+}
+
+test('csv: the response carries a UTF-8 BOM so Excel reads it as UTF-8', () => {
+  const sent = captureCsv('Employee ID,Name\r\nEMP-001,Priya\r\n');
+  assert.ok(Buffer.isBuffer(sent.body), 'body is a Buffer, so the BOM survives as bytes');
+  assert.deepStrictEqual(sent.body.subarray(0, 3), Buffer.from([0xef, 0xbb, 0xbf]));
+});
+
+test('csv: a BOM-aware reader still sees the first header, not the BOM', () => {
+  const sent = captureCsv('Employee ID,Name\r\n');
+  assert.strictEqual(sent.body.toString('utf8').replace(/^\ufeff/, '').split(',')[0], 'Employee ID');
+});
+
+test('csv: non-ASCII names survive the round trip', () => {
+  const sent = captureCsv('Employee ID,Name\r\nEMP-001,\u0baa\u0bbf\u0bb0\u0bbf\u0baf\u0bbe\r\n');
+  assert.ok(sent.body.toString('utf8').includes('\u0baa\u0bbf\u0bb0\u0bbf\u0baf\u0bbe'));
+});
+
+test('csv: Content-Length counts the BOM, not just the text', () => {
+  // A length computed from the string alone would be 3 bytes short and truncate
+  // the last characters of the file.
+  const text = 'a,b\r\n';
+  const sent = captureCsv(text);
+  assert.strictEqual(sent.headers['Content-Length'], Buffer.byteLength(text, 'utf8') + 3);
 });
