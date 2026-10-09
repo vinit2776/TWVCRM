@@ -173,7 +173,15 @@ export function unbilledMonths(opts: {
   /** Months an admin waived (contract_rent_waivers.waived_month, YYYY-MM-DD):
    *  deliberately not billed through the CRM, so not reported as missed. */
   waivedMonths?: string[];
+  /** Termination date (YYYY-MM-DD or ISO), for a terminated contract. Rent
+   *  after the month of termination was never due. */
+  terminatedAt?: string | null;
+  /** When the contract was activated. A terminated contract with no
+   *  activation was withdrawn before it began: it never owed rent. */
+  activatedAt?: string | null;
 }): BillingMonth[] {
+  if (opts.contractStatus === "terminated" && !opts.activatedAt) return [];
+
   const ownFirst = ymOf(firstBillingAnchor(opts.startDate));
   const created = ymOf(opts.createdAt.slice(0, 10));
   // A contract created in or after its own first billing month missed the run
@@ -188,9 +196,16 @@ export function unbilledMonths(opts: {
   const first = newInCrm || monthKey(ownFirst) > monthKey(created) ? ownFirst : monthAfter(created);
 
   const now = ymOf(opts.today);
-  const last = opts.contractStatus === "renewal_in_progress"
+  let last = opts.contractStatus === "renewal_in_progress"
     ? now
     : (monthKey(ymOf(opts.endDate)) <= monthKey(now) ? ymOf(opts.endDate) : now);
+  // A termination ends the obligation even when end_date still lies ahead. The
+  // termination month itself stays in scope: its rent was billed by the run
+  // before the contract ended, so an unbilled one is a real gap.
+  if (opts.contractStatus === "terminated" && opts.terminatedAt) {
+    const t = ymOf(opts.terminatedAt);
+    if (monthKey(t) < monthKey(last)) last = t;
+  }
 
   if (monthKey(first) > monthKey(last)) return [];
 

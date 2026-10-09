@@ -236,6 +236,8 @@ interface EligibleContract {
   start_date: string;
   end_date: string;
   created_at: string;
+  activated_at: string | null;
+  terminated_at: string | null;
   lead_id: string | null;
   billing_cycle: string | null;
   subtotal: number | null;
@@ -336,7 +338,7 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
   // an audit of history, so expired/terminated contracts must be included.
   const { data: contracts } = await supabase
     .from("contracts")
-    .select("id, contract_number, status, start_date, end_date, created_at, lead_id, billing_cycle, subtotal, total_amount, phase_start_date, tax_percentage")
+    .select("id, contract_number, status, start_date, end_date, created_at, activated_at, terminated_at, lead_id, billing_cycle, subtotal, total_amount, phase_start_date, tax_percentage")
     .in("status", ["active", "renewal_in_progress", "renewed", "expired", "terminated"]);
 
   if (!contracts || contracts.length === 0) return [];
@@ -418,6 +420,8 @@ async function getRentGaps(supabase: SupabaseClient): Promise<InternalRow[]> {
       contractId: c.id,
       contractStatus: c.status,
       waivedMonths: waivedByContract.get(c.id),
+      terminatedAt: c.terminated_at,
+      activatedAt: c.activated_at,
     });
     // Same rule the contract page uses, so the two can never disagree about
     // which gaps can be raised directly (see backfillableRentMonths).
