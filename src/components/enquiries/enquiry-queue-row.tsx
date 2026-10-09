@@ -34,11 +34,16 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+// An unclaimed enquiry this old is long past "needs a reply in hours" — calling it
+// "Overdue ≥4h" is misleading, so it reads Stale instead.
+const STALE_AFTER_MS = 7 * 24 * 3600 * 1000;
+
 function urgency(item: EnquiryItem): "red" | "yellow" | "stale" | "ok" {
   if (item.resolvedAt) return "ok";
   const now = Date.now();
   if (!item.claimedAt) {
     const ageMs = now - new Date(item.attentionResetAt).getTime();
+    if (ageMs >= STALE_AFTER_MS) return "stale";
     if (ageMs >= 4 * 3600 * 1000) return "red";
     if (ageMs >= 2 * 3600 * 1000) return "yellow";
     return "ok";
