@@ -4239,12 +4239,19 @@ function csvField(value) {
 function toCsv(headers, rows) {
   return [headers, ...rows].map(row => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
+// The charset header only helps a browser rendering the response; a file saved to
+// disk and opened in Excel is read with the machine's own codepage instead, which
+// mangles anything non-ASCII — Tamil employee names here, and ₹ if a report ever
+// carries an amount. A UTF-8 BOM is what Excel actually looks for. Added here, in
+// the one place every report is sent from, so no individual export can forget it.
 function sendCsv(res, filename, csv) {
+  const body = Buffer.from(`\ufeff${csv}`, 'utf8');
   res.writeHead(200, {
     'Content-Type': 'text/csv; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`,
+    'Content-Length': body.length,
   });
-  res.end(csv);
+  res.end(body);
 }
 // Caps how much of a request body we'll buffer into memory — an unbounded read
 // lets one request (no auth required to trigger it, since the body is read before
@@ -5975,6 +5982,7 @@ module.exports.ensureInit = ensureInit;
 module.exports.init = init;
 // Exported for the unit tests — a pure string function, no server needed.
 module.exports.csvField = csvField;
+module.exports.sendCsv = sendCsv;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the
 // Windows NSSM service. On Vercel this file is imported, so this block is skipped
