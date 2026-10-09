@@ -103,6 +103,8 @@ interface ContractInvoicesSectionProps {
   startDate?: string | null;
   endDate?: string | null;
   createdAt?: string | null;
+  activatedAt?: string | null;
+  terminatedAt?: string | null;
 }
 
 /** A live admin waiver — a missed rent month deliberately not billed through the CRM. */
@@ -149,6 +151,8 @@ export function ContractInvoicesSection({
   startDate,
   endDate,
   createdAt,
+  activatedAt,
+  terminatedAt,
 }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -303,8 +307,10 @@ export function ContractInvoicesSection({
       statements,
       contractId,
       contractStatus,
+      activatedAt,
+      terminatedAt,
     });
-  }, [startDate, endDate, createdAt, statements, contractId, contractStatus]);
+  }, [startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
 
   const waiverByMonthKey = useMemo(
     () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),

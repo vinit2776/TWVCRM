@@ -102,6 +102,48 @@ describe("unbilledMonths", () => {
     })).toEqual([{ year: 2026, month: 10 }]);
   });
 
+  it("stops at the termination month for a terminated contract", () => {
+    // TWV-C-0141: terminated 19 Sep with end_date still in 2027. October rent
+    // was never due.
+    expect(unbilledMonths({
+      startDate: "2026-09-07",
+      endDate: "2027-03-06",
+      createdAt: "2026-09-03T10:00:00Z",
+      today: "2026-10-09",
+      statements: [],
+      contractStatus: "terminated",
+      activatedAt: "2026-09-08T10:00:00Z",
+      terminatedAt: "2026-09-19T10:00:00Z",
+    })).toEqual([]);
+  });
+
+  it("still reports the termination month itself when unbilled", () => {
+    expect(unbilledMonths({
+      startDate: "2026-05-01",
+      endDate: "2027-04-30",
+      createdAt: "2026-04-01T10:00:00Z",
+      today: "2026-10-09",
+      statements: [rent(2026, 5, "2026-05-01", "2026-05-31"), rent(2026, 6, "2026-06-01", "2026-06-30"), rent(2026, 7, "2026-07-01", "2026-07-31")],
+      contractStatus: "terminated",
+      activatedAt: "2026-05-02T10:00:00Z",
+      terminatedAt: "2026-08-18T10:00:00Z",
+    })).toEqual([{ year: 2026, month: 8 }]);
+  });
+
+  it("a terminated contract that was never activated owes nothing", () => {
+    // TWV-C-0144: withdrawn before it began.
+    expect(unbilledMonths({
+      startDate: "2026-09-07",
+      endDate: "2027-08-06",
+      createdAt: "2026-09-08T10:00:00Z",
+      today: "2026-10-09",
+      statements: [],
+      contractStatus: "terminated",
+      activatedAt: null,
+      terminatedAt: "2026-09-21T10:00:00Z",
+    })).toEqual([]);
+  });
+
   it("does not report next month — it isn't late yet", () => {
     // September is billed by the run at the end of August, which hasn't run.
     const missing = unbilledMonths({
