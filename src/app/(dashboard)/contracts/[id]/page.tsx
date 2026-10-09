@@ -77,6 +77,7 @@ import {
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
   ACTIVATION_UNBLOCKING_PURPOSE,
+  ADHOC_ATTRIBUTION_PURPOSE_LABELS,
   CONTRACT_PRE_ACTIVATION_STATUSES,
   canWithdrawContract,
 } from "@/lib/constants";
@@ -1185,6 +1186,14 @@ export default function ContractDetailPage({
             const linkedUnpaidProrataInvoice = prorataAttribution.attributed.find(
               (inv) => inv.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE && inv.status !== "paid"
             );
+            // A paid invoice already attributed to this contract under another purpose
+            // (e.g. "Monthly rent") doesn't satisfy the gate — say so, otherwise the
+            // block reads as "nothing was paid" while the payment is sitting right there.
+            const paidInvoiceTaggedElsewhere = prorataAttribution.attributed.find(
+              (inv) => inv.status === "paid"
+                && inv.attribution_purpose !== ACTIVATION_UNBLOCKING_PURPOSE
+                && inv.attribution_purpose !== "security_deposit"
+            );
             const proposalPaid = isRenewal
               || (!!contract.proposal_id && (linkedProposal?.payment_status === "paid" || !!paidProrataInvoice));
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
@@ -1238,6 +1247,16 @@ export default function ContractDetailPage({
                     {!proposalMissing && !proposalPaid && (
                       <div>
                         <p>• Proposal payment collected</p>
+                        {!linkedUnpaidProrataInvoice && paidInvoiceTaggedElsewhere && (
+                          <p className="mt-1 pl-3 text-amber-800">
+                            <span className="font-mono">{paidInvoiceTaggedElsewhere.invoice_number}</span>
+                            {" "}({formatCurrency(paidInvoiceTaggedElsewhere.total_amount)}) is paid but tagged{" "}
+                            <strong>{(paidInvoiceTaggedElsewhere.attribution_purpose
+                              && (ADHOC_ATTRIBUTION_PURPOSE_LABELS as Record<string, string>)[paidInvoiceTaggedElsewhere.attribution_purpose])
+                              || "another purpose"}</strong>.
+                            {" "}If it was the first invoice, change it to &quot;Pro-rata / first invoice&quot; under Ad-hoc Invoices below.
+                          </p>
+                        )}
                         {linkedUnpaidProrataInvoice ? (
                           <p className="mt-1 pl-3 text-amber-800">
                             Linked ad-hoc invoice <span className="font-mono">{linkedUnpaidProrataInvoice.invoice_number}</span>

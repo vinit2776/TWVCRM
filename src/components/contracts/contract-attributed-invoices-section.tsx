@@ -78,6 +78,10 @@ export function ContractAttributedInvoicesSection({
   const [purpose, setPurpose] = useState<AdhocAttributionPurpose | "">("");
   const [saving, setSaving] = useState(false);
   const [detachingId, setDetachingId] = useState<string | null>(null);
+  // Unlinking pulls an invoice off the contract (and off the activation gate),
+  // so it asks first — the icon alone is easy to hit by mistake.
+  const [confirmDetach, setConfirmDetach] = useState<AttributableInvoice | null>(null);
+  const [changingId, setChangingId] = useState<string | null>(null);
 
   const canAttribute = ["admin", "accounts"].includes(currentUserRole);
 
@@ -122,6 +126,31 @@ export function ContractAttributedInvoicesSection({
       toast.error("Failed to attribute invoice");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Re-tag in place: the attribution POST already updates an attributed invoice,
+  // so the invoice never leaves the contract (and the gate) in between.
+  const handleChangePurpose = async (invoiceId: string, next: AdhocAttributionPurpose) => {
+    setChangingId(invoiceId);
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/attribution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contract_id: contractId, purpose: next }),
+      });
+      if (res.ok) {
+        toast.success(`Now counted as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[next]}`);
+        await refresh();
+        onAttributionChanged?.();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to change what this invoice covers");
+      }
+    } catch {
+      toast.error("Failed to change what this invoice covers");
+    } finally {
+      setChangingId(null);
     }
   };
 
@@ -213,19 +242,43 @@ export function ContractAttributedInvoicesSection({
                   </p>
                 </div>
                 {canAttribute && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    disabled={detachingId === inv.id}
-                    onClick={() => handleDetach(inv.id)}
-                  >
-                    {detachingId === inv.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Unlink className="h-3.5 w-3.5" />
+                  <div className="flex shrink-0 items-center gap-1">
+                    {/* A deposit credit moves money in the deposit pool, so it is
+                        only changed by removing the attribution, never re-tagged inline. */}
+                    {inv.attribution_purpose && inv.attribution_purpose !== "security_deposit" && (
+                      <Select
+                        value={inv.attribution_purpose}
+                        onValueChange={(v) => handleChangePurpose(inv.id, v as AdhocAttributionPurpose)}
+                        disabled={changingId === inv.id}
+                      >
+                        <SelectTrigger className="h-8 w-[170px] text-xs" aria-label={`What ${inv.invoice_number} covers`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ADHOC_ATTRIBUTION_PURPOSES.filter((p) => p !== "security_deposit").map((p) => (
+                            <SelectItem key={p} value={p} className="text-xs">
+                              {ADHOC_ATTRIBUTION_PURPOSE_LABELS[p]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     )}
-                  </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground hover:text-destructive"
+                      title="Remove from this contract"
+                      aria-label={`Remove ${inv.invoice_number} from this contract`}
+                      disabled={detachingId === inv.id}
+                      onClick={() => setConfirmDetach(inv)}
+                    >
+                      {detachingId === inv.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Unlink className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </div>
                 )}
               </div>
             ))}
@@ -240,6 +293,37 @@ export function ContractAttributedInvoicesSection({
           </p>
         )}
       </CardContent>
+
+      <Dialog open={!!confirmDetach} onOpenChange={(o) => { if (!o) setConfirmDetach(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove {confirmDetach?.invoice_number} from this contract?</DialogTitle>
+            <DialogDescription>
+              The invoice stays as it is, but it no longer counts for this contract
+              {confirmDetach?.attribution_purpose === ACTIVATION_UNBLOCKING_PURPOSE
+                ? ", and it stops satisfying the activation payment requirement"
+                : ""}
+              {confirmDetach?.attribution_purpose === "security_deposit"
+                ? ", and its security deposit credit is taken back out of the customer's pool"
+                : ""}
+              . To change what it covers, use the dropdown on the row instead.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDetach(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const id = confirmDetach?.id;
+                setConfirmDetach(null);
+                if (id) void handleDetach(id);
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
