@@ -130,7 +130,9 @@ export async function PATCH(
       .eq("id", payment.booking_id);
   }
 
-  logAudit(supabase, {
+  // Awaited: on serverless the function can be frozen once the response is sent,
+  // and this correction must always leave an audit trail.
+  await logAudit(supabase, {
     entityType: "booking_payment",
     entityId: id,
     action: "update",
