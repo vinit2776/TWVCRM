@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
   if (includeMonthly) {
     let monthlyQuery = supabase
       .from("vendor_bills")
-      .select("id, invoice_date, total_amount, payment_status")
+      .select("id, invoice_date, total_amount, payment_status, approval_status")
       .range(0, 4999);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     monthlyQuery = applyBillFilters(monthlyQuery as any, searchParams, { vendorIdsFromQ: vendorIds, poIdsFromQ: poIds }) as typeof monthlyQuery;

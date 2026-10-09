@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { summarizeBillsByMonth } from "@/lib/bills-monthly-summary";
 
-const bill = (id: string, date: string | null, amt: number | string, status: string) => ({
-  id, invoice_date: date, total_amount: amt, payment_status: status,
+const bill = (id: string, date: string | null, amt: number | string, status: string, approval?: string) => ({
+  id, invoice_date: date, total_amount: amt, payment_status: status, approval_status: approval,
 });
 
 describe("summarizeBillsByMonth", () => {
@@ -21,6 +21,20 @@ describe("summarizeBillsByMonth", () => {
     expect(s.months[0]).toMatchObject({ partiallyPaid: 100.1, unpaid: 6028.45 });
     expect(s.total).toBe(13904.35);
     expect(s.paid + s.partiallyPaid + s.unpaid).toBeCloseTo(s.total, 2);
+  });
+
+  it("keeps rejected bills out of paid/unpaid but in the total", () => {
+    const s = summarizeBillsByMonth(
+      [
+        bill("a", "2026-04-02", 6420, "unpaid", "rejected"),
+        bill("b", "2026-04-03", 1680, "paid", "approved"),
+        bill("c", "2026-09-01", 100, "unpaid", "approved"),
+      ],
+      new Map(),
+    );
+    expect(s.months[0]).toMatchObject({ total: 8100, paid: 1680, unpaid: 0, rejected: 6420 });
+    expect(s).toMatchObject({ total: 8200, paid: 1680, unpaid: 100, rejected: 6420 });
+    expect(s.paid + s.partiallyPaid + s.unpaid + s.rejected).toBeCloseTo(s.total, 2);
   });
 
   it("counts open queries per month and bills affected", () => {

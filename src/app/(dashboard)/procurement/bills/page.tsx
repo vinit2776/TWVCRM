@@ -266,7 +266,8 @@ function VendorBillsPageInner() {
                           {monthLabel(key)} · {m?.billCount ?? 0} {m?.billCount === 1 ? "bill" : "bills"}
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          {outstanding > 0 ? `${formatCurrency(outstanding)} unpaid` : "all paid"}
+                          {outstanding > 0 ? `${formatCurrency(outstanding)} unpaid` : m && m.rejected < m.total ? "all paid" : ""}
+                          {!!m?.rejected && `${outstanding > 0 || m.rejected < m.total ? " · " : ""}${formatCurrency(m.rejected)} rejected`}
                         </span>
                         {!!m?.openQueries && (
                           <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-800">
