@@ -128,6 +128,8 @@ function countsTowards(
  *     bills month M executes at the end of M-1, so a contract whose row was
  *     created in June was first billable for July. Without that floor, every
  *     contract predating the CRM's billing rollout reads as months in arrears.
+ *     The one exception: a contract created in its own first billing month
+ *     keeps that month, because it is new and no earlier invoice can exist.
  *   • It closes at the CURRENT month. Next month's rent is billed by the run at
  *     the end of this one, so it is not late yet.
  *
@@ -173,8 +175,17 @@ export function unbilledMonths(opts: {
   waivedMonths?: string[];
 }): BillingMonth[] {
   const ownFirst = ymOf(firstBillingAnchor(opts.startDate));
-  const firstRunnable = monthAfter(ymOf(opts.createdAt.slice(0, 10)));
-  const first = monthKey(ownFirst) >= monthKey(firstRunnable) ? ownFirst : firstRunnable;
+  const created = ymOf(opts.createdAt.slice(0, 10));
+  // A contract created in or after its own first billing month missed the run
+  // that would have billed it. If that month is the creation month itself, the
+  // contract is brand new and nothing else could have invoiced it, so report
+  // it (TWV-C-0153: started 7 Sep, created 5 Oct, October rent never raised).
+  // Created any later than that, the contract was likely entered after the fact
+  // for a tenancy already invoiced elsewhere, so the window opens the month
+  // after creation instead. Before the CRM began billing rent, an earlier
+  // invoice may sit outside it, so the exception only applies from then on.
+  const newInCrm = monthKey(ownFirst) >= monthKey(created) && monthKey(created) >= monthKey(RENT_BACKFILL_FLOOR);
+  const first = newInCrm || monthKey(ownFirst) > monthKey(created) ? ownFirst : monthAfter(created);
 
   const now = ymOf(opts.today);
   const last = opts.contractStatus === "renewal_in_progress"
