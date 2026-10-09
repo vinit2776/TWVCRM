@@ -20,6 +20,8 @@ export type WidgetId =
   | "renewal_pipeline"
   | "cash_aging"
   | "revenue_pulse"
+  | "sales"
+  | "procurement_po"
   | "occupancy"
   // New (Tier 2: operational signal)
   | "sla_risk"
@@ -62,6 +64,8 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   renewal_pipeline:       { id: "renewal_pipeline",       title: "Renewal Pipeline" },
   cash_aging:             { id: "cash_aging",             title: "Cash Aging" },
   revenue_pulse:          { id: "revenue_pulse",          title: "Revenue Pulse" },
+  sales:                  { id: "sales",                  title: "Sales" },
+  procurement_po:         { id: "procurement_po",         title: "Procurement POs" },
   occupancy:              { id: "occupancy",              title: "Occupancy" },
   sla_risk:               { id: "sla_risk",               title: "SLA Risk Board" },
   member_health:          { id: "member_health",          title: "Member Health" },
@@ -86,28 +90,10 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 // insert its WidgetId into the role's array.
 
 export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
+  // Admin sees only the two management widgets. Every other role keeps its own set.
   admin: [
-    "pending_actions",
-    "live_enquiries",
-    "quick_charge",
-    "week_in_review",
-    "mtd_bookings",
-    "revenue_pulse",
-    "renewal_pipeline",
-    "cash_aging",
-    "rent_revenue",
-    "occupancy",
-    "sla_risk",
-    "lead_funnel",
-    "source_roi",
-    "schedule",
-    "member_health",
-    "aggregator_performance",
-    "quota_overuse",
-    "pending_overtime_charges",
-    "procurement_spend",
-    "team_performance",
-    "followups",
+    "sales",
+    "procurement_po",
   ],
 
   manager: [
