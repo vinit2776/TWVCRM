@@ -1,52 +1,45 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { hostForPath, isAllowedOnFormHost, parseFormHosts } from "@/lib/public-forms/hosts";
 
-// The three public enquiry forms move to their own host (e.g. enquire.theworkvilla.com) so
-// ad tracking cookies are first-party to theworkvilla.com. Both variables are unset by
-// default, which makes everything below a no-op; set them in the *Production* scope only,
-// so previews and local dev are never redirected.
-//   PUBLIC_FORMS_HOST         the new host
-//   LEGACY_PUBLIC_FORMS_HOST  the old CRM host that should forward the form paths
-const FORM_PATHS = ["/enquire", "/meta", "/walkin"];
-// Everything the three forms (and the Next.js runtime) need on the public host.
-const PUBLIC_HOST_ALLOWED_PREFIXES = [
-  ...FORM_PATHS,
-  "/api/public/enquiry",
-  "/api/public/locations",
-  "/_next",
-  "/logo",
-  "/favicon",
-  "/icons",
-];
-
-const isFormPath = (pathname: string) =>
-  FORM_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-
+// Each public enquiry form is served from its own host (meta.theworkvilla.com, ...) so ad
+// tracking cookies are first-party to theworkvilla.com and the short links already in use
+// keep working. Unset by default, which makes everything below a no-op; set both in the
+// *Production* scope only, so previews and local dev are never redirected.
+//   PUBLIC_FORM_HOSTS         "host=/path,host=/path" — see src/lib/public-forms/hosts.ts
+//   LEGACY_PUBLIC_FORMS_HOST  the old CRM host whose form paths should redirect to those hosts
 export async function proxy(request: NextRequest) {
-  const publicHost = process.env.PUBLIC_FORMS_HOST;
+  const formHosts = parseFormHosts(process.env.PUBLIC_FORM_HOSTS);
   const legacyHost = process.env.LEGACY_PUBLIC_FORMS_HOST;
-  const host = request.headers.get("host")?.split(":")[0];
+  const host = request.headers.get("host")?.split(":")[0]?.toLowerCase();
   const { pathname } = request.nextUrl;
 
-  if (publicHost && legacyHost && host === legacyHost && isFormPath(pathname)) {
-    const target = request.nextUrl.clone();
-    target.host = publicHost;
-    target.port = "";
-    target.protocol = "https:";
-    return NextResponse.redirect(target, 308); // keeps the query string (UTMs, click IDs)
-  }
+  if (formHosts.size > 0 && host) {
+    const formPath = formHosts.get(host);
 
-  // The public host serves only the forms — never the CRM login or dashboard.
-  if (publicHost && host === publicHost) {
-    if (pathname === "/") {
-      const target = request.nextUrl.clone();
-      target.pathname = "/enquire";
-      return NextResponse.redirect(target, 307);
+    if (formPath) {
+      // A form host serves only its forms — never the CRM login or dashboard.
+      if (pathname === "/") {
+        const target = request.nextUrl.clone();
+        target.pathname = formPath;
+        return NextResponse.rewrite(target); // URL bar stays on the short link
+      }
+      if (!isAllowedOnFormHost(pathname)) return new NextResponse("Not found", { status: 404 });
+      return NextResponse.next();
     }
-    const allowed =
-      PUBLIC_HOST_ALLOWED_PREFIXES.some((p) => pathname.startsWith(p)) ||
-      /\.(?:svg|png|jpg|jpeg|gif|webp|ico)$/.test(pathname);
-    if (!allowed) return new NextResponse("Not found", { status: 404 });
+
+    if (legacyHost && host === legacyHost) {
+      const newHost = hostForPath(formHosts, pathname);
+      if (newHost) {
+        const target = request.nextUrl.clone();
+        target.host = newHost;
+        target.port = "";
+        target.protocol = "https:";
+        // Keeps the query string (UTMs, click IDs); /meta/x style subpaths collapse to the root.
+        target.pathname = "/";
+        return NextResponse.redirect(target, 308);
+      }
+    }
   }
 
   return await updateSession(request);
