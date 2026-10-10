@@ -278,8 +278,9 @@ export function SalesWidget({ locationFilter }: SalesWidgetProps) {
                   onClick={(state) => {
                     // A bar segment fires first and has already chosen month + stream.
                     if (barClicked.current) { barClicked.current = false; return; }
-                    const idx = state?.activeTooltipIndex;
-                    const m = typeof idx === "number" ? summary.months[idx] : null;
+                    // Recharts 3 reports the hovered index as a string ("3"), not a number.
+                    const idx = state?.activeTooltipIndex == null ? NaN : Number(state.activeTooltipIndex);
+                    const m = Number.isInteger(idx) ? summary.months[idx] : null;
                     if (m && m.key.localeCompare(summary.today.slice(0, 7)) <= 0) { setMonth(m.key); setStream(null); }
                   }}
                 >
