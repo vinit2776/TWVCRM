@@ -58,6 +58,10 @@
       "schedule": "0 4 * * 6"
     },
     {
+      "path": "/api/cron/rent-gap-alert",
+      "schedule": "30 4 * * *"
+    },
+    {
       "path": "/api/cron/contract-expiry",
       "schedule": "30 18 * * *"
     },
