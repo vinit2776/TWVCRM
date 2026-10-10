@@ -176,7 +176,15 @@ export default function ContractsPage() {
             <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
-              {CONTRACT_STATUSES.map((s) => <SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>)}
+              {CONTRACT_STATUSES.flatMap((s) =>
+                s === "terminated"
+                  // Withdrawn is stored as terminated (never activated); list the two apart.
+                  ? [
+                      <SelectItem key={s} value="terminated_only">{CONTRACT_STATUS_LABELS[s]}</SelectItem>,
+                      <SelectItem key="withdrawn" value="withdrawn">{CONTRACT_STATUS_LABELS.withdrawn}</SelectItem>,
+                    ]
+                  : [<SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>],
+              )}
             </SelectContent>
           </Select>
           <div className="w-[180px]">
