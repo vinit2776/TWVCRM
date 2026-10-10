@@ -307,6 +307,12 @@ export function canOverrideBookingFacility(role: string | null | undefined): boo
   return !!role && (BOOKING_FACILITY_OVERRIDE_ROLES as readonly string[]).includes(role);
 }
 
+// Roles allowed to (re)issue a booking's door PIN for any booking. Everyone
+// else may only do it for bookings they created themselves. Issuing a PIN
+// rotates the guest's code on the entry devices and re-sends it by SMS/email,
+// so it stays with the people who run the front desk.
+export const BOOKING_ACCESS_PIN_ROLES = ["admin", "manager", "floor_manager"] as const;
+
 export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
