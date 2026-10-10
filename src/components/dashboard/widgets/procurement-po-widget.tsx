@@ -298,8 +298,9 @@ export function ProcurementPoWidget({ locationFilter }: Props) {
                   margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
                   onClick={(state) => {
                     if (barClicked.current) { barClicked.current = false; return; }
-                    const idx = state?.activeTooltipIndex;
-                    const m = typeof idx === "number" ? summary.months[idx] : null;
+                    // Recharts 3 reports the hovered index as a string ("3"), not a number.
+                    const idx = state?.activeTooltipIndex == null ? NaN : Number(state.activeTooltipIndex);
+                    const m = Number.isInteger(idx) ? summary.months[idx] : null;
                     if (m && m <= todayMonth) { setMonth(m); setSelState(null); setSelDept(null); }
                   }}
                 >
