@@ -16,6 +16,8 @@ const updateVendorSchema = z.object({
   notes: z.string().optional(),
   is_active: z.boolean().optional(),
   is_service_provider: z.boolean().optional(),
+  // Marks a utility/landlord whose bills must name a location. Admin only (see PATCH).
+  is_electricity_provider: z.boolean().optional(),
   // Bank details
   bank_name: z.string().optional(),
   bank_account_holder: z.string().optional(),
@@ -121,6 +123,37 @@ export async function PATCH(
   const parsed = updateVendorSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  // The electricity-provider switch changes how this vendor's bills are handled, so only an
+  // admin may change it. The edit form sends every field on each save, so an unchanged value
+  // from a non-admin is ignored rather than rejected — otherwise managers could not save any edit.
+  if (parsed.data.is_electricity_provider !== undefined) {
+    const { data: current } = await supabase
+      .from("procurement_vendors")
+      .select("is_electricity_provider")
+      .eq("id", id)
+      .single();
+    if (!current) return NextResponse.json({ error: "Vendor not found" }, { status: 404 });
+    const changing = current.is_electricity_provider !== parsed.data.is_electricity_provider;
+    if (changing && dbUser.role !== "admin") {
+      return NextResponse.json({ error: "Only an admin can change the electricity provider setting" }, { status: 403 });
+    }
+    if (changing && parsed.data.is_electricity_provider === false) {
+      // Switching it off would strand connections (and later, their bills) on a vendor that no longer qualifies.
+      const { count } = await supabase
+        .from("location_electricity_connections")
+        .select("id", { count: "exact", head: true })
+        .eq("vendor_id", id)
+        .eq("is_active", true);
+      if ((count ?? 0) > 0) {
+        return NextResponse.json(
+          { error: `This vendor still has ${count} active electricity ${count === 1 ? "connection" : "connections"}. Deactivate them first.` },
+          { status: 409 }
+        );
+      }
+    }
+    if (!changing) delete parsed.data.is_electricity_provider;
   }
 
   // If kyc_verified is being set to true, record who verified and when

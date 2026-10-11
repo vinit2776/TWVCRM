@@ -1186,6 +1186,7 @@ export type AuditEntityType =
   | "unifi_voucher"
   | "electricity_bill"
   | "electricity_billing_profile"
+  | "electricity_connection"
   | "location_electricity_config"
   | "location_energy_sync"
   | "asset_document"
@@ -2356,6 +2357,8 @@ export interface ProcurementVendor {
   is_active: boolean;
   // True for service providers (internet, AMC, ...) — should use the service PO flow, not goods POs
   is_service_provider?: boolean;
+  // True for a utility or landlord whose electricity bills must name a location (admin-set)
+  is_electricity_provider?: boolean;
   // Bank details
   bank_name?: string;
   bank_account_holder?: string;
@@ -4351,4 +4354,21 @@ export interface StatementTimelineEvent {
   amount: number | null;
   /** Draws the eye to workflow overrides that explain otherwise-odd state. */
   highlight: boolean;
+}
+
+// One utility connection at a location. Identified by a consumer number and/or
+// remembered names (the wording the vendor prints) — both optional.
+export interface ElectricityConnection {
+  id: string;
+  location_id: string;
+  vendor_id: string;
+  vendor?: { id: string; name: string } | null;
+  consumer_number: string | null;
+  bill_aliases: string[];
+  meter_label: string | null;
+  onegrid_device_id: string | null;
+  sanctioned_kva: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
