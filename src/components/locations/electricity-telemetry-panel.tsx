@@ -341,9 +341,10 @@ export function ElectricityTelemetryPanel({ locationId, defaultDeviceId }: Props
           </div>
         )}
 
-        {selectedDevice && <EnergyPeakSection key={selectedDevice} locationId={locationId} deviceId={selectedDevice} />}
+        {/* Keys must differ between siblings: two children sharing a key makes React re-create one of them on every render and leave the old copies in the page. */}
+        {selectedDevice && <EnergyPeakSection key={`peak-${selectedDevice}`} locationId={locationId} deviceId={selectedDevice} />}
 
-        {selectedDevice && <EnergyMonthlySection key={selectedDevice} locationId={locationId} deviceId={selectedDevice} />}
+        {selectedDevice && <EnergyMonthlySection key={`monthly-${selectedDevice}`} locationId={locationId} deviceId={selectedDevice} />}
 
         <div className="border-t pt-4 space-y-3">
           <div className="flex items-end gap-4">
