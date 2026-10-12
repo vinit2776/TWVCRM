@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ElectricityTelemetryPanel } from "./electricity-telemetry-panel";
+import { ElectricityConnectionsCard } from "./electricity-connections-card";
 
 interface Vendor { id: string; name: string }
 
@@ -413,6 +414,13 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
           </Button>
         </div>
       )}
+
+      <ElectricityConnectionsCard
+        locationId={locationId}
+        serviceNumber={(config?.service_number as string | null) ?? null}
+        configVendorId={(config?.landlord_vendor_id as string | null) ?? null}
+        onegridEnabled={Boolean(config?.onegrid_enabled && config?.onegrid_api_key)}
+      />
 
       {Boolean(config?.onegrid_enabled && config?.onegrid_api_key) && (
         <ElectricityTelemetryPanel

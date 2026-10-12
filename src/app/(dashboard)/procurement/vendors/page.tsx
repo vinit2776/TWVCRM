@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import type { ProcurementVendor, VendorCategory } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { useCurrentUser } from "@/providers/current-user-provider";
 
 const CATEGORY_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
@@ -44,6 +45,7 @@ const emptyForm = {
   notes: "",
   terms_and_conditions: "",
   is_service_provider: false,
+  is_electricity_provider: false,
   // Bank details
   bank_name: "",
   bank_account_holder: "",
@@ -158,6 +160,8 @@ export default function VendorsPage() {
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const { user } = useCurrentUser();
+  const isAdmin = user?.role === "admin";
   const [categoryFilter, setCategoryFilter] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
 
@@ -204,6 +208,7 @@ export default function VendorsPage() {
       notes: vendor.notes || "",
       terms_and_conditions: vendor.terms_and_conditions || "",
       is_service_provider: vendor.is_service_provider ?? false,
+      is_electricity_provider: vendor.is_electricity_provider ?? false,
       bank_name: vendor.bank_name || "",
       bank_account_holder: vendor.bank_account_holder || "",
       bank_account_number: vendor.bank_account_number || "",
@@ -233,6 +238,8 @@ export default function VendorsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...form,
+        // Only an admin can change this switch; leave it out for everyone else.
+        is_electricity_provider: isAdmin ? form.is_electricity_provider : undefined,
         contact_email: form.contact_email || undefined,
         bank_name: form.bank_name || undefined,
         bank_account_holder: form.bank_account_holder || undefined,
@@ -376,6 +383,9 @@ export default function VendorsPage() {
                         {v.is_service_provider && (
                           <Badge variant="outline" className="ml-1 text-xs">Service provider</Badge>
                         )}
+                        {v.is_electricity_provider && (
+                          <Badge variant="outline" className="ml-1 text-xs">Electricity</Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                         {v.contact_name || "—"}
@@ -465,6 +475,18 @@ export default function VendorsPage() {
                 />
                 <Label htmlFor="is_service_provider" className="font-normal leading-snug">
                   Service provider (internet, AMC, security…) — orders go through the service PO flow, not goods POs
+                </Label>
+              </div>
+              <div className="col-span-2 flex items-start gap-2">
+                <Checkbox
+                  id="is_electricity_provider"
+                  checked={form.is_electricity_provider}
+                  disabled={!isAdmin}
+                  onCheckedChange={(c) => setForm((f) => ({ ...f, is_electricity_provider: c === true }))}
+                />
+                <Label htmlFor="is_electricity_provider" className="font-normal leading-snug">
+                  Electricity provider (utility or landlord) — their bills must name a location
+                  {!isAdmin && <span className="block text-xs text-muted-foreground">Only an admin can change this.</span>}
                 </Label>
               </div>
               <div className="space-y-1">

@@ -15,6 +15,7 @@ const createVendorSchema = z.object({
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
   is_service_provider: z.boolean().optional(),
+  is_electricity_provider: z.boolean().optional(),
   // Bank details
   bank_name: z.string().optional(),
   bank_account_holder: z.string().optional(),
@@ -42,6 +43,7 @@ export async function GET(request: NextRequest) {
 
   if (!includeInactive) query = query.eq("is_active", true);
   if (category) query = query.eq("category", category);
+  if (searchParams.get("is_electricity_provider") === "true") query = query.eq("is_electricity_provider", true);
   if (search?.trim()) {
     const term = search.trim();
     query = query.or(`name.ilike.%${term}%,contact_name.ilike.%${term}%`);
@@ -69,6 +71,10 @@ export async function POST(request: NextRequest) {
   const parsed = createVendorSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  if (parsed.data.is_electricity_provider && dbUser.role !== "admin") {
+    return NextResponse.json({ error: "Only an admin can mark a vendor as an electricity provider" }, { status: 403 });
   }
 
   const { data: vendor, error } = await supabase
