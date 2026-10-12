@@ -18,6 +18,7 @@ import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
+import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
   if (!po.purchase_order_items || !po.po_delivery_receipts) return null;
@@ -93,6 +94,13 @@ function NewVendorBillForm() {
   // Company selector — required for standalone bills (no PO); inherited read-only when a PO is linked
   const [companyId, setCompanyId] = useState<string>("");
   const [companies, setCompanies] = useState<Company[]>([]);
+
+  // Electricity-provider vendors: a standalone bill must say which location it is for.
+  const [elec, setElec] = useState<ElectricityBillFieldsValue>(EMPTY_ELECTRICITY_FIELDS);
+  const [elecStatus, setElecStatus] = useState<{ ok: boolean; reason: string | null }>({ ok: true, reason: null });
+  const showElectricity = !poId && !!vendors.find((v) => v.id === vendorId)?.is_electricity_provider;
+  // Whatever was entered for one vendor means nothing for another.
+  useEffect(() => { setElec(EMPTY_ELECTRICITY_FIELDS); }, [vendorId]);
 
   // Replacement-bill mode
   const [replacesBill, setReplacesBill] = useState<{
@@ -361,6 +369,7 @@ function NewVendorBillForm() {
     if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
+    if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
   };
 
@@ -404,6 +413,16 @@ function NewVendorBillForm() {
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
         replaces_bill_id: replacesBill?.id ?? null,
+        ...(showElectricity
+          ? {
+              location_id: elec.location_id || null,
+              connection_id: elec.connection_id || null,
+              consumer_number: elec.consumer_number.trim() || null,
+              printed_name: elec.printed_name.trim() || null,
+              acknowledge_mismatch: elec.acknowledge_mismatch,
+              remember_name: elec.remember_name,
+            }
+          : {}),
       };
 
       const res = await fetch("/api/procurement/bills", {
@@ -417,6 +436,7 @@ function NewVendorBillForm() {
         return;
       }
       toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
+      for (const w of (json.warnings as string[] | undefined) ?? []) toast.warning(w, { duration: 8000 });
       router.push(`/procurement/bills/${json.data.id}`);
     } finally {
       setSubmitting(false);
@@ -608,6 +628,10 @@ function NewVendorBillForm() {
               <p className="text-xs text-muted-foreground">Company is inherited from the linked purchase order</p>
             )}
           </div>
+
+          {showElectricity && (
+            <ElectricityBillFields vendorId={vendorId} companyId={companyId} value={elec} onChange={setElec} onStatus={setElecStatus} onRequestCompany={setCompanyId} />
+          )}
 
           {/* Duplicate-invoice warning (Finance Intelligence) */}
           {(hasExactDuplicate || (!duplicateDismissed && duplicates.length > 0)) && (
