@@ -1010,7 +1010,7 @@ export function ContractInvoicesSection({
                       </Badge>
                     </td>
                     <td className="py-2 px-3 text-right whitespace-nowrap">
-                      {userRole && ["admin", "manager"].includes(userRole) ? (
+                      {userRole && ["admin", "manager", "sales_rep"].includes(userRole) ? (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1021,7 +1021,7 @@ export function ContractInvoicesSection({
                           {convertingId === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Convert to GST"}
                         </Button>
                       ) : (
-                        <span className="text-[10px] text-muted-foreground italic">Admin/manager only</span>
+                        <span className="text-[10px] text-muted-foreground italic">Admin/manager/sales only</span>
                       )}
                     </td>
                   </tr>
