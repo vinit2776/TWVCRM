@@ -115,6 +115,9 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   }, [search]);
   const searchTerm = search.trim().toLowerCase();
   const canBill = !!userRole && BILLING_ROLES.includes(userRole);
+  // Sales reps may review & send a single statement (the API allows it) but not
+  // the other billing actions that canBill gates.
+  const canReviewSend = canBill || userRole === "sales_rep";
   // Waiving a gap is admin-only (enforced again by the API).
   const canWaive = userRole === "admin";
   const [waiveRow, setWaiveRow] = useState<UnbilledRow | null>(null);
@@ -367,7 +370,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             Open statement
           </button>
         )}
-        {row.category === "current_cycle" && row.statementId && canBill && (
+        {row.category === "current_cycle" && row.statementId && canReviewSend && (
           <button
             onClick={() => setReviewTarget({
               statementId: row.statementId!,

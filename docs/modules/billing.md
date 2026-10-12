@@ -332,7 +332,7 @@ Periods are created on-demand by billing generators (`ensureAccountingPeriod()`)
 ```
 draft
   │ PATCH {status: "finalized"}              (any authenticated)
-  │ POST /finalize-and-send                  (admin/manager/accounts)
+  │ POST /finalize-and-send                  (admin/manager/accounts/sales_rep)
   ↓
 finalized
   │ POST /send-proforma                      (admin/manager/accounts)
