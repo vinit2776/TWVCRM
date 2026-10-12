@@ -1465,7 +1465,7 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Finalized: Send / Resend proforma — only when PI not yet cancelled */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "accounts"].includes(userRole) && !showResendChoice && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && !showResendChoice && (
             <Button
               onClick={() => {
                 // First send: go directly. Resend: offer link-renewal choice.
@@ -1484,7 +1484,7 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Inline resend-choice panel — appears when Resend Proforma is clicked and a link already exists */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && showResendChoice && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && showResendChoice && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
             <div className="flex w-full flex-col gap-2 rounded-md border border-blue-200 bg-blue-50 p-3">
               <p className="text-sm font-medium text-blue-800">
                 A payment link was previously sent. How would you like to resend?
@@ -1503,15 +1503,17 @@ export function ViewStatementDialog({
                   {sendingProforma ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Send className="mr-1 h-3 w-3" />}
                   Resend with existing link
                 </Button>
-                <Button
-                  size="sm"
-                  className="flex-1 bg-blue-700 hover:bg-blue-800 text-white"
-                  onClick={handleReissuePaymentLink}
-                  disabled={sendingProforma || reissuingLink}
-                >
-                  {reissuingLink ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
-                  Resend with new payment link
-                </Button>
+                {userRole !== "sales_rep" && (
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-blue-700 hover:bg-blue-800 text-white"
+                    onClick={handleReissuePaymentLink}
+                    disabled={sendingProforma || reissuingLink}
+                  >
+                    {reissuingLink ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
+                    Resend with new payment link
+                  </Button>
+                )}
               </div>
               <button
                 className="text-xs text-blue-500 hover:underline text-left"
@@ -1522,7 +1524,7 @@ export function ViewStatementDialog({
             </div>
           )}
           {/* Send Reminder — finalized/exported, not yet paid, proforma already sent, not voided */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
             <div className="flex gap-1">
               <Button
                 variant="outline"
@@ -1598,7 +1600,7 @@ export function ViewStatementDialog({
                 <Download className="h-3 w-3" />
                 PDF
               </a>
-              {statement?.lead?.email && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+              {statement?.lead?.email && userRole && ["admin", "manager", "accounts", "sales_rep"].includes(userRole) && (
                 <Button
                   size="sm"
                   variant="outline"
