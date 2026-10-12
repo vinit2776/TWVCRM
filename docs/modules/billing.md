@@ -50,7 +50,7 @@ There is no separate `/billing/[id]` detail page — individual statements are v
 | `src/components/billing/billing-pipeline-bar.tsx` | Horizontal stage bar showing count/amount per stage |
 | `src/components/billing/add-usage-charge-dialog.tsx` | Add ad-hoc charge (creates `usage_charge` row) |
 | `src/components/billing/usage-review-dialog.tsx` | Per-contract usage review before finalizing |
-| `src/components/billing/convert-to-gst-early-dialog.tsx` | PI → early GST override dialog (admin/manager) |
+| `src/components/billing/convert-to-gst-early-dialog.tsx` | PI → early GST override dialog (admin/manager/sales_rep) |
 | `src/components/billing/electricity-bills-tab.tsx` | Electricity sub-billing tab |
 | `src/components/billing/tally-status-badge.tsx` | Tally sync status badge on rent statements |
 | `src/components/billing/billing-lifecycle-flow.tsx` | Visual lifecycle diagram |
@@ -83,7 +83,7 @@ There is no separate `/billing/[id]` detail page — individual statements are v
 | `/api/billing-statements/[id]/extract-gst-invoice` | POST | Extract data from uploaded GST invoice PDF |
 | `/api/billing-statements/[id]/preview-gst-stamp` | POST | Preview the QR/stamp overlay before upload |
 | `/api/billing-statements/[id]/send-reminder` | POST | Send payment reminder to customer |
-| `/api/billing-statements/[id]/convert-to-gst-early` | POST | PI override request (admin/manager only): cancels PI + Razorpay link, sets `handoff_state = direct_gst_requested` for Tally inbox — does NOT generate or send a GST invoice |
+| `/api/billing-statements/[id]/convert-to-gst-early` | POST | PI override request (admin/manager/sales_rep only): cancels PI + Razorpay link, sets `handoff_state = direct_gst_requested` for Tally inbox — does NOT generate or send a GST invoice |
 | `/api/billing-statements/[id]/inbox-send` | POST | v2 handoff: send from accounts inbox |
 | `/api/billing-statements/[id]/inbox-complete` | POST | v2 handoff: mark complete |
 | `/api/billing-statements/[id]/tally-retry` | POST | Retry a failed Tally sync job |

@@ -221,7 +221,7 @@ NULL → direct_gst_requested
            (handleStatementFinalized in billing.ts)
 
 NULL → direct_gst_requested
-  trigger: admin/manager calls POST /convert-to-gst-early
+  trigger: admin/manager/sales_rep calls POST /convert-to-gst-early
            (overrides PI, cancels Razorpay link)
 
 payment captured (proforma_first) → pi_paid_awaiting_gst
@@ -291,7 +291,7 @@ Steps visible in the lifecycle tracker:
 
 ### Flow 2: Override / PI-cancelled
 
-Admin/manager calls `convert-to-gst-early`. This:
+Admin/manager/sales_rep calls `convert-to-gst-early`. This:
 - Cancels existing Razorpay payment link via Razorpay API
 - Sets `pi_cancelled_at`, `pi_cancelled_by`, `pi_override_reason`
 - Clears `razorpay_payment_link_id`, `razorpay_payment_link_url`

@@ -34,7 +34,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * and the name check passes (handoff_state → ready_to_send).
  *
  * Guards:
- *   - Admin or manager only
+ *   - Admin, manager or sales_rep only
  *   - Statement must be finalized, unpaid/partially paid, no existing GST invoice
  *   - PI must not already have been cancelled via this action
  */
@@ -50,8 +50,8 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admin or manager can issue an early GST invoice override" }, { status: 403 });
+  if (!dbUser || !["admin", "manager", "sales_rep"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager or sales rep can issue an early GST invoice override" }, { status: 403 });
   }
 
   const body = await request.json().catch(() => ({}));
