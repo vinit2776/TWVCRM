@@ -233,13 +233,18 @@ export default function VendorsPage() {
       ? `/api/procurement/vendors/${editVendor.id}`
       : "/api/procurement/vendors";
     const method = editVendor ? "PATCH" : "POST";
+    const electricityChanged = editVendor
+      ? form.is_electricity_provider !== (editVendor.is_electricity_provider ?? false)
+      : form.is_electricity_provider === true;
     const res = await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...form,
-        // Only an admin can change this switch; leave it out for everyone else.
-        is_electricity_provider: isAdmin ? form.is_electricity_provider : undefined,
+        // Only an admin can change this switch, and it is sent only when it actually changed (or is
+        // being switched on for a new vendor). An ordinary save must not carry it: before migration
+        // 00586 is applied the column does not exist, and a value in the body makes the server read it.
+        is_electricity_provider: isAdmin && electricityChanged ? form.is_electricity_provider : undefined,
         contact_email: form.contact_email || undefined,
         bank_name: form.bank_name || undefined,
         bank_account_holder: form.bank_account_holder || undefined,
