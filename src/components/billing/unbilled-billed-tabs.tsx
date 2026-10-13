@@ -375,6 +375,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
             onClick={() => setReviewTarget({
               statementId: row.statementId!,
               status: row.statementStatus ?? "draft",
+              billingMode: row.billingMode ?? null,
               contractNumber: row.contractNumber,
               customerName: row.customerName,
               periodLabel: row.periodLabel.split(" · ")[0],

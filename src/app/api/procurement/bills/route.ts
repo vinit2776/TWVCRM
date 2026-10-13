@@ -9,6 +9,12 @@ import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 import { createVendorBill } from "@/lib/vendor-bills";
 import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
 import { tryAutoApproveAmcBill } from "@/lib/procurement/amc-bill-auto-approve";
+import { decideElectricityContext, type ElectricityBillExtra, type RememberName } from "@/lib/electricity-bill-match";
+import { findDuplicateVendorBill, loadElectricityFacts, rememberConnectionName } from "@/lib/electricity-bill-context-server";
+
+// Any 8-4-4-4-12 hex id, which is what Postgres accepts. Zod's strict .uuid() also demands an RFC version
+// nibble, which would reject perfectly valid database ids (e.g. a hand-seeded location).
+const idShaped = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "Invalid id");
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
@@ -31,6 +37,16 @@ const createBillSchema = z.object({
   // an amount or date that looks off) even though later cycles on an
   // approved AMC contract would otherwise auto-approve.
   amc_manual_review_requested: z.boolean().default(false),
+  // Electricity-provider vendors only (ignored for every other vendor). The location is chosen by the
+  // person recording the bill; the consumer number and printed name only help identify the connection.
+  location_id: idShaped.nullish(),
+  connection_id: idShaped.nullish(),
+  consumer_number: z.string().max(60).nullish(),
+  printed_name: z.string().max(120).nullish(),
+  // The bill prints an identifier that belongs to a different location than the one chosen, and the person confirmed.
+  acknowledge_mismatch: z.boolean().default(false),
+  // Teach the connection this wording so the next bill carrying it is recognised by itself.
+  remember_name: z.boolean().default(false),
 }).refine(
   (d) => (d.gst_amount ?? 0) <= Math.round(d.total_amount * 0.28 * 100) / 100,
   {
@@ -328,6 +344,51 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // ── Electricity-provider vendors: tie a standalone bill to a location ─────
+  // For any other vendor (or a PO-linked bill) this changes nothing and stores nothing extra.
+  let electricityExtra: ElectricityBillExtra | null = null;
+  let rememberName: RememberName = null;
+  {
+    const admin = createAdminClient();
+    let decision;
+    try {
+      const facts = await loadElectricityFacts(admin, {
+        vendorId: parsed.data.vendor_id,
+        hasPo: !!parsed.data.po_id,
+        billCompanyId,
+        locationId: parsed.data.location_id ?? null,
+      });
+      decision = decideElectricityContext(
+        {
+          location_id: parsed.data.location_id ?? null,
+          connection_id: parsed.data.connection_id ?? null,
+          consumer_number: parsed.data.consumer_number ?? null,
+          printed_name: parsed.data.printed_name ?? null,
+          acknowledge_mismatch: parsed.data.acknowledge_mismatch,
+          remember_name: parsed.data.remember_name,
+        },
+        facts
+      );
+      if (decision.ok && decision.extra) {
+        // The exact-match guard above is case-sensitive; electricity bills are re-keyed from paper in
+        // varying punctuation, so also catch "EB/09/2026/00418" vs "eb-09-2026-00418".
+        const dup = await findDuplicateVendorBill(admin, parsed.data.vendor_id, parsed.data.invoice_number);
+        if (dup) {
+          return NextResponse.json(
+            { error: `A bill with number "${dup.invoice_number}" already exists for this vendor (${dup.bill_number}, ${dup.approval_status}). Open it instead of recording it again.` },
+            { status: 409 }
+          );
+        }
+      }
+    } catch (err) {
+      console.error("[bills] electricity context failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check the electricity details for this bill" }, { status: 500 });
+    }
+    if (!decision.ok) return NextResponse.json({ error: decision.error, code: decision.code }, { status: decision.status });
+    electricityExtra = decision.extra;
+    rememberName = decision.rememberName;
+  }
+
   // ── Create the bill (number generation, insert, PO status update, audit) ───
   const initialPaymentStatus =
     poAdvanceCredit >= parsed.data.total_amount ? "paid" :
@@ -352,6 +413,7 @@ export async function POST(request: NextRequest) {
       amount_paid: poAdvanceCredit,
       payment_status: initialPaymentStatus,
       created_by: dbUser.id,
+      ...(electricityExtra ?? {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to create bill";
@@ -391,7 +453,25 @@ export async function POST(request: NextRequest) {
     }).catch((err) => console.error("[push] new bill notification failed:", err));
   }
 
+  // Teach the connection the wording on this bill, if asked. Best-effort: it never undoes the bill.
+  const warnings: string[] = [];
+  if (rememberName) {
+    const r = await rememberConnectionName(createAdminClient(), {
+      connectionId: rememberName.connection_id,
+      name: rememberName.name,
+      userId: dbUser.id,
+      billId: bill.id,
+    });
+    if (r.warning) warnings.push(r.warning);
+  }
+
   return NextResponse.json({
-    data: { id: bill.id, bill_number: bill.bill_number, auto_approved: autoApproval.autoApproved },
+    data: {
+      id: bill.id,
+      bill_number: bill.bill_number,
+      auto_approved: autoApproval.autoApproved,
+      ...(electricityExtra ? { location_id: electricityExtra.location_id, connection_id: electricityExtra.connection_id } : {}),
+    },
+    ...(warnings.length ? { warnings } : {}),
   }, { status: 201 });
 }
