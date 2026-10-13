@@ -118,7 +118,9 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
   // Renewals inherit the customer's invoicing preference; lead with it.
   const prefersGstDirect = contract.billing_mode === "gst_direct";
-  const canSendGst = ["admin", "accounts"].includes(userRole ?? "");
+  // Same roles the prorata-link API allows for either mode — Send PI has no
+  // client gate, so GST Direct shouldn't be narrower than it.
+  const canSendGst = ["admin", "manager", "accounts", "sales_rep"].includes(userRole ?? "");
 
   const addCcEmail = () => {
     const email = ccInput.trim().toLowerCase();
