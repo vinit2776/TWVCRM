@@ -824,7 +824,7 @@ export function ViewStatementDialog({
             {/* Universal handoff lifecycle (visible on every statement,
                 regardless of tally_handoff_v2 state — the panel reads from
                 /api/accounting/inbox?id=… and gracefully degrades). */}
-            <StatementLifecyclePanel statementId={statement.id} />
+            <StatementLifecyclePanel statementId={statement.id} fallbackStatus={statement.status} />
 
             {/* Collapsible chronological history — fetches timeline events
                 only when the user expands the disclosure. */}
@@ -1422,7 +1422,21 @@ export function ViewStatementDialog({
             {statement.notes && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Notes</p>
-                <p className="text-sm">{statement.notes}</p>
+                {(() => {
+                  // Re-issues from /void: "Replaces voided X.\nVoid reason: …" — show the
+                  // reason on demand so an old void message doesn't read as a live warning.
+                  const m = statement.notes.match(/^Replaces voided (.+?)\.\nVoid reason: ([\s\S]*)$/);
+                  if (!m) return <p className="text-sm">{statement.notes}</p>;
+                  return (
+                    <details className="text-sm">
+                      <summary className="cursor-pointer select-none">
+                        Replaces voided <span className="font-mono">{m[1]}</span>
+                        <span className="text-xs text-muted-foreground"> · Why it was voided</span>
+                      </summary>
+                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{m[2]}</p>
+                    </details>
+                  );
+                })()}
               </div>
             )}
           </div>

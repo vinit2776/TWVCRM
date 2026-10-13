@@ -70,6 +70,8 @@ export interface UnbilledRow {
   /** current_cycle rows only: the statement's status, which decides how
    *  "Review & send" sends it (draft → finalize-and-send, finalized → send-proforma). */
   statementStatus?: string;
+  /** current_cycle rows: the contract's billing mode — GST Direct statements are handed to accounts, not emailed. */
+  billingMode?: string | null;
   /** rent_gap rows: the expected invoice, estimated the way the rent run would
    *  price it (rate phases, part months, add-ons, contract GST rate). `amount`
    *  carries the total. Absent when it can't be priced from the contract alone
@@ -178,7 +180,7 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
     .select(`
       id, statement_type, status, total_amount, prepaid_month, prepaid_year,
       proforma_sent_at, gst_invoice_sent_at, gst_invoice_number, handoff_state, finalized_at,
-      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
+      contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
       on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(contract_number)
     `)
     .in("status", ["draft", "finalized", "exported"])
@@ -216,6 +218,7 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
       amount: s.total_amount ?? null,
       statementId: s.id,
       statementStatus: s.status,
+      billingMode: s.contract.billing_mode ?? null,
       ...(onBehalf?.contract_number ? { onBehalfOfContractNumber: onBehalf.contract_number } : {}),
       detail: cls.detail,
       ...(cls.at ? { sentAt: cls.at } : {}),
