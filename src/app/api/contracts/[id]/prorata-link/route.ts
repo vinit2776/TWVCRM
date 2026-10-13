@@ -218,7 +218,7 @@ export async function POST(
     if (stmt?.handoff_state) {
       handedToAccounts = true;
     } else if (!stmt?.gst_invoice_number) {
-      const handoff = await handleStatementFinalized(admin, statementId!, "gst_direct", "prorata_link");
+      const handoff = await handleStatementFinalized(admin, statementId!, "gst_direct", "prorata_link", dbUser.id);
       handedToAccounts = handoff.skipLegacyDispatch;
     }
   }
