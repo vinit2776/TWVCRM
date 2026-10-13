@@ -22,6 +22,7 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
+const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, isBranchDeviation } = require('./geofence');
 
 // Two roles have full run of the app — 'admin' and 'manager' are deliberately
 // equivalent everywhere, including settings and password resets. The only
@@ -270,17 +271,12 @@ self.addEventListener('fetch', (event) => {
 // account exists). Those stay environment-only by necessity.
 const SETTING_DEFS = [
   {
-    key: 'OFFICE_WIFI_IPS',
-    label: 'Office public IP addresses',
-    help: "Comma-separated. A punch from the Punch button counts as in the office only when the employee's public IP matches one of these — there is no browser API for reading the WiFi SSID, so this is how a web app can tell \"on the office network\". Any other punch is recorded as remote, with the phone's location. Leave empty and every Punch-button punch is remote. Add every ISP if the office has more than one.",
-    fallback: '',
-    parse: (raw) => new Set(String(raw).split(',').map(x => x.trim()).filter(Boolean)),
-  },
-  {
-    key: 'OFFICE_WIFI_SSID',
-    label: 'Office WiFi name',
-    help: 'Shown under the punch button so an employee knows which network to join. Display only — it has no effect on whether a punch is accepted.',
-    fallback: 'Workvilla_LGF',
+    key: 'OFFICE_RADIUS_METERS',
+    label: 'Branch radius (metres)',
+    help: "How far from a branch's location a Punch-button punch can be and still count as made at that branch. Applies to every branch. Indoor GPS is often 20-50 m off, so don't go much below 100.",
+    fallback: String(DEFAULT_OFFICE_RADIUS_METERS),
+    parse: (raw) => { const n = Number(raw); return Number.isFinite(n) && n > 0 ? n : DEFAULT_OFFICE_RADIUS_METERS; },
+    validate: (value) => { const n = Number(value); return Number.isFinite(n) && n >= 10 && n <= 5000 ? null : 'Office radius must be a number of metres between 10 and 5000.'; },
   },
   {
     key: 'ZK_DEVICE_SN',
@@ -327,13 +323,6 @@ const SETTING_DEFS = [
     help: 'lon1,lat1,lon2,lat2 — biases address suggestions to one city so other cities do not clutter results. Default covers Chennai. Empty disables the restriction.',
     fallback: '79.95,12.75,80.35,13.35',
   },
-  {
-    key: 'BRANCHES',
-    label: 'Branches / locations',
-    help: 'Comma-separated, in the order they should appear. These are the options offered on the Branch dropdown in Employee Registration and Edit Employee. Renaming or removing one here does not change what is already saved against an existing employee — see the Edit Employee form for that.',
-    fallback: 'Branch 1,Branch 2,Branch 3',
-    parse: (raw) => String(raw).split(',').map(x => x.trim()).filter(Boolean),
-  },
 ];
 const SETTING_DEFS_BY_KEY = Object.fromEntries(SETTING_DEFS.map(d => [d.key, d]));
 
@@ -357,6 +346,15 @@ function applySettings(overrides = {}) {
 }
 applySettings();
 
+// Branches live in their own table (name, location, whether the biometric device is
+// there) and are cached alongside the settings, refreshed on the same schedule.
+// CONFIG.BRANCHES keeps the plain list of names the employee forms use.
+function applyBranches(rows) {
+  CONFIG.BRANCH_LIST = rows.map(r => ({ id: r.id, name: r.name, locationText: r.location || '', location: parseLatLng(r.location), has_device: !!r.has_device }));
+  CONFIG.BRANCHES = CONFIG.BRANCH_LIST.map(b => b.name);
+}
+applyBranches([]);
+
 // Re-read from the database at most this often. A serverless instance would otherwise
 // issue an extra query on every request; the cost of the cache is that a settings
 // change takes up to this long to reach instances other than the one that saved it.
@@ -367,6 +365,7 @@ async function loadSettings({ force = false } = {}) {
   try {
     const rows = await db.prepare('SELECT key, value FROM app_settings').all();
     applySettings(Object.fromEntries(rows.map(r => [r.key, r.value])));
+    applyBranches(await db.prepare('SELECT * FROM branches ORDER BY sort_order, id').all());
     _settingsLoadedAt = Date.now();
   } catch (err) {
     // Never let a settings read take the whole app down: env values and fallbacks are
@@ -390,8 +389,8 @@ function warnAboutUnsetSettings() {
   if (!CONFIG.ZK_DEVICE_SN) {
     console.warn('ZK_DEVICE_SN is not configured: the /iclock ADMS endpoints are disabled and reject every push. Set the device serial at /admin/settings once the K40 Pro is installed.');
   }
-  if (CONFIG.OFFICE_WIFI_IPS.size === 0) {
-    console.warn('OFFICE_WIFI_IPS is not configured: every Punch-button punch is recorded as remote. Set the office public IP at /admin/settings.');
+  if (!CONFIG.BRANCH_LIST.some(b => b.location)) {
+    console.warn('No branch has a location: every Punch-button punch is recorded as remote. Set branch locations at /admin/settings.');
   }
 }
 
@@ -403,10 +402,17 @@ function getClientIp(req) {
   const ip = xff ? String(xff).split(',')[0].trim() : (req.socket.remoteAddress || '');
   return ip.replace(/^::ffff:/, '');
 }
-// No browser API exposes the WiFi SSID, so "on the office network" means the caller's
-// public IP is one of the configured office IPs.
-function isOnOfficeWifi(req) {
-  return CONFIG.OFFICE_WIFI_IPS.has(getClientIp(req));
+// The branch a phone at `point` ({ lat, lng }) is at, or null (see geofence.js).
+function branchAtPoint(point) {
+  return branchAt(point, CONFIG.BRANCH_LIST, CONFIG.OFFICE_RADIUS_METERS);
+}
+// The branch the biometric device is in, or null if none is marked.
+function deviceBranch() {
+  return CONFIG.BRANCH_LIST.find(b => b.has_device) || null;
+}
+// How an employee's branch reads on screen.
+function employeeBranchLabel(branch) {
+  return branch === MULTI_BRANCH ? 'Multi-branch' : (branch || '');
 }
 
 function logSecurityEvent(type, details = {}) {
@@ -598,6 +604,25 @@ const SCHEMA_SQL = `
     start_ts TEXT NOT NULL,
     end_ts TEXT
   );
+  -- location is "lat, lng" ('' until set). has_device marks the branch the biometric
+  -- device is in, so its punches count as made there.
+  CREATE TABLE IF NOT EXISTS branches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    location TEXT NOT NULL DEFAULT '',
+    has_device INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  -- A manager's decision on a day an employee punched at a branch that isn't theirs:
+  -- 'accepted', or rejected as 'absent' / 'half_day'. No row means still pending.
+  CREATE TABLE IF NOT EXISTS deviation_reviews (
+    employee_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reviewed_by TEXT NOT NULL,
+    reviewed_at TEXT NOT NULL,
+    PRIMARY KEY (employee_id, date)
+  );
   -- Every one of these tables is filtered by employee_id (almost always together with
   -- a date/timestamp range or a status) on hot paths: the dashboard, reports, and every
   -- approval list. Without these, each such query is a full table scan against a
@@ -633,6 +658,7 @@ const SCHEMA_SQL = `
 const {
   getEmployee, getPunchesForDay, getBreaksForDay, getShiftForDate, getHoliday,
   getApprovedLeaveForDate, getApprovedPermissionForDate, getActiveCorrectionsForMonth, computeDayStatus,
+  getDeviationReview,
 } = createAttendanceLogic(db);
 
 const LEAVE_TYPES = ['Casual Leave', 'Sick Leave', 'Comp Off'];
@@ -701,7 +727,9 @@ async function init() {
   await db.exec(SCHEMA_SQL);
 
   // Column migrations for databases created before these columns existed.
-  for (const col of ["location TEXT DEFAULT ''", "marked_by TEXT DEFAULT ''", "location_address TEXT DEFAULT ''"]) {
+  // branch: the branch a punch was made at ('' for none). deviation: 1 when that isn't
+  // the employee's own branch.
+  for (const col of ["location TEXT DEFAULT ''", "marked_by TEXT DEFAULT ''", "location_address TEXT DEFAULT ''", "branch TEXT DEFAULT ''", 'deviation INTEGER NOT NULL DEFAULT 0']) {
     try { await db.exec(`ALTER TABLE punches ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
   // No longer read: anyone can punch from outside the office now (as 'remote'). Kept
@@ -728,6 +756,15 @@ async function init() {
     await db.exec("UPDATE employees SET designation = role, role = NULL WHERE role IS NOT NULL");
   } catch { /* already exists */ }
   try { await db.exec('ALTER TABLE employees ADD COLUMN branch TEXT'); } catch { /* already exists */ }
+  // Branches used to be a comma-separated BRANCHES setting (names only). Carry those
+  // names over the first time the table is empty, so employees' branches still match.
+  if ((await db.prepare('SELECT COUNT(*) AS c FROM branches').get()).c === 0) {
+    const legacy = await db.prepare("SELECT value FROM app_settings WHERE key = 'BRANCHES'").get();
+    const names = String((legacy && legacy.value) || process.env.BRANCHES || 'Branch 1,Branch 2,Branch 3').split(',').map(x => x.trim()).filter(Boolean);
+    for (const [i, name] of [...new Set(names)].entries()) {
+      await db.prepare('INSERT OR IGNORE INTO branches (name, sort_order) VALUES (?, ?)').run(name, i);
+    }
+  }
   // Existing employees (registered before this column existed) will have mobile = NULL —
   // required going forward on the registration/edit forms, but not backfilled.
   try { await db.exec('ALTER TABLE employees ADD COLUMN mobile TEXT'); } catch { /* already exists */ }
@@ -862,10 +899,12 @@ async function isDuplicatePunch(employeeId, timestamp) {
 }
 // Returns whether a new row was actually inserted — false means an existing
 // punch within the dedup window already covers this one, so it was skipped.
-async function recordPunch(employeeId, timestamp, direction, source, note = '', location = '', markedBy = '', locationAddress = '') {
+// `branch` is the branch the punch was made at ('' for none); `deviation` is whether
+// that isn't the employee's own branch.
+async function recordPunch(employeeId, timestamp, direction, source, note = '', location = '', markedBy = '', locationAddress = '', branch = '', deviation = false) {
   if (await isDuplicatePunch(employeeId, timestamp)) return false;
-  await db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, note, location, marked_by, location_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(employeeId, timestamp, direction, source, note, location, markedBy, locationAddress);
+  await db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, note, location, marked_by, location_address, branch, deviation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(employeeId, timestamp, direction, source, note, location, markedBy, locationAddress, branch, deviation ? 1 : 0);
   return true;
 }
 async function getEmployeeByDevicePin(pin) {
@@ -958,9 +997,13 @@ async function ingestAttlogText(sn, text, cmdId = null) {
   return { received, ingested };
 }
 
+// A device punch is made at the branch the device is in (see deviceBranch).
 async function ingestBiometricPunch(employeeId, timestamp) {
   const direction = await inferPunchDirection(employeeId, timestamp);
-  const inserted = await recordPunch(employeeId, timestamp, direction, 'biometric');
+  const employee = await getEmployee(employeeId);
+  const branch = deviceBranch();
+  const inserted = await recordPunch(employeeId, timestamp, direction, 'biometric', '', '', '', '',
+    branch ? branch.name : '', !!branch && isBranchDeviation(employee && employee.branch, branch.name));
   return { direction, inserted };
 }
 async function createNotification(employeeId, message) {
@@ -1274,7 +1317,7 @@ function parseMonthParam(parsed) {
 // by memory instead of the network for this call. If attendance-logic.js's internal SQL
 // text ever changes shape, the `sql.includes(...)` routing below needs to change with it.
 async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
-  const [employees, punches, breaks, holidays, leaves, permissions, corrections] = await Promise.all([
+  const [employees, punches, breaks, holidays, leaves, permissions, corrections, deviationReviews] = await Promise.all([
     allEmployees(),
     db.prepare('SELECT * FROM punches WHERE timestamp LIKE ? ORDER BY timestamp ASC').all(`${likePrefix}%`),
     db.prepare('SELECT * FROM breaks WHERE start_ts LIKE ? ORDER BY start_ts ASC').all(`${likePrefix}%`),
@@ -1285,6 +1328,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
     // monthly limit depends on every other correction filed that month.
     db.prepare("SELECT * FROM correction_requests WHERE status IN ('pending', 'approved') AND date >= ? AND date <= ? ORDER BY id ASC")
       .all(`${rangeStart.slice(0, 7)}-01`, `${rangeEnd.slice(0, 7)}-31`),
+    db.prepare('SELECT * FROM deviation_reviews WHERE date LIKE ?').all(`${likePrefix}%`),
   ]);
 
   const employeeById = new Map(employees.map(e => [e.id, e]));
@@ -1302,6 +1346,7 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
   const holidayByDate = new Map(holidays.map(h => [h.date, h]));
   const permissionByKey = new Map(permissions.map(p => [`${p.employee_id}|${p.date}`, p]));
   const correctionsByKey = groupByEmpDate(corrections, c => c.date.slice(0, 7));
+  const deviationReviewByKey = new Map(deviationReviews.map(r => [`${r.employee_id}|${r.date}`, r]));
   const leavesByEmployee = new Map();
   for (const l of leaves) {
     if (!leavesByEmployee.has(l.employee_id)) leavesByEmployee.set(l.employee_id, []);
@@ -1333,6 +1378,9 @@ async function createAttendanceSnapshot(rangeStart, rangeEnd, likePrefix) {
       }
       if (sql.includes('FROM correction_requests')) {
         return { all: (employeeId, likeArg) => correctionsByKey.get(`${employeeId}|${likeArg.slice(0, 7)}`) || [] };
+      }
+      if (sql.includes('FROM deviation_reviews')) {
+        return { get: (employeeId, dateStr) => deviationReviewByKey.get(`${employeeId}|${dateStr}`) };
       }
       throw new Error(`createAttendanceSnapshot: unhandled query shape: ${sql}`);
     },
@@ -1631,9 +1679,14 @@ function normalizeSource(source) {
 // Every stored value that reads as a remote punch — for queries, which can't call
 // normalizeSource.
 const REMOTE_SOURCE_VALUES = ['remote', 'on-site'];
+// What the Punch button may send. The server decides between office and remote from
+// the location; 'wifi' is only what dashboards from before that still send.
+const LOCATED_PUNCH_SOURCES = ['office', 'remote', 'wifi'];
 
 const PUNCH_SOURCE_TAGS = {
   'biometric': ['BIO', 'B'],
+  // Punch button within the office radius. 'wifi' is the old IP-matched office punch.
+  'office': ['OFFICE', 'O'],
   'wifi': ['WIFI', 'W'],
   'remote': ['REMOTE', 'R'],
   'auto': ['AUTO', 'A'],
@@ -1648,7 +1701,7 @@ function punchSourceName(source, lang) {
   const key = normalizeSource(source);
   return PUNCH_SOURCE_TAGS[key] ? t(lang, `calendar.source.${key}`) : key;
 }
-// Biometric, WiFi and the 19:00 auto-checkout all happen at the office; a correction
+// Biometric, office (GPS), WiFi and the 19:00 auto-checkout all happen at the office; a correction
 // says nothing about where, so only a remote punch counts as away.
 function isRemotePunch(p) {
   return !!p && normalizeSource(p.source) === 'remote';
@@ -1712,18 +1765,41 @@ function locationCell(p, short = false) {
   return `<a href="https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}" target="_blank" rel="noopener" title="${escapeHtml(label)}">${escapeHtml(shown)}</a>`;
 }
 
-// Where a punch was made, for admin tables: a remote punch shows its location.
-function punchPlaceHtml(p) {
+// Colours for where a punch was made: green for the employee's own branch, red for a
+// branch that isn't theirs (a deviation), amber for anywhere else.
+const PLACE_STYLE = {
+  own: 'background:#E8F5E9;color:#2E7D32;',
+  deviation: 'background:#FDECEA;color:#C62828;',
+};
+function placePill(kind, text) {
+  return `<span style="display:inline-block;padding:1px 7px;border-radius:6px;font-weight:600;white-space:nowrap;${PLACE_STYLE[kind]}">${escapeHtml(text)}</span>`;
+}
+// Where a punch was made, for admin tables: the branch name when it was at one,
+// otherwise a remote punch shows its location.
+function punchPlaceHtml(p, employee = null) {
+  if (p.deviation) {
+    const own = employee && employee.branch && employee.branch !== MULTI_BRANCH ? employee.branch : null;
+    return `${placePill('deviation', `⚠ ${p.branch}`)}${own ? `<br><span style="color:#C62828;white-space:nowrap;">Theirs: ${escapeHtml(own)}</span>` : ''}`;
+  }
+  if (p.branch) return placePill('own', p.branch);
   if (isRemotePunch(p)) return `<span style="color:#7A5C00;font-weight:600;">Remote</span><br><span style="display:inline-block;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;">${locationCell(p, true)}</span>`;
   if (p.source === 'correction') return 'Correction';
   if (p.source === 'auto') return 'Auto check-out';
   return 'Office';
 }
+// Where a deviation day stands with the managers, for the dashboard.
+const DEVIATION_DECISION_LABELS = { accepted: 'Accepted', absent: 'Rejected: Absent', half_day: 'Rejected: Half Day' };
+function deviationStateHtml(deviation, dateStr) {
+  if (deviation === 'pending') return `<a href="/admin/deviations" style="color:#C62828;font-weight:600;white-space:nowrap;">Needs review →</a>`;
+  if (deviation === 'accepted') return '<span style="color:#7C8896;">Deviation accepted</span>';
+  return `<span style="color:#C62828;font-weight:600;">Deviation ${escapeHtml(DEVIATION_DECISION_LABELS[deviation].toLowerCase())}</span>`;
+}
 // The admin dashboard's "Where" cell: where the day's check-in and check-out were.
-function punchedFromCell(status) {
+function punchedFromCell(status, employee = null) {
   if (!status.checkInPunch) return '<span style="color:#9AA5B1;">—</span>';
-  const lines = [`In: ${punchPlaceHtml(status.checkInPunch)}`];
-  if (status.checkOutPunch) lines.push(`Out: ${punchPlaceHtml(status.checkOutPunch)}`);
+  const lines = [`In: ${punchPlaceHtml(status.checkInPunch, employee)}`];
+  if (status.checkOutPunch) lines.push(`Out: ${punchPlaceHtml(status.checkOutPunch, employee)}`);
+  if (status.deviation) lines.push(deviationStateHtml(status.deviation, status.date));
   return lines.join('<br>');
 }
 
@@ -1785,6 +1861,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
   // once ever, and a mid-tour reload or a later replay never asks again.
   const showLanguagePicker = onboardingKind === 'tour' && !!user && !user.languageSet;
   const unreadCount = isAdmin ? await unreadNotificationCountAll() : (user ? await unreadNotificationCount(employeeId) : 0);
+  const pendingDeviations = isAdmin ? (await getDeviationDays({ pending: true })).length : 0;
   const pendingDocs = (!isAdmin && employeeId) ? await pendingDocumentCount(employeeId) : 0;
   // A same-page-return POST toggle, same pattern as calendarViewToggle — no separate
   // settings page, just flips the account's language and redirects right back.
@@ -1926,6 +2003,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         ${!isAdmin ? `<a id="navDocuments" href="/documents?employee_id=${escapeHtml(employeeId)}" class="${activeNav === 'documents' ? 'active' : ''}"><span class="ico">📁</span> <span class="lbl">${t(lang, 'nav.documents')}${pendingDocs ? ` (${pendingDocs})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/employee-registration" class="${activeNav === 'employee-registration' ? 'active' : ''}"><span class="ico">🧑‍💼</span> <span class="lbl">Employee Registration</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/remote-punches" class="${activeNav === 'remote-punches' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">Remote Punches</span></a>` : ''}
+        ${isAdmin ? `<a href="/admin/deviations" class="${activeNav === 'deviations' ? 'active' : ''}"><span class="ico">⚠️</span> <span class="lbl">Deviations${pendingDeviations ? ` (${pendingDeviations})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
@@ -2125,30 +2203,64 @@ function renderChangePassword(error, username) {
 }
 
 // The Punch In/Out button, shared by the employee dashboard and the "My attendance
-// today" card managers get on the admin dashboard. Anyone can punch from anywhere:
-// on the office WiFi it's an office punch, otherwise it's a remote one with the
-// phone's location attached. `onOfficeWifi` is only for the hint under the button —
-// the server checks the network again on every punch.
-function selfPunchBlock(dayStatus, lang, onOfficeWifi) {
-  const hint = onOfficeWifi
-    ? t(lang, 'dashboard.office_hint', { ssid: escapeHtml(CONFIG.OFFICE_WIFI_SSID) })
-    : escapeHtml(t(lang, 'dashboard.remote_hint'));
+// today" card managers get on the admin dashboard. Anyone can punch from anywhere: every
+// punch sends the phone's location, and the server works out which branch, if any, it
+// was made at. The hint under the button is only a preview — selfPunchScript fills it
+// in once it has a location.
+function selfPunchBlock(dayStatus, lang) {
+  const hint = CONFIG.BRANCH_LIST.some(b => b.location)
+    ? t(lang, 'dashboard.location_hint', { radius: CONFIG.OFFICE_RADIUS_METERS })
+    : t(lang, 'dashboard.remote_hint');
   return `
       <div id="selfPunchStatus" style="font-size:0.85em;opacity:0.9;margin-bottom:8px;min-height:1.2em;"></div>
       <button id="selfPunchBtn" onclick="selfPunch()" style="padding:10px 22px;border-radius:8px;border:none;background:#fff;color:#1565C0;font-weight:700;cursor:pointer;">${dayStatus.status === 'Active' ? t(lang, 'dashboard.punch_out') : t(lang, 'dashboard.punch_in')}</button>
-      <div style="font-size:0.75em;opacity:0.8;margin-top:6px;">${onOfficeWifi ? '📶' : '📍'} ${hint}</div>`;
+      <div id="selfPunchHint" style="font-size:0.75em;opacity:0.8;margin-top:6px;">📍 ${escapeHtml(hint)}</div>`;
 }
 
-// selfPunchBlock's click handler. Always tries an office punch first, without asking
-// for location, so nobody in the office gets a location prompt; only when the server
-// says this isn't the office network does it fetch the location and punch remotely.
-function selfPunchScript(employeeId, lang) {
+// selfPunchBlock's click handler: gets a fresh position and sends it with the punch.
+// If location is already allowed it also checks on load, so the hint can say which
+// branch this punch will count at before the button is pressed. Mirrors branchAt and
+// isBranchDeviation in geofence.js; the server decides again on every punch.
+function selfPunchScript(employee, lang) {
+  const branches = CONFIG.BRANCH_LIST.filter(b => b.location).map(b => ({ name: b.name, lat: b.location.lat, lng: b.location.lng }));
+  const ownBranch = employee.branch && employee.branch !== MULTI_BRANCH ? employee.branch : null;
   return `
+      const selfPunchBranches = ${JSON.stringify(branches)};
+      const selfPunchRadius = ${JSON.stringify(CONFIG.OFFICE_RADIUS_METERS)};
+      const selfPunchOwnBranch = ${JSON.stringify(ownBranch)};
+      function selfPunchDistance(b, lat, lng) {
+        const rad = d => d * Math.PI / 180;
+        const dLat = rad(lat - b.lat), dLng = rad(lng - b.lng);
+        const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(b.lat)) * Math.cos(rad(lat)) * Math.sin(dLng / 2) ** 2;
+        return 2 * 6371000 * Math.asin(Math.sqrt(h));
+      }
+      function selfPunchShowWhere(pos) {
+        const hint = document.getElementById('selfPunchHint');
+        if (!hint || !selfPunchBranches.length) return;
+        let nearest = null, meters = Infinity;
+        for (const b of selfPunchBranches) {
+          const d = selfPunchDistance(b, pos.coords.latitude, pos.coords.longitude);
+          if (d < meters) { nearest = b; meters = d; }
+        }
+        if (meters <= selfPunchRadius && selfPunchOwnBranch && nearest.name !== selfPunchOwnBranch) {
+          hint.textContent = '⚠️ ' + ${JSON.stringify(t(lang, 'dashboard.other_branch_hint'))}.replace('{{branch}}', nearest.name).replace('{{own}}', selfPunchOwnBranch);
+        } else if (meters <= selfPunchRadius) {
+          hint.textContent = '🏢 ' + ${JSON.stringify(t(lang, 'dashboard.at_branch_hint'))}.replace('{{branch}}', nearest.name);
+        } else {
+          const away = meters < 1000 ? Math.round(meters) + ' m' : (meters / 1000).toFixed(1) + ' km';
+          hint.textContent = '📍 ' + ${JSON.stringify(t(lang, 'dashboard.away_hint'))}.replace('{{distance}}', away);
+        }
+      }
+      if (selfPunchBranches.length && navigator.geolocation && navigator.permissions) {
+        navigator.permissions.query({ name: 'geolocation' }).then(p => {
+          if (p.state === 'granted') navigator.geolocation.getCurrentPosition(selfPunchShowWhere, () => {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+        }).catch(() => {});
+      }
       function selfPunchPost(fields) {
         return fetch('/api/punch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(Object.assign({ employee_id: ${JSON.stringify(employeeId)} }, fields))
+          body: JSON.stringify(Object.assign({ employee_id: ${JSON.stringify(employee.id)} }, fields))
         }).then(async r => ({ ok: r.ok, data: await r.json() }));
       }
       function selfPunchFail(message, isHtml) {
@@ -2167,35 +2279,30 @@ function selfPunchScript(employeeId, lang) {
       function selfPunchWrong() {
         selfPunchFail(${JSON.stringify(t(lang, 'dashboard.something_wrong'))});
       }
-      function selfPunchRemote() {
+      function selfPunch() {
         const status = document.getElementById('selfPunchStatus');
+        const btn = document.getElementById('selfPunchBtn');
+        if (!status || !btn) return;
         if (!navigator.geolocation) return selfPunchFail(${JSON.stringify(t(lang, 'dashboard.geolocation_unsupported'))});
+        btn.disabled = true;
+        status.style.color = '';
         status.textContent = ${JSON.stringify(t(lang, 'dashboard.getting_location'))};
         navigator.geolocation.getCurrentPosition(
-          pos => selfPunchPost({ source: 'remote', location: pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5) })
-            .then(selfPunchDone).catch(selfPunchWrong),
+          pos => {
+            selfPunchShowWhere(pos);
+            selfPunchPost({ location: pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5) })
+              .then(selfPunchDone).catch(selfPunchWrong);
+          },
           err => err.code === 1
             ? selfPunchFail(${JSON.stringify(escapeHtml(t(lang, 'dashboard.location_denied')) + '<br><span style="font-size:0.88em;opacity:0.85;">' + escapeHtml(t(lang, 'dashboard.location_denied_help')) + '</span>')}, true)
             : selfPunchFail(${JSON.stringify(t(lang, 'dashboard.location_failed'))}),
           // Fresh, GPS-level position: no cached fix from somewhere else.
           { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
         );
-      }
-      function selfPunch() {
-        const status = document.getElementById('selfPunchStatus');
-        const btn = document.getElementById('selfPunchBtn');
-        if (!status || !btn) return;
-        btn.disabled = true;
-        status.style.color = '';
-        status.textContent = ${JSON.stringify(t(lang, 'dashboard.checking'))};
-        selfPunchPost({ source: 'wifi' }).then(res => {
-          if (!res.ok && res.data.code === 'not_on_office_wifi') return selfPunchRemote();
-          selfPunchDone(res);
-        }).catch(selfPunchWrong);
       }`;
 }
 
-async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = [], onOfficeWifi = false) {
+async function renderDashboard(employee, dayStatus, punches, user, overtimeMinutes = 0, overtimeAuthorized = false, leaveBalances = [], breaks = [], forceOnboardingTour = false, missedCheckoutDays = []) {
   const lang = langOf(user);
   const todayShift = getShiftForDate(employee, todayStr());
   const onBreak = !!dayStatus.onBreak;
@@ -2287,7 +2394,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
         <span style="opacity:0.9;">${t(lang, 'dashboard.overtime', { time: formatMinutesAsHM(overtimeMinutes) })}</span>
         <span style="padding:2px 9px;border-radius:999px;font-size:0.8em;font-weight:600;background:rgba(255,255,255,0.2);">${overtimeAuthorized ? t(lang, 'dashboard.authorized') : t(lang, 'dashboard.unauthorized')}</span>
       </div>` : ''}
-      <div style="margin-top:14px;">${selfPunchBlock(dayStatus, lang, onOfficeWifi)}</div>
+      <div style="margin-top:14px;">${selfPunchBlock(dayStatus, lang)}</div>
       ${breakBlock}
     </div>
     <div class="card">
@@ -2302,7 +2409,7 @@ async function renderDashboard(employee, dayStatus, punches, user, overtimeMinut
       <div style="display:flex;gap:12px;flex-wrap:wrap;">${leaveBalanceCards}</div>
     </div>
     <script>
-      ${selfPunchScript(employee.id, lang)}
+      ${selfPunchScript(employee, lang)}
       function toggleBreak() {
         const status = document.getElementById('breakStatus');
         const btn = document.getElementById('breakBtn');
@@ -2383,7 +2490,9 @@ async function renderCalendar(employee, year, month, user) {
         <span title="${t(lang, 'calendar.check_in')}" style="white-space:nowrap;">${hhmm(checkIn.timestamp)}${punchSourceTag(checkIn.source)}</span><br>
         <span title="${t(lang, 'calendar.check_out')}" style="white-space:nowrap;">${checkOut ? `${hhmm(checkOut.timestamp)}${punchSourceTag(checkOut.source)}` : '—'}</span>
       </div>` : '';
-    cells.push(`<div class="cal-day${checkIn ? ' has-times' : ''}" data-day="${dateStr}" style="background:${s.bg};color:${s.fg};border-radius:8px;padding:8px 6px;min-height:52px;overflow-wrap:break-word;${isToday ? 'outline:2px solid #1565C0;' : ''}">
+    // A day punched at a branch that isn't theirs, still waiting on a manager.
+    const deviationPending = status.deviation === 'pending';
+    cells.push(`<div class="cal-day${checkIn ? ' has-times' : ''}" data-day="${dateStr}"${deviationPending ? ` title="${escapeHtml(t(lang, 'calendar.deviation'))}"` : ''} style="background:${s.bg};color:${s.fg};border-radius:8px;padding:8px 6px;min-height:52px;overflow-wrap:break-word;${deviationPending ? 'outline:2px solid #C62828;outline-offset:-2px;' : (isToday ? 'outline:2px solid #1565C0;' : '')}">
       <div style="font-weight:700;">${d}</div>
       <div class="cal-status" style="font-size:0.72em;font-weight:600;overflow-wrap:break-word;hyphens:auto;">${escapeHtml(t(lang, `status.${styleKey}`))}</div>${timesHtml}
     </div>`);
@@ -2393,6 +2502,7 @@ async function renderCalendar(employee, year, month, user) {
       ...punches.map((p, idx) => {
         let detail = '';
         if (p.source === 'correction') detail = t(lang, 'calendar.correction_by', { name: p.marked_by || '—' });
+        else if (p.branch) detail = p.deviation ? `${p.branch} ⚠ ${t(lang, 'calendar.deviation')}` : p.branch;
         else if (isRemotePunch(p) && showLocation) detail = { html: locationCell(p) };
         return { time: p.timestamp, cells: [t(lang, idx % 2 === 0 ? 'calendar.check_in' : 'calendar.check_out'), hhmm(p.timestamp), punchSourceName(p.source, lang), detail] };
       }),
@@ -2425,7 +2535,10 @@ async function renderCalendar(employee, year, month, user) {
   const legend = Object.keys(STATUS_STYLE).map(status => `
     <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.8em;margin-right:14px;margin-bottom:6px;">
       <span style="width:10px;height:10px;border-radius:50%;background:${STATUS_STYLE[status].dot || STATUS_STYLE[status].fg};display:inline-block;"></span>${t(lang, `status.${status}`)}
-    </span>`).join('');
+    </span>`).join('') + `
+    <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.8em;margin-right:14px;margin-bottom:6px;">
+      <span style="width:10px;height:10px;border-radius:3px;outline:2px solid #C62828;outline-offset:-2px;display:inline-block;"></span>${t(lang, 'calendar.deviation_pending')}
+    </span>`;
   const sourceLegend = Object.keys(PUNCH_SOURCE_TAGS).map(source => `
     <span style="display:inline-flex;align-items:center;gap:3px;font-size:0.8em;margin-right:14px;margin-bottom:6px;color:#4C5A68;">
       ${punchSourceTag(source)}${escapeHtml(punchSourceName(source, lang))}
@@ -2870,7 +2983,7 @@ async function renderAdminFieldTrips(trips, user) {
 
 // A manager's own attendance on the admin dashboard, with the same Punch button
 // employees get.
-function myAttendanceCard(employee, dayStatus, lang, onOfficeWifi) {
+function myAttendanceCard(employee, dayStatus, lang) {
   const time = ts => escapeHtml(ts.split(' ')[1].slice(0, 5));
   const facts = [
     dayStatus.checkIn ? `In ${time(dayStatus.checkIn)}` : 'Not punched in yet',
@@ -2886,9 +2999,9 @@ function myAttendanceCard(employee, dayStatus, lang, onOfficeWifi) {
         <div style="font-size:1.25em;font-weight:700;margin:2px 0 6px;">${escapeHtml(employee.name)}</div>
         <div style="font-size:0.9em;">${statusBadge(dayStatus.status, dayStatus.label, lang)} &nbsp;${facts}</div>
       </div>
-      <div>${selfPunchBlock(dayStatus, lang, onOfficeWifi)}</div>
+      <div>${selfPunchBlock(dayStatus, lang)}</div>
     </div>
-    <script>${selfPunchScript(employee.id, lang)}</script>`;
+    <script>${selfPunchScript(employee, lang)}</script>`;
 }
 
 // "18:02" for today, "5 Oct 18:02" otherwise; withDate always includes the date
@@ -2974,8 +3087,9 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
     const breakCell = r.status.breakMinutes > 0 || r.status.onBreak
       ? `${formatMinutesAsHM(r.status.breakMinutes || 0)}${r.status.onBreak ? ' <span style="color:#B26A00;font-weight:600;">(on break)</span>' : ''}`
       : '—';
+    // A deviation still waiting on a manager tints the whole row.
     return `
-    <tr>
+    <tr${r.status.deviation === 'pending' ? ' style="background:#FFF5F5;"' : ''}>
       <td><a href="/calendar?employee_id=${escapeHtml(r.employee.id)}" style="color:#1B2430;text-decoration:none;font-weight:600;">${escapeHtml(r.employee.name)}</a> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(r.employee.id)})</span></td>
       <td>${statusBadge(r.status.status, r.status.label)}</td>
       <td>${r.status.checkIn ? escapeHtml(r.status.checkIn.split(' ')[1]) : '—'}</td>
@@ -2983,7 +3097,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
       <td style="font-variant-numeric:tabular-nums;">${hoursCell}</td>
       <td>${breakCell}</td>
       <td>${permissionCell}</td>
-      <td style="font-size:0.82em;">${punchedFromCell(r.status)}</td>
+      <td style="font-size:0.82em;">${punchedFromCell(r.status, r.employee)}</td>
     </tr>`;
   }))).join('');
 
@@ -3008,7 +3122,7 @@ async function renderAdminAttendance(dateStr, rows, user, opts = {}) {
 
   const body = `
     ${opts.deviceCard ? deviceStatusCard(opts.deviceCard) : ''}
-    ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user), opts.myAttendance.onOfficeWifi) : ''}
+    ${opts.myAttendance ? myAttendanceCard(opts.myAttendance.employee, opts.myAttendance.dayStatus, langOf(user)) : ''}
     ${statsWidgets}
     ${devicePinsLink}
     <div class="card">
@@ -3434,8 +3548,71 @@ async function renderAdminOvertime(requests, hoursReportRows, user, error) {
   return pageShell('Overtime', '', 'overtime', body, user);
 }
 
+// --- Deviations: days an employee punched at a branch that isn't their own ---
+// Days with at least one deviation punch, newest first, with any manager decision.
+// pending: only undecided days (any date); otherwise only decided days in [from, to].
+async function getDeviationDays({ pending, from = null, to = null }) {
+  return await db.prepare(
+    `SELECT DISTINCT p.employee_id, substr(p.timestamp, 1, 10) AS date, r.decision, r.reviewed_by, r.reviewed_at
+     FROM punches p LEFT JOIN deviation_reviews r ON r.employee_id = p.employee_id AND r.date = substr(p.timestamp, 1, 10)
+     WHERE p.deviation = 1 AND ${pending ? 'r.decision IS NULL' : 'r.decision IS NOT NULL AND substr(p.timestamp, 1, 10) BETWEEN ? AND ?'}
+     ORDER BY date DESC, p.employee_id`
+  ).all(...(pending ? [] : [from, to]));
+}
+
+async function renderAdminDeviations(user, { from, to }) {
+  const day = async (d) => {
+    const employee = await getEmployee(d.employee_id);
+    const punches = (await getPunchesForDay(d.employee_id, d.date)).filter(p => p.source !== 'auto');
+    const status = await computeDayStatus(d.employee_id, d.date);
+    const punchLines = punches.map(p => {
+      const where = p.branch || (isRemotePunch(p) ? 'Remote' : punchSourceName(p.source, 'en'));
+      return `<span style="${p.deviation ? 'color:#C62828;font-weight:600;' : 'color:#7C8896;'}">${p.direction === 'in' ? 'In' : 'Out'} ${escapeHtml(p.timestamp.slice(11, 16))} ${escapeHtml(where)}</span>`;
+    }).join('<br>');
+    const decide = (decision, label, danger) => `
+      <form method="POST" action="/admin/deviations/decide" style="display:inline;margin:0;">
+        <input type="hidden" name="employee_id" value="${escapeHtml(d.employee_id)}"><input type="hidden" name="date" value="${escapeHtml(d.date)}">
+        <input type="hidden" name="decision" value="${decision}"><input type="hidden" name="from" value="${escapeHtml(from)}"><input type="hidden" name="to" value="${escapeHtml(to)}">
+        <button type="submit" style="padding:5px 10px;border-radius:6px;border:1px solid ${danger ? '#F5C2C0' : '#D0D5DA'};background:#fff;color:${danger ? '#C62828' : '#1B2430'};font-weight:600;cursor:pointer;font-size:0.85em;white-space:nowrap;"${decision === 'absent' ? ` onclick="return confirm('Mark ${escapeHtml(employee ? employee.name : d.employee_id)} absent on ${escapeHtml(d.date)}?')"` : ''}>${label}</button>
+      </form>`;
+    const action = d.decision
+      ? `<span style="color:#7C8896;font-size:0.85em;">${escapeHtml(DEVIATION_DECISION_LABELS[d.decision])} by ${escapeHtml(d.reviewed_by)}, ${escapeHtml(d.reviewed_at.slice(0, 16))}</span> ${decide('undo', 'Undo', false)}`
+      : `<div style="display:flex;gap:6px;flex-wrap:wrap;">${decide('accepted', 'Accept', false)}${decide('half_day', 'Reject: Half Day', true)}${decide('absent', 'Reject: Absent', true)}</div>`;
+    return `
+    <tr>
+      <td style="white-space:nowrap;">${escapeHtml(new Date(`${d.date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
+      <td><a href="/calendar?employee_id=${escapeHtml(d.employee_id)}" style="color:#1B2430;text-decoration:none;font-weight:600;">${escapeHtml(employee ? employee.name : d.employee_id)}</a></td>
+      <td>${escapeHtml(employee ? employeeBranchLabel(employee.branch) || '—' : '—')}</td>
+      <td style="font-size:0.88em;">${punchLines}</td>
+      <td>${status ? statusBadge(status.status, status.label) : '—'}</td>
+      <td>${action}</td>
+    </tr>`;
+  };
+  const header = '<tr><th>Date</th><th>Employee</th><th>Their branch</th><th>Punches</th><th>Status</th><th>Decision</th></tr>';
+  const pending = await Promise.all((await getDeviationDays({ pending: true })).map(day));
+  const reviewed = await Promise.all((await getDeviationDays({ pending: false, from, to })).map(day));
+  const body = `
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:4px;">Deviations — pending (${pending.length})</div>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Days an employee punched at a branch that isn't their own, even if they were on time. Until you decide, the day keeps its normal status. Accept leaves it as it is; rejecting marks the day Half Day or Absent everywhere (calendar, reports, muster) and notifies the employee. Every decision can be undone.</p>
+      <div style="overflow-x:auto;"><table>${header}${pending.join('') || '<tr><td colspan="6" style="color:#9AA5B1;">Nothing waiting for review</td></tr>'}</table></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="font-weight:700;">Reviewed</div>
+        <form method="GET" action="/admin/deviations" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:0;">
+          <div><label style="display:block;font-size:0.8em;color:#7C8896;">From</label><input type="date" name="from" value="${escapeHtml(from)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;"></div>
+          <div><label style="display:block;font-size:0.8em;color:#7C8896;">To</label><input type="date" name="to" value="${escapeHtml(to)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;"></div>
+          <button type="submit" style="padding:7px 14px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;color:#1565C0;font-weight:600;cursor:pointer;">Show</button>
+        </form>
+      </div>
+      <div style="overflow-x:auto;"><table>${header}${reviewed.join('') || '<tr><td colspan="6" style="color:#9AA5B1;">No reviewed deviations in these dates</td></tr>'}</table></div>
+    </div>`;
+  return pageShell('Deviations', '', 'deviations', body, user);
+}
+
 const REMOTE_PUNCH_LOG_LIMIT = 100;
-// Every remote punch (made away from the office WiFi), newest first, with where it was.
+// Every remote punch made away from every branch, newest first, with where it was.
 async function renderAdminRemotePunches(punches, user) {
   const rows = (await Promise.all(punches.map(async p => {
     const emp = await getEmployee(p.employee_id);
@@ -3451,7 +3628,7 @@ async function renderAdminRemotePunches(punches, user) {
   const body = `
     <div class="card">
       <div style="font-weight:700;margin-bottom:4px;">Remote Punches — All Employees</div>
-      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Punches made away from the office WiFi, with the location captured from the phone. The latest ${REMOTE_PUNCH_LOG_LIMIT} are shown.</p>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Punches made away from every branch, with the location captured from the phone. Punches at a branch that isn't the employee's own are on Deviations. The latest ${REMOTE_PUNCH_LOG_LIMIT} are shown.</p>
       <table><tr><th>Employee</th><th>Event</th><th>Time</th><th>Location</th></tr>${rows}</table>
     </div>`;
   return pageShell('Remote Punches', '', 'remote-punches', body, user);
@@ -3479,7 +3656,7 @@ async function renderEmployeeRegistration(user, error, justCreated) {
     <tr>
       <td><strong>${escapeHtml(e.name)}</strong> <span style="color:#9AA5B1;font-weight:400;">(${escapeHtml(e.id)})</span></td>
       <td>${escapeHtml(e.designation || '—')}</td>
-      <td>${escapeHtml(e.branch || '—')}</td>
+      <td>${escapeHtml(employeeBranchLabel(e.branch) || '—')}</td>
       <td>${accountRoles[e.id] === 'manager' ? '<strong style="color:#1565C0;">Manager</strong>' : 'Employee'}</td>
       <td>${escapeHtml(e.shift_start)}&ndash;${escapeHtml(e.shift_end)}</td>
       <td style="white-space:nowrap;">
@@ -3562,6 +3739,7 @@ Password: password123</code>
           <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
           <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             ${CONFIG.BRANCHES.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
+            <option value="${MULTI_BRANCH}">Multi-branch (any branch counts as their office)</option>
           </select>
         </div>
         <div style="flex:1;min-width:180px;">
@@ -3646,8 +3824,9 @@ async function renderEditEmployee(employee, user, error) {
           <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
           <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
             <option value="">&mdash; None &mdash;</option>
-            ${(employee.branch && !CONFIG.BRANCHES.includes(employee.branch) ? [employee.branch, ...CONFIG.BRANCHES] : CONFIG.BRANCHES)
+            ${(employee.branch && employee.branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(employee.branch) ? [employee.branch, ...CONFIG.BRANCHES] : CONFIG.BRANCHES)
               .map(b => `<option value="${escapeHtml(b)}" ${b === employee.branch ? 'selected' : ''}>${escapeHtml(b)}</option>${b === employee.branch && !CONFIG.BRANCHES.includes(b) ? ' <!-- no longer in the configured list -->' : ''}`).join('')}
+            <option value="${MULTI_BRANCH}" ${employee.branch === MULTI_BRANCH ? 'selected' : ''}>Multi-branch (any branch counts as their office)</option>
           </select>
         </div>
         <div style="flex:1;min-width:180px;">
@@ -4035,6 +4214,98 @@ async function renderDeviceCard() {
     </div>`;
 }
 
+// Punch-button punches whose branch, office/remote or deviation would come out
+// differently under today's branches and radius — made before branches had locations,
+// or before one was added or moved. Each comes back with what it should now be.
+async function punchesToRecheck() {
+  if (!CONFIG.BRANCH_LIST.some(b => b.location)) return [];
+  const sources = [...REMOTE_SOURCE_VALUES, 'office'];
+  const rows = await db.prepare(
+    `SELECT p.id, p.source, p.location, p.branch, p.deviation, e.branch AS employee_branch
+     FROM punches p JOIN employees e ON e.id = p.employee_id
+     WHERE p.source IN (${sources.map(() => '?').join(', ')}) AND p.location != ''`
+  ).all(...sources);
+  const changes = [];
+  for (const r of rows) {
+    const point = parseLatLng(r.location);
+    if (!point) continue;
+    const branch = branchAtPoint(point);
+    const name = branch ? branch.name : '';
+    const deviation = isBranchDeviation(r.employee_branch, name);
+    const source = branch && !deviation ? 'office' : 'remote';
+    if (normalizeSource(r.source) !== source || (r.branch || '') !== name || !!r.deviation !== deviation) {
+      changes.push({ id: r.id, source, branch: name, deviation });
+    }
+  }
+  return changes;
+}
+
+// Branch names, locations and which one has the biometric device. Rows are posted as
+// parallel arrays (id[], name[], location[]); a blank id is a new branch.
+async function renderBranchesCard() {
+  const counts = Object.fromEntries((await db.prepare('SELECT branch, COUNT(*) AS c FROM employees GROUP BY branch').all()).map(r => [r.branch, Number(r.c)]));
+  const input = 'padding:7px;border-radius:6px;border:1px solid #D0D5DA;';
+  const row = (b) => `
+      <tr>
+        <td><input type="hidden" name="id" value="${b ? b.id : ''}"><input type="text" name="name" value="${b ? escapeHtml(b.name) : ''}" placeholder="${b ? '' : 'New branch name'}" style="${input}width:100%;min-width:120px;"></td>
+        <td><div style="display:flex;gap:6px;"><input type="text" name="location" value="${b ? escapeHtml(b.locationText) : ''}" placeholder="latitude, longitude" style="${input}width:100%;min-width:150px;">
+          <button type="button" onclick="branchUseMyLocation(this)" title="Use my current location" style="padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;cursor:pointer;">📍</button></div></td>
+        <td style="text-align:center;"><input type="radio" name="device_branch" value="${b ? b.id : 'new'}" ${b && b.has_device ? 'checked' : ''} style="width:auto;"></td>
+        <td style="color:#7C8896;font-size:0.85em;">${b ? `${counts[b.name] || 0}` : ''}</td>
+        <td>${b ? `<label style="font-size:0.82em;color:#7C8896;white-space:nowrap;"><input type="checkbox" name="delete" value="${b.id}" style="width:auto;" ${counts[b.name] ? 'disabled title="Move its employees to another branch first"' : ''}> Delete</label>` : ''}</td>
+      </tr>`;
+  return `
+    <form method="POST" action="/admin/branches" class="card" id="branches">
+      <div style="font-weight:700;margin-bottom:6px;">Branches</div>
+      <p style="color:#7C8896;font-size:0.88em;margin-top:0;">A Punch-button punch within the branch radius (below, under Settings) of a branch's location is made at that branch: office if it's the employee's own branch, otherwise remote and flagged on Deviations. A branch with no location is never matched. Tap 📍 while standing in a branch to fill in its location. Renaming a branch updates the employees in it.</p>
+      <div style="overflow-x:auto;"><table>
+        <tr><th>Name</th><th>Location (latitude, longitude)</th><th>Biometric device here</th><th>Employees</th><th></th></tr>
+        ${CONFIG.BRANCH_LIST.map(row).join('')}
+        ${row(null)}
+      </table></div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.85em;color:#7C8896;"><input type="radio" name="device_branch" value="" ${deviceBranch() ? '' : 'checked'} style="width:auto;"> The biometric device isn't in any branch</label>
+      <div id="branchLocStatus" style="font-size:0.85em;color:#C62828;min-height:1.2em;margin-top:6px;"></div>
+      <button type="submit" style="margin-top:6px;padding:9px 20px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Save branches</button>
+      <script>
+        function branchUseMyLocation(btn) {
+          const status = document.getElementById('branchLocStatus');
+          const field = btn.parentElement.querySelector('input[name=location]');
+          if (!navigator.geolocation) { status.textContent = "This browser can't share your location."; return; }
+          status.style.color = '#7C8896';
+          status.textContent = 'Getting your location...';
+          navigator.geolocation.getCurrentPosition(
+            pos => { field.value = pos.coords.latitude.toFixed(5) + ', ' + pos.coords.longitude.toFixed(5); status.textContent = 'Location filled in. Save branches to keep it.'; },
+            () => { status.style.color = '#C62828'; status.textContent = "Couldn't get your location. Allow location for this site and try again."; },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+          );
+        }
+      </script>
+    </form>`;
+}
+
+async function renderOfficeRelabelCard() {
+  if (!CONFIG.BRANCH_LIST.some(b => b.location)) return '';
+  const changes = await punchesToRecheck();
+  const toOffice = changes.filter(c => c.source === 'office').length;
+  const flagged = changes.filter(c => c.deviation).length;
+  const summary = [
+    toOffice ? `${toOffice} would be marked as office` : '',
+    flagged ? `${flagged} would be flagged as made at another branch (they'll appear on Deviations)` : '',
+    changes.length - toOffice - flagged ? `${changes.length - toOffice - flagged} would change branch or become remote` : '',
+  ].filter(Boolean).join('; ');
+  return `
+    <div class="card" id="relabel">
+      <div style="font-weight:700;margin-bottom:6px;">Re-check past punches</div>
+      <p style="color:#7C8896;font-size:0.88em;margin-top:0;">Checks every Punch-button punch's location against today's branches and radius, and updates which branch it was made at, whether it counts as office or remote, and whether it was at a branch that isn't the employee's own. Run it after adding or moving a branch. Locations stay recorded, and days a manager has already reviewed keep their decision.</p>
+      ${changes.length
+        ? `<form method="POST" action="/admin/punches/relabel-office" style="margin:0;">
+            <div style="font-size:0.9em;margin-bottom:10px;">${changes.length} punch${changes.length === 1 ? '' : 'es'} would change: ${escapeHtml(summary)}.</div>
+            <button type="submit" style="padding:8px 16px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Update them</button>
+          </form>`
+        : '<div style="font-size:0.9em;color:#7C8896;">Every punch already matches today\'s branches.</div>'}
+    </div>`;
+}
+
 async function renderAdminSettings(user, opts = {}) {
   const { error, notice, revealedKey, revealedValue } = opts;
   const rows = await db.prepare('SELECT key, value, updated_at, updated_by FROM app_settings').all();
@@ -4094,6 +4365,8 @@ async function renderAdminSettings(user, opts = {}) {
       ${fields}
       <button type="submit" style="margin-top:18px;padding:9px 20px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Save settings</button>
     </form>
+    ${await renderBranchesCard()}
+    ${await renderOfficeRelabelCard()}
     <form method="POST" action="/admin/settings/generate-punch-key" id="generateKeyForm"></form>`;
   return pageShell('Settings', '', 'settings', body, user);
 }
@@ -4307,6 +4580,18 @@ async function readJsonBody(req) {
 async function readFormBody(req) {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
   return Object.fromEntries(new URLSearchParams(await bufferBody(req)));
+}
+// Like readFormBody, but a field posted more than once (one per table row) comes back
+// as an array of every value rather than just the last.
+async function readFormBodyLists(req) {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const params = new URLSearchParams(await bufferBody(req));
+  const out = {};
+  for (const key of new Set(params.keys())) {
+    const all = params.getAll(key);
+    out[key] = all.length > 1 ? all : all[0];
+  }
+  return out;
 }
 // ADMS log uploads are plain tab/newline-separated text, not JSON or form-encoded —
 // and can be a large batch after the device catches up from an outage, hence the
@@ -4537,7 +4822,7 @@ async function handleRequest(req, res) {
     // Two trust levels call this endpoint: the biometric device (API key, source
     // defaults to 'biometric') and a logged-in employee's or manager's own browser
     // session (the Punch button) — session auth is restricted below to the caller's own
-    // employee_id and source in ('wifi', 'remote') only.
+    // employee_id and a located punch, which the server marks office or remote.
     const apiKey = req.headers['x-api-key'];
     const authorizedViaApiKey = apiKey === CONFIG.PUNCH_API_KEY;
     const sessionUser = authorizedViaApiKey ? null : await getSessionUser(req);
@@ -4570,40 +4855,47 @@ async function handleRequest(req, res) {
         logSecurityEvent('punch_auth_failed', { ip: getClientIp(req), reason: 'session employee_id mismatch', sessionEmployeeId: sessionUser.employeeId, requestedEmployeeId: employee_id });
         return sendJson(res, 403, { error: 'You can only punch your own attendance.' });
       }
-      if (!['wifi', 'remote'].includes(punchSource)) {
-        return sendJson(res, 403, { error: 'Only office WiFi or remote punches are allowed from a logged-in session.' });
+      if (!LOCATED_PUNCH_SOURCES.includes(punchSource)) {
+        return sendJson(res, 403, { error: 'Only office or remote punches are allowed from a logged-in session.' });
       }
     }
 
     const employee = await getEmployee(employee_id);
     if (!employee) return sendJson(res, 404, { error: `Unknown employee_id: ${employee_id}` });
 
-    // Already in the office: a remote punch sent from the office network (the page was
-    // opened elsewhere, or the WiFi check raced a network switch) is an office punch.
-    if (punchSource === 'remote' && isOnOfficeWifi(req)) punchSource = 'wifi';
-
-    // WiFi punch: there's no browser API to check SSID, so "on the office network" is
-    // verified by matching the caller's public IP against the configured office IP(s).
-    // Not being on it isn't an error: the Punch button falls back to a remote punch.
-    if (punchSource === 'wifi' && !isOnOfficeWifi(req)) {
-      return sendJson(res, 409, { error: "You're not on the office WiFi.", code: 'not_on_office_wifi' });
+    // A dashboard loaded before the office became a GPS radius tries a location-less
+    // 'wifi' punch first; this answer makes it fall back to sending the location.
+    if (punchSource === 'wifi' && !location) {
+      return sendJson(res, 409, { error: 'Your location is needed to punch.', code: 'not_on_office_wifi' });
     }
-    // Remote punches must carry the phone's real coordinates — a typed-in place name
-    // can't be verified.
+    // A Punch-button punch must carry the phone's real coordinates — a typed-in place
+    // name can't be verified — and where they fall decides the branch, and so office
+    // or remote. The client's own claim is never trusted for that. At a branch that
+    // isn't the employee's own it's remote and flagged as a deviation for a manager.
     let coords = null;
-    if (punchSource === 'remote') {
-      coords = String(location || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-      if (!coords || Math.abs(Number(coords[1])) > 90 || Math.abs(Number(coords[2])) > 180) {
-        return sendJson(res, 400, { error: "Punching from outside the office needs your phone's location. Allow location access and try again." });
+    let punchBranch = '';
+    let deviation = false;
+    if (LOCATED_PUNCH_SOURCES.includes(punchSource)) {
+      coords = parseLatLng(location);
+      if (!coords) {
+        return sendJson(res, 400, { error: "Punching needs your phone's location. Allow location access and try again." });
       }
+      const branch = branchAtPoint(coords);
+      punchBranch = branch ? branch.name : '';
+      deviation = isBranchDeviation(employee.branch, punchBranch);
+      punchSource = branch && !deviation ? 'office' : 'remote';
+    } else if (punchSource === 'biometric' && deviceBranch()) {
+      punchBranch = deviceBranch().name;
+      deviation = isBranchDeviation(employee.branch, punchBranch);
     }
 
     const ts = timestamp || formatTimestamp(new Date());
     const dir = direction || await inferPunchDirection(employee_id, ts);
-    // Turn the captured "lat,lng" into a readable address so a manager sees a place,
-    // not coordinates. Best-effort: never blocks the punch.
-    const locationAddress = coords ? await reverseGeocode(coords[1], coords[2]) : '';
-    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', coords ? location : '', marked_by || '', locationAddress);
+    // Turn a remote punch's "lat,lng" into a readable address so a manager sees a place,
+    // not coordinates. Best-effort: never blocks the punch. A punch at a branch shows the
+    // branch name instead, and keeps its coordinates so the decision can be checked.
+    const locationAddress = coords && !punchBranch ? await reverseGeocode(coords.lat, coords.lng) : '';
+    const inserted = await recordPunch(employee_id, ts, dir, punchSource, '', coords ? location.trim() : '', marked_by || '', locationAddress, punchBranch, deviation);
 
     const dayStatus = await computeDayStatus(employee_id, ts.split(' ')[0]);
     return sendJson(res, 200, { employee_id, name: employee.name, direction: dir, timestamp: ts, dayStatus, duplicate: !inserted });
@@ -4967,7 +5259,7 @@ async function handleRequest(req, res) {
       // Managers are registered as employees, so they punch like one; the main admin
       // login isn't linked to an employee and gets no card.
       const selfEmployee = user.employeeId ? await getEmployee(user.employeeId) : null;
-      const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()), onOfficeWifi: isOnOfficeWifi(req) } : null;
+      const myAttendance = selfEmployee ? { employee: selfEmployee, dayStatus: await computeDayStatus(selfEmployee.id, todayStr()) } : null;
       const sn = CONFIG.ZK_DEVICE_SN;
       const deviceCard = sn ? {
         device: await getDeviceStatus(sn),
@@ -4987,7 +5279,7 @@ async function handleRequest(req, res) {
     const leaveBalances = await getLeaveBalanceDisplay(employeeId);
     const forceOnboardingTour = parsed.searchParams.get('tour') === '1';
     const missedCheckoutDays = await getUncorrectedMissedCheckouts(employeeId);
-    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays, isOnOfficeWifi(req)));
+    return sendHtml(res, await renderDashboard(employee, dayStatus, punches, user, overtimeMinutes, overtimeAuthorized, leaveBalances, breaks, forceOnboardingTour, missedCheckoutDays));
   }
 
   // Marks the current onboarding content as seen — called when the tour finishes
@@ -5341,9 +5633,52 @@ async function handleRequest(req, res) {
   if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const punches = await db.prepare(
-      `SELECT * FROM punches WHERE source IN (${REMOTE_SOURCE_VALUES.map(() => '?').join(',')}) ORDER BY timestamp DESC LIMIT ?`
+      // A remote punch made at another branch is a deviation, listed on Deviations instead.
+      `SELECT * FROM punches WHERE source IN (${REMOTE_SOURCE_VALUES.map(() => '?').join(',')}) AND COALESCE(branch, '') = '' ORDER BY timestamp DESC LIMIT ?`
     ).all(...REMOTE_SOURCE_VALUES, REMOTE_PUNCH_LOG_LIMIT);
     return sendHtml(res, await renderAdminRemotePunches(punches, user));
+  }
+
+  if (parsed.pathname === '/admin/deviations' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+    const today = todayStr();
+    const from = isDate(parsed.searchParams.get('from')) ? parsed.searchParams.get('from') : `${today.slice(0, 7)}-01`;
+    const to = isDate(parsed.searchParams.get('to')) ? parsed.searchParams.get('to') : today;
+    return sendHtml(res, await renderAdminDeviations(user, { from, to }));
+  }
+
+  if (parsed.pathname === '/admin/deviations/decide' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const form = await readFormBody(req);
+    const employeeId = String(form.employee_id || '');
+    const date = String(form.date || '');
+    const decision = String(form.decision || '');
+    const employee = await getEmployee(employeeId);
+    const isDeviationDay = /^\d{4}-\d{2}-\d{2}$/.test(date) && !!(await db.prepare(
+      'SELECT 1 FROM punches WHERE employee_id = ? AND timestamp LIKE ? AND deviation = 1 LIMIT 1'
+    ).get(employeeId, `${date}%`));
+    if (!employee || !isDeviationDay || !['accepted', 'absent', 'half_day', 'undo'].includes(decision)) {
+      res.writeHead(400); return res.end('Not a deviation day, or not a decision.');
+    }
+    if (decision === 'undo') {
+      await db.prepare('DELETE FROM deviation_reviews WHERE employee_id = ? AND date = ?').run(employeeId, date);
+      await logAdminAction(user.username, 'deviation_undo', 'deviation', `${employeeId}:${date}`, '');
+    } else {
+      await db.prepare(
+        'INSERT INTO deviation_reviews (employee_id, date, decision, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(employee_id, date) DO UPDATE SET decision = excluded.decision, reviewed_by = excluded.reviewed_by, reviewed_at = excluded.reviewed_at'
+      ).run(employeeId, date, decision, user.username, formatTimestamp(new Date()));
+      await logAdminAction(user.username, `deviation_${decision}`, 'deviation', `${employeeId}:${date}`, DEVIATION_DECISION_LABELS[decision]);
+      if (decision !== 'accepted') {
+        const where = [...new Set((await getPunchesForDay(employeeId, date)).filter(p => p.deviation).map(p => p.branch))].join(', ');
+        await createNotification(employeeId, `Your attendance on ${date} was marked ${decision === 'absent' ? 'Absent' : 'Half Day'}: you punched at ${where}, which isn't your branch${employee.branch && employee.branch !== MULTI_BRANCH ? ` (${employee.branch})` : ''}.`);
+      }
+    }
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+    const back = isDate(form.from) && isDate(form.to) ? `?from=${form.from}&to=${form.to}` : '';
+    res.writeHead(303, { Location: `/admin/deviations${back}` });
+    return res.end();
   }
 
   // Retired: on-site duty became remote punching from the Dashboard's Punch button.
@@ -5463,7 +5798,7 @@ async function handleRequest(req, res) {
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown role.'));
     }
-    if (branch && !CONFIG.BRANCHES.includes(branch)) {
+    if (branch && branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(branch)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown branch.'));
     }
     if (reportsTo && !(await getEmployee(reportsTo))) {
@@ -5644,7 +5979,7 @@ async function handleRequest(req, res) {
     // been renamed or removed from the configured list — otherwise editing any other
     // field on this employee (or just re-saving the form untouched) would be blocked
     // with "Unknown branch." until the admin manually picks a currently-valid one.
-    if (branch && branch !== employee.branch && !CONFIG.BRANCHES.includes(branch)) {
+    if (branch && branch !== employee.branch && branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(branch)) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown branch.'));
     }
     if (reportsTo === employeeId) {
@@ -5833,6 +6168,7 @@ async function handleRequest(req, res) {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
     const form = await readFormBody(req);
     const changed = [];
+    const invalid = [];
     for (const def of SETTING_DEFS) {
       const submitted = form[def.key];
       const clearing = form[`__clear__${def.key}`] === '1';
@@ -5854,6 +6190,9 @@ async function handleRequest(req, res) {
         changed.push(`${def.key} cleared`);
         continue;
       }
+      // An invalid value is not saved, so the setting keeps working with what it had.
+      const problem = def.validate ? def.validate(value) : null;
+      if (problem) { invalid.push(problem); continue; }
       const existing = await db.prepare('SELECT value FROM app_settings WHERE key = ?').get(def.key);
       if (existing && existing.value === value) continue;
       await db.prepare(
@@ -5869,8 +6208,88 @@ async function handleRequest(req, res) {
     }
     await loadSettings({ force: true });
     return sendHtml(res, await renderAdminSettings(user, {
-      notice: changed.length ? `Saved: ${changed.join(', ')}.` : 'No changes to save.',
+      error: invalid.length ? `Not saved: ${invalid.join(' ')}` : null,
+      notice: changed.length ? `Saved: ${changed.join(', ')}.` : (invalid.length ? null : 'No changes to save.'),
     }));
+  }
+
+  if (parsed.pathname === '/admin/branches' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const form = await readFormBodyLists(req);
+    const list = v => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+    const ids = list(form.id), names = list(form.name), locations = list(form.location);
+    const deleting = new Set(list(form.delete).map(Number));
+    const rows = ids.map((id, i) => ({ id: id ? Number(id) : null, name: String(names[i] || '').trim(), location: String(locations[i] || '').trim() }))
+      // The always-present blank "new branch" row, left empty.
+      .filter(r => r.id || r.name || r.location);
+    const kept = rows.filter(r => !deleting.has(r.id));
+    let error = null;
+    const seen = new Set();
+    for (const r of kept) {
+      if (!r.name) error = 'Every branch needs a name.';
+      else if (r.name.toLowerCase() === 'multi-branch' || r.name === MULTI_BRANCH) error = '"Multi-branch" is reserved for floating employees.';
+      else if (seen.has(r.name.toLowerCase())) error = `There are two branches called ${r.name}.`;
+      else if (r.location && !parseLatLng(r.location)) error = `${r.name}'s location must be "latitude, longitude", e.g. 13.06184, 80.24674.`;
+      if (error) break;
+      seen.add(r.name.toLowerCase());
+    }
+    const existing = Object.fromEntries(CONFIG.BRANCH_LIST.map(b => [b.id, b]));
+    for (const id of deleting) {
+      const b = existing[id];
+      if (b && (await db.prepare('SELECT COUNT(*) AS c FROM employees WHERE branch = ?').get(b.name)).c > 0) error = `${b.name} still has employees. Move them to another branch first.`;
+    }
+    if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
+
+    const changed = [];
+    for (const id of deleting) {
+      if (!existing[id]) continue;
+      await db.prepare('DELETE FROM branches WHERE id = ?').run(id);
+      changed.push(`${existing[id].name} deleted`);
+    }
+    // Two passes so swapping two names doesn't trip the UNIQUE constraint midway.
+    for (const r of kept.filter(r => r.id && existing[r.id] && existing[r.id].name !== r.name)) {
+      await db.prepare('UPDATE branches SET name = ? WHERE id = ?').run(`__renaming__${r.id}`, r.id);
+    }
+    let newId = null;
+    for (const [i, r] of kept.entries()) {
+      const before = r.id ? existing[r.id] : null;
+      if (before) {
+        await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ? WHERE id = ?').run(r.name, r.location, i, r.id);
+        if (before.name !== r.name) {
+          await db.prepare('UPDATE employees SET branch = ? WHERE branch = ?').run(r.name, before.name);
+          changed.push(`${before.name} renamed to ${r.name}`);
+        }
+        if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
+      } else {
+        const result = await db.prepare('INSERT INTO branches (name, location, sort_order) VALUES (?, ?, ?)').run(r.name, r.location, i);
+        newId = Number(result.lastInsertRowid);
+        changed.push(`${r.name} added`);
+      }
+    }
+    const deviceChoice = form.device_branch === 'new' ? newId : (form.device_branch ? Number(form.device_branch) : null);
+    const deviceBefore = deviceBranch();
+    if ((deviceBefore ? deviceBefore.id : null) !== deviceChoice) {
+      await db.prepare('UPDATE branches SET has_device = CASE WHEN id = ? THEN 1 ELSE 0 END').run(deviceChoice);
+      changed.push('biometric device branch changed');
+    }
+    if (changed.length) await logAdminAction(user.username, 'branches_updated', 'branches', 'branches', changed.join(', '));
+    await loadSettings({ force: true });
+    return sendHtml(res, await renderAdminSettings(user, { notice: changed.length ? `Saved: ${changed.join(', ')}.` : 'No changes to save.' }));
+  }
+
+  if (parsed.pathname === '/admin/punches/relabel-office' && req.method === 'POST') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const changes = await punchesToRecheck();
+    for (const c of changes) {
+      await db.prepare('UPDATE punches SET source = ?, branch = ?, deviation = ? WHERE id = ?').run(c.source, c.branch, c.deviation ? 1 : 0, c.id);
+    }
+    if (changes.length) {
+      await logAdminAction(user.username, 'punches_rechecked', 'punches', changes.map(c => c.id).join(','),
+        `${changes.length} punch(es) re-checked against branch locations (radius ${CONFIG.OFFICE_RADIUS_METERS} m)`);
+    }
+    return sendHtml(res, await renderAdminSettings(user, { notice: changes.length
+      ? `Updated ${changes.length} punch${changes.length === 1 ? '' : 'es'}.`
+      : "Every punch already matches today's branches." }));
   }
 
   if (parsed.pathname === '/admin/settings/generate-punch-key' && req.method === 'POST') {

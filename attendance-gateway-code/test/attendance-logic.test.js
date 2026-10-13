@@ -24,7 +24,11 @@ function setup() {
     CREATE TABLE punches (
       id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, timestamp TEXT NOT NULL,
       direction TEXT NOT NULL, source TEXT NOT NULL, note TEXT DEFAULT '', location TEXT DEFAULT '',
-      marked_by TEXT DEFAULT ''
+      marked_by TEXT DEFAULT '', branch TEXT DEFAULT '', deviation INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE deviation_reviews (
+      employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL,
+      reviewed_by TEXT NOT NULL, reviewed_at TEXT NOT NULL, PRIMARY KEY (employee_id, date)
     );
     CREATE TABLE holidays (date TEXT PRIMARY KEY, name TEXT NOT NULL);
     CREATE TABLE leave_requests (
@@ -344,4 +348,63 @@ test('correction: a real check-out the device delivers later wins over the corre
   assert.equal(result.status, 'Present');
   assert.equal(result.checkOut, `${d} 18:32:00`);
   assert.equal(result.correctionKind, null);
+});
+
+// A full on-time day where the check-in was at a branch that isn't the employee's own.
+function deviationDay(db, dateStr) {
+  db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, branch, deviation) VALUES (?, ?, ?, ?, ?, 1)')
+    .run(EMP, `${dateStr} 09:20:00`, 'in', 'remote', 'Velachery');
+  db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, branch) VALUES (?, ?, ?, ?, ?)')
+    .run(EMP, `${dateStr} 18:35:00`, 'out', 'office', 'T. Nagar');
+}
+function review(db, dateStr, decision) {
+  db.prepare('INSERT INTO deviation_reviews (employee_id, date, decision, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?)')
+    .run(EMP, dateStr, decision, 'admin', '2026-10-13 12:00:00');
+}
+
+test('deviation: an on-time day at another branch stays Present, flagged pending', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  deviationDay(db, d);
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.deviation, 'pending');
+});
+
+test('deviation: accepted keeps the day as it was', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  deviationDay(db, d);
+  review(db, d, 'accepted');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Present');
+  assert.equal(result.deviation, 'accepted');
+});
+
+test('deviation: rejected as half day makes it a Half Day', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  deviationDay(db, d);
+  review(db, d, 'half_day');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Half Day');
+  assert.equal(result.halfDay, true);
+});
+
+test('deviation: rejected as absent makes it Absent with no hours, punches kept', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  deviationDay(db, d);
+  review(db, d, 'absent');
+  const result = await computeDayStatus(EMP, d);
+  assert.equal(result.status, 'Absent');
+  assert.equal(result.hoursWorked, 0);
+  assert.ok(result.checkIn);
+});
+
+test('deviation: a normal day has no deviation', async () => {
+  const { db, computeDayStatus } = setup();
+  const d = daysAgo(1);
+  punch(db, d, '09:20:00', '18:35:00');
+  assert.equal((await computeDayStatus(EMP, d)).deviation, null);
 });
