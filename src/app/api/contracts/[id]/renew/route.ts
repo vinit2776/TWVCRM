@@ -202,6 +202,9 @@ export async function POST(
       is_renewal: true,
       renewal_sequence: renewalSequence,
       deposit_carried_from: id,
+      // Invoicing preference follows the customer, not the term — a GST Direct
+      // customer must not silently reset to PI-first on renewal.
+      billing_mode: source.billing_mode ?? "proforma_first",
       deposit_shortfall: depositShortfall,
       created_by: dbUser.id,
       // Pro-rata gate: mid-month starts require collecting the partial first month
