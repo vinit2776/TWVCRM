@@ -78,6 +78,7 @@ import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/financ
 import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { UnbilledBilledTabs } from "@/components/billing/unbilled-billed-tabs";
+import { usageSourceLabel } from "@/lib/usage-source-label";
 // Per-tab components are dynamic-imported so the JS for tabs the user
 // never opens isn't downloaded. Each loader shows a small skeleton block.
 // SSR off because all four are client-state-driven (filters, dialogs).
@@ -115,11 +116,6 @@ const USAGE_SOURCE_COLORS: Record<string, string> = {
   manual:   "bg-slate-50 text-slate-700 border-slate-300",
   print:    "bg-blue-50 text-blue-800 border-blue-200",
   facility: "bg-purple-50 text-purple-800 border-purple-200",
-};
-const USAGE_SOURCE_LABELS: Record<string, string> = {
-  manual:   "Manual charge",
-  print:    "Print log",
-  facility: "Facility usage",
 };
 
 // "Bills in: [month] [status]" tag — which billing cycle a charge belongs to,
@@ -1504,7 +1500,7 @@ export default function BillingPage() {
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell">
                         <Badge variant="outline" className={USAGE_SOURCE_COLORS[charge.source ?? "manual"]}>
-                          {USAGE_SOURCE_LABELS[charge.source ?? "manual"]}
+                          {usageSourceLabel(charge.source ?? "manual", !!charge.booking_id, "long")}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
