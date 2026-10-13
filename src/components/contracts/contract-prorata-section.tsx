@@ -107,6 +107,8 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
     }
   }
 
+  // Renewals inherit the customer's invoicing preference; lead with it.
+  const prefersGstDirect = contract.billing_mode === "gst_direct";
   const canSendGst = ["admin", "accounts"].includes(userRole ?? "");
 
   const addCcEmail = () => {
@@ -139,7 +141,13 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
       if (res.ok) {
         const data = await res.json();
         if (mode === "gst_direct") {
-          toast.success(data.routedToTally ? "Routed to Tally inbox — accounts will issue the GST invoice" : "GST invoice dispatched");
+          if (data.handedToAccounts || data.routedToTally) {
+            toast.success("Handed to accounts — GST invoice will be issued from the Tally Inbox");
+          } else if (data.standby) {
+            toast.warning("Nothing was sent — GST invoicing is on standby.");
+          } else {
+            toast.success("GST invoice dispatched");
+          }
         } else if (data.noContact) {
           toast.warning("PI created but no email/phone on file — contact client manually.");
         } else {
@@ -239,12 +247,24 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <p>Optional — collect the partial first month upfront, or leave it to bill automatically as part of the contract&apos;s first regular statement once activated.</p>
               </div>
-              <Button size="sm" className="w-full" onClick={() => setPiPreviewOpen(true)} disabled={sending}>
+              <Button
+                size="sm"
+                variant={prefersGstDirect && canSendGst ? "outline" : "default"}
+                className="w-full"
+                onClick={() => setPiPreviewOpen(true)}
+                disabled={sending}
+              >
                 <Send className="mr-1.5 h-3.5 w-3.5" />
                 Send PI
               </Button>
               {canSendGst && (
-                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => setGstConfirmOpen(true)} disabled={sending}>
+                <Button
+                  size="sm"
+                  variant={prefersGstDirect ? "default" : "outline"}
+                  className={prefersGstDirect ? "w-full" : "w-full text-blue-700 border-blue-300 hover:bg-blue-50"}
+                  onClick={() => setGstConfirmOpen(true)}
+                  disabled={sending}
+                >
                   <FileText className="mr-1.5 h-3.5 w-3.5" />
                   Send GST Direct → Tally Inbox
                 </Button>
@@ -435,10 +455,12 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               sent to the client with a payment link.
             </DialogDescription>
           </DialogHeader>
+          {!prefersGstDirect && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
             <p className="font-semibold">Only use this when the client specifically requests a GST invoice upfront.</p>
             <p>For most renewals, use <strong>Send PI</strong> instead — it is faster and does not require accounts team involvement.</p>
           </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setGstConfirmOpen(false)}>
               Cancel — use Send PI instead

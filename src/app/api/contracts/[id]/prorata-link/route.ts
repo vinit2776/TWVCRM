@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -203,7 +204,28 @@ export async function POST(
     ? body.cc.filter((e: unknown) => typeof e === "string" && (e as string).includes("@"))
     : [];
 
-  const result = mode === "gst_direct"
+  // GST Direct under Tally handoff v2: accounts issue the invoice from the
+  // Tally Inbox, so hand the statement over instead of the legacy CRM dispatch
+  // (which hits the CRM-GST standby gate and sends nothing). Skip if it is
+  // already with accounts or already has an invoice.
+  let handedToAccounts = false;
+  if (mode === "gst_direct") {
+    const { data: stmt } = await admin
+      .from("billing_statements")
+      .select("handoff_state, gst_invoice_number")
+      .eq("id", statementId!)
+      .single();
+    if (stmt?.handoff_state) {
+      handedToAccounts = true;
+    } else if (!stmt?.gst_invoice_number) {
+      const handoff = await handleStatementFinalized(admin, statementId!, "gst_direct", "prorata_link");
+      handedToAccounts = handoff.skipLegacyDispatch;
+    }
+  }
+
+  const result = handedToAccounts
+    ? { success: true, error: undefined, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, routedToTally: false, standby: false }
+    : mode === "gst_direct"
     ? await dispatchGstDirect(admin, statementId!, dbUser.id, additionalCc)
     : await dispatchProforma(admin, statementId!, dbUser.id, additionalCc);
 
@@ -236,5 +258,7 @@ export async function POST(
     emailSkipped: result.emailSkipped,
     noContact: result.noContact,
     routedToTally: result.routedToTally,
+    handedToAccounts,
+    standby: result.standby ?? false,
   });
 }
