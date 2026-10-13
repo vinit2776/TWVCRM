@@ -6,6 +6,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE, CONTRACT_PRE_ACTIVATION_STATUSES, canWithdrawContract } from "@/lib/constants";
 import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { renewalChainContractIds } from "@/lib/renewal-chain";
+import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
 import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
@@ -58,7 +59,18 @@ export async function GET(
     parentContract = parent;
   }
 
-  return NextResponse.json({ data: { ...data, ...actorNames, parent_contract: parentContract } });
+  const renewalProrataGate = data.is_renewal && data.status !== "active"
+    ? await getRenewalProrataGate(createAdminClient(), data)
+    : null;
+
+  return NextResponse.json({
+    data: {
+      ...data,
+      ...actorNames,
+      parent_contract: parentContract,
+      renewal_prorata_blocking: renewalProrataGate?.blocking ?? false,
+    },
+  });
 }
 
 export async function PATCH(
@@ -374,13 +386,19 @@ export async function PATCH(
           prorataSatisfiedByInvoice = `${prorataInvoice.invoice_number} (${prorataInvoice.total_amount})`;
         }
       }
-      // Renewals are a continuation, not a new occupancy — the deposit already
-      // carries forward (isRenewal gate above), and the partial first month
-      // (when the new term starts mid-month) doesn't need a separate collected-
-      // upfront pro-rata PI either. It bills automatically like any contract's
-      // first month via the "generate current month's statement immediately"
-      // hook below. The Pro-Rata section remains available for staff who want
-      // to collect it manually ahead of activation, but it's no longer a gate.
+      // Renewals carry the deposit forward, but a mid-month start still owes a
+      // pro-rata invoice for the balance of that month. Nothing else raises it:
+      // activation raises no invoice (see below) and the monthly rent run opens
+      // at the FOLLOWING month. So the pro-rata must be sent (or admin-waived)
+      // before activation — otherwise the partial month is silently never billed
+      // (TWV-C-0155, Oct 2026). Sending stays a deliberate click on the Pro-Rata
+      // card; activation itself never emails a customer.
+      if (isRenewal) {
+        const prorataGate = await getRenewalProrataGate(createAdminClient(), oldContract);
+        if (prorataGate.blocking) {
+          return NextResponse.json({ error: PRORATA_UNSENT_ERROR, code: "PRORATA_UNSENT" }, { status: 400 });
+        }
+      }
 
       // Snapshot the proposal's deposit fields onto the contract at the
       // moment of activation — after this, the contract owns its own

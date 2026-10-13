@@ -1206,11 +1206,11 @@ export default function ContractDetailPage({
             const depositPaid = isRenewal || !depositRequired || poolDepositApplied > 0
               || (!!contract.proposal_id && linkedProposal?.deposit_payment_status === "paid" && !depositClaimedByOther);
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            // Renewals don't gate on pro-rata: it's a continuation, not a new
-            // occupancy, and the partial first month (when the new term starts
-            // mid-month) bills automatically like any contract's first month —
-            // see contracts/[id]/route.ts activation handler.
-            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete;
+            // A mid-month renewal can't activate until its pro-rata invoice is
+            // sent (or admin-waived) — nothing else bills the partial first
+            // month. The server enforces the same rule; this just explains it.
+            const prorataBlocking = !!contract.renewal_prorata_blocking;
+            const canActivate = !proposalMissing && proposalPaid && depositPaid && kycComplete && !prorataBlocking;
             const hasDeferred = kycStatus.deferred > 0;
 
             // Closest-amount-first so the invoice that most plausibly *is* the
@@ -1243,6 +1243,7 @@ export default function ContractDetailPage({
                   </Button>
                   <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                     <p className="font-semibold mb-1">Cannot activate until:</p>
+                    {prorataBlocking && <p>• The pro-rata invoice for the balance of the start month is sent (see the Pro-Rata card) — or waived by an admin</p>}
                     {proposalMissing && <p>• A proposal is linked to this contract</p>}
                     {!proposalMissing && !proposalPaid && (
                       <div>
