@@ -29,8 +29,8 @@ describe("hasLivePi", () => {
 });
 
 describe("canOverridePiToGst", () => {
-  it("allows admin, manager and sales_rep only", () => {
-    for (const r of ["admin", "manager", "sales_rep"]) expect(canOverridePiToGst(r)).toBe(true);
-    for (const r of ["accounts", "fms", "office_admin", "", null, undefined]) expect(canOverridePiToGst(r)).toBe(false);
+  it("allows admin, manager, accounts and sales_rep only", () => {
+    for (const r of ["admin", "manager", "accounts", "sales_rep"]) expect(canOverridePiToGst(r)).toBe(true);
+    for (const r of ["fms", "office_admin", "", null, undefined]) expect(canOverridePiToGst(r)).toBe(false);
   });
 });
