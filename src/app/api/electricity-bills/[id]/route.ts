@@ -68,7 +68,9 @@ export async function PATCH(
 
   const { data: bill, error: billErr } = await supabase
     .from("electricity_bills")
-    .select("id, bill_side, status, vendor_bill_id, location_id, landlord_total_amount, landlord_gst_amount")
+    // "*" rather than a column list: source_vendor_bill_id exists only once migration 00588 is applied,
+    // and an edit of an ordinary bill must keep working before then.
+    .select("*")
     .eq("id", id)
     .single();
 
@@ -77,6 +79,12 @@ export async function PATCH(
   }
   if (bill.bill_side !== "landlord") {
     return NextResponse.json({ error: "Only landlord bills can be edited here" }, { status: 422 });
+  }
+  if ((bill as { source_vendor_bill_id?: string | null }).source_vendor_bill_id) {
+    return NextResponse.json(
+      { error: "This record was linked from an uploaded vendor bill, so its lines must match that bill. Unlink it and link the bill again to change anything." },
+      { status: 422 },
+    );
   }
   if (bill.status !== "draft") {
     return NextResponse.json(
