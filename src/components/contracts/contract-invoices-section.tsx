@@ -226,6 +226,18 @@ export function ContractInvoicesSection({
     [statements, contractId],
   );
 
+  // Voided statements stay for the audit trail but are tucked away by default —
+  // an inline voided Oct row beside the live one reads like double billing.
+  const [showVoided, setShowVoided] = useState(false);
+  const voidedStatements = useMemo(
+    () => ownStatements.filter((s) => s.status === "voided" || !!s.voided_at),
+    [ownStatements],
+  );
+  const visibleStatements = useMemo(
+    () => (showVoided ? ownStatements : ownStatements.filter((s) => !voidedStatements.includes(s))),
+    [showVoided, ownStatements, voidedStatements],
+  );
+
   // Proformas still open under the old Proforma First flow — switching to
   // GST Direct only affects future cycles, so these are left behind unless
   // resolved via the GST override (convert-to-gst-early).
@@ -300,7 +312,8 @@ export function ContractInvoicesSection({
   // Computed without waivers first, so a waived month that's still unbilled
   // can be listed (and billed anyway) below; missedMonths then drops them.
   const unbilledIncludingWaived = useMemo(() => {
-    if (!startDate || !endDate || !createdAt) return [];
+    // Until the statements arrive every past month looks unbilled — wait.
+    if (loading || !startDate || !endDate || !createdAt) return [];
     return unbilledMonths({
       startDate, endDate, createdAt,
       today: new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10),
@@ -310,7 +323,7 @@ export function ContractInvoicesSection({
       activatedAt,
       terminatedAt,
     });
-  }, [startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
+  }, [loading, startDate, endDate, createdAt, statements, contractId, contractStatus, activatedAt, terminatedAt]);
 
   const waiverByMonthKey = useMemo(
     () => new Map(waivers.map((w) => [w.waived_month.slice(0, 7), w])),
@@ -796,7 +809,7 @@ export function ContractInvoicesSection({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {ownStatements.map((s) => (
+                {visibleStatements.map((s) => (
                   <tr key={s.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 pr-4 whitespace-nowrap">
                       {periodLabel(s.period_start, s.period_end)}
@@ -866,12 +879,25 @@ export function ContractInvoicesSection({
                         share one request. */}
                     <td className="py-2.5">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <StatementLifecycleBadge statementId={s.id} compact />
+                        <StatementLifecycleBadge statementId={s.id} compact fallbackStatus={s.status} />
                         <StatementQuickActions statementId={s.id} compact />
                       </div>
                     </td>
                   </tr>
                 ))}
+                {voidedStatements.length > 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowVoided((v) => !v)}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        {showVoided ? "▾ Hide" : "▸ Show"} {voidedStatements.length} voided statement{voidedStatements.length === 1 ? "" : "s"}
+                      </button>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

@@ -27,6 +27,8 @@ export interface ReviewSendTarget {
   customerName: string;
   periodLabel: string;
   amount: number | null;
+  /** gst_direct statements are handed to accounts (Tally Inbox), never emailed from here. */
+  billingMode?: string | null;
 }
 
 interface PreviewEmail { subject: string; to: string[]; html: string; no_contact: boolean }
@@ -45,9 +47,10 @@ export function ReviewSendStatementDialog({
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const handoff = target?.billingMode === "gst_direct";
 
   useEffect(() => {
-    if (!target) return;
+    if (!target || handoff) return;
     setTab("invoice");
     setEmail(null);
     setEmailError(null);
@@ -60,7 +63,7 @@ export function ReviewSendStatementDialog({
       })
       .catch(() => setEmailError("Email preview unavailable"))
       .finally(() => setEmailLoading(false));
-  }, [target]);
+  }, [target, handoff]);
 
   const send = async () => {
     if (!target) return;
@@ -112,16 +115,18 @@ export function ReviewSendStatementDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Send className="h-4 w-4" />
-            Review &amp; send — {target?.contractNumber}
+            {handoff ? "Hand to accounts" : "Review & send"} — {target?.contractNumber}
           </DialogTitle>
           <DialogDescription>
             {target?.customerName} · {target?.periodLabel}
-            {target?.amount != null ? ` · ${formatCurrency(target.amount)}` : ""}. This sends the invoice
-            that already exists — nothing new is created. Nothing goes out until you click Send.
+            {target?.amount != null ? ` · ${formatCurrency(target.amount)}` : ""}.{" "}
+            {handoff
+              ? "Accounts will issue the GST invoice in Tally and send it. Nothing goes to the customer from here."
+              : "This sends the invoice that already exists — nothing new is created. Nothing goes out until you click Send."}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-1 border-b">
+        {!handoff && <div className="flex gap-1 border-b">
           {(["invoice", "email"] as const).map((t) => (
             <button
               key={t}
@@ -132,9 +137,9 @@ export function ReviewSendStatementDialog({
               {t === "invoice" ? "Invoice PDF" : "Email"}
             </button>
           ))}
-        </div>
+        </div>}
 
-        <div className="flex-1 min-h-0 overflow-y-auto rounded-md bg-muted/30">
+        {!handoff && <div className="flex-1 min-h-0 overflow-y-auto rounded-md bg-muted/30">
           {!target ? null : tab === "invoice" ? (
             <iframe
               title="Invoice preview"
@@ -156,18 +161,18 @@ export function ReviewSendStatementDialog({
               <iframe title="Email preview" srcDoc={email.html} className="w-full h-[45vh] bg-white rounded border" />
             </div>
           )}
-        </div>
+        </div>}
 
         <DialogFooter className="items-center gap-2">
-          {email && (
+          {!handoff && email && (
             <p className={`text-xs mr-auto ${noRecipient ? "text-red-600" : "text-muted-foreground"}`}>
               {noRecipient ? "No email on file — add one on the lead before sending." : `Will email ${email.to.join(", ")}`}
             </p>
           )}
           <Button variant="outline" onClick={onClose} disabled={sending}>Cancel</Button>
-          <Button onClick={send} disabled={sending || emailLoading || noRecipient}>
+          <Button onClick={send} disabled={sending || (!handoff && (emailLoading || noRecipient))}>
             {sending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-            Send to customer
+            {handoff ? "Hand to accounts" : "Send to customer"}
           </Button>
         </DialogFooter>
       </DialogContent>
