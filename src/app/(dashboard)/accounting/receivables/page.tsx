@@ -51,6 +51,8 @@ import {
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { canRecordPayments } from "@/lib/constants";
+import { canOverridePiToGst, hasLivePi } from "@/lib/pi-override";
+import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
 
 interface Lead {
   id: string;
@@ -325,6 +327,8 @@ export default function AccountsReceivablePage() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("detail");
   const [canRecordPayment, setCanRecordPayment] = useState(false);
+  const [canConvertPi, setCanConvertPi] = useState(false);
+  const [convertRow, setConvertRow] = useState<ReceivableRow | null>(null);
   // Which row has its query thread expanded (one at a time).
   const [queryRowId, setQueryRowId] = useState<string | null>(null);
 
@@ -400,8 +404,14 @@ export default function AccountsReceivablePage() {
   useEffect(() => {
     fetch("/api/me")
       .then((res) => res.json())
-      .then((me) => setCanRecordPayment(canRecordPayments(me.role)))
-      .catch(() => setCanRecordPayment(false));
+      .then((me) => {
+        setCanRecordPayment(canRecordPayments(me.role));
+        setCanConvertPi(canOverridePiToGst(me.role));
+      })
+      .catch(() => {
+        setCanRecordPayment(false);
+        setCanConvertPi(false);
+      });
   }, []);
 
   /**
@@ -978,7 +988,7 @@ export default function AccountsReceivablePage() {
                                     {r.gst_invoice_number}
                                     <FileDown className="h-3 w-3" />
                                   </Link>
-                                ) : r.contract?.billing_mode === "gst_direct" ? (
+                                ) : r.contract?.billing_mode === "gst_direct" && !hasLivePi(r) ? (
                                   <span className="font-mono">GST Pending</span>
                                 ) : (
                                   <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono flex items-center gap-1">
@@ -1109,6 +1119,17 @@ export default function AccountsReceivablePage() {
                               title="Raise or answer a question about this statement"
                             />
                             <span className="w-px h-4 bg-border mx-1" />
+                            {canConvertPi && !!r.contract && hasLivePi(r) && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                                onClick={() => setConvertRow(r)}
+                                title="Cancel this PI and queue a GST invoice to the Tally Inbox"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Convert to GST
+                              </Button>
+                            )}
                             {/*
                               Distinct from Record: that is the accounts-only
                               action that moves money, this is open to everyone
@@ -1237,6 +1258,23 @@ export default function AccountsReceivablePage() {
       />
 
       <StatementTimelineDialog statement={historyRow} onClose={() => setHistoryRow(null)} />
+
+      {convertRow && (
+        <ConvertToGstEarlyDialog
+          open
+          onOpenChange={(o) => { if (!o) setConvertRow(null); }}
+          statementId={convertRow.id}
+          statementNumber={convertRow.statement_number}
+          customerName={customerName(convertRow.contract?.lead)}
+          customerEmail={convertRow.contract?.lead?.email}
+          periodLabel={new Date(convertRow.period_start + "T00:00:00").toLocaleDateString("en-IN", {
+            timeZone: "Asia/Kolkata", month: "short", year: "numeric",
+          })}
+          totalAmount={convertRow.total_amount}
+          hasExistingPaymentLink={!!convertRow.razorpay_payment_link_url}
+          onSuccess={() => { setConvertRow(null); load(); }}
+        />
+      )}
 
       <Dialog open={!!resendRow} onOpenChange={(o) => !o && setResendRow(null)}>
         <DialogContent>

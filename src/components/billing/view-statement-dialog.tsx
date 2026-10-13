@@ -24,6 +24,7 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
+import { canOverridePiToGst, hasLivePi } from "@/lib/pi-override";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
 import { StatementTimeline } from "@/components/accounting/statement-timeline";
@@ -1572,7 +1573,7 @@ export function ViewStatementDialog({
             </div>
           )}
           {/* Early GST override — admin/manager/sales_rep, finalized, unpaid, no GST yet */}
-          {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "sales_rep"].includes(userRole) && (
+          {statement && hasLivePi({ status: statement.status, payment_status: statement.payment_status ?? null, gst_invoice_number: statement.gst_invoice_number ?? null, pi_cancelled_at: statement.pi_cancelled_at ?? null, proforma_sent_at: statement.proforma_sent_at ?? null, voided_at: statement.voided_at }) && canOverridePiToGst(userRole) && (
             <Button
               variant="outline"
               className="border-amber-400 text-amber-700 hover:bg-amber-50"
