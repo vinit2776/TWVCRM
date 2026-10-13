@@ -38,6 +38,7 @@ import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { ElectricityBillBreakupCard } from "@/components/procurement/electricity-bill-breakup-card";
+import { ElectricityLinkCard } from "@/components/procurement/electricity-link-card";
 import { VendorBillDocuments } from "@/components/procurement/vendor-bill-documents";
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -995,6 +996,14 @@ export default function VendorBillDetailPage() {
       </div>
 
       {bill.electricity_bill && <ElectricityBillBreakupCard bill={bill.electricity_bill} />}
+      {!bill.electricity_bill && (
+        <ElectricityLinkCard
+          vendorBillId={bill.id}
+          isAdmin={user?.role === "admin"}
+          canLink={["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "")}
+          onChanged={fetchAll}
+        />
+      )}
 
       {/* Transaction Lifecycle */}
       <Card>
