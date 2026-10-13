@@ -409,8 +409,13 @@ export default function ElectricityBillsPage() {
     const res = await fetch(`/api/electricity-bills/${billId}/approve`, { method: "POST" });
     const json = await res.json();
     if (res.ok) {
-      const count = (json.data as { customer_bills_generated: number }).customer_bills_generated ?? 0;
-      toast.success(`Approved — ${count} customer bill${count !== 1 ? "s" : ""} generated`);
+      const data = json.data as { customer_bills_generated: number; vendor_bill_awaiting_admin?: boolean };
+      const count = data.customer_bills_generated ?? 0;
+      toast.success(
+        data.vendor_bill_awaiting_admin
+          ? "Approved — the vendor bill is waiting for admin approval in Procurement"
+          : `Approved — ${count} customer bill${count !== 1 ? "s" : ""} generated`,
+      );
       fetchBills();
     } else {
       toast.error(json.error || "Approval failed");
