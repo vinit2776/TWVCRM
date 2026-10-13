@@ -447,6 +447,7 @@ export async function handleStatementFinalized(
   statementId: string,
   billingMode: "proforma_first" | "gst_direct" | null | undefined,
   trigger: string,
+  performedBy: string | null = null,
 ): Promise<{ skipLegacyDispatch: boolean }> {
   const v2Enabled = await isHandoffV2Enabled(supabase);
   if (!v2Enabled) {
@@ -454,7 +455,7 @@ export async function handleStatementFinalized(
   }
 
   if (billingMode === "gst_direct") {
-    await setHandoffState(supabase, statementId, "direct_gst_requested", trigger);
+    await setHandoffState(supabase, statementId, "direct_gst_requested", trigger, performedBy);
     return { skipLegacyDispatch: true };
   }
 

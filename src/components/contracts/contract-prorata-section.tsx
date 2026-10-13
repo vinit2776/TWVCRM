@@ -16,12 +16,15 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
+import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import type { Contract } from "@/types";
 
 interface StatementState {
   payment_status: string | null;
   proforma_sent_at: string | null;
   handoff_state: string | null;
+  updated_at: string | null;
   gst_invoice_number: string | null;
   issuance_channel: string | null;
   razorpay_payment_link_url: string | null;
@@ -43,11 +46,17 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const [waiveReason, setWaiveReason] = useState("");
   const [waiving, setWaiving] = useState(false);
   const [stmtState, setStmtState] = useState<StatementState | null>(null);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
-  const fetchStmtState = useCallback(async () => {
-    if (!contract.prorata_billing_statement_id) return;
+  // Takes an explicit id because right after a first send the contract prop
+  // doesn't carry prorata_billing_statement_id yet — without it the card
+  // stays on "Pending" until the page is reloaded.
+  const fetchStmtState = useCallback(async (statementId?: string) => {
+    const id = statementId ?? contract.prorata_billing_statement_id;
+    if (!id) return;
     const res = await fetch(
-      `/api/billing-statements/${contract.prorata_billing_statement_id}?fields=payment_status,proforma_sent_at,handoff_state,gst_invoice_number,razorpay_payment_link_url`
+      `/api/billing-statements/${id}?fields=payment_status,proforma_sent_at,handoff_state,gst_invoice_number,razorpay_payment_link_url,updated_at`
     );
     if (res.ok) {
       const json = await res.json();
@@ -132,6 +141,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
   const handleDispatch = async (mode: "proforma" | "gst_direct", cc: string[] = []) => {
     setSending(true);
+    setDispatchError(null);
     try {
       const res = await fetch(`/api/contracts/${contract.id}/prorata-link`, {
         method: "POST",
@@ -153,12 +163,17 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
         } else {
           toast.success(`PI sent to ${data.emailedTo}`);
         }
-        await fetchStmtState();
+        await fetchStmtState(data.statementId);
         onSuccess();
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to send");
+        const message = err?.error || "Failed to send";
+        setDispatchError(message);
+        toast.error(message);
       }
+    } catch {
+      setDispatchError("Network error — nothing was sent. Try again.");
+      toast.error("Network error — nothing was sent");
     } finally {
       setSending(false);
     }
@@ -240,6 +255,13 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <span>Total</span>
             <span>{formatCurrency(prorataTotal)}</span>
           </div>
+
+          {dispatchError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <p><span className="font-semibold">Not sent.</span> {dispatchError}</p>
+            </div>
+          )}
 
           {displayState === "unsent" && (
             <>
@@ -325,9 +347,23 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
           )}
 
           {displayState === "gst_in_tally" && (
-            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-              <p className="font-semibold mb-1">GST invoice in Tally inbox</p>
-              <p>Accounts is issuing the GST invoice.</p>
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 space-y-1">
+              <p className="font-semibold">GST invoice in Tally inbox</p>
+              <p>
+                {stmtState?.handoff_state
+                  ? HANDOFF_STATE_LABELS[stmtState.handoff_state as HandoffState] ?? stmtState.handoff_state
+                  : "Accounts is issuing the GST invoice."}
+              </p>
+              {stmtState?.updated_at && (
+                <div className="flex items-center gap-1.5 text-blue-700">
+                  <Clock className="h-3 w-3 shrink-0" />
+                  <span>Updated {new Date(stmtState.updated_at).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-3 pt-0.5">
+                <button type="button" className="underline" onClick={() => setHistoryOpen(true)}>View history</button>
+                <a className="underline" href="/accounting/inbox">Open Tally Inbox</a>
+              </div>
             </div>
           )}
 
@@ -479,6 +515,13 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StatementTimelineDialog
+        statement={historyOpen && contract.prorata_billing_statement_id
+          ? { id: contract.prorata_billing_statement_id, statement_number: "Pro-rata statement" }
+          : null}
+        onClose={() => setHistoryOpen(false)}
+      />
 
       {/* Waive Dialog */}
       <Dialog open={waiveOpen} onOpenChange={setWaiveOpen}>
