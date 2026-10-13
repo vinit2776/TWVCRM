@@ -377,8 +377,14 @@ export function ViewStatementDialog({
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
       });
       const json = await res.json();
-      if (res.ok) {
-        toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : "Proforma generated (no email on file)");
+      if (res.ok && json.standby) {
+        toast.warning("Nothing was sent — GST invoicing is on standby.");
+      } else if (res.ok) {
+        toast.success(
+          json.handedToAccounts
+            ? "Handed to accounts — GST invoice will be issued from the Tally Inbox"
+            : json.emailedTo ? `Proforma sent to ${json.emailedTo}` : "Proforma generated (no email on file)",
+        );
         onStatusChange();
         const refreshed = await fetch(`/api/billing-statements/${statementId}`);
         if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }

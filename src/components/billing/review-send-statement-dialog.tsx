@@ -76,6 +76,18 @@ export function ReviewSendStatementDialog({
         toast.error(json.error || "Couldn't send this invoice");
         return;
       }
+      if (json.handedToAccounts) {
+        // GST Direct under Tally handoff v2: accounts issue the invoice in Tally.
+        // Nothing has gone to the customer yet.
+        toast.success(`${target.contractNumber} handed to accounts — GST invoice will be issued from the Tally Inbox`);
+        onClose();
+        await onSent();
+        return;
+      }
+      if (json.standby) {
+        toast.warning("Nothing was sent — GST invoicing is on standby.");
+        return;
+      }
       const emailedTo: string | null = json.emailed_to ?? json.emailedTo ?? null;
       const noContact: boolean = json.no_contact ?? json.noContact ?? false;
       if (noContact) {

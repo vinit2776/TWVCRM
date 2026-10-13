@@ -82,6 +82,13 @@ export async function POST(
   }
   const bill = rawBill as EbBillRow;
 
+  if ((rawBill as { source_vendor_bill_id?: string | null }).source_vendor_bill_id) {
+    return NextResponse.json(
+      { error: "This record was linked from an uploaded vendor bill and cannot be revised. Unlink it and link the bill again." },
+      { status: 422 },
+    );
+  }
+
   if (!["invoiced", "dispatched"].includes(bill.status)) {
     return NextResponse.json(
       { error: `Only invoiced or dispatched bills can be revised (current status: ${bill.status})` },
