@@ -9,6 +9,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { usageLine, toUsageLineInput, type UsageChargeRow } from "@/lib/booking-usage-line";
 
 export const maxDuration = 30;
 
@@ -56,7 +57,7 @@ export async function POST(
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", id)
     .single();
@@ -151,7 +152,7 @@ export async function POST(
   // same data the table below is built from) so the totals box can never
   // drift from what's printed. Falls back to the legacy per-field sum only
   // for statements predating the structured line_items JSONB.
-  const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
+  const usageCharges = (statement.usage_charges || []) as UsageChargeRow[];
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
   const serviceUsageAmount = Number(statement.service_usage_amount || 0);
@@ -191,7 +192,10 @@ export async function POST(
     }
   } else {
     if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    for (const charge of usageCharges) {
+      const line = usageLine(toUsageLineInput(charge));
+      lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+    }
   }
 
   // Customer-facing proof attached at bill-customer time — appended as extra

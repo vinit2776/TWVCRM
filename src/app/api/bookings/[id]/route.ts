@@ -13,16 +13,18 @@ export const maxDuration = 30;
 
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state, wifi_voucher_mode), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, id_proof_path), facilities:booking_facilities(*)";
 
-/** Actual duration in hours between two real timestamps, rounded UP to the
- *  next whole hour. Both check_in_at/check_out_at are proper UTC
+/** Actual duration in hours between two real timestamps, to the minute
+ *  (two decimals — the quantity column is DECIMAL(10,2)). Billed exactly:
+ *  rounding every session up to the next hour overcharged short overruns
+ *  (4h00m48s billed as 5h). Both check_in_at/check_out_at are proper UTC
  *  timestamptz values, so plain Date arithmetic is correct here — unlike
  *  the booking.end_time comparison above (a bare "HH:MM" wall-clock
  *  string with no timezone, implicitly IST), this never needs the
  *  Intl/Asia-Kolkata dance. */
-function roundedActualHours(checkInIso: string, checkOutAt: Date): number {
+function exactActualHours(checkInIso: string, checkOutAt: Date): number {
   const checkIn = new Date(checkInIso);
   const minutes = (checkOutAt.getTime() - checkIn.getTime()) / 60000;
-  return Math.ceil(Math.max(0, minutes) / 60);
+  return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
 }
 
 /** Wall-clock time in IST for display in charge descriptions — check_in_at
@@ -82,7 +84,7 @@ async function cancelStaleBookingPaymentLink(linkId: string): Promise<void> {
  *
  * Computes and posts this booking's contribution to its contract_facility's
  * monthly pooled-usage charge: actual duration (check_in_at → check_out_at,
- * rounded up to the next whole hour), pooled sequentially against every
+ * to the minute), pooled sequentially against every
  * other already-checked-out booking this calendar month for the same
  * contract + facility (ordered by true checkout chronology — created_at,
  * not booking_date), charged only for hours beyond the facility's
@@ -160,13 +162,13 @@ async function maybePostPooledUsageCharge(
     if (!facility) return;
   }
 
-  const actualHours = roundedActualHours(checkInAt, checkOutAt);
+  const actualHours = exactActualHours(checkInAt, checkOutAt);
   if (actualHours <= 0) return;
 
   // Pool against every other already-checked-out booking this calendar
   // month for this contract + facility. Summing `quantity` on prior
   // pooled_usage charges gives hours consumed so far directly — each
-  // charge's quantity IS that booking's full rounded actual duration
+  // charge's quantity IS that booking's full actual duration
   // (see insert below), regardless of how much of it was free vs. paid,
   // so this sum is exactly the running pool total the next booking needs.
   const [year, month] = bookingDate.split("-").map(Number);
@@ -183,14 +185,14 @@ async function maybePostPooledUsageCharge(
     .gte("charge_date", monthStart)
     .lte("charge_date", monthEnd)
     .order("created_at", { ascending: true });
-  const hoursConsumedSoFar = (priorCharges || []).reduce(
-    (sum: number, c: { quantity: number }) => sum + Number(c.quantity || 0),
-    0
-  );
+  const hoursConsumedSoFar = Math.round(
+    (priorCharges || []).reduce((sum: number, c: { quantity: number }) => sum + Number(c.quantity || 0), 0) * 100
+  ) / 100;
 
   const freeQuota = Number(facility.free_quota);
-  const freeRemaining = Math.max(0, freeQuota - hoursConsumedSoFar);
-  const overageHours = Math.max(0, actualHours - freeRemaining);
+  const freeRemaining = Math.round(Math.max(0, freeQuota - hoursConsumedSoFar) * 100) / 100;
+  // Round off float noise from subtracting two-decimal hours (5.45 - 3 = 2.4500000000000002).
+  const overageHours = Math.round(Math.max(0, actualHours - freeRemaining) * 100) / 100;
   const rate = Number(facility.cost_per_unit);
   const total = parseFloat((overageHours * rate).toFixed(2));
 
@@ -208,9 +210,9 @@ async function maybePostPooledUsageCharge(
   // descriptive, doesn't change quantity/total/gst below. Mirrors the
   // display-only split in contract-bookings-section.tsx so both places
   // read consistently.
-  const extraHoursNeeded = Math.max(0, actualHours - bookedHours);
+  const extraHoursNeeded = Math.round(Math.max(0, actualHours - bookedHours) * 100) / 100;
   const extraBilled = Math.min(overageHours, extraHoursNeeded);
-  const usageBilled = overageHours - extraBilled;
+  const usageBilled = Math.round((overageHours - extraBilled) * 100) / 100;
   const bookedNote = extraHoursNeeded > 0 ? `, ${bookedHours}hr booked` : "";
   const timeRange = `${formatIstTime(new Date(checkInAt))} – ${formatIstTime(checkOutAt)}`;
 
