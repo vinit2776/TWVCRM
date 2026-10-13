@@ -37,6 +37,7 @@ import { buildServiceDescription, ensureAccountingPeriod, monthLabel } from "@/l
 import { dispatchGstDirect, dispatchProforma } from "@/lib/send-proforma";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
+import { usageLine, toUsageLineInput } from "@/lib/booking-usage-line";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -234,7 +235,7 @@ function one<T>(v: T | T[] | null | undefined): T | null {
 export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?: string): Promise<UnbilledUsageCharge[]> {
   let manualQ = supabase
     .from("usage_charges")
-    .select("id, contract_id, description, quantity, unit_price, total, charge_date, held_at, hold_reason, reviewed_at, booking:bookings!usage_charges_booking_id_fkey(booking_number)")
+    .select("id, contract_id, description, quantity, unit_price, total, charge_date, booking_charge_kind, held_at, hold_reason, reviewed_at, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name)")
     .eq("status", "pending")
     .is("billing_statement_id", null)
     .not("contract_id", "is", null);
@@ -265,9 +266,11 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
   const out: UnbilledUsageCharge[] = [];
   for (const r of (manualRes.data ?? []) as any[]) {
     const [year, month] = String(r.charge_date).split("-").map(Number);
+    // Booking charges print one transaction per line: hours billed (so qty x rate = amount) and the used/free split.
+    const line = usageLine(toUsageLineInput(r));
     out.push({
       key: `manual:${r.id}`, id: r.id, source: "manual", contractId: r.contract_id,
-      description: r.description, quantity: Number(r.quantity), unitPrice: Number(r.unit_price),
+      description: line.description, quantity: line.quantity, unitPrice: line.unitPrice,
       amount: Number(r.total || 0), date: r.charge_date, year, month,
       held: !!r.held_at, holdReason: r.hold_reason ?? null, reviewed: !!r.reviewed_at,
       bookingNumber: one<any>(r.booking)?.booking_number ?? null,

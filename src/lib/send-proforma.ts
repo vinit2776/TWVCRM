@@ -23,6 +23,7 @@ import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { usageLine, toUsageLineInput, type UsageChargeRow } from "@/lib/booking-usage-line";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -102,7 +103,7 @@ export async function dispatchProforma(
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", statementId)
     .single();
@@ -191,7 +192,7 @@ export async function dispatchProforma(
   // non-waived, is the source of truth for that section; every other
   // section type (facility/service/booking usage) has no post-generation
   // edit path, so the frozen snapshot is safe to trust as-is.
-  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+  const usageCharges = ((statement.usage_charges || []) as (UsageChargeRow & { is_waived: boolean })[])
     .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
@@ -322,7 +323,8 @@ export async function dispatchProforma(
     lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
   }
   for (const charge of usageCharges) {
-    lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    const line = usageLine(toUsageLineInput(charge));
+    lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // ── Generate PDF ─────────────────────────────────────────────────────────
@@ -594,7 +596,7 @@ export async function dispatchGstDirect(
         start_date, end_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", statementId)
     .single();
@@ -666,7 +668,7 @@ export async function dispatchGstDirect(
   // comment above: add-charge/waive-charge never update this frozen
   // snapshot, so the live usage_charges table (filtered to non-waived) is
   // the source of truth for that section specifically.
-  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+  const usageCharges = ((statement.usage_charges || []) as (UsageChargeRow & { is_waived: boolean })[])
     .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s: number, c: { total: number }) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
@@ -780,7 +782,10 @@ export async function dispatchGstDirect(
   } else if (fixedAmount > 0) {
     lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
   }
-  for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+  for (const charge of usageCharges) {
+    const line = usageLine(toUsageLineInput(charge));
+    lineItems.push({ description: line.description, hsnSac: "997212", qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+  }
 
   // ── Generate PDF (actual GST invoice, not proforma) ───────────────────────
   let razorpayQrBase64: string | undefined;
