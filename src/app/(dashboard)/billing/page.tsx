@@ -952,7 +952,11 @@ export default function BillingPage() {
       const json = await res.json();
       if (res.ok) {
         toast.dismiss(tid);
-        if (json.emailedTo) {
+        if (json.handedToAccounts) {
+          toast.success("Handed to accounts — GST invoice will be issued from the Tally Inbox");
+        } else if (json.standby) {
+          toast.warning("Nothing was sent — GST invoicing is on standby.");
+        } else if (json.emailedTo) {
           toast.success(`Proforma sent to ${json.emailedTo}`);
         } else if (json.razorpayLinkUrl) {
           toast.warning("Proforma generated — no email on file. Share the payment link manually with the client.");

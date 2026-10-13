@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { resolveAttachmentUrl } from "@/lib/communications-log";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 
 export const maxDuration = 30;
 
@@ -12,6 +13,12 @@ export const maxDuration = 30;
  * src/lib/send-proforma.ts. Checks the contract's billing_mode:
  *   proforma_first (default) → dispatchProforma()
  *   gst_direct               → dispatchGstDirect() — skips PI, issues tax invoice
+ *
+ * Under Tally handoff v2 a GST Direct statement is not sent from the CRM at
+ * all: accounts issue the invoice in Tally from /accounting/inbox. That
+ * handoff is normally created at finalize time (finalize-and-send, billing
+ * cron), but a statement that was finalized without it — e.g. re-issued after
+ * a void — reaches this route instead, so it is created here too.
  */
 export async function POST(
   request: NextRequest,
@@ -47,7 +54,7 @@ export async function POST(
   // Validate statement is ready to send + fetch billing_mode from contract
   const { data: stmt } = await adminSupabase
     .from("billing_statements")
-    .select("status, voided_at, contract_id")
+    .select("status, voided_at, contract_id, handoff_state, gst_invoice_number")
     .eq("id", id)
     .single();
 
@@ -69,6 +76,20 @@ export async function POST(
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
   const toOverride: string[] = Array.isArray(body.to) ? (body.to as string[]).filter(Boolean) : [];
 
+  // GST Direct, no invoice issued yet: hand to accounts (v2) instead of the
+  // legacy CRM dispatch. A statement that already has a handoff_state is with
+  // accounts already — never overwrite a later state like ready_to_send. A
+  // statement with a GST invoice is a resend and keeps the legacy path.
+  if (billingMode === "gst_direct" && !stmt.gst_invoice_number) {
+    if (stmt.handoff_state) {
+      return NextResponse.json({ success: true, handedToAccounts: true, alreadyWithAccounts: true });
+    }
+    const handoff = await handleStatementFinalized(adminSupabase, id, "gst_direct", "send_proforma");
+    if (handoff.skipLegacyDispatch) {
+      return NextResponse.json({ success: true, handedToAccounts: true });
+    }
+  }
+
   const result = billingMode === "gst_direct"
     ? await dispatchGstDirect(adminSupabase, id, dbUserId, additionalCc, toOverride)
     : await dispatchProforma(adminSupabase, id, dbUserId, additionalCc, toOverride);
@@ -87,6 +108,10 @@ export async function POST(
     emailedTo: result.emailedTo,
     emailSkipped: result.emailSkipped,
     noContact: result.noContact,
+    // Nothing was sent when GST invoicing is on standby or was routed to
+    // Tally — callers must not report that as "sent".
+    standby: result.standby ?? false,
+    routedToTally: result.routedToTally ?? false,
     commLogEntry,
   });
 }
