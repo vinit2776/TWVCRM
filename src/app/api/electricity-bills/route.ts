@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
+import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -200,6 +201,30 @@ export async function POST(request: NextRequest) {
     if (dupeNumber && dupeNumber > 0) {
       return NextResponse.json(
         { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { status: 409 },
+      );
+    }
+  }
+
+  // ── Block a bill that was already recorded as a vendor bill ───────────────
+  // This path creates its own vendor bill, so capturing a bill that Procurement already holds
+  // (uploaded through Procurement → Bills) would put a second payable for the same invoice in the
+  // payment queue. Match on the vendor's number ignoring case, spacing and punctuation.
+  if (config.landlord_vendor_id && landlord_bill_number) {
+    let existingBill;
+    try {
+      existingBill = await findDuplicateVendorBill(supabase, config.landlord_vendor_id, landlord_bill_number);
+    } catch (err) {
+      console.error("[electricity-bills] duplicate vendor-bill check failed:", err instanceof Error ? err.message : "unknown error");
+      return NextResponse.json({ error: "Could not check for an existing vendor bill" }, { status: 500 });
+    }
+    if (existingBill) {
+      return NextResponse.json(
+        {
+          error:
+            `Bill number "${landlord_bill_number}" already exists as vendor bill ${existingBill.bill_number} (${existingBill.approval_status}). ` +
+            `Capturing it here would create a second payable for the same invoice — open that bill instead.`,
+        },
         { status: 409 },
       );
     }

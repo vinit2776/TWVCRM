@@ -15,6 +15,12 @@ export interface CreateVendorBillInput {
   service_report_id?: string | null;
   replaces_bill_id?: string | null;
   electricity_bill_id?: string | null;
+  // Electricity-provider bills only (migration 00587). Never passed for any other bill, so ordinary
+  // bills never reference these columns and keep working whether or not the migration has run.
+  location_id?: string | null;
+  connection_id?: string | null;
+  electricity_consumer_number?: string | null;
+  electricity_printed_name?: string | null;
   amount_paid?: number;
   payment_status?: string;
   created_by: string;
@@ -51,6 +57,14 @@ export async function createVendorBill(
       invoice_file_url: input.invoice_file_url ?? null,
       service_report_id: input.service_report_id ?? null,
       electricity_bill_id: input.electricity_bill_id ?? null,
+      ...(input.location_id
+        ? {
+            location_id: input.location_id,
+            connection_id: input.connection_id ?? null,
+            electricity_consumer_number: input.electricity_consumer_number ?? null,
+            electricity_printed_name: input.electricity_printed_name ?? null,
+          }
+        : {}),
       amount_paid: input.amount_paid ?? 0,
       payment_status: input.payment_status ?? "unpaid",
       approval_status: "pending",

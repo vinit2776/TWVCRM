@@ -2746,7 +2746,12 @@ export interface VendorBill {
       units: number | null;
       rate: number | null;
       amount: number | null;
-    }[];
+      // Electricity-provider bills only (migration 00587): where the bill is for
+  location_id?: string | null;
+  connection_id?: string | null;
+  electricity_consumer_number?: string | null;
+  electricity_printed_name?: string | null;
+}[];
   } | null;
   purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type" | "expected_delivery_date"> & {
     purchase_requests?: { department: string; expenditure_type: string } | null;
