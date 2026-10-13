@@ -139,6 +139,8 @@ export interface CurrentCycleStatement {
   gst_invoice_number: string | null;
   handoff_state: string | null;
   finalized_at: string | null;
+  /** Stamped by setHandoffState when the statement is handed to accounts. */
+  updated_at?: string | null;
 }
 
 /**
@@ -157,7 +159,9 @@ export function classifyCurrentCycleStatement(
   if (s.gst_invoice_sent_at) return { group: "sent", at: s.gst_invoice_sent_at, detail: "GST invoice sent" };
   if (s.gst_invoice_number) return { group: "sent", at: null, detail: `GST invoice ${s.gst_invoice_number} issued` };
   if (s.handoff_state && WITH_ACCOUNTS_HANDOFF_STATES.has(s.handoff_state)) {
-    return { group: "tally", at: s.finalized_at, detail: "GST Direct · with accounts" };
+    // Dated by the hand-off, not by finalization — a statement can sit finalized
+    // for days before anyone hands it over (same clock the Tally Inbox ages by).
+    return { group: "tally", at: s.updated_at ?? s.finalized_at, detail: "GST Direct · with accounts" };
   }
   if (s.status === "draft") return { group: "ready", at: null, detail: "Draft · not sent" };
   if (s.status === "finalized") return { group: "ready", at: null, detail: "Finalized · never sent" };
@@ -179,7 +183,7 @@ async function getCurrentCycle(supabase: SupabaseClient): Promise<{
     .from("billing_statements")
     .select(`
       id, statement_type, status, total_amount, prepaid_month, prepaid_year,
-      proforma_sent_at, gst_invoice_sent_at, gst_invoice_number, handoff_state, finalized_at,
+      proforma_sent_at, gst_invoice_sent_at, gst_invoice_number, handoff_state, finalized_at, updated_at,
       contract_id, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)),
       on_behalf:contracts!billing_statements_billed_on_behalf_of_contract_id_fkey(contract_number)
     `)

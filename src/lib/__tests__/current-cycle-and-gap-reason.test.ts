@@ -24,9 +24,14 @@ describe("classifyCurrentCycleStatement", () => {
     expect(classifyCurrentCycleStatement({ ...base, gst_invoice_number: "TWV/26-27/0412" })?.group).toBe("sent");
   });
 
-  it("GST Direct with accounts is 'tally', dated by its hand-off (finalized_at)", () => {
-    expect(classifyCurrentCycleStatement({ ...base, handoff_state: "direct_gst_requested" }))
-      .toEqual({ group: "tally", at: "2026-09-30T13:00:00Z", detail: "GST Direct · with accounts" });
+  it("GST Direct with accounts is 'tally', dated by the hand-off (updated_at), not finalization", () => {
+    expect(classifyCurrentCycleStatement({ ...base, handoff_state: "direct_gst_requested", updated_at: "2026-10-13T11:17:00Z" }))
+      .toEqual({ group: "tally", at: "2026-10-13T11:17:00Z", detail: "GST Direct · with accounts" });
+  });
+
+  it("falls back to finalized_at when there is no updated_at", () => {
+    expect(classifyCurrentCycleStatement({ ...base, handoff_state: "direct_gst_requested" })?.at)
+      .toBe("2026-09-30T13:00:00Z");
   });
 
   it("draft and finalized-unsent are 'ready'", () => {
