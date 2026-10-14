@@ -250,6 +250,15 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
+      // A hold must block payment on the server, not just hide the button on the page.
+      if (bill.payment_hold_status === "on_hold") {
+        const reason = bill.payment_hold_reason ? HOLD_REASON_LABELS[bill.payment_hold_reason] ?? bill.payment_hold_reason : null;
+        return NextResponse.json(
+          { error: `This bill is on hold${reason ? ` (${reason})` : ""}. Release the hold before recording a payment.` },
+          { status: 422 }
+        );
+      }
+
       // Mandatory GST gate: GST must have been entered before any payment.
       // A bill edit clears gst_set_at but preserves gst_amount — that existing
       // value is still valid, so we accept it without requiring re-confirmation.
