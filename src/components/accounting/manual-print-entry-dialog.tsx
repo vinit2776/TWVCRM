@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Printer, AlertCircle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+import { usageContractLabel } from "@/lib/usage-contract-label";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,10 @@ interface ContractOption {
   contract_number: string;
   lead?: { first_name: string; last_name: string; company?: string };
   location?: { name: string };
+  status?: string;
+  activated_at?: string | null;
+  terminated_at?: string | null;
+  end_date?: string | null;
 }
 
 interface ServiceQuota {
@@ -95,13 +100,6 @@ const MONTHS = [
 
 function monthLabel(year: number, month: number) {
   return `${MONTHS[month - 1]} ${year}`;
-}
-
-function contractLabel(c: ContractOption) {
-  const customer = c.lead?.company
-    || `${c.lead?.first_name ?? ""} ${c.lead?.last_name ?? ""}`.trim()
-    || "Unknown";
-  return `${c.contract_number} — ${customer}`;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -310,7 +308,7 @@ export function ManualPrintEntryDialog({
               emptyMessage="No matching contracts found."
               options={contracts.map(c => ({
                 value: c.id,
-                label: c.location ? `${contractLabel(c)} · ${c.location.name}` : contractLabel(c),
+                label: usageContractLabel(c),
               }))}
             />
             {contracts.length === 0 && !contractsLoading && (
