@@ -3045,11 +3045,6 @@ export default function PurchaseOrderDetailPage() {
             <p className="text-sm text-muted-foreground">
               Enter the quantity actually delivered. Undelivered quantities are released back to the PR.
             </p>
-            {hasBill && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                A vendor bill exists for this PO. Partial cancellation does not modify the bill — adjust it separately.
-              </p>
-            )}
             <div className="rounded-md border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -3083,9 +3078,39 @@ export default function PurchaseOrderDetailPage() {
                 </tbody>
               </table>
             </div>
-            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-              Once partially cancelled, this PO cannot be reissued.
-            </p>
+            {(() => {
+              const items = po?.purchase_order_items ?? [];
+              const qtyOf = (i: (typeof items)[number]) => parseFloat(partialCancelQtys[i.id] ?? String(i.quantity_ordered));
+              const nothingChanged = items.every((i) => qtyOf(i) === Number(i.quantity_ordered));
+              const allZero = items.length > 0 && items.every((i) => qtyOf(i) === 0);
+              if (nothingChanged) {
+                return (
+                  <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                    Nothing to cancel. Lower a quantity, or set every quantity to 0 to cancel the whole PO.
+                  </p>
+                );
+              }
+              if (allZero) {
+                return (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    This cancels the whole PO and releases the request so a new PO can be raised.
+                    {hasBill && " Its unpaid bill will be rejected. An already-approved bill blocks the cancel until Accounts reverse it."}
+                  </p>
+                );
+              }
+              return (
+                <>
+                  {hasBill && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      A vendor bill exists. Its amount is reduced to the new PO total if it is higher.
+                    </p>
+                  )}
+                  <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                    Once partially cancelled, this PO cannot be reissued.
+                  </p>
+                </>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setActionDialog(null); setPartialCancelQtys({}); }}>Keep Order</Button>

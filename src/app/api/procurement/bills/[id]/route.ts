@@ -208,6 +208,31 @@ export async function PATCH(
     return NextResponse.json({ error: message, details: fieldErrors }, { status: 400 });
   }
 
+  // A bill must not move toward payment once its PO has been cancelled, nor
+  // exceed a partially-cancelled PO's reduced total (PO-2610-002: a "partial
+  // cancel" changed nothing and the bill was still approved and paid).
+  if (bill.po_id && ["approve", "approve_balance", "record_payment"].includes(parsed.data.action)) {
+    const { data: linkedPo } = await supabase
+      .from("purchase_orders")
+      .select("po_number, status, total_ordered_amount")
+      .eq("id", bill.po_id)
+      .single();
+    if (linkedPo?.status === "cancelled") {
+      return NextResponse.json({
+        error: `${linkedPo.po_number} is cancelled. Reject this bill, or ask procurement to reinstate the PO.`,
+      }, { status: 422 });
+    }
+    if (
+      linkedPo?.status === "partially_cancelled" &&
+      parsed.data.action === "approve" &&
+      Number(bill.total_amount) > Number(linkedPo.total_ordered_amount)
+    ) {
+      return NextResponse.json({
+        error: `This bill (₹${Number(bill.total_amount).toLocaleString("en-IN")}) exceeds the reduced total of ${linkedPo.po_number} (₹${Number(linkedPo.total_ordered_amount).toLocaleString("en-IN")}).`,
+      }, { status: 422 });
+    }
+  }
+
   let updatePayload: Record<string, unknown> = {};
   // Extra audit-trail entries that don't come from the vendor_bills row diff
   // (e.g. partial_reason lives on vendor_bill_payments, but we want it
