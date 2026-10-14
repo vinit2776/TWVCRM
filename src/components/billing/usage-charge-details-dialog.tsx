@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils";
+import { usageSourceLabel } from "@/lib/usage-source-label";
 
 interface DetailCharge {
   id: string;
@@ -48,7 +49,6 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
 }
 
 const STATUS_LABELS: Record<string, string> = { pending: "Pending", billed: "Billed", waived: "Waived" };
-const SOURCE_LABELS: Record<string, string> = { manual: "Manual charge", print: "Print log", facility: "Facility usage" };
 
 export function UsageChargeDetailsDialog({ open, onOpenChange, charge }: UsageChargeDetailsDialogProps) {
   if (!charge) return null;
@@ -67,7 +67,7 @@ export function UsageChargeDetailsDialog({ open, onOpenChange, charge }: UsageCh
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Customer" value={customerName} />
-            <Field label="Source" value={SOURCE_LABELS[charge.source ?? "manual"]} />
+            <Field label="Source" value={usageSourceLabel(charge.source ?? "manual", !!charge.booking?.booking_number, "long")} />
           </div>
 
           {(charge.contract?.contract_number || charge.booking?.booking_number) && (
