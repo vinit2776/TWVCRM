@@ -1203,7 +1203,7 @@ export default function ElectricityBillsPage() {
                   </p>
                 )}
                 {mappedContracts && mappedContracts.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No contract mapped — will route to Accounts Payable on approval.</p>
+                  <p className="text-xs text-muted-foreground">No contract mapped — the vendor bill goes to Accounts Payable once an admin approves it.</p>
                 )}
                 {editingBillId && (
                   <p className="text-xs text-muted-foreground">Location, month, and year can&apos;t be changed once captured.</p>
