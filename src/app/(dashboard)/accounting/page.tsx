@@ -50,8 +50,7 @@ import {
   PROCUREMENT_DEPARTMENT_COLORS,
   EXPENDITURE_TYPE_LABELS,
   PROCUREMENT_DEPARTMENTS,
-  PARTIAL_APPROVAL_REASON_LABELS,
-} from "@/lib/constants";
+  PARTIAL_APPROVAL_REASON_LABELS, PARTIAL_PAYMENT_REASONS } from "@/lib/constants";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -250,7 +249,10 @@ export default function AccountingPage() {
     { value: "bank_transfer", label: "Bank Transfer" },
     { value: "cheque", label: "Cheque" },
   ];
-  const allBatchPayModes = canRecordCash
+  // Mirrors the batch API: office_admin pays cash only; admin and accounts pay any mode.
+  const allBatchPayModes = currentUserRole === "office_admin"
+    ? [{ value: "cash", label: "Cash / Petty Cash" }]
+    : canRecordCash
     ? [...bankPayModes, { value: "cash", label: "Cash / Petty Cash" }]
     : bankPayModes;
 
@@ -263,6 +265,15 @@ export default function AccountingPage() {
   const [batchRef, setBatchRef] = useState("");
   const [batchNotes, setBatchNotes] = useState("");
   const [batchGst, setBatchGst] = useState<Record<string, string>>({});
+  // Per-bill amount override (blank = full outstanding) and the reason required when it is lower.
+  const [batchAmt, setBatchAmt] = useState<Record<string, string>>({});
+  const [batchPartialReason, setBatchPartialReason] = useState<Record<string, string>>({});
+  const [batchPettyBooks, setBatchPettyBooks] = useState<{ id: string; current_balance: number; owner: { full_name: string } | null }[]>([]);
+  const [batchPettyBookId, setBatchPettyBookId] = useState("");
+  const [batchResult, setBatchResult] = useState<{
+    processed: { bill_number: string; amount: number }[];
+    failed: { bill_number: string; error: string }[];
+  } | null>(null);
   const [batchTds, setBatchTds] = useState<Record<string, BatchTdsState>>({});
   const [batchTdsSections, setBatchTdsSections] = useState<TdsSection[]>([]);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
@@ -504,6 +515,16 @@ export default function AccountingPage() {
     [selectedBills]
   );
 
+  function batchBillAmounts(b: VendorBillItem) {
+    const gst = parseFloat(batchGst[b.id] || "0") || 0;
+    const base = Number(b.approved_amount ?? b.total_amount);
+    const outstanding = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
+    const raw = batchAmt[b.id];
+    const entered = raw !== undefined && raw !== "" ? parseFloat(raw) : NaN;
+    const pay = Number.isFinite(entered) ? entered : outstanding;
+    return { gst, base, outstanding, pay, isPartial: pay < outstanding - 0.01 };
+  }
+
   function openBatchWizard() {
     const gstInit: Record<string, string> = {};
     const tdsInit: Record<string, BatchTdsState> = {};
@@ -512,6 +533,10 @@ export default function AccountingPage() {
       tdsInit[b.id] = { enabled: false, sectionCode: "", vendorType: "company", rate: 0, rateMin: 0, rateMax: 20, baseAmount: "", panAvailable: true };
     }
     setBatchGst(gstInit);
+    setBatchAmt({});
+    setBatchPartialReason({});
+    setBatchResult(null);
+    setBatchPettyBookId("");
     setBatchTds(tdsInit);
     setBatchDate(today);
     const saved = typeof window !== "undefined" ? localStorage.getItem("batch_pay_last_mode") : "";
@@ -520,6 +545,16 @@ export default function AccountingPage() {
     setBatchNotes("");
     setBatchStep(0);
     setBatchWizardOpen(true);
+    if (currentUserRole === "admin" || currentUserRole === "accounts" || currentUserRole === "office_admin") {
+      fetch(`/api/petty-cash/books${currentUserRole === "office_admin" ? "" : "?all=true"}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.data) {
+            setBatchPettyBooks(d.data);
+            if (d.data.length === 1) setBatchPettyBookId(d.data[0].id);
+          }
+        });
+    }
     // Fetch TDS sections once (cached in state)
     if (batchTdsSections.length === 0) {
       fetch("/api/tds/sections").then((r) => r.json()).then((d) => {
@@ -532,14 +567,17 @@ export default function AccountingPage() {
     if (!batchMode) { toast.error("Select a payment mode"); return; }
     if (!batchDate) { toast.error("Select a payment date"); return; }
     if (!batchRef.trim()) { toast.error("Enter the payment reference / UTR"); return; }
+    for (const b of selectedBills) {
+      const { pay, outstanding, isPartial } = batchBillAmounts(b);
+      if (!(pay > 0) || pay > outstanding + 0.5) { toast.error(`${b.bill_number}: enter an amount up to ${formatCurrency(outstanding)}`); return; }
+      if (isPartial && !batchPartialReason[b.id]) { toast.error(`${b.bill_number}: select a reason for the partial payment`); return; }
+    }
 
     setBatchSubmitting(true);
     try {
       if (typeof window !== "undefined") localStorage.setItem("batch_pay_last_mode", batchMode);
       const billsPayload = selectedBills.map((b) => {
-        const gst = parseFloat(batchGst[b.id] || "0") || 0;
-        const base = Number(b.approved_amount ?? b.total_amount);
-        const outstanding = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
+        const { gst, pay, isPartial } = batchBillAmounts(b);
         const tds = batchTds[b.id];
         const tdsAmount = tds?.enabled && tds.baseAmount && tds.rate > 0
           ? Math.round(Number(tds.baseAmount) * tds.rate) / 100
@@ -552,7 +590,13 @@ export default function AccountingPage() {
           tds_amount: tdsAmount,
           pan_available: tds.panAvailable,
         } : undefined;
-        return { bill_id: b.id, amount: Math.round(outstanding * 100) / 100, gst_amount: gst, tds: tdsPayload };
+        return {
+          bill_id: b.id,
+          amount: Math.round(pay * 100) / 100,
+          gst_amount: gst,
+          partial_reason: isPartial ? batchPartialReason[b.id] : undefined,
+          tds: tdsPayload,
+        };
       });
       const res = await fetch("/api/accounting/batch-payment", {
         method: "POST",
@@ -563,6 +607,7 @@ export default function AccountingPage() {
           payment_mode: batchMode,
           payment_reference: batchRef.trim() || null,
           notes: batchNotes.trim() || null,
+          petty_cash_book_id: batchMode === "cash" ? batchPettyBookId || null : null,
           bills: billsPayload,
         }),
       });
@@ -571,11 +616,16 @@ export default function AccountingPage() {
         toast.error(typeof json.error === "string" ? json.error : "Batch payment failed");
         return;
       }
-      if (json.failed_count > 0) {
-        toast.error(`${json.failed_count} bill(s) failed: ${json.failed.map((f: { bill_number: string }) => f.bill_number).join(", ")}`);
-      }
       if (json.processed_count > 0) {
         toast.success(`${json.processed_count} bill${json.processed_count > 1 ? "s" : ""} paid — ${formatCurrency(json.total_paid)}`);
+      }
+      if (json.failed_count > 0) {
+        // Some bills were paid and some were not: keep the dialog open and say exactly which.
+        setBatchResult({ processed: json.processed ?? [], failed: json.failed });
+        setBatchStep(-1);
+        setSelectedBillIds(new Set());
+        await fetchVendorBills();
+        return;
       }
       setBatchWizardOpen(false);
       setSelectedBillIds(new Set());
@@ -687,13 +737,13 @@ export default function AccountingPage() {
                     placeholder="Search by bill #, invoice #, vendor, PO, notes…"
                   />
                 </div>
-                {canRecordPayment && selectedBills.length >= 2 && (
+                {canRecordPayment && selectedBills.length >= 1 && (
                   <button
                     onClick={openBatchWizard}
                     className="shrink-0 h-9 inline-flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-3 transition-colors"
                   >
                     <Layers className="h-4 w-4" />
-                    Pay {selectedBills.length} bills · {formatCurrency(selectedTotal)}
+                    Pay {selectedBills.length} {selectedBills.length === 1 ? "bill" : "bills"} · {formatCurrency(selectedTotal)}
                   </button>
                 )}
               </div>
@@ -1753,9 +1803,33 @@ export default function AccountingPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Layers className="h-5 w-5 text-emerald-600" />
-              Batch Payment — {selectedBills.length} bills
+              {batchResult ? "Batch payment result" : selectedBills.length === 1 ? "Pay bill" : `Batch Payment — ${selectedBills.length} bills`}
             </DialogTitle>
           </DialogHeader>
+
+          {batchResult && (
+            <div className="space-y-3 py-1 text-sm">
+              {batchResult.processed.length > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <p className="font-medium text-emerald-800 mb-1">Paid ({batchResult.processed.length})</p>
+                  {batchResult.processed.map((p) => (
+                    <div key={p.bill_number} className="flex justify-between text-xs text-emerald-900">
+                      <span className="font-mono">{p.bill_number}</span><span>{formatCurrency(p.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <p className="font-medium text-red-800 mb-1">Not paid ({batchResult.failed.length})</p>
+                {batchResult.failed.map((f) => (
+                  <div key={f.bill_number} className="text-xs text-red-900">
+                    <span className="font-mono">{f.bill_number}</span> — {f.error}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">Bills that were paid stay paid. The ones above that weren&apos;t are back in the list to retry.</p>
+            </div>
+          )}
 
           {/* Step 0: Bill review */}
           {batchStep === 0 && (
@@ -1789,9 +1863,7 @@ export default function AccountingPage() {
           {/* Steps 1..N: Per-bill GST confirmation */}
           {batchStep >= 1 && batchStep <= selectedBills.length && (() => {
             const bill = selectedBills[batchStep - 1];
-            const gst = parseFloat(batchGst[bill.id] || "0") || 0;
-            const base = Number(bill.approved_amount ?? bill.total_amount);
-            const outstanding = Math.max(0, base + gst - Number(bill.amount_paid ?? 0));
+            const { gst, base, outstanding, pay, isPartial } = batchBillAmounts(bill);
             return (
               <div className="space-y-4 py-1">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -1821,16 +1893,41 @@ export default function AccountingPage() {
                   />
                   {gst > 0 && <p className="text-xs text-muted-foreground">GST rate ≈ {((gst / base) * 100).toFixed(1)}%</p>}
                 </div>
-                <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 flex items-center justify-between">
-                  <span className="text-sm text-emerald-800">Amount to pay</span>
-                  <span className="text-lg font-bold text-emerald-700">{formatCurrency(outstanding)}</span>
+                <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-emerald-800">Outstanding (incl. GST)</span>
+                    <span className="text-sm font-semibold text-emerald-700">{formatCurrency(outstanding)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="bp_amt" className="text-sm text-emerald-800">Amount to pay</Label>
+                    <Input
+                      id="bp_amt" type="number" min="0" step="0.01" className="h-8 w-36 text-right bg-white"
+                      placeholder={outstanding.toFixed(2)}
+                      value={batchAmt[bill.id] ?? ""}
+                      onChange={(e) => setBatchAmt((prev) => ({ ...prev, [bill.id]: e.target.value }))}
+                    />
+                  </div>
+                  {pay > outstanding + 0.5 && <p className="text-xs text-red-600">Can&apos;t exceed the outstanding amount.</p>}
+                  {isPartial && (
+                    <div className="space-y-1">
+                      <Label className="text-xs text-emerald-800">Reason for partial payment <span className="text-red-500">*</span></Label>
+                      <select
+                        className="w-full h-8 rounded-md border border-input bg-white px-2 text-xs"
+                        value={batchPartialReason[bill.id] ?? ""}
+                        onChange={(e) => setBatchPartialReason((prev) => ({ ...prev, [bill.id]: e.target.value }))}
+                      >
+                        <option value="">Select a reason</option>
+                        {PARTIAL_PAYMENT_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                      </select>
+                    </div>
+                  )}
                 </div>
                 {/* Per-bill round-off */}
                 {(() => {
                   const tds = batchTds[bill.id];
                   const tdsAmt = tds?.enabled && tds.baseAmount && tds.rate > 0
                     ? Math.round(Number(tds.baseAmount) * tds.rate) / 100 : 0;
-                  const roundTarget = tds?.enabled && tdsAmt > 0 ? outstanding - tdsAmt : outstanding;
+                  const roundTarget = tds?.enabled && tdsAmt > 0 ? pay - tdsAmt : pay;
                   const rounded = Math.round(roundTarget);
                   const diff = rounded - roundTarget;
                   if (Math.abs(diff) < 0.005) return null;
@@ -1858,7 +1955,7 @@ export default function AccountingPage() {
                   const tds = batchTds[bill.id] ?? { enabled: false, sectionCode: "", vendorType: "company" as const, rate: 0, rateMin: 0, rateMax: 20, baseAmount: "", panAvailable: true };
                   const tdsAmt = tds.enabled && tds.baseAmount && tds.rate > 0
                     ? Math.round(Number(tds.baseAmount) * tds.rate) / 100 : 0;
-                  const netToVendor = outstanding - tdsAmt;
+                  const netToVendor = pay - tdsAmt;
                   return (
                     <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/40 p-3 space-y-2.5">
                       <div className="flex items-center justify-between">
@@ -1933,11 +2030,7 @@ export default function AccountingPage() {
 
           {/* Final step: Payment details + confirmed summary */}
           {batchStep === selectedBills.length + 1 && (() => {
-            const totalWithGst = selectedBills.reduce((s, b) => {
-              const gst = parseFloat(batchGst[b.id] || "0") || 0;
-              const base = Number(b.approved_amount ?? b.total_amount);
-              return s + Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-            }, 0);
+            const totalWithGst = selectedBills.reduce((s, b) => s + batchBillAmounts(b).pay, 0);
             return (
               <div className="space-y-4 py-1">
                 {/* Bill summary with confirmed GST */}
@@ -1946,12 +2039,13 @@ export default function AccountingPage() {
                     <span>Bill</span><span>Vendor</span><span className="text-right">GST</span><span className="text-right">Total</span>
                   </div>
                   {selectedBills.map((b) => {
-                    const gst = parseFloat(batchGst[b.id] || "0") || 0;
-                    const base = Number(b.approved_amount ?? b.total_amount);
-                    const total = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
+                    const { gst, pay: total, isPartial } = batchBillAmounts(b);
                     return (
                       <div key={b.id} className="grid grid-cols-4 px-3 py-2.5 items-center">
-                        <span className="font-mono text-xs font-medium text-primary">{b.bill_number}</span>
+                        <span className="font-mono text-xs font-medium text-primary">
+                          {b.bill_number}
+                          {isPartial && <span className="block text-[10px] font-normal text-amber-700">Partial</span>}
+                        </span>
                         <span className="truncate text-xs text-muted-foreground pr-2">{b.procurement_vendors?.name ?? "—"}</span>
                         <span className="text-right text-xs">{gst > 0 ? formatCurrency(gst) : "—"}</span>
                         <span className="text-right font-semibold">{formatCurrency(total)}</span>
@@ -2001,6 +2095,21 @@ export default function AccountingPage() {
                     </Select>
                   </div>
                 </div>
+                {batchMode === "cash" && batchPettyBooks.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label>Petty Cash Book to Debit <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                    <Select value={batchPettyBookId} onValueChange={setBatchPettyBookId}>
+                      <SelectTrigger><SelectValue placeholder="Select book" /></SelectTrigger>
+                      <SelectContent>
+                        {batchPettyBooks.map((b) => (
+                          <SelectItem key={b.id} value={b.id}>
+                            {b.owner?.full_name ?? "Unknown"} · {formatCurrency(b.current_balance)} balance
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="bp_ref">UTR / Reference Number <span className="text-red-500">*</span></Label>
                   <Input id="bp_ref" placeholder="e.g. UTR123456789012" value={batchRef} onChange={(e) => setBatchRef(e.target.value)} />
@@ -2014,6 +2123,14 @@ export default function AccountingPage() {
           })()}
 
           <DialogFooter className="gap-2 sm:gap-0">
+            {batchResult && (
+              <button
+                onClick={() => { setBatchWizardOpen(false); setBatchResult(null); }}
+                className="inline-flex items-center rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm hover:bg-primary/90"
+              >
+                Close
+              </button>
+            )}
             {batchStep > 0 && (
               <button
                 onClick={() => setBatchStep((s) => s - 1)}
@@ -2028,7 +2145,7 @@ export default function AccountingPage() {
                 Cancel
               </button>
             )}
-            {batchStep < selectedBills.length + 1 && (
+            {batchStep >= 0 && batchStep < selectedBills.length + 1 && (
               <button
                 onClick={() => setBatchStep((s) => s + 1)}
                 disabled={batchSubmitting}

@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
+import { PARTIAL_PAYMENT_REASONS } from "@/lib/constants";
 
 const BANK_MODES = ["neft", "rtgs", "imps", "bank_transfer", "cheque"] as const;
 
@@ -18,10 +19,11 @@ const tdsBillSchema = z.object({
 const billItemSchema = z.object({
   bill_id: z.string().uuid(),
   /**
-   * Amount to pay — must equal the full approved outstanding (no partial
-   * payments allowed in a batch; validated server-side).
+   * Amount to pay — at most the approved outstanding. Paying less is a partial
+   * payment and needs `partial_reason`, same as the single-bill flow.
    */
   amount: z.number().positive(),
+  partial_reason: z.enum(PARTIAL_PAYMENT_REASONS.map((r) => r.code) as [string, ...string[]]).nullish(),
   /**
    * Optional GST amount to set on the bill before recording payment.
    * If omitted or null, the bill's existing gst_amount is used as-is.
@@ -38,7 +40,9 @@ const batchPaymentSchema = z.object({
   payment_mode: z.enum([...BANK_MODES, "cash"]),
   payment_reference: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
-  bills: z.array(billItemSchema).min(2, "A batch must contain at least 2 bills"),
+  /** Petty cash book to debit when payment_mode is cash (optional, as for a single bill). */
+  petty_cash_book_id: z.string().uuid().nullish(),
+  bills: z.array(billItemSchema).min(1, "Select at least one bill"),
 });
 
 /**
@@ -49,7 +53,7 @@ const batchPaymentSchema = z.object({
  * batch_ref, but each bill's gst_amount can be set individually before the
  * payment is recorded.
  *
- * Roles: accounts (bank modes only), admin (all), office_admin (cash only).
+ * Roles: admin and accounts (all modes, as for a single bill), office_admin (cash only).
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -75,16 +79,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
-  const { batch_ref, payment_date, payment_mode, payment_reference, notes, bills } = parsed.data;
+  const { batch_ref, payment_date, payment_mode, payment_reference, notes, petty_cash_book_id, bills } = parsed.data;
 
   // Payment mode gate by role
-  const isBankMode = (BANK_MODES as readonly string[]).includes(payment_mode);
-  if (dbUser.role === "accounts" && !isBankMode) {
-    return NextResponse.json(
-      { error: "Accounts team can only record bank payments (NEFT, RTGS, IMPS, Bank Transfer, Cheque)" },
-      { status: 403 }
-    );
-  }
   if (dbUser.role === "office_admin" && payment_mode !== "cash") {
     return NextResponse.json(
       { error: "Petty cash payments only — bank payments must be processed by the Accounts team" },
@@ -135,9 +132,13 @@ export async function POST(request: NextRequest) {
     const alreadyPaid = Number(bill.amount_paid ?? 0);
     const outstanding = ceiling - alreadyPaid;
 
-    if (Math.abs(item.amount - outstanding) > 0.5) {
+    if (item.amount > outstanding + 0.5) {
       validationErrors.push(
-        `${bill.bill_number}: amount ₹${item.amount.toFixed(2)} does not match outstanding ₹${outstanding.toFixed(2)}`
+        `${bill.bill_number}: amount ₹${item.amount.toFixed(2)} exceeds outstanding ₹${outstanding.toFixed(2)}`
+      );
+    } else if (item.amount < outstanding - 0.5 && !item.partial_reason) {
+      validationErrors.push(
+        `${bill.bill_number}: ₹${item.amount.toFixed(2)} of ₹${outstanding.toFixed(2)} outstanding is a partial payment — select a reason`
       );
     }
   }
@@ -158,12 +159,19 @@ export async function POST(request: NextRequest) {
       const storedGst = Number(bill.gst_amount ?? 0);
       const newGst = item.gst_amount != null ? item.gst_amount : storedGst;
 
-      if (item.gst_amount != null && Math.abs(item.gst_amount - storedGst) > 0.001) {
+      // The wizard's per-bill GST step is the user's confirmation, so stamp it the
+      // way the single-bill flow does (including an explicit zero-GST confirmation).
+      if (item.gst_amount != null) {
+        const gstNow = new Date().toISOString();
         const { error: gstErr } = await adminSupabase
           .from("vendor_bills")
           .update({
             gst_amount: newGst,
             base_amount: Number(bill.total_amount), // total_amount IS the base
+            gst_set_by: dbUser.id,
+            gst_set_at: gstNow,
+            gst_zero_confirmed: newGst === 0,
+            gst_zero_confirmed_by: newGst === 0 ? dbUser.id : null,
           })
           .eq("id", bill.id);
 
@@ -179,6 +187,7 @@ export async function POST(request: NextRequest) {
       const alreadyPaid = Number(bill.amount_paid ?? 0);
       const newAmountPaid = alreadyPaid + item.amount;
       const paymentStatus = newAmountPaid >= finalCeiling - 0.01 ? "paid" : "partially_paid";
+      const isPartial = item.amount < finalCeiling - alreadyPaid - 0.01;
 
       // 3. Insert vendor_bill_payments row
       const { data: paymentRow, error: payErr } = await adminSupabase
@@ -192,6 +201,8 @@ export async function POST(request: NextRequest) {
           notes: notes ?? null,
           recorded_by: dbUser.id,
           batch_ref,
+          partial_reason: isPartial ? item.partial_reason ?? null : null,
+          petty_cash_book_id: payment_mode === "cash" ? petty_cash_book_id ?? null : null,
         })
         .select("id")
         .single();
@@ -246,6 +257,7 @@ export async function POST(request: NextRequest) {
           amount_paid: { old: alreadyPaid, new: newAmountPaid },
           payment_status: { old: bill.payment_status, new: paymentStatus },
           batch_ref: { old: null, new: batch_ref },
+          ...(isPartial ? { partial_payment_reason: { old: null, new: item.partial_reason ?? null } } : {}),
         },
       }).catch(() => {});
 
@@ -260,6 +272,22 @@ export async function POST(request: NextRequest) {
   }
 
   const totalPaid = processed.reduce((s, p) => s + p.amount, 0);
+
+  // Debit the petty cash book once for everything that was actually paid
+  // (overdraft allowed, as for a single bill).
+  if (payment_mode === "cash" && petty_cash_book_id && totalPaid > 0) {
+    const { data: pcBook } = await adminSupabase
+      .from("petty_cash_books")
+      .select("id, current_balance")
+      .eq("id", petty_cash_book_id)
+      .single();
+    if (pcBook) {
+      await adminSupabase
+        .from("petty_cash_books")
+        .update({ current_balance: Number(pcBook.current_balance) - totalPaid })
+        .eq("id", petty_cash_book_id);
+    }
+  }
 
   return NextResponse.json({
     batch_ref,
