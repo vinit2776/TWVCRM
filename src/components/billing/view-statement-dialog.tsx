@@ -32,6 +32,8 @@ import { CommunicationSentDialog } from "@/components/communications/communicati
 import { RecentCommunicationsCard } from "@/components/communications/recent-communications-card";
 import type { CommunicationLogEntry } from "@/types";
 import { canRecordPayments } from "@/lib/constants";
+import Link from "next/link";
+import { bookingChargeTotals, type BookingChargeView } from "@/lib/booking-usage-line";
 
 interface UsageCharge {
   id: string;
@@ -45,6 +47,8 @@ interface UsageCharge {
   waived_at?: string | null;
   waive_reason?: string | null;
   waived_by_user?: { full_name: string } | null;
+  /** Set by the statement API for booking charges only; null keeps the single-line rendering. */
+  booking_view?: BookingChargeView | null;
 }
 
 interface FacilityCharge {
@@ -1150,10 +1154,24 @@ export function ViewStatementDialog({
                             className={`border-b ${charge.is_waived ? "bg-red-50/40" : ""}`}
                           >
                             <td className="px-3 py-2">
-                              <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
-                                {charge.description}
-                              </div>
-                              <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                              {charge.booking_view ? (
+                                <>
+                                  <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
+                                    {charge.booking_view.title} ·{" "}
+                                    {charge.booking_view.bookingId ? (
+                                      <Link href={`/bookings/${charge.booking_view.bookingId}`} className="text-blue-600 hover:underline">{charge.booking_view.bookingNumber}</Link>
+                                    ) : charge.booking_view.bookingNumber}
+                                  </div>
+                                  <div className={`text-xs text-muted-foreground ${charge.is_waived ? "line-through" : ""}`}>{charge.booking_view.detail}</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
+                                    {charge.description}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                                </>
+                              )}
                               {charge.is_waived && charge.waived_by_user && (
                                 <div className="text-xs text-red-600 mt-0.5">
                                   Waived by {charge.waived_by_user.full_name}
@@ -1162,10 +1180,10 @@ export function ViewStatementDialog({
                               )}
                             </td>
                             <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
-                              {charge.quantity}
+                              {charge.booking_view ? charge.booking_view.billedHours : charge.quantity}
                             </td>
                             <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
-                              {formatCurrency(charge.unit_price)}
+                              {formatCurrency(charge.booking_view ? charge.booking_view.unitPrice : charge.unit_price)}
                             </td>
                             <td className={`px-3 py-2 text-right font-medium ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
                               {formatCurrency(charge.total)}
@@ -1261,6 +1279,27 @@ export function ViewStatementDialog({
                           {canWaive && <td className="px-3 py-2" />}
                         </tr>
                       ))}
+                      {(() => {
+                        const live = (statement.usage_charges ?? []).filter((c) => !c.is_waived && c.status !== "waived" && c.booking_view);
+                        if (live.length < 2) return null;
+                        const t = bookingChargeTotals(live.map((c) => c.booking_view as BookingChargeView));
+                        return (
+                          <tr className="bg-muted/40 border-t">
+                            <td className="px-3 py-2">
+                              <div className="font-medium">Booking charges total</div>
+                              <div className="text-xs text-muted-foreground">
+                                Used {t.usedHours} h, free {t.freeHours} h, billed {t.billedHours} h
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium">{t.billedHours}</td>
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2 text-right font-medium">
+                              {formatCurrency(live.reduce((sum, c) => sum + Number(c.total || 0), 0))}
+                            </td>
+                            {canWaive && <td className="px-3 py-2" />}
+                          </tr>
+                        );
+                      })()}
                     </tbody>
                   </table>
                 </div>

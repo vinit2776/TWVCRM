@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
+import { bookingChargeView } from "@/lib/booking-usage-line";
 
 export const maxDuration = 30;
 
@@ -28,7 +29,7 @@ export async function GET(
   // Fetch associated usage charges — include waiver fields and the waivers' user name
   const { data: usageCharges } = await supabase
     .from("usage_charges")
-    .select("*, waived_by_user:users!usage_charges_waived_by_fkey(full_name)")
+    .select("*, waived_by_user:users!usage_charges_waived_by_fkey(full_name), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name)")
     .eq("billing_statement_id", id)
     .order("charge_date", { ascending: true });
 
@@ -189,7 +190,8 @@ export async function GET(
     data: {
       ...statement,
       supplements: supplementsOriginal,
-      usage_charges: usageCharges || [],
+      // booking_view is null for anything that is not a booking charge; the statement view then keeps its single-line rendering.
+      usage_charges: (usageCharges || []).map((c) => ({ ...c, booking_view: bookingChargeView(c) })),
       facility_charges: facilityCharges,
       service_charges: serviceCharges,
       booking_charges: bookingCharges,

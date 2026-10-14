@@ -40,3 +40,52 @@ describe("usageLine", () => {
     expect(legacy.description).toBe("Overage");
   });
 });
+
+import { bookingChargeView, bookingChargeTotals } from "../booking-usage-line";
+
+describe("bookingChargeView", () => {
+  const row = {
+    description: "x", quantity: 5.5, unit_price: 1000, total: 2500, charge_date: "2026-07-01",
+    booking_charge_kind: "pooled_usage",
+    booking: { id: "b1", booking_number: "TWV-B-0124", check_in_at: "2026-07-01T09:09:31Z", check_out_at: "2026-07-01T14:36:15Z" },
+    contract_facility: { name: "Conference Room" },
+  };
+
+  it("builds a title, detail and billed hours for a live booking charge", () => {
+    const v = bookingChargeView(row)!;
+    expect(v.title).toBe("Conference Room · 1 Jul");
+    expect(v.detail).toBe("2:39 pm to 8:06 pm · used 5.5 h, free 3 h");
+    expect(v.billedHours).toBe(2.5);
+    expect(v.bookingId).toBe("b1");
+  });
+
+  it("uses the waive-time snapshot for a waived charge", () => {
+    const v = bookingChargeView({ ...row, quantity: 5, total: 0, unit_price: 0, status: "waived", is_waived: true, original_unit_price: 1000, original_total: 5000 })!;
+    expect(v.billedHours).toBe(5);
+    expect(v.freeHours).toBe(0);
+    expect(v.unitPrice).toBe(1000);
+  });
+
+  it("keeps billed hours for a charge waived from the statement (amount retained)", () => {
+    const v = bookingChargeView({ ...row, quantity: 4.5, total: 1350, unit_price: 300, is_waived: true })!;
+    expect(v.billedHours).toBe(4.5);
+    expect(v.freeHours).toBe(0);
+  });
+
+  it("shows a system-waived within-quota charge as all free", () => {
+    const v = bookingChargeView({ ...row, quantity: 1, total: 0, unit_price: 1000, status: "waived" })!;
+    expect(v.billedHours).toBe(0);
+    expect(v.freeHours).toBe(1);
+  });
+
+  it("returns null for non-booking charges", () => {
+    expect(bookingChargeView({ description: "Ad-hoc", quantity: 1, unit_price: 100, total: 100 })).toBeNull();
+    expect(bookingChargeView({ ...row, booking_charge_kind: "quota_overage" })).toBeNull();
+  });
+
+  it("totals used, free and billed hours", () => {
+    const a = bookingChargeView(row)!;
+    const b = bookingChargeView({ ...row, quantity: 4.5, total: 4500, booking: { id: "b2", booking_number: "TWV-B-0136" } })!;
+    expect(bookingChargeTotals([a, b])).toEqual({ count: 2, usedHours: 10, freeHours: 3, billedHours: 7 });
+  });
+});

@@ -95,3 +95,68 @@ export function toUsageLineInput(c: UsageChargeRow): BookingUsageChargeInput {
     facility_name: embedded<{ name: string | null }>(c.contract_facility)?.name ?? null,
   };
 }
+
+/** What staff see for one booking-linked charge on the internal statement view. */
+export interface BookingChargeView {
+  bookingId: string | null;
+  bookingNumber: string;
+  /** "Conference Room · 1 Jul" */
+  title: string;
+  /** "2:39 pm to 8:06 pm · used 5.5 h, free 3 h" */
+  detail: string;
+  usedHours: number;
+  freeHours: number;
+  billedHours: number;
+  unitPrice: number;
+}
+
+export interface StaffChargeInput extends UsageChargeRow {
+  is_waived?: boolean | null;
+  status?: string | null;
+  original_unit_price?: number | null;
+  original_total?: number | null;
+}
+
+/**
+ * Null for anything that is not a booking charge (ad-hoc, print, legacy kinds) so
+ * the caller keeps its existing single-line rendering. A waived charge has its
+ * money zeroed, so hours billed come from the snapshot taken at waive time.
+ */
+export function bookingChargeView(c: StaffChargeInput): BookingChargeView | null {
+  const input = toUsageLineInput(c);
+  const booking = input.booking as (typeof input.booking & { id?: string | null }) | null;
+  if (c.booking_charge_kind !== "pooled_usage" || !booking?.booking_number) return null;
+
+  // Two waive paths exist: the usage board zeroes total/unit_price and snapshots the
+  // originals, while the statement's own waive only sets is_waived and keeps the amount.
+  // Either way, the hours that were billable come from whichever still holds the money.
+  const unitPrice = Number(c.unit_price) || Number(c.original_unit_price ?? 0) || 0;
+  const amount = Number(c.total) || Number(c.original_total ?? 0) || 0;
+  const used = Number(c.quantity) || 0;
+  const billed = unitPrice > 0 ? round2(amount / unitPrice) : 0;
+  const free = Math.max(0, round2(used - billed));
+  const window = booking.check_in_at && booking.check_out_at ? `${istTime(booking.check_in_at)} to ${istTime(booking.check_out_at)} · ` : "";
+
+  return {
+    bookingId: booking.id ?? null,
+    bookingNumber: booking.booking_number,
+    title: `${input.facility_name || "Facility"} · ${dayMonth(input.charge_date)}`,
+    detail: `${window}used ${fmtHours(used)} h, free ${fmtHours(free)} h`,
+    usedHours: used,
+    freeHours: free,
+    billedHours: billed,
+    unitPrice,
+  };
+}
+
+export interface BookingChargeTotals { count: number; usedHours: number; freeHours: number; billedHours: number }
+
+/** Month total across live (non-waived) booking charges; callers show it from 2 bookings up. */
+export function bookingChargeTotals(views: BookingChargeView[]): BookingChargeTotals {
+  return {
+    count: views.length,
+    usedHours: round2(views.reduce((s, v) => s + v.usedHours, 0)),
+    freeHours: round2(views.reduce((s, v) => s + v.freeHours, 0)),
+    billedHours: round2(views.reduce((s, v) => s + v.billedHours, 0)),
+  };
+}
