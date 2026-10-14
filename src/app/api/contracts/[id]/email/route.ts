@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
+import { unvalidatedAutoDraftReason } from "@/lib/renewal-autodraft";
 
 const SENDABLE_STATUSES = ["draft", "rejected"];
 
@@ -57,6 +58,9 @@ export async function POST(
   if (fetchError || !contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
+
+  const notValidated = unvalidatedAutoDraftReason(contract);
+  if (notValidated) return NextResponse.json({ error: notValidated }, { status: 409 });
 
   // Get sender info
   const { data: sender } = await supabase

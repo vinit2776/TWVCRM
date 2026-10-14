@@ -33,8 +33,9 @@ export const maxDuration = 60;
  * Contracts are skipped if:
  *   - Already renewed (status = "renewed")
  *   - Renewal declined
- *   - Not active
- *   - A renewal draft already exists (parent_contract_id → this contract)
+ *   - Not active / renewal_in_progress
+ *   - The renewal has been sent to the customer (or is accepted/active). A
+ *     renewal still in draft does NOT stop the reminders.
  */
 
 const REMINDER_TIERS = [
@@ -83,7 +84,10 @@ async function handler(request: NextRequest) {
       lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile),
       location:locations!contracts_location_id_fkey(name)
     `)
-    .eq("status", "active")
+    // renewal_in_progress parents stay on the ladder: creating a draft (by hand
+    // or by the auto-draft job) flips the parent to that status, and the
+    // customer should keep being reminded until the renewal is actually sent.
+    .in("status", ["active", "renewal_in_progress"])
     .eq("renewal_declined", false)
     .gte("end_date", todayIST)
     .lte("end_date", sixtyDaysOut)
@@ -108,7 +112,9 @@ async function handler(request: NextRequest) {
     .from("contracts")
     .select("parent_contract_id")
     .in("parent_contract_id", contractIds)
-    .in("status", ["draft", "sent", "viewed", "accepted", "active"]);
+    // A renewal still in "draft" has not been sent to the customer yet, so it
+    // does not stop the ladder. Once it is sent (or beyond) the customer has it.
+    .in("status", ["sent", "viewed", "accepted", "active"]);
 
   const hasRenewalDraft = new Set(
     (existingRenewals || []).map((r) => r.parent_contract_id)
@@ -309,8 +315,8 @@ async function handler(request: NextRequest) {
  * is still not active.
  *
  * This is the gap that put August 2026 rent on four expired contracts. The
- * customer-facing ladder above deliberately stops once a renewal draft exists —
- * from the customer's side the renewal is handled. But a draft is not a live
+ * customer-facing ladder above stops once the renewal has been sent — from the
+ * customer's side the renewal is then handled. But a draft is not a live
  * contract: until it is activated the parent stays the only billable row, so
  * the month-end run charges the OLD contract at the new rate for a period the
  * new contract should own. Nothing was watching that window.

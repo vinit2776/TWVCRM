@@ -36,7 +36,9 @@ export async function GET(request: NextRequest) {
     .select(
       "id, contract_number, end_date, total_amount, billing_cycle, tenure_months, seats, renewal_declined, renewal_reminder_count, lead:leads(id, first_name, last_name, company, location_id)"
     )
-    .eq("status", "active")
+    // renewal_in_progress parents stay on the board: creating a draft flips the
+    // parent to that status, and the contract is still ending and at risk.
+    .in("status", ["active", "renewal_in_progress"])
     .gte("end_date", todayStr)
     .lte("end_date", in60Str)
     .order("end_date", { ascending: true });
@@ -75,14 +77,18 @@ export async function GET(request: NextRequest) {
   const contractIds = filtered.map((c) => c.id);
   const { data: existingRenewals } = await adminSupabase
     .from("contracts")
-    .select("parent_contract_id, status")
+    .select("parent_contract_id, status, renewal_auto_created, renewal_validated_at")
     .in("parent_contract_id", contractIds.length > 0 ? contractIds : ["__none__"])
     .in("status", ["draft", "sent", "viewed", "accepted", "active"]);
 
   const renewalStatusMap = new Map<string, string>();
+  const needsValidation = new Set<string>();
   for (const r of existingRenewals || []) {
     if (r.parent_contract_id) {
       renewalStatusMap.set(r.parent_contract_id, r.status);
+      if (r.status === "draft" && r.renewal_auto_created && !r.renewal_validated_at) {
+        needsValidation.add(r.parent_contract_id);
+      }
     }
   }
 
@@ -104,6 +110,7 @@ export async function GET(request: NextRequest) {
     let renewal_status: string;
     if (declined) renewal_status = "declined";
     else if (renewalDraftStatus === "active") renewal_status = "renewed";
+    else if (needsValidation.has(c.id)) renewal_status = "needs_validation";
     else if (renewalDraftStatus) renewal_status = "in_progress";
     else if (reminderCount > 0) renewal_status = "reminded";
     else renewal_status = "pending";

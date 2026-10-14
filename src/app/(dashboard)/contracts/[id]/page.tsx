@@ -90,6 +90,8 @@ import {
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
+import { RenewalValidationBanner } from "@/components/contracts/renewal-validation-banner";
+import { unvalidatedAutoDraftReason } from "@/lib/renewal-autodraft";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
@@ -1068,8 +1070,8 @@ export default function ContractDetailPage({
             !["rejected", "terminated", "completed"].includes(contract.status) && (
               <Button
                 onClick={handleInitiateSigning}
-                disabled={initiatingSigning || !leegalityEnabled}
-                title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead."}
+                disabled={initiatingSigning || !leegalityEnabled || !!unvalidatedAutoDraftReason(contract)}
+                title={unvalidatedAutoDraftReason(contract) ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead.")}
               >
                 {initiatingSigning ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1124,7 +1126,12 @@ export default function ContractDetailPage({
           )}
 
           {contract.status === "draft" && !contract.signed_document && (
-            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
+            <Button
+              variant="outline"
+              onClick={handleOpenEmailDialog}
+              disabled={statusUpdating || !!unvalidatedAutoDraftReason(contract)}
+              title={unvalidatedAutoDraftReason(contract) ?? undefined}
+            >
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
             </Button>
@@ -1430,6 +1437,13 @@ export default function ContractDetailPage({
           )}
         </div>
       </div>
+
+      <RenewalValidationBanner
+        contract={contract}
+        userRole={userRole}
+        onChanged={() => fetchContract(false)}
+        onEditTerms={() => setEditTermsDialogOpen(true)}
+      />
 
       {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
       {contract.lead_id && (
@@ -2205,6 +2219,11 @@ export default function ContractDetailPage({
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
                     <p className="font-semibold">⏳ Renewal in Progress</p>
                     <p>A renewal draft has been created and is awaiting finalization. This contract remains active until the renewal is activated.</p>
+                    {renewalDraft?.renewal_auto_created && !renewalDraft?.renewal_validated_at && (
+                      <p className="font-medium text-amber-900">
+                        Created automatically. It needs validating before it can be sent to the customer.
+                      </p>
+                    )}
                     {renewalDraft && (
                       <Link
                         href={`/contracts/${renewalDraft.id}`}
