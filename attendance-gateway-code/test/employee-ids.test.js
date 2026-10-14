@@ -43,7 +43,7 @@ function setup() {
     CREATE TABLE correction_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, decided_by TEXT);
     CREATE TABLE overtime_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL);
     CREATE TABLE field_trips (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL);
-    CREATE TABLE employee_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL);
+    CREATE TABLE employee_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, uploaded_by TEXT);
     CREATE TABLE device_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, requested_by TEXT);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, updated_by TEXT NOT NULL DEFAULT '');
   `);
@@ -62,6 +62,15 @@ function runBatch(db, statements) {
   }
 }
 
+// Columns holding an actor's username rather than the subject's employee id.
+const ACTOR_COLUMNS = [
+  ['punches', 'marked_by'],
+  ['correction_requests', 'decided_by'],
+  ['device_commands', 'requested_by'],
+  ['app_settings', 'updated_by'],
+  ['employee_documents', 'uploaded_by'],
+];
+
 const EMPLOYEE_TABLES = [
   'punches', 'breaks', 'notifications', 'leave_requests', 'permission_requests',
   'correction_requests', 'overtime_requests', 'field_trips', 'employee_documents',
@@ -78,6 +87,7 @@ test('renaming moves every record and the login to the new id, leaving nothing b
     INSERT INTO correction_requests (employee_id, decided_by) VALUES ('EMP-002', 'EMP-001');
     INSERT INTO device_commands (requested_by) VALUES ('EMP-001');
     INSERT INTO app_settings VALUES ('office_radius', 'EMP-001');
+    INSERT INTO employee_documents (employee_id, uploaded_by) VALUES ('EMP-002', 'EMP-001');
   `);
   for (const table of EMPLOYEE_TABLES) db.prepare(`INSERT INTO ${table} (employee_id) VALUES ('EMP-001')`).run();
 
@@ -96,10 +106,17 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   assert.equal(db.prepare('SELECT decided_by FROM correction_requests WHERE employee_id = ?').get('EMP-002').decided_by, 'EMP-027');
   assert.equal(db.prepare('SELECT requested_by FROM device_commands').get().requested_by, 'EMP-027');
   assert.equal(db.prepare('SELECT updated_by FROM app_settings').get().updated_by, 'EMP-027');
+  assert.equal(db.prepare('SELECT uploaded_by FROM employee_documents WHERE employee_id = ?').get('EMP-002').uploaded_by, 'EMP-027');
 
   // Nothing anywhere still points at the old id.
   for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions']) {
     assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE employee_id = 'EMP-001'`).get().c, 0, table);
+  }
+  // The "done by" columns hold the actor's username, which for a manager is their
+  // employee id. Sweeping these as well as employee_id is what would have caught
+  // employee_documents.uploaded_by being missed.
+  for (const [table, column] of ACTOR_COLUMNS) {
+    assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE ${column} = 'EMP-001'`).get().c, 0, `${table}.${column}`);
   }
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM employees WHERE id = 'EMP-001' OR reports_to = 'EMP-001'").get().c, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM users WHERE username = 'EMP-001'").get().c, 0);
