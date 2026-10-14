@@ -47,10 +47,21 @@ export async function GET(request: NextRequest) {
     if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 });
 
     const rows = (rpcRows ?? []) as { data: Record<string, unknown>; total_count: number }[];
-    const total = rows[0]?.total_count ?? 0;
+    // search_contracts has no terminated_after argument, so apply the cutoff
+    // here — otherwise it only worked on the direct-query path below. It runs
+    // after the RPC's limit, so it can only trim rows, never recover ones the
+    // limit cut. Falls back to end_date for terminated rows with no terminated_at.
+    const kept = terminatedAfter
+      ? rows.filter(r => {
+          if (r.data.status !== "terminated") return true;
+          const endedOn = (r.data.terminated_at ?? r.data.end_date) as string | null | undefined;
+          return !!endedOn && endedOn >= terminatedAfter;
+        })
+      : rows;
+    const total = Math.max(0, Number(rows[0]?.total_count ?? 0) - (rows.length - kept.length));
     return NextResponse.json({
-      data: rows.map(r => r.data),
-      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+      data: kept.map(r => r.data),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   }
 
