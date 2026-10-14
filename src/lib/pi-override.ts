@@ -7,7 +7,7 @@
  * contract flipped to GST Direct after a PI already went out (TWV-C-0155)
  * still holds a live PI that someone has to be able to convert.
  */
-export const PI_OVERRIDE_ROLES = ["admin", "manager", "sales_rep"] as const;
+export const PI_OVERRIDE_ROLES = ["admin", "manager", "accounts", "sales_rep"] as const;
 
 export function canOverridePiToGst(role: string | null | undefined): boolean {
   return !!role && (PI_OVERRIDE_ROLES as readonly string[]).includes(role);
