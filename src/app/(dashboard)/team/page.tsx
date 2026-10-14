@@ -1058,6 +1058,7 @@ export default function TeamPage() {
                       <SelectItem value="office_admin">Office Administrator</SelectItem>
                       <SelectItem value="it_team">IT Team</SelectItem>
                       <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1243,6 +1244,7 @@ export default function TeamPage() {
                   <SelectItem value="office_admin">Office Administrator</SelectItem>
                   <SelectItem value="it_team">IT Team</SelectItem>
                   <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                 </SelectContent>
               </Select>
             </div>

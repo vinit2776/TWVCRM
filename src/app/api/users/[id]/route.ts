@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit";
 const VALID_ROLES = [
   "admin", "manager", "sales_rep", "floor_manager", "accounts",
   "fms", "office_admin", "it_manager", "it_technician", "viewer",
+  "enquiry_viewer",
 ];
 
 export async function GET(

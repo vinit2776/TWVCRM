@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { ENQUIRY_SELECT } from "@/lib/enquiries";
+import { ENQUIRY_SELECT, type RawEnquiryRow } from "@/lib/enquiries";
+import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 
 // GET /api/leads/enquiry-log — one row per public-form enquiry (lead_enquiries).
 //   ?source=google_ads|meta_ads|direct_walkin
@@ -68,6 +69,18 @@ export async function GET(request: NextRequest) {
     },
     { total: 0, unresolved: 0, converted: 0, notInterested: 0, noResponse: 0, superseded: 0 }
   );
+
+  // An enquiry_viewer (e.g. the social media manager) follows enquiry activity, not the
+  // customers: strip contact details here so they never reach that browser.
+  const { data: me } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  if (me?.role === ENQUIRY_VIEWER_ROLE) {
+    const masked = (data as unknown as RawEnquiryRow[]).map((row) => ({
+      ...row,
+      payload: row.payload?.name ? { name: row.payload.name } : null,
+      lead: row.lead ? { ...row.lead, mobile: null } : row.lead,
+    }));
+    return NextResponse.json({ data: masked, summary });
+  }
 
   return NextResponse.json({ data, summary });
 }
