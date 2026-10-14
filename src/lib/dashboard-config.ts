@@ -181,6 +181,9 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "sla_risk",
   ],
 
+  // Enquiry Log Viewer — confined to /leads/enquiry-log; the dashboard is never shown
+  enquiry_viewer: [],
+
   // Management Viewer — read-only observer; sees high-level KPIs across all areas
   viewer: [
     "kpi_stats",
