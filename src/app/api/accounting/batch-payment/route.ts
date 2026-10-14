@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
   const billIds = bills.map((b) => b.bill_id);
   const { data: dbBills, error: fetchErr } = await adminSupabase
     .from("vendor_bills")
-    .select("id, bill_number, approval_status, payment_status, total_amount, amount_paid, approved_amount, gst_amount")
+    .select("id, bill_number, approval_status, payment_status, payment_hold_status, payment_hold_reason, total_amount, amount_paid, approved_amount, gst_amount")
     .in("id", billIds);
 
   if (fetchErr || !dbBills) {
@@ -119,6 +119,12 @@ export async function POST(request: NextRequest) {
     }
     if (bill.payment_status === "paid") {
       validationErrors.push(`${bill.bill_number}: already fully paid`);
+      continue;
+    }
+    // Validation runs before anything is paid, so one held bill refuses the whole batch.
+    if (bill.payment_hold_status === "on_hold") {
+      const reason = bill.payment_hold_reason ? ` (${bill.payment_hold_reason.replace(/_/g, " ")})` : "";
+      validationErrors.push(`${bill.bill_number}: on hold${reason}`);
       continue;
     }
 
