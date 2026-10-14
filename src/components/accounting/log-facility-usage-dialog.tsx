@@ -37,7 +37,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, AlertCircle, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
-import { usageContractLabel } from "@/lib/usage-contract-label";
+import { usageContractOption } from "@/lib/usage-contract-label";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -268,10 +268,7 @@ export function LogFacilityUsageDialog({
               placeholder={contractsLoading ? "Loading…" : "Select active contract"}
               searchPlaceholder="Search by contract # or customer…"
               emptyMessage="No matching contracts found."
-              options={contracts.map(c => ({
-                value: c.id,
-                label: usageContractLabel(c),
-              }))}
+              options={contracts.map(usageContractOption)}
             />
             {contracts.length === 0 && !contractsLoading && (
               <p className="text-[11px] text-muted-foreground mt-1">No active contracts found.</p>
