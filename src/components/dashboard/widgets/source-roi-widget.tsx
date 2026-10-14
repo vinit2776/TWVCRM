@@ -5,6 +5,7 @@ import { Target, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LEAD_SOURCE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface SourceRow {
   source: string;
@@ -34,7 +35,7 @@ export function SourceRoiWidget({ locationFilter }: SourceRoiWidgetProps) {
     try {
       const params = new URLSearchParams();
       if (locationFilter) params.set("location_id", locationFilter);
-      const res = await fetch(`/api/dashboard/source-roi?${params}`);
+      const res = await dashboardFetch(`/api/dashboard/source-roi?${params}`);
       const json = await res.json();
       setData(json.data ?? null);
     } catch {

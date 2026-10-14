@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ReceiptText, ScrollText, Wallet, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface FinancialSummary {
   unpaid_vendor_bills: number;
@@ -17,7 +18,7 @@ export function FinancialSummaryWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/financial")
+    dashboardFetch("/api/dashboard/financial")
       .then((r) => r.json())
       .then((json) => setData(json.data ?? null))
       .catch(() => setData(null))

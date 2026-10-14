@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlarmClock, Loader2, Inbox } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface OvertimeItem {
   id: string;
@@ -26,7 +27,7 @@ export function PendingOvertimeChargesWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/pending-overtime-charges")
+    dashboardFetch("/api/dashboard/pending-overtime-charges")
       .then((r) => r.json())
       .then((j) => setData(j.data ?? null))
       .catch(() => setData(null))
