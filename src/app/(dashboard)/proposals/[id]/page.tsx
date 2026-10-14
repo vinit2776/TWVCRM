@@ -24,6 +24,7 @@ import {
   ScrollText,
   Pencil,
   Lock,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,6 +59,8 @@ import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { ExtendValidityDialog } from "@/components/proposals/extend-validity-dialog";
+import { effectiveExpiryDate } from "@/lib/proposal-followups";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
@@ -90,6 +93,7 @@ export default function ProposalDetailPage({
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
   const [loading, setLoading] = useState(true);
   const [editProposalOpen, setEditProposalOpen] = useState(false);
+  const [extendOpen, setExtendOpen] = useState(false);
 
   // Current user (rep) profile for PDF/email attribution
   const { user: currentUser } = useCurrentUser();
@@ -1021,6 +1025,16 @@ export default function ProposalDetailPage({
               </DropdownMenu>
             );
           })()}
+          {["sent", "viewed", "expired"].includes(proposal.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setExtendOpen(true)}
+            >
+              <Clock className="mr-2 h-4 w-4" />
+              {proposal.status === "expired" ? "Extend and revive" : "Extend"}
+            </Button>
+          )}
           {(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(proposal.status) && (
             <Button
               variant="outline"
@@ -1056,6 +1070,22 @@ export default function ProposalDetailPage({
           )}
         </div>
       </div>
+
+      {/* Follow-up status: what the automatic nudges have done and when it lapses */}
+      {proposal.status === "expired" && (
+        <div className="rounded-md border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm text-orange-800">
+          Expired{proposal.expired_at ? ` on ${formatDate(proposal.expired_at)}` : ""}
+          {proposal.nudge_2_sent_at ? " with no response after two reminders" : ""}.
+          Extend the date to bring it back.
+        </div>
+      )}
+      {(proposal.status === "sent" || proposal.status === "viewed") && (proposal.nudge_1_sent_at || proposal.nudge_2_sent_at) && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
+          {proposal.nudge_1_sent_at && <>Reminder 1 emailed to the customer on {formatDate(proposal.nudge_1_sent_at)}. </>}
+          {proposal.nudge_2_sent_at && <>Reminder 2 emailed on {formatDate(proposal.nudge_2_sent_at)}. </>}
+          {effectiveExpiryDate(proposal as never) && <>Expires automatically after {formatDate(effectiveExpiryDate(proposal as never) as string)}.</>}
+        </div>
+      )}
 
       {/* Lifecycle Timeline */}
       <Card>
@@ -1758,6 +1788,19 @@ export default function ProposalDetailPage({
                   </div>
                 </>
               )}
+              {(proposal.nudge_1_sent_at || proposal.nudge_2_sent_at) && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Reminder 1</span>
+                    <span>{proposal.nudge_1_sent_at ? formatDate(proposal.nudge_1_sent_at) : "—"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Reminder 2</span>
+                    <span>{proposal.nudge_2_sent_at ? formatDate(proposal.nudge_2_sent_at) : "—"}</span>
+                  </div>
+                </>
+              )}
               <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Created</span>
@@ -1830,6 +1873,18 @@ export default function ProposalDetailPage({
       </div>
 
       {/* Edit Proposal Dialog */}
+      <ExtendValidityDialog
+        proposalId={proposal.id}
+        currentValidUntil={proposal.valid_until}
+        isExpired={proposal.status === "expired"}
+        open={extendOpen}
+        onOpenChange={setExtendOpen}
+        onDone={(editAfter) => {
+          fetchProposal();
+          if (editAfter) setEditProposalOpen(true);
+        }}
+      />
+
       {editProposalOpen && proposal.lead_id && (
         <ProposalForm
           leadId={proposal.lead_id}
