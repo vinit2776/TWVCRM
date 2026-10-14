@@ -123,6 +123,11 @@ export default function ProposalsPage() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge>
+                    {["sent", "viewed"].includes(p.status) && (p.nudge_1_sent_at || p.nudge_2_sent_at) && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200">
+                        {p.nudge_2_sent_at ? "Reminder 2 sent" : "Reminder 1 sent"}
+                      </span>
+                    )}
                     {/* Deposit status badge — shown when deposit is required but not yet collected */}
                     {Number(p.security_deposit_months || 0) > 0 && p.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(p.status) && (
                       <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${

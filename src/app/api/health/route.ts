@@ -41,6 +41,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/storage-backup":          DAILY,
   "cron/contract-expiry":         DAILY,
   "cron/lead-reminder-digest":    DAILY,
+  "cron/proposal-followups":      DAILY,
   "cron/vo-renewal":              DAILY,
   "cron/renewal-reminders":       DAILY,
   "cron/lease-payment-reminders": DAILY,
