@@ -16,7 +16,7 @@ interface RenewalItem {
   seats: number;
   customer: string;
   lead_id: string | null;
-  renewal_status: "pending" | "reminded" | "in_progress" | "declined" | "renewed";
+  renewal_status: "pending" | "reminded" | "in_progress" | "needs_validation" | "declined" | "renewed";
   reminder_count: number;
 }
 
@@ -34,6 +34,7 @@ const RENEWAL_STATUS_CONFIG: Record<string, { label: string; color: string; icon
   pending:     { label: "No action",    color: "bg-gray-100 text-gray-600",   icon: CalendarX },
   reminded:    { label: "Reminded",     color: "bg-blue-100 text-blue-700",   icon: Bell },
   in_progress: { label: "Draft",        color: "bg-emerald-100 text-emerald-700", icon: FileText },
+  needs_validation: { label: "Validate draft", color: "bg-amber-100 text-amber-700", icon: FileText },
   declined:    { label: "Declined",     color: "bg-red-100 text-red-700",     icon: XCircle },
   renewed:     { label: "Renewed",      color: "bg-green-100 text-green-700", icon: CheckCircle2 },
 };

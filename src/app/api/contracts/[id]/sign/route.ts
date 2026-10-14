@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
+import { unvalidatedAutoDraftReason } from "@/lib/renewal-autodraft";
 import {
   uploadForEStampAndSigning,
   getSigningStatus,
@@ -86,6 +87,8 @@ export async function POST(
 
   switch (action) {
     case "initiate": {
+      const notValidated = unvalidatedAutoDraftReason(contract);
+      if (notValidated) return NextResponse.json({ error: notValidated }, { status: 409 });
       if (["rejected", "terminated", "completed"].includes(contract.status)) {
         return NextResponse.json(
           { error: "Cannot initiate e-signing on a rejected, terminated, or completed contract" },

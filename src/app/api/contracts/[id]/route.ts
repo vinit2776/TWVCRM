@@ -1,3 +1,4 @@
+import { unvalidatedAutoDraftReason } from "@/lib/renewal-autodraft";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
@@ -257,6 +258,11 @@ export async function PATCH(
       return NextResponse.json({
         error: `Cannot move contract from "${oldContract.status}" to "${body.status}". Allowed transitions: ${(allowed || []).join(", ") || "none (terminal status)"}`,
       }, { status: 400 });
+    }
+
+    if (["sent", "viewed", "accepted", "active"].includes(body.status)) {
+      const notValidated = unvalidatedAutoDraftReason(oldContract);
+      if (notValidated) return NextResponse.json({ error: notValidated }, { status: 409 });
     }
 
     const now = new Date().toISOString();

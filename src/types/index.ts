@@ -713,6 +713,11 @@ export interface Contract {
   renewal_reminder_count?: number;
   // Decline tracking
   renewal_declined?: boolean;
+  renewal_auto_created?: boolean;
+  renewal_auto_created_at?: string | null;
+  renewal_validated_at?: string | null;
+  renewal_validated_by?: string | null;
+  renewal_validation_nudged_at?: string | null;
   renewal_declined_reason?: string | null;
   renewal_declined_at?: string | null;
   renewal_declined_by?: string | null;
