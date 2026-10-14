@@ -22,6 +22,9 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
+const {
+  formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
+} = require('./employee-ids');
 
 // Two roles have full run of the app — 'admin' and 'manager' are deliberately
 // equivalent everywhere, including settings and password resets. The only
@@ -433,6 +436,10 @@ const db = {
     };
   },
   exec(sql) { return _dbClient.executeMultiple(sql); },
+  // All-or-nothing: libSQL runs a 'write' batch as a single transaction.
+  batch(statements) {
+    return _dbClient.batch(statements.map(({ sql, args }) => ({ sql, args: _bindArgs(args) })), 'write');
+  },
 };
 
 const SCHEMA_SQL = `
@@ -3457,18 +3464,34 @@ async function renderAdminRemotePunches(punches, user) {
   return pageShell('Remote Punches', '', 'remote-punches', body, user);
 }
 
-// IDs are EMP-00N today, but padding shouldn't cap the count — padStart(3) just
-// stops padding once the number itself is 3+ digits, it doesn't truncate.
+// Only a suggestion for the registration form — the admin overrides it with the
+// person's Emp ID # from HR records (see employee-ids.js).
 async function nextEmployeeId() {
-  const employees = await allEmployees();
-  const maxN = employees.reduce((max, e) => {
-    const n = parseInt(String(e.id).replace(/^EMP-0*/, ''), 10);
-    return Number.isFinite(n) && n > max ? n : max;
-  }, 0);
-  return `EMP-${String(maxN + 1).padStart(3, '0')}`;
+  return formatEmployeeId(nextEmployeeNumber(await allEmployees()));
 }
 
-async function renderEmployeeRegistration(user, error, justCreated) {
+// Who already holds this id, as an employee or as a login username — either would
+// collide. Returns a human description for the error message, or null if it's free.
+async function employeeIdHolder(id) {
+  const employee = await getEmployee(id);
+  if (employee) return `${employee.name} (${employee.id})`;
+  const account = await db.prepare('SELECT username FROM users WHERE username = ?').get(id);
+  return account ? `the login "${account.username}"` : null;
+}
+
+// The "EMP-[ 15 ]" input shared by the registration and edit forms.
+function employeeIdField(number) {
+  return `
+        <div>
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Emp ID # <span style="color:#9AA5B1;">(from HR records)</span></label>
+          <div style="display:flex;align-items:center;border:1px solid #D0D5DA;border-radius:6px;overflow:hidden;background:#fff;">
+            <span style="padding:6px 4px 6px 8px;color:#7C8896;background:#F5F6F8;">EMP-</span>
+            <input type="number" name="employee_number" required min="1" max="99999" step="1" value="${escapeHtml(String(number))}" style="padding:6px;border:none;width:80px;">
+          </div>
+        </div>`;
+}
+
+async function renderEmployeeRegistration(user, error, justCreated, renamed) {
   const existingEmployees = await allEmployees();
   const accountRoles = await accountRolesByEmployeeId();
   const reportsToOptions = existingEmployees
@@ -3522,13 +3545,23 @@ Password: password123</code>
       }
     </script>` : '';
 
+  // Shown once after an Emp ID change — the login username moved with it, and the
+  // employee has to be told, since nothing else in the app will tell them.
+  const renamedCard = renamed ? `
+    <div class="card" style="border-color:#2E7D32;">
+      <div style="font-weight:700;margin-bottom:6px;">${escapeHtml(renamed.name)} is now ${escapeHtml(renamed.id)}</div>
+      <div style="color:#7C8896;font-size:0.9em;">Their login username changed from <strong>${escapeHtml(renamed.from)}</strong> to <strong>${escapeHtml(renamed.id)}</strong>. Their password has not changed &mdash; let them know the new username.</div>
+    </div>` : '';
+
   const body = `
     ${error ? `<div class="card" style="color:#C62828;">${escapeHtml(error)}</div>` : ''}
     ${credentialsCard}
+    ${renamedCard}
     <div class="card">
       <div style="font-weight:700;margin-bottom:10px;">Employee Registration</div>
-      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">New employee will be enrolled as <strong>${escapeHtml(nextId)}</strong>.</p>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Enter the employee's Emp ID # from HR records &mdash; #2 is saved as EMP-002. It is also their login username.</p>
       <form method="POST" action="/admin/employee-registration" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+${employeeIdField(parseEmployeeNumber(nextId))}
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">Name</label>
           <input type="text" name="name" required style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
@@ -3612,6 +3645,7 @@ async function renderEditEmployee(employee, user, error) {
       <div style="font-weight:700;margin-bottom:10px;">Edit Employee &mdash; ${escapeHtml(employee.id)}</div>
       <form method="POST" action="/admin/employee/edit" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="employee_id" value="${escapeHtml(employee.id)}">
+${employeeIdField(parseEmployeeNumber(employee.id) || '')}
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">Name</label>
           <input type="text" name="name" required value="${escapeHtml(employee.name)}" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
@@ -5447,7 +5481,11 @@ async function handleRequest(req, res) {
       const proto = req.headers['x-forwarded-proto'] || 'https';
       justCreated = { ...justCreated, loginUrl: `${proto}://${req.headers.host}` };
     }
-    return sendHtml(res, await renderEmployeeRegistration(user, null, justCreated));
+    const renamedEmployee = await getEmployee(parsed.searchParams.get('renamed'));
+    const renamed = renamedEmployee
+      ? { id: renamedEmployee.id, name: renamedEmployee.name, from: parsed.searchParams.get('from') || '' }
+      : null;
+    return sendHtml(res, await renderEmployeeRegistration(user, null, justCreated, renamed));
   }
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'POST') {
@@ -5485,35 +5523,40 @@ async function handleRequest(req, res) {
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown "reports to" employee.'));
     }
-    // nextEmployeeId() reads the current max and is not atomic with the insert below —
-    // two admins registering at once (or one impatient double-tap) can both compute the
-    // same id and race to insert it. Rather than let the loser crash with an unhandled
-    // UNIQUE constraint error (which the global handler would show as a bare "Something
-    // went wrong"), retry with a freshly recomputed id a few times before giving up.
-    let id;
-    const MAX_ID_RACE_RETRIES = 5;
-    for (let attempt = 1; ; attempt++) {
-      id = await nextEmployeeId();
-      try {
-        await db.prepare(
-          'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to, mobile, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null);
-        break;
-      } catch (err) {
-        const isIdCollision = /unique constraint/i.test(err && err.message || '') && /employees/i.test(err && err.message || '');
-        if (!isIdCollision || attempt >= MAX_ID_RACE_RETRIES) {
-          if (isIdCollision) {
-            return sendHtml(res, await renderEmployeeRegistration(user, 'Another registration just took this employee ID — please try again.'));
-          }
-          throw err;
-        }
-        // Loop again with a newly computed id; another INSERT has landed in the meantime.
+    const employeeNumber = parseEmployeeNumber(form.employee_number);
+    if (!employeeNumber) {
+      return sendHtml(res, await renderEmployeeRegistration(user, 'Enter the Emp ID # as a number, e.g. 15.'));
+    }
+    const id = formatEmployeeId(employeeNumber);
+    const holder = await employeeIdHolder(id);
+    if (holder) {
+      return sendHtml(res, await renderEmployeeRegistration(user, `${id} is already used by ${holder}. Check the Emp ID # against HR records.`));
+    }
+    // Employee row, leave balances and login go in together — a half-registered
+    // employee with no login (or a login with no employee) would need hand repair.
+    try {
+      await db.batch([
+        {
+          sql: 'INSERT INTO employees (id, name, shift_start, shift_end, date_joined, role, designation, branch, reports_to, mobile, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          args: [id, name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null],
+        },
+        ...BALANCE_POOL_LEAVE_TYPES.map(type => ({
+          sql: 'INSERT INTO leave_balances (employee_id, leave_type, balance) VALUES (?, ?, ?)',
+          args: [id, type, DEFAULT_LEAVE_BALANCE[type]],
+        })),
+        {
+          sql: 'INSERT INTO users (username, password_hash, role, employee_id, must_change_password) VALUES (?, ?, ?, ?, 1)',
+          args: [id, hashPassword('password123'), accountRole, id],
+        },
+      ]);
+    } catch (err) {
+      // Two admins registering the same Emp ID # at the same moment — the check above
+      // passed for both, the database let only one through.
+      if (/unique constraint/i.test(err && err.message || '')) {
+        return sendHtml(res, await renderEmployeeRegistration(user, `${id} was just taken by another registration. Check the Emp ID # and try again.`));
       }
+      throw err;
     }
-    for (const type of BALANCE_POOL_LEAVE_TYPES) {
-      await db.prepare('INSERT INTO leave_balances (employee_id, leave_type, balance) VALUES (?, ?, ?)').run(id, type, DEFAULT_LEAVE_BALANCE[type]);
-    }
-    await db.prepare('INSERT INTO users (username, password_hash, role, employee_id, must_change_password) VALUES (?, ?, ?, ?, 1)').run(id, hashPassword('password123'), accountRole, id);
     await logAdminAction(user.username, 'add_employee', 'employee', id, `${name} (${accountRole})`);
     // Back to this form (not straight to the dashboard) so the admin sees the new
     // login details immediately, in the one place they need to copy them from.
@@ -5669,6 +5712,19 @@ async function handleRequest(req, res) {
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown "reports to" employee.'));
     }
+    // A blank/absent field (an old cached form) keeps the current id; anything typed
+    // must be a valid number.
+    const employeeNumber = (form.employee_number || '').trim() ? parseEmployeeNumber(form.employee_number) : null;
+    if ((form.employee_number || '').trim() && !employeeNumber) {
+      return sendHtml(res, await renderEditEmployee(employee, user, 'Enter the Emp ID # as a number, e.g. 15.'));
+    }
+    const newId = employeeNumber ? formatEmployeeId(employeeNumber) : employeeId;
+    if (newId !== employeeId) {
+      const holder = await employeeIdHolder(newId);
+      if (holder) {
+        return sendHtml(res, await renderEditEmployee(employee, user, `${newId} is already used by ${holder}. Change that employee's Emp ID # first.`));
+      }
+    }
     const currentAccountRole = await accountRoleForEmployee(employeeId);
     // Same "absent or invalid keeps the current value" rule as branch above — an old
     // cached form or a stray request without this field must not silently demote
@@ -5677,15 +5733,30 @@ async function handleRequest(req, res) {
     await db.prepare(
       'UPDATE employees SET name = ?, shift_start = ?, shift_end = ?, date_joined = ?, role = ?, designation = ?, branch = ?, reports_to = ?, mobile = ?, email = ? WHERE id = ?'
     ).run(name, shiftStart, shiftEnd, dateJoined, role || null, designation || null, branch || null, reportsTo || null, mobile, email || null, employeeId);
+    if (newId !== employeeId) {
+      try {
+        await db.batch(renameEmployeeStatements(employeeId, newId));
+      } catch (err) {
+        if (/unique constraint/i.test(err && err.message || '')) {
+          return sendHtml(res, await renderEditEmployee(await getEmployee(employeeId), user, `${newId} was just taken, so the Emp ID # was not changed. Check it and try again.`));
+        }
+        throw err;
+      }
+      await logAdminAction(user.username, 'change_employee_id', 'employee', newId, `${name}: ${employeeId} -> ${newId}`);
+    }
     if (accountRole !== currentAccountRole) {
-      await db.prepare('UPDATE users SET role = ? WHERE employee_id = ?').run(accountRole, employeeId);
+      await db.prepare('UPDATE users SET role = ? WHERE employee_id = ?').run(accountRole, newId);
       // Session role is copied in at login time, not re-read per request — without this,
       // the old permission level would keep working until the account's next login.
-      await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(employeeId);
-      await logAdminAction(user.username, 'change_account_role', 'employee', employeeId, `${name}: ${currentAccountRole} -> ${accountRole}`);
+      await db.prepare('DELETE FROM sessions WHERE employee_id = ?').run(newId);
+      await logAdminAction(user.username, 'change_account_role', 'employee', newId, `${name}: ${currentAccountRole} -> ${accountRole}`);
     }
-    await logAdminAction(user.username, 'edit_employee', 'employee', employeeId, name);
-    res.writeHead(302, { Location: '/admin/employee-registration' });
+    await logAdminAction(user.username, 'edit_employee', 'employee', newId, name);
+    res.writeHead(302, {
+      Location: newId !== employeeId
+        ? `/admin/employee-registration?renamed=${encodeURIComponent(newId)}&from=${encodeURIComponent(employeeId)}`
+        : '/admin/employee-registration',
+    });
     return res.end();
   }
 
