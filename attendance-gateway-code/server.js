@@ -4573,6 +4573,22 @@ async function handleRequest(req, res) {
       if (!['wifi', 'remote'].includes(punchSource)) {
         return sendJson(res, 403, { error: 'Only office WiFi or remote punches are allowed from a logged-in session.' });
       }
+      // The Punch button records "now", decided here. Accepting a time (or a direction,
+      // or who marked it) from the browser would let anyone backdate or reshape their
+      // own attendance by editing the request; the button never sends these.
+      if (timestamp !== undefined || direction !== undefined || marked_by !== undefined) {
+        logSecurityEvent('punch_field_rejected', { ip: getClientIp(req), employeeId: sessionUser.employeeId, timestamp: timestamp !== undefined, direction: direction !== undefined, markedBy: marked_by !== undefined });
+        return sendJson(res, 400, { error: "A punch from the app is always recorded at the current time." });
+      }
+    } else {
+      // The device (or its middleware) sends its own punch times, e.g. when catching up
+      // after an outage. Malformed ones would be stored as-is and break day matching.
+      if (timestamp !== undefined && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(String(timestamp))) {
+        return sendJson(res, 400, { error: 'timestamp must be "YYYY-MM-DD HH:MM:SS"' });
+      }
+      if (direction !== undefined && !['in', 'out'].includes(direction)) {
+        return sendJson(res, 400, { error: 'direction must be "in" or "out"' });
+      }
     }
 
     const employee = await getEmployee(employee_id);
