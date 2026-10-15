@@ -1,5 +1,7 @@
 "use client";
 
+import { PaymentDateFields } from "@/components/billing/payment-date-fields";
+import { todayIst } from "@/lib/payment-dates";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -67,7 +69,7 @@ export function RecordPaymentDialog({
   open, onOpenChange, statementId, statementNumber, partyLabel, balanceDue, onSuccess, prefill,
 }: RecordPaymentDialogProps) {
   const [amount, setAmount]       = useState("");
-  const [date, setDate]           = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate]           = useState(todayIst());
   const [mode, setMode]           = useState("neft");
   const [reference, setReference] = useState("");
   const [notes, setNotes]         = useState("");
@@ -104,7 +106,7 @@ export function RecordPaymentDialog({
             ? String(balanceDue)
             : "",
       );
-      setDate(prefill?.date || new Date().toISOString().slice(0, 10));
+      setDate(prefill?.date || todayIst());
       setMode(prefill?.mode || "neft");
       setReference(prefill?.reference || "");
       setNotes("");
@@ -292,10 +294,7 @@ export function RecordPaymentDialog({
               <Label>{isDepositMode ? "Amount to settle (₹)" : "Amount received (₹)"}</Label>
               <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 15000" />
             </div>
-            <div className="space-y-2">
-              <Label>Payment Date</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            </div>
+            <PaymentDateFields value={date} onChange={setDate} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

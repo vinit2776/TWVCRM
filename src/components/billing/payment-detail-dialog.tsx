@@ -14,11 +14,15 @@ import {
 } from "@/components/ui/dialog";
 import { IndianRupee, CreditCard, Hash, Calendar, User, StickyNote, History } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatRecordedOn } from "@/lib/payment-dates";
 
 export interface PaymentDetail {
   id: string;
   amount: number;
+  /** When the money reached the bank (typed by whoever recorded it). */
   payment_date: string;
+  /** When it was entered into the CRM (set by the database). */
+  created_at?: string;
   payment_mode: string;
   payment_reference: string | null;
   razorpay_payment_id: string | null;
@@ -89,9 +93,15 @@ export function PaymentDetailDialog({
                       <td className="py-1.5 text-right font-mono text-xs">{payment.razorpay_payment_id || payment.payment_reference || "—"}</td>
                     </tr>
                     <tr>
-                      <td className="py-1.5 text-muted-foreground"><Calendar className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Paid on</td>
+                      <td className="py-1.5 text-muted-foreground"><Calendar className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Received in bank</td>
                       <td className="py-1.5 text-right">{formatDate(payment.payment_date)}</td>
                     </tr>
+                    {payment.created_at && (
+                      <tr>
+                        <td className="py-1.5 text-muted-foreground"><Calendar className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Recorded in CRM</td>
+                        <td className="py-1.5 text-right">{formatRecordedOn(payment.created_at)}</td>
+                      </tr>
+                    )}
                     <tr>
                       <td className="py-1.5 text-muted-foreground"><User className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />Recorded by</td>
                       <td className="py-1.5 text-right">{isRazorpayAuto ? "Captured via Razorpay" : payment.recorded_by_user?.full_name || "—"}</td>
