@@ -234,6 +234,9 @@ function NewPurchaseOrderFormWithPr({
   const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
 
   const selectedVendor = vendors.find((v) => v.id === vendorId);
+  // Mirrors the server rule in POST /api/procurement/orders — services can't be
+  // ordered on a goods PO because they would never get cycle billing.
+  const isServiceOrder = prData?.department === "amc" || !!selectedVendor?.is_service_provider;
 
   const handleVendorChange = async (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
@@ -491,13 +494,15 @@ function NewPurchaseOrderFormWithPr({
                 ))}
               </SelectContent>
             </Select>
-            {selectedVendor?.is_service_provider && (
+            {isServiceOrder && (
               <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 <p>
-                  <strong>{selectedVendor.name}</strong> is a service provider. Services (internet, AMC, etc.)
-                  shouldn&apos;t be ordered on a goods PO — it would be received as goods with quantities
-                  instead of being tracked as a service.{" "}
+                  {selectedVendor?.is_service_provider
+                    ? <><strong>{selectedVendor.name}</strong> is a service provider.</>
+                    : <>This is an AMC request.</>}{" "}
+                  Services (internet, AMC, etc.) can&apos;t be ordered on a goods PO — they need a service
+                  PO so each cycle gets a service report and one invoice.{" "}
                   <Link
                     href={prData?.department === "amc" && prId
                       ? `/procurement/orders/new-service?from_mr=${prId}`
@@ -863,7 +868,7 @@ function NewPurchaseOrderFormWithPr({
               Total: {totalOrdered > 0 ? formatCurrency(totalOrdered + totalGst) : "—"}
             </p>
           </div>
-          <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered} size="lg">
+          <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered || isServiceOrder} size="lg">
             {submitting ? (
               <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Creating…</>
             ) : allItemsFullyOrdered ? (

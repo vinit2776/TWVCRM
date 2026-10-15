@@ -319,6 +319,27 @@ export async function POST(request: NextRequest) {
       }, { status: 422 });
     }
 
+    // Goods POs: the per-bill ceiling above stops one oversized invoice, but not
+    // several that together exceed the PO — which is how a duplicate upload slips
+    // through. Rejected bills free their value back up, and so does the bill this
+    // one replaces.
+    if (po.po_type !== "service" && ceiling !== null && ceiling > 0) {
+      const { data: liveBills } = await supabase
+        .from("vendor_bills")
+        .select("id, total_amount, bill_number")
+        .eq("po_id", parsed.data.po_id)
+        .neq("approval_status", "rejected");
+      const invoiced = (liveBills ?? [])
+        .filter((b) => b.id !== parsed.data.replaces_bill_id)
+        .reduce((sum, b) => sum + Number(b.total_amount), 0);
+      if (invoiced + parsed.data.total_amount > ceiling + 0.01) {
+        const remaining = Math.max(0, ceiling - invoiced);
+        return NextResponse.json({
+          error: `This PO already has ₹${invoiced.toLocaleString("en-IN")} invoiced of ₹${ceiling.toLocaleString("en-IN")} (${(liveBills ?? []).map((b) => b.bill_number).join(", ")}). Only ₹${remaining.toLocaleString("en-IN")} is left to invoice — if this is a corrected invoice, edit the rejected one instead.`,
+        }, { status: 422 });
+      }
+    }
+
     // Pre-credit advance if already processed
     if (po.advance_status === "processed" && po.advance_amount) {
       poAdvanceCredit = Math.min(Number(po.advance_amount), parsed.data.total_amount);

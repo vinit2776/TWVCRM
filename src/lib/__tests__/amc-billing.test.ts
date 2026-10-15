@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep } from "../procurement/amc-billing";
+import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep, serviceNextStep } from "../procurement/amc-billing";
 
 describe("cyclesBetween", () => {
   it("a standard financial year is 12 monthly cycles", () => {
@@ -156,5 +156,32 @@ describe("serviceBillingStep", () => {
     const s = serviceBillingStep(0, 0, null);
     expect(s.allBilled).toBe(false);
     expect(s.nextAction).toBe("log_report");
+  });
+});
+
+describe("serviceNextStep", () => {
+  const base = { status: "ordered", terminated: false, cycleCount: 2 };
+
+  it("waits for the PO to be ordered", () => {
+    expect(serviceNextStep({ ...base, status: "pending", reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "not_ordered" });
+  });
+
+  it("asks for a report first, then the invoice, per cycle", () => {
+    expect(serviceNextStep({ ...base, reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "log_report", cycle: 1 });
+    expect(serviceNextStep({ ...base, reportsFiled: 1, invoicesFiled: 0 })).toEqual({ kind: "upload_invoice", cycle: 1 });
+    expect(serviceNextStep({ ...base, reportsFiled: 1, invoicesFiled: 1 })).toEqual({ kind: "log_report", cycle: 2 });
+    expect(serviceNextStep({ ...base, reportsFiled: 2, invoicesFiled: 1 })).toEqual({ kind: "upload_invoice", cycle: 2 });
+  });
+
+  it("is done once every cycle is invoiced", () => {
+    expect(serviceNextStep({ ...base, reportsFiled: 2, invoicesFiled: 2 })).toEqual({ kind: "all_billed" });
+  });
+
+  it("a cancelled PO is closed, not billed", () => {
+    expect(serviceNextStep({ ...base, status: "cancelled", reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "closed" });
+  });
+
+  it("a terminated contract has no next step", () => {
+    expect(serviceNextStep({ ...base, terminated: true, reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "terminated" });
   });
 });

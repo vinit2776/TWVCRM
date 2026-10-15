@@ -9,7 +9,7 @@ import {
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
   AlertTriangle, Undo2, Mail, Wrench, Phone, CalendarDays,
-  XCircle, Edit3, Save,
+  XCircle, Edit3, Save, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,9 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 // Type-only import — compiles away, no runtime cost. Keeps Parameters<typeof ...> working.
 import type { generatePurchaseOrderPDF, CompanyForPdf } from "@/lib/po-pdf-generator";
@@ -32,7 +35,7 @@ import {
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { ServiceBillingSteps } from "@/components/procurement/service-billing-steps";
+import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
@@ -120,7 +123,7 @@ function buildTimeline(
         id: ev.id,
         ts: ev.created_at,
         type: "status",
-        title: "Partially Cancelled",
+        title: "Closed Short — undelivered qty released",
         subtitle: performer?.full_name ?? "—",
       });
     }
@@ -507,7 +510,7 @@ export default function PurchaseOrderDetailPage() {
       const msgs: Partial<Record<ActionType, string>> = {
         mark_ordered: "Order marked as ordered",
         cancel: "Order cancelled",
-        partial_cancel: "Order partially cancelled — remaining qty released back to PR",
+        partial_cancel: "Order closed short — undelivered qty released back to PR",
         process_advance: "Advance payment marked as processed",
         approve_advance: "Advance payment approved — accounts can now process payment",
         reject_advance: "Advance payment rejected",
@@ -930,6 +933,14 @@ export default function PurchaseOrderDetailPage() {
     terminated: "bg-rose-100 text-rose-700",
   };
 
+  // Releasing undelivered quantity is a goods-PO concept: it needs an invoice on
+  // file (the API requires invoice_received) and something still undelivered.
+  const canReleaseItems =
+    po.po_type !== "service" &&
+    po.status === "invoice_received" &&
+    (po.purchase_order_items ?? []).some((i) => Number(i.quantity_received ?? 0) < Number(i.quantity_ordered));
+  const canCancelOrder = ["pending", "ordered", "partially_received", "received"].includes(po.status);
+
   const amcStatus = (po.amc_status ?? "inactive") as AmcStatus;
   const amcVisitsUsed = po.amc_visits_used ?? 0;
   const amcVisitsCoveredNum = po.amc_visits_covered ?? null;
@@ -1023,26 +1034,10 @@ export default function PurchaseOrderDetailPage() {
               <Package className="h-4 w-4 mr-1" /> Record Delivery
             </Button>
           )}
-          {po.po_type === "service" && po.status === "ordered" && !po.amc_terminated_at && (
-            <Button
-              size="sm"
-              className="bg-teal-600 hover:bg-teal-700"
-              onClick={() => {
-                const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                setSrCycleNumber(String(nextCycle));
-                setSrPeriodFrom("");
-                setSrPeriodTo("");
-                setActionDialog("record_service_report");
-              }}
-              disabled={actionLoading}
-            >
-              <ClipboardList className="h-4 w-4 mr-1" /> Record Service Report
-            </Button>
-          )}
           {isAmcPo && po.status === "ordered" && !po.amc_terminated_at && (
             <Button
               size="sm"
-              className="bg-blue-600 hover:bg-blue-700"
+              variant="outline"
               onClick={() => setShowAmcEventDialog(true)}
               disabled={actionLoading}
             >
@@ -1064,66 +1059,38 @@ export default function PurchaseOrderDetailPage() {
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
           )}
-          {po.po_type === "service" && po.status === "ordered" && (() => {
-            const invoicedIds = new Set((po.vendor_bills ?? []).map((b) => b.service_report_id).filter(Boolean));
-            const uninvoiced = (po.po_service_reports ?? []).filter((sr) => !invoicedIds.has(sr.id));
-            const cycleCap = Number(po.cycle_count ?? 0);
-            const allCyclesBilled = cycleCap > 0 && (po.vendor_bills?.length ?? 0) >= cycleCap;
-            // The reason a disabled button is disabled has to be readable without
-            // hovering — new users otherwise read it as the feature being broken.
-            const blockedReason = allCyclesBilled
-              ? `All ${cycleCap} cycles invoiced`
-              : uninvoiced.length === 0
-                ? "Log a service report first"
-                : null;
-            return (
-              <div className="flex flex-col items-end gap-0.5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setInvDate(today);
-                    setInvAmount(String(po.unit_cost_per_cycle || ""));
-                    setActionDialog("add_invoice");
-                  }}
-                  disabled={blockedReason !== null}
-                >
-                  <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
+          {(canReleaseItems || canCancelOrder) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" disabled={actionLoading}>
+                  More <ChevronDown className="h-4 w-4 ml-1" />
                 </Button>
-                {blockedReason && (
-                  <span className="text-[11px] text-muted-foreground">{blockedReason}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canReleaseItems && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      const initial: Record<string, string> = {};
+                      for (const item of po.purchase_order_items ?? []) {
+                        initial[item.id] = String(item.quantity_ordered);
+                      }
+                      setPartialCancelQtys(initial);
+                      setActionDialog("partial_cancel");
+                    }}
+                  >
+                    Release unreceived items
+                  </DropdownMenuItem>
                 )}
-              </div>
-            );
-          })()}
-          {po.status === "invoice_received" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-orange-600 hover:text-orange-700"
-              onClick={() => {
-                const initial: Record<string, string> = {};
-                for (const item of po.purchase_order_items ?? []) {
-                  initial[item.id] = String(item.quantity_ordered);
-                }
-                setPartialCancelQtys(initial);
-                setActionDialog("partial_cancel");
-              }}
-              disabled={actionLoading}
-            >
-              Partial Cancel
-            </Button>
-          )}
-          {["pending", "ordered", "partially_received", "received"].includes(po.status) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-muted-foreground"
-              onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
-              disabled={actionLoading}
-            >
-              Cancel Order
-            </Button>
+                {canCancelOrder && (
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
+                  >
+                    Cancel order
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
@@ -1297,17 +1264,6 @@ export default function PurchaseOrderDetailPage() {
                 <p className="text-muted-foreground mb-0.5">Invoices Filed</p>
                 <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
               </div>
-            </div>
-
-            <div className="mt-4">
-              <ServiceBillingSteps
-                billingCycle={po.billing_cycle ?? null}
-                cycleCount={po.cycle_count ?? null}
-                unitCostPerCycle={po.unit_cost_per_cycle ?? null}
-                reportsFiled={po.po_service_reports?.length ?? 0}
-                invoicesFiled={po.vendor_bills?.length ?? 0}
-                isOrdered={po.status === "ordered"}
-              />
             </div>
           </CardContent>
         </Card>
@@ -1762,95 +1718,29 @@ export default function PurchaseOrderDetailPage() {
         </Card>
       )}
 
-      {/* Service Reports */}
+      {/* Service billing: next step + one row per cycle */}
       {po.po_type === "service" && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-muted-foreground" />
-                <CardTitle className="text-base">Service Reports</CardTitle>
-              </div>
-              {po.status === "ordered" && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
-                    setSrCycleNumber(String(nextCycle));
-                    setSrPeriodFrom("");
-                    setSrPeriodTo("");
-                    setActionDialog("record_service_report");
-                  }}
-                >
-                  <ClipboardList className="h-4 w-4 mr-1" /> Record Report
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {!(po.po_service_reports?.length) ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Info className="h-4 w-4 flex-shrink-0" />
-                No service reports filed yet. Record a report at the end of each cycle to unlock vendor invoicing.
-              </div>
-            ) : (
-              <div className="rounded-md border overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-3 py-2.5 text-left font-medium">Cycle</th>
-                      <th className="px-3 py-2.5 text-left font-medium">Period</th>
-                      <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Recorded by</th>
-                      <th className="px-3 py-2.5 text-center font-medium">Report</th>
-                      <th className="px-3 py-2.5 text-center font-medium">Invoice</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(po.po_service_reports as PoServiceReport[]).map((sr) => {
-                      const bill = (po.vendor_bills ?? []).find((b) => b.service_report_id === sr.id);
-                      return (
-                        <tr key={sr.id} className="border-b last:border-0">
-                          <td className="px-3 py-2.5 font-medium">Cycle {sr.cycle_number}</td>
-                          <td className="px-3 py-2.5 text-muted-foreground text-xs">
-                            {formatDate(sr.period_from)} – {formatDate(sr.period_to)}
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground hidden sm:table-cell">
-                            {sr.recorder?.full_name ?? "—"}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {sr.report_file_url ? (
-                              <a href={sr.report_file_url} target="_blank" rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                                <Paperclip className="h-3 w-3" /> View
-                              </a>
-                            ) : "—"}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {bill ? (
-                              <Link
-                                href={`/procurement/bills/${bill.id}`}
-                                className="inline-flex items-center justify-center gap-1 hover:opacity-80"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
-                                <Badge variant="secondary" className={`text-[10px] ${bill.approval_status === "approved" ? "bg-green-100 text-green-800" : bill.approval_status === "rejected" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
-                                  {bill.approval_status === "approved" ? "OK" : bill.approval_status === "rejected" ? "Rejected" : "Pending"}
-                                </Badge>
-                              </Link>
-                            ) : (
-                              <span className="text-xs text-amber-600">Pending</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <ServiceCyclesCard
+          status={po.status}
+          terminated={!!po.amc_terminated_at}
+          billingCycle={po.billing_cycle ?? null}
+          cycleCount={po.cycle_count ?? null}
+          unitCostPerCycle={po.unit_cost_per_cycle ?? null}
+          reports={(po.po_service_reports as PoServiceReport[] | undefined) ?? []}
+          bills={(po.vendor_bills ?? []) as CycleBill[]}
+          onRecordReport={() => {
+            setSrCycleNumber(String((po.po_service_reports?.length ?? 0) + 1));
+            setSrPeriodFrom("");
+            setSrPeriodTo("");
+            setActionDialog("record_service_report");
+          }}
+          onUploadInvoice={() => {
+            setInvDate(today);
+            setInvAmount(String(po.unit_cost_per_cycle || ""));
+            setActionDialog("add_invoice");
+          }}
+          onEditInvoice={openEditInvoice}
+        />
       )}
 
       {/* Line Items */}
@@ -3039,7 +2929,7 @@ export default function PurchaseOrderDetailPage() {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Partial Cancel — {po?.po_number}</DialogTitle>
+            <DialogTitle>Release unreceived items — {po?.po_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
@@ -3047,7 +2937,7 @@ export default function PurchaseOrderDetailPage() {
             </p>
             {hasBill && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                A vendor bill exists for this PO. Partial cancellation does not modify the bill — adjust it separately.
+                A vendor bill exists for this PO. Releasing items does not modify the bill — adjust it separately.
               </p>
             )}
             <div className="rounded-md border overflow-x-auto">
@@ -3084,7 +2974,7 @@ export default function PurchaseOrderDetailPage() {
               </table>
             </div>
             <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-              Once partially cancelled, this PO cannot be reissued.
+              Once closed short, this PO cannot be reissued.
             </p>
           </div>
           <DialogFooter>
@@ -3112,7 +3002,7 @@ export default function PurchaseOrderDetailPage() {
               }}
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Confirm Partial Cancel
+              Release items
             </Button>
           </DialogFooter>
         </DialogContent>

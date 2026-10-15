@@ -284,7 +284,7 @@ export default function PurchaseOrdersPage() {
           <span className="text-muted-foreground">— not counted in budget</span>
           {pagination.total > totals.poCount && (
             <span className="text-muted-foreground text-xs">
-              + {pagination.total - totals.poCount} partially cancelled (shown at remaining amount, not included above)
+              + {pagination.total - totals.poCount} closed short (shown at remaining amount, not included above)
             </span>
           )}
         </div>
