@@ -3,6 +3,8 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { MaterialRequestForm } from "@/components/procurement/material-request-form";
+import { RequestWizard } from "@/components/procurement/request-wizard";
+import { PROCUREMENT_DEPARTMENTS } from "@/lib/constants";
 import type { ProcurementDepartment } from "@/types";
 
 export default function NewPurchaseRequestPage() {
@@ -15,8 +17,11 @@ export default function NewPurchaseRequestPage() {
 
 function NewPurchaseRequestForm() {
   const searchParams = useSearchParams();
-  // Pre-select department from ?department=amc — used by the legacy /orders/new-service redirect
-  const initialDepartment = searchParams.get("department") as ProcurementDepartment | null;
+  // ?department= comes from the request wizard (and the legacy /orders/new-service redirect).
+  // Without a valid one, the wizard asks what the user wants to buy first.
+  const requested = searchParams.get("department");
+  const department = PROCUREMENT_DEPARTMENTS.find((d) => d === requested) as ProcurementDepartment | undefined;
 
-  return <MaterialRequestForm mode="create" initialDepartment={initialDepartment} />;
+  if (!department) return <RequestWizard />;
+  return <MaterialRequestForm mode="create" initialDepartment={department} lockDepartment />;
 }
