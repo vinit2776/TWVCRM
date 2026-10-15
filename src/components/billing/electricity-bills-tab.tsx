@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Plus, Zap, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -218,12 +218,13 @@ function BillPreview({
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export function ElectricityBillsTab() {
+/** `initialLocationId` preselects the location filter, e.g. from the contract page's Invoice wizard. */
+export function ElectricityBillsTab({ initialLocationId, autoCapture }: { initialLocationId?: string; autoCapture?: boolean }) {
   const { user } = useCurrentUser();
   const canCapture = user?.role === "admin" || user?.role === "manager" || user?.role === "accounts";
 
   const now = new Date();
-  const [filterLocationId, setFilterLocationId] = useState<string>("all");
+  const [filterLocationId, setFilterLocationId] = useState<string>(initialLocationId || "all");
   const [filterMonth, setFilterMonth] = useState(now.getMonth() + 1);
   const [filterYear, setFilterYear] = useState(now.getFullYear());
   const [locations, setLocations] = useState<LocationOption[]>([]);
@@ -291,6 +292,15 @@ export function ElectricityBillsTab() {
     setLineKey(3);
     setDialogOpen(true);
   };
+
+  // Invoice wizard hand-off: open Capture Bill once the location list is ready.
+  const autoCapturedRef = useRef(false);
+  useEffect(() => {
+    if (!autoCapture || autoCapturedRef.current || !canCapture || locations.length === 0) return;
+    autoCapturedRef.current = true;
+    openDialog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCapture, canCapture, locations]);
 
   const addLine = () => {
     setFormLines((prev) => [

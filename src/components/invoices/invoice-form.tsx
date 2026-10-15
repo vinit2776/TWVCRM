@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,11 @@ interface InvoiceFormProps {
   hasActiveProposal: boolean;
   activeProposalId?: string;
   onRequestProposal: () => void;
+  // Set when a guided flow (the contract page's Invoice wizard) has already
+  // asked what the invoice is for — the purpose is then shown, not chosen.
+  presetHead?: AccountingHead;
+  // Receives the created invoice so a caller can follow up (e.g. attach it to a contract).
+  onCreated?: (invoice: { id: string }) => void | Promise<void>;
 }
 
 export function InvoiceForm({
@@ -48,9 +53,12 @@ export function InvoiceForm({
   hasActiveProposal,
   activeProposalId,
   onRequestProposal,
+  presetHead,
+  onCreated,
 }: InvoiceFormProps) {
   const router = useRouter();
-  const [primaryHead, setPrimaryHead] = useState<AccountingHead | "unsure" | "">("");
+  const [primaryHead, setPrimaryHead] = useState<AccountingHead | "unsure" | "">(presetHead ?? "");
+  useEffect(() => { if (open) setPrimaryHead(presetHead ?? ""); }, [open, presetHead]);
   const [title, setTitle] = useState("");
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
@@ -65,7 +73,7 @@ export function InvoiceForm({
   const isDeposit = primaryHead === "security_deposit";
 
   const resetForm = () => {
-    setPrimaryHead("");
+    setPrimaryHead(presetHead ?? "");
     setTitle("");
     setItems([{ description: "", quantity: 1, unit_price: 0, total: 0 }]);
     setTaxPercentage(18);
@@ -167,10 +175,12 @@ export function InvoiceForm({
 
     setSubmitting(false);
     if (res.ok) {
+      const created = await res.json().catch(() => null);
       toast.success("Invoice created successfully");
       resetForm();
       onOpenChange(false);
       onSuccess();
+      if (created?.data?.id) await onCreated?.({ id: created.data.id });
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to create invoice");
@@ -184,27 +194,36 @@ export function InvoiceForm({
           <DialogTitle>Create Ad-Hoc Proforma Invoice</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
+          {presetHead ? (
+            <div className="space-y-1">
+              <Label>What is this invoice for?</Label>
+              <p className="text-sm font-medium">{ACCOUNTING_HEAD_LABELS[presetHead]}</p>
+              <p className="text-xs text-muted-foreground">Set by the Invoice wizard.</p>
+            </div>
+          ) : (
           <div className="space-y-2">
-            <Label htmlFor="invoice-purpose">
-              What is this invoice for? <span className="text-destructive">*</span>
-            </Label>
-            <Select
-              value={primaryHead}
-              onValueChange={(v) => setPrimaryHead(v as AccountingHead | "unsure")}
-            >
-              <SelectTrigger id="invoice-purpose">
-                <SelectValue placeholder="Select a purpose" />
-              </SelectTrigger>
-              <SelectContent>
-                {SELECTABLE_HEADS.map((head) => (
-                  <SelectItem key={head} value={head}>
-                    {ACCOUNTING_HEAD_LABELS[head]}
-                  </SelectItem>
-                ))}
-                <SelectItem value="unsure">I don&apos;t know</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              <Label htmlFor="invoice-purpose">
+                What is this invoice for? <span className="text-destructive">*</span>
+              </Label>
+              <Select
+                value={primaryHead}
+                onValueChange={(v) => setPrimaryHead(v as AccountingHead | "unsure")}
+              >
+                <SelectTrigger id="invoice-purpose">
+                  <SelectValue placeholder="Select a purpose" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SELECTABLE_HEADS.map((head) => (
+                    <SelectItem key={head} value={head}>
+                      {ACCOUNTING_HEAD_LABELS[head]}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="unsure">I don&apos;t know</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+  
+          )}
 
           {isDeposit ? (
             <Card className="border-amber-300 bg-amber-50">
