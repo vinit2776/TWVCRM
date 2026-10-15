@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle, FileUp, Paperclip, Wrench, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -88,12 +89,15 @@ function hydrateItems(pr: PurchaseRequest): LineItem[] {
 }
 
 export type MaterialRequestFormProps =
-  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; pr?: undefined }
-  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined };
+  | { mode: "create"; initialDepartment?: ProcurementDepartment | null; lockDepartment?: boolean; pr?: undefined }
+  | { mode: "edit"; pr: PurchaseRequest; initialDepartment?: undefined; lockDepartment?: undefined };
 
 export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isEdit = props.mode === "edit";
   const pr = props.pr;
+  // Set when the request wizard chose the department — the type is then
+  // changed by going back to the wizard, not by the dropdown.
+  const departmentChosenByWizard = !!props.lockDepartment;
 
   const router = useRouter();
   const { user } = useCurrentUser();
@@ -782,7 +786,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             <Select
               value={department}
               onValueChange={(v) => handleDepartmentChange(v as ProcurementDepartment)}
-              disabled={reimbursementLocked}
+              disabled={reimbursementLocked || departmentChosenByWizard}
             >
               <SelectTrigger id="department">
                 <SelectValue />
@@ -802,7 +806,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                 ))}
               </SelectContent>
             </Select>
-            {isEdit && !canCrossReimbursementBoundary ? (
+            {departmentChosenByWizard ? (
+              <p className="text-xs text-muted-foreground flex items-start gap-1">
+                <Lock className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                <span>
+                  Set by what you chose to buy.{" "}
+                  <Link href="/procurement/requests/new" className="underline">Change type</Link>
+                </span>
+              </p>
+            ) : isEdit && !canCrossReimbursementBoundary ? (
               <p className="text-xs text-muted-foreground flex items-start gap-1">
                 <Lock className="h-3 w-3 mt-0.5 flex-shrink-0" />
                 {reimbursementLocked
