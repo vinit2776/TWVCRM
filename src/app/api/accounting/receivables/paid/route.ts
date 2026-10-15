@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
   // Full payment trail per statement — powers the "Payment received" detail
   // dialog (amount, reference, who recorded it), most recent first.
   const paymentsByStatement = new Map<string, Array<{
-    id: string; amount: number; payment_date: string; payment_mode: string;
+    id: string; amount: number; payment_date: string; created_at: string; payment_mode: string;
     payment_reference: string | null; razorpay_payment_id: string | null;
     notes: string | null; recorded_by_user: { id: string; full_name: string } | null;
   }>>();
@@ -145,6 +145,7 @@ export async function GET(req: NextRequest) {
         id: p.id as string,
         amount: p.amount as number,
         payment_date: p.payment_date as string,
+        created_at: p.created_at as string,
         payment_mode: p.payment_mode as string,
         payment_reference: p.payment_reference as string | null,
         razorpay_payment_id: p.razorpay_payment_id as string | null,

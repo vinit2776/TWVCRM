@@ -6,6 +6,7 @@ import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { canRecordPayments } from "@/lib/constants";
 import { OVERPAYMENT_CODE, overpaymentMessage } from "@/lib/overpayment-guard";
+import { isFutureDate } from "@/lib/payment-dates";
 import { DEPOSIT_ADJUSTMENT_MODE, DEPOSIT_OVERRIDE_NOTE_MARKER, evaluateDepositGuard } from "@/lib/deposit-payment-guard";
 
 /**
@@ -82,7 +83,10 @@ export async function POST(
   const tdsSection = (typeof body.tds_section === "string" && body.tds_section.trim()) ? body.tds_section.trim() : null;
 
   if (!amount || amount <= 0) return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
-  if (!payment_date) return NextResponse.json({ error: "Payment date is required" }, { status: 400 });
+  if (!payment_date) return NextResponse.json({ error: "Date received in bank is required" }, { status: 400 });
+  if (isFutureDate(String(payment_date))) {
+    return NextResponse.json({ error: "Date received in bank can't be in the future" }, { status: 400 });
+  }
   if (!payment_mode) return NextResponse.json({ error: "Payment mode is required" }, { status: 400 });
   // Only approve_deposit_adjustment may create a deposit_adjustment payment —
   // posting one here would settle the invoice without the maker-checker step.
