@@ -143,7 +143,7 @@ function VisitsBar({ used, covered }: { used: number; covered: number | null }) 
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{used} / {covered} visits used</span>
+        <span className="text-muted-foreground">{used} / {covered} preventive visits used</span>
         <span className={pct >= 100 ? "text-red-600 font-medium" : "text-muted-foreground"}>{pct}%</span>
       </div>
       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
@@ -605,8 +605,8 @@ export default function AmcRegisterPage() {
                       <ChevronDown className="h-3.5 w-3.5" />
                     )}
                     {row.amc_visits_used > 0
-                      ? `${row.amc_visits_used} event${row.amc_visits_used !== 1 ? "s" : ""} logged`
-                      : "No events yet"}
+                      ? `${row.amc_visits_used} preventive visit${row.amc_visits_used !== 1 ? "s" : ""} · view all`
+                      : "View visits"}
                   </button>
                   <Link
                     href={`/procurement/orders/${row.id}`}

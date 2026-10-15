@@ -655,7 +655,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                           <div className="text-right shrink-0 space-y-1">
                             <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
+                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} preventive visits
                             </div>
                             <Link
                               href={`/procurement/orders/${c.id}`}
@@ -912,7 +912,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                           <div className="text-right shrink-0 space-y-1">
                             <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
+                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} preventive visits
                             </div>
                             <Link
                               href={`/procurement/orders/${c.id}`}

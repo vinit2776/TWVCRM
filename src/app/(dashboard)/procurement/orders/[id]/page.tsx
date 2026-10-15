@@ -1470,7 +1470,7 @@ export default function PurchaseOrderDetailPage() {
                     <div className="flex items-start gap-2.5">
                       <Wrench className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                       <div className="flex-1">
-                        <p className="text-xs text-muted-foreground mb-1">Visits / Calls</p>
+                        <p className="text-xs text-muted-foreground mb-1">Preventive visits <span className="font-normal">(breakdowns are unlimited)</span></p>
                         {amcVisitsCoveredNum === null ? (
                           <p className="text-sm font-medium">
                             {amcVisitsUsed} used · <span className="text-blue-600">∞ unlimited</span>
