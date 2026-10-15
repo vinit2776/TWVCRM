@@ -44,11 +44,13 @@ import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
+import { ToVerifyPanel } from "./to-verify-panel";
+import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
 import { DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment } from "@/components/billing/deposit-guard-notice";
 import { DEPOSIT_OVERRIDE_MIN_REASON_LENGTH } from "@/lib/deposit-payment-guard";
 
-type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
+type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "to_verify" | "discrepancy" | "closed";
 
 // Success confirmation shown in place of a row once an action closes it out —
 // the row itself drops out of the "open" list on the next reload, so without
@@ -68,6 +70,7 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All open" },
   { key: "gst_to_issue", label: "GST to issue" },
   { key: "payment_to_record", label: "Payments" },
+  { key: "to_verify", label: "To verify" },
   { key: "discrepancy", label: "Discrepancies" },
   { key: "closed", label: "Closed" },
 ];
@@ -205,6 +208,23 @@ export function TallyInboxClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FilterTab>("all");
+  // Open payment reports waiting on a bank check. Only meaningful (and only
+  // shown) for the roles that can settle them — see canReviewPaymentReport.
+  const canVerifyPayments = canReviewPaymentReport(currentUserRole);
+  const [toVerifyCount, setToVerifyCount] = useState<number | null>(null);
+  const loadToVerifyCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/queries?stats=true", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as { stats?: { to_verify?: number } };
+      setToVerifyCount(json.stats?.to_verify ?? 0);
+    } catch {
+      // The tab simply shows no count.
+    }
+  }, []);
+  useEffect(() => {
+    if (canVerifyPayments) void loadToVerifyCount();
+  }, [canVerifyPayments, loadToVerifyCount]);
   // Primary split — rental/contract statements vs walk-in booking GST tasks.
   // These are backed by entirely different tables (billing_statements vs
   // booking_gst_tasks) and were previously stacked in one unlabeled list.
@@ -879,7 +899,7 @@ export function TallyInboxClient() {
 
       {/* Filter tabs + search */}
       <div className="border-b flex items-center gap-1 flex-wrap">
-        {FILTER_TABS.map((t) => {
+        {FILTER_TABS.filter((t) => t.key !== "to_verify" || canVerifyPayments).map((t) => {
           // Counts are tab-aware: open tabs reflect the OPEN summary; the
           // Closed tab can't sensibly show a global count, so it shows the
           // page-size result only when we're on it.
@@ -887,6 +907,7 @@ export function TallyInboxClient() {
             t.key === "all" ? activeStats.total_open
             : t.key === "gst_to_issue" ? activeStats.gst_to_issue
             : t.key === "payment_to_record" ? activeStats.payments_to_record
+            : t.key === "to_verify" ? (toVerifyCount ?? undefined)
             : t.key === "discrepancy" ? activeStats.discrepancies
             : t.key === "closed" && tab === "closed" ? (activeType === "contracts" ? visibleRows.length : visibleBookingRows.length)
             : undefined;
@@ -937,7 +958,9 @@ export function TallyInboxClient() {
       </div>
 
       {/* Worklist */}
-      {error ? (
+      {tab === "to_verify" ? (
+        <ToVerifyPanel onChanged={() => void loadToVerifyCount()} />
+      ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">Failed to load inbox</p>
           <p className="mt-1">{error}</p>

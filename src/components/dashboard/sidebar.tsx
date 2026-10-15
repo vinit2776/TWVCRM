@@ -64,12 +64,35 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
+import { useSidebarBadges, type SidebarBadgeKey } from "@/hooks/use-sidebar-badges";
 
 type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   roles: string[] | null; // null = visible to all roles
+  /** Shows a count pill when the matching number is above zero. */
+  badge?: SidebarBadgeKey;
+};
+
+type BadgeCounts = Partial<Record<SidebarBadgeKey, number>>;
+
+function CountPill({ count, label }: { count: number; label: string }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className="ml-auto shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white"
+      title={label}
+      aria-label={label}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+const BADGE_LABELS: Record<SidebarBadgeKey, (n: number) => string> = {
+  queries_awaiting: (n) => `${n} ${n === 1 ? "query" : "queries"} waiting on you`,
+  payments_to_verify: (n) => `${n} reported ${n === 1 ? "payment" : "payments"} to verify`,
 };
 
 type NavSection = {
@@ -98,6 +121,7 @@ const topNavItems: NavItem[] = [
     label: "Queries",
     icon: MessageCircleQuestion,
     roles: ["admin", "manager", "sales_rep", "floor_manager", "accounts", "office_admin", "viewer"],
+    badge: "queries_awaiting",
   },
 ];
 
@@ -129,7 +153,7 @@ const navSections: NavSection[] = [
       { href: "/accounting/billing-reconciliation", label: "Billing Reconciliation", icon: FileSpreadsheet, roles: ["admin", "manager", "accounts"] },
       { href: "/accounting/deposit-review", label: "Deposit Review", icon: ShieldCheck, roles: ["admin", "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"] },
+      { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"], badge: "payments_to_verify" },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
       { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
@@ -271,6 +295,7 @@ function CollapsibleSection({
   pathname,
   userRole,
   onNavigate,
+  badges,
 }: {
   section: NavSection;
   isOpen: boolean;
@@ -278,9 +303,17 @@ function CollapsibleSection({
   pathname: string;
   userRole: string | null;
   onNavigate: () => void;
+  badges: BadgeCounts;
 }) {
   const visibleItems = filterItems(section.items, userRole);
   if (visibleItems.length === 0) return null;
+
+  // A collapsed section would otherwise hide the very badge meant to pull
+  // attention to it, so its header carries the sum until it is opened.
+  const sectionTotal = visibleItems.reduce(
+    (sum, item) => sum + (item.badge ? (badges[item.badge] ?? 0) : 0),
+    0,
+  );
 
   const isActive = visibleItems.some(
     (item) => pathname === item.href || pathname.startsWith(item.href + "/")
@@ -299,6 +332,9 @@ function CollapsibleSection({
       >
         <section.icon className="h-5 w-5 shrink-0" />
         {section.label}
+        {!isOpen && sectionTotal > 0 && (
+          <CountPill count={sectionTotal} label={`${sectionTotal} items waiting on you in ${section.label}`} />
+        )}
         <ChevronDown
           className={cn(
             "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
@@ -325,6 +361,9 @@ function CollapsibleSection({
               >
                 <item.icon className="h-4 w-4 shrink-0" />
                 {item.label}
+                {item.badge && (
+                  <CountPill count={badges[item.badge] ?? 0} label={BADGE_LABELS[item.badge](badges[item.badge] ?? 0)} />
+                )}
               </Link>
             );
           })}
@@ -339,6 +378,7 @@ export function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useUiStore();
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  const badges = useSidebarBadges(!!userRole);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -510,6 +550,9 @@ export function Sidebar() {
                   >
                     <item.icon className="h-5 w-5 shrink-0" />
                     {item.label}
+                    {item.badge && (
+                      <CountPill count={badges[item.badge] ?? 0} label={BADGE_LABELS[item.badge](badges[item.badge] ?? 0)} />
+                    )}
                   </Link>
                 );
               })}
@@ -524,6 +567,7 @@ export function Sidebar() {
                   pathname={pathname}
                   userRole={userRole}
                   onNavigate={closeSidebar}
+                  badges={badges}
                 />
               ))}
             </>

@@ -11,6 +11,8 @@ import {
 } from "@/lib/tally-handoff";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { withCronHealth } from "@/lib/cron-ping";
+import { loadEntitySummaries, entityKey } from "@/lib/queries/server";
+import { renderPaymentsToVerifyHtml, type PendingPaymentReport } from "@/lib/inbox-digest-payments";
 
 /**
  * GET /api/cron/inbox-digest
@@ -21,10 +23,13 @@ import { withCronHealth } from "@/lib/cron-ping";
  *   - Table of every open item (party, statement, state, amount, aging)
  *   - Aging > 48h items flagged in red
  *   - Link to /accounting/inbox
+ *   - A "Payments to verify" block for reported payments still waiting on a
+ *     bank check (Queries threads of kind payment_reported)
  *
  * Skipped silently if:
  *   - tally_handoff_v2_enabled is false (legacy mode, no inbox)
- *   - There are zero open items (no point pinging accounts about nothing)
+ *   - There are zero open items AND zero payments to verify (no point pinging
+ *     accounts about nothing)
  *
  * Vercel cron schedule: "0 4 * * *" (in vercel.json).
  */
@@ -104,7 +109,56 @@ async function handler(request: NextRequest) {
     contract: r.contract,
   }));
 
-  if (rows.length === 0) {
+  // Payment reports waiting on a bank check. A failed read must not take the
+  // whole digest down — the inbox items are the primary payload — but it is
+  // logged so a silent gap in the section doesn't go unnoticed.
+  const pendingReports: PendingPaymentReport[] = [];
+  {
+    const { data: reportData, error: reportErr } = await supabase
+      .from("queries")
+      .select(`
+        id, entity_type, entity_id, created_at,
+        created_by:users!queries_created_by_fkey(full_name),
+        payment_report:query_payment_reports!query_payment_reports_query_id_fkey(amount, status, payment_mode)
+      `)
+      .eq("kind", "payment_reported")
+      .eq("status", "open");
+    if (reportErr) {
+      console.error("[inbox-digest] payment reports read failed:", reportErr.message);
+    } else {
+      type ReportRow = {
+        entity_type: string;
+        entity_id: string;
+        created_at: string;
+        created_by: { full_name: string } | { full_name: string }[] | null;
+        payment_report:
+          | { amount: number; status: string; payment_mode: string }
+          | { amount: number; status: string; payment_mode: string }[]
+          | null;
+      };
+      const reportRows = (reportData ?? []) as unknown as ReportRow[];
+      const summaries = await loadEntitySummaries(
+        supabase,
+        reportRows.map((r) => ({ entity_type: r.entity_type, entity_id: r.entity_id })),
+      );
+      for (const r of reportRows) {
+        const pr = Array.isArray(r.payment_report) ? r.payment_report[0] : r.payment_report;
+        if (!pr || pr.status !== "reported") continue;
+        const by = Array.isArray(r.created_by) ? r.created_by[0] : r.created_by;
+        const entity = summaries.get(entityKey(r.entity_type, r.entity_id));
+        pendingReports.push({
+          customer: entity?.title ?? "(unknown)",
+          reference: entity?.reference ?? null,
+          amount: Number(pr.amount),
+          paymentMode: pr.payment_mode,
+          reportedBy: by?.full_name ?? "—",
+          createdAt: r.created_at,
+        });
+      }
+    }
+  }
+
+  if (rows.length === 0 && pendingReports.length === 0) {
     return NextResponse.json({ skipped: "no open items" });
   }
 
@@ -124,7 +178,12 @@ async function handler(request: NextRequest) {
 
   // ── Compose email ────────────────────────────────────────────────────────
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
-  const subject = `[Tally inbox] ${rows.length} open item${rows.length === 1 ? "" : "s"}${agingOver48h > 0 ? ` · ${agingOver48h} aging > 48h` : ""}`;
+  const subjectParts = [
+    rows.length > 0 ? `${rows.length} open item${rows.length === 1 ? "" : "s"}` : null,
+    pendingReports.length > 0 ? `${pendingReports.length} payment${pendingReports.length === 1 ? "" : "s"} to verify` : null,
+    agingOver48h > 0 ? `${agingOver48h} aging > 48h` : null,
+  ].filter(Boolean);
+  const subject = `[Tally inbox] ${subjectParts.join(" · ")}`;
 
   const tableRows = rows.map((r) => {
     const partyName =
@@ -148,7 +207,9 @@ async function handler(request: NextRequest) {
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#111;">
       <h2 style="margin:0 0 8px;font-size:18px;font-weight:500;">Tally Inbox — daily digest</h2>
-      <p style="margin:0 0 16px;color:#666;font-size:14px;">
+      ${renderPaymentsToVerifyHtml(pendingReports, appUrl, now)}
+
+      <p style="margin:16px 0;color:#666;font-size:14px;">
         ${rows.length} open item${rows.length === 1 ? "" : "s"} as of ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST.
       </p>
 
@@ -202,6 +263,7 @@ async function handler(request: NextRequest) {
     sent: true,
     to: ACCOUNTS_INBOX_EMAIL,
     open_items: rows.length,
+    payments_to_verify: pendingReports.length,
     gst_to_issue: gstToIssue,
     payments_to_record: paymentsToRecord,
     aging_over_48h: agingOver48h,

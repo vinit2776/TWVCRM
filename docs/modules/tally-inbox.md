@@ -276,6 +276,15 @@ gst_sent → complete
 | `name_check_pending`, `ready_to_send`, `gst_sent`, `gst_sent_awaiting_payment`, `pi_awaiting_payment` | `in_flight` | All open |
 | `complete` | `complete` | Closed |
 
+### "To verify" tab (payment reports)
+
+Not a bucket and not backed by `billing_statements`. It lists open Queries threads of kind `payment_reported` — payments someone reported out of system that accounts have not yet settled — so accounts see them from the screen they already work in. It sits right after **Payments**, and is shown only to roles that can settle a report (`canReviewPaymentReport`: `admin`, `accounts`).
+
+- Data: `GET /api/queries?tab=open&kind=payment_reported` (the same feed as the Payment reports filter on `/queries`). `GET /api/queries?stats=true` carries the count as `to_verify`, which also drives the Tally Inbox sidebar badge.
+- Clicking a row opens a drawer that embeds the ordinary `QueryThreadPanel`, so verify / "Not found yet" / "No such payment" run through `PaymentReportCard` and the existing Record Payment dialog. Nothing in the inbox records a payment itself.
+- A report leaves the tab when verified or rejected; "Not found yet" keeps it listed. Full history stays on `/queries` and the AR page.
+- The daily inbox digest email (`/api/cron/inbox-digest`) gains a "Payments to verify" block, and now also sends when there are no open inbox items but reports are pending.
+
 ---
 
 ## Three Billing Flows
