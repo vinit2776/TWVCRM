@@ -73,6 +73,14 @@ function NewServicePOForm() {
 
   // AMC fields — pre-activate if URL param ?amc=1 or ?from_mr=<id> (always AMC)
   const fromMrId = searchParams.get("from_mr");
+  // Which request line this PO is for (multi-asset AMC requests have one line per asset).
+  const itemParam = searchParams.get("item");
+  // Combined PO: several request lines (one asset each) ordered together as one PO.
+  const itemsParam = searchParams.get("items");
+  const combineIds = itemsParam ? itemsParam.split(",").filter(Boolean) : [];
+  const isCombined = combineIds.length > 1;
+  const [combinedAssets, setCombinedAssets] = useState<Array<{ id: string; name: string; asset_code: string | null; price: number }>>([]);
+  const [prItemId, setPrItemId] = useState<string | null>(null);
   const isAmcFromUrl = searchParams.get("amc") === "1" || !!fromMrId;
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
   // AMC contracts may be paid monthly or quarterly. Default yearly so the
@@ -179,11 +187,33 @@ function NewServicePOForm() {
         }
         setSourceMrNumber(pr.pr_number ?? null);
         if (pr.companies) setInheritedCompany(pr.companies);
+        // The line this PO fulfils: the one asked for, the only one, or the next unordered one.
+        const lines: Array<{ id: string; item_name?: string; unit?: string; quantity?: number; estimated_price?: number | null; linked_asset_id?: string | null; linked_asset?: { id: string; name: string; asset_code: string | null } | null; already_ordered_qty?: number }> =
+          pr.purchase_request_items ?? [];
+        const picked = isCombined ? lines.filter((l) => combineIds.includes(l.id)) : [];
+        const mrItem = isCombined
+          ? picked[0]
+          : lines.find((l) => l.id === itemParam) ??
+            (lines.length === 1 ? lines[0] : lines.find((l) => (l.already_ordered_qty ?? 0) < Number(l.quantity)) ?? lines[0]);
+        if (mrItem && !isCombined) setPrItemId(mrItem.id);
+        if (isCombined) {
+          setCombinedAssets(
+            picked.map((l) => ({
+              id: l.linked_asset_id ?? l.id,
+              name: l.linked_asset?.name ?? l.item_name ?? "Asset",
+              asset_code: l.linked_asset?.asset_code ?? null,
+              price: Number(l.estimated_price ?? 0),
+            }))
+          );
+        }
         // Service identity
-        if (pr.service_item_name) setCustomName(pr.service_item_name);
-        else if (pr.purchase_request_items?.[0]?.item_name) setCustomName(pr.purchase_request_items[0].item_name);
+        if (isCombined) setCustomName(pr.service_item_name ?? "Annual Maintenance Contract");
+        else if (lines.length > 1 && mrItem?.item_name) setCustomName(mrItem.item_name);
+        else if (pr.service_item_name) setCustomName(pr.service_item_name);
+        else if (lines[0]?.item_name) setCustomName(lines[0].item_name);
         if (pr.location_id) setLocationId(pr.location_id);
-        if (pr.linked_asset_id) setLinkedAssetId(pr.linked_asset_id);
+        const lineAsset = mrItem?.linked_asset_id ?? pr.linked_asset_id;
+        if (lineAsset) setLinkedAssetId(lineAsset);
         // AMC coverage + dates
         if (pr.amc_coverage_type) setAmcCoverageType(pr.amc_coverage_type);
         if (pr.amc_start_date) {
@@ -196,13 +226,13 @@ function NewServicePOForm() {
         // Frequency, cycle count and per-cycle cost all come off the MR's line item.
         // total_estimated_amount is the whole commitment, so using it as the unit
         // cost would multiply a monthly contract by its own cycle count.
-        const mrItem = pr.purchase_request_items?.[0];
         setAmcBillingCycle(cycleFromUnit(mrItem?.unit));
         if (mrItem?.quantity && Number(mrItem.quantity) > 1) {
           setAmcCycleCountOverride(String(mrItem.quantity));
         }
-        if (mrItem?.estimated_price) setUnitCost(String(mrItem.estimated_price));
-        else if (pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
+        if (isCombined) setUnitCost(String(Math.round(picked.reduce((sum, l) => sum + Number(l.estimated_price ?? 0), 0) * 100) / 100));
+        else if (mrItem?.estimated_price) setUnitCost(String(mrItem.estimated_price));
+        else if (lines.length <= 1 && pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
         // Contacts
         if (pr.amc_contact_name) setAmcContactName(pr.amc_contact_name);
         if (pr.amc_helpline_number) setAmcHelpline(pr.amc_helpline_number);
@@ -222,7 +252,7 @@ function NewServicePOForm() {
         if (pr.notes) setNotes(pr.notes);
       })
       .catch(() => toast.error("Could not load source MR for pre-fill"));
-  }, [fromMrId, router]);
+  }, [fromMrId, itemParam, itemsParam, router]);
 
   const serviceItemName = customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
@@ -287,7 +317,9 @@ function NewServicePOForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           po_type: "service",
-          ...(fromMrId ? { pr_id: fromMrId } : { company_id: companyId }),
+          ...(fromMrId
+            ? { pr_id: fromMrId, ...(isCombined ? { pr_item_ids: combineIds } : prItemId ? { pr_item_id: prItemId } : {}) }
+            : { company_id: companyId }),
           vendor_id: vendorId,
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
@@ -350,7 +382,9 @@ function NewServicePOForm() {
 
       {fromMrId && sourceMrNumber && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-          <span className="mr-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium">Service PO · AMC</span>
+          <span className="mr-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium">
+            {isCombined ? `Combined service PO · ${combineIds.length} assets` : "Service PO · AMC"}
+          </span>
           Creating PO from <span className="font-semibold">{sourceMrNumber}</span>. Asset, dates, contacts and advance are pre-filled from the MR. Select the vendor below to proceed.
           {inheritedCompany && (
             <div className="mt-1 text-xs text-blue-700">
@@ -425,6 +459,21 @@ function NewServicePOForm() {
                 <CardTitle className="text-base">Asset &amp; Coverage</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {isCombined ? (
+                <div className="space-y-1.5">
+                  <Label>Assets covered</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {combinedAssets.map((a) => (
+                      <span key={a.id} className="rounded-md border bg-muted/40 px-2 py-1 text-sm">
+                        {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    One PO for all {combinedAssets.length} assets. Visits are counted per asset.
+                  </p>
+                </div>
+                ) : (
                 <div className="space-y-1.5">
                   <Label>Asset being covered *</Label>
                   <SearchableSelect
@@ -440,6 +489,7 @@ function NewServicePOForm() {
                   />
                   <p className="text-xs text-muted-foreground">The asset this AMC will cover.</p>
                 </div>
+                )}
 
                 <div className="space-y-1.5">
                   <Label>Coverage Type *</Label>
@@ -574,10 +624,13 @@ function NewServicePOForm() {
                       step="0.01"
                       value={unitCost}
                       onChange={(e) => setUnitCost(e.target.value)}
+                      readOnly={isCombined}
                       placeholder="0.00"
                     />
                     <p className="text-xs text-muted-foreground">
-                      {amcBillingCycle === "yearly"
+                      {isCombined
+                        ? `Sum of the ${combinedAssets.length} lines: ${combinedAssets.map((a) => formatCurrency(a.price)).join(" + ")}.`
+                        : amcBillingCycle === "yearly"
                         ? "Total amount payable to vendor per year."
                         : `Amount the vendor invoices each ${CYCLE_UNIT_LABEL[amcBillingCycle]}.`}
                     </p>

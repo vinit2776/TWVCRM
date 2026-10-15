@@ -55,6 +55,7 @@ const editPrItemSchema = z.object({
   unit: z.enum(ITEM_UNITS),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
+  linked_asset_id: z.string().uuid().optional().nullable(),
 });
 
 const editPrSchema = z.object({
@@ -141,7 +142,7 @@ export async function GET(
     supabase
       .from("purchase_requests")
       .select(
-        `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate, standard_price)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, gst_invoice_number, supporting_documents:reimbursement_supporting_documents(id))`
+        `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, linked_asset:facility_assets(id, name, asset_code), procurement_items(id, name, department, unit, description, gst_rate, standard_price)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by), linked_asset:facility_assets!linked_asset_id(id, name, asset_code), billable_contract:contracts!billable_contract_id(id, contract_number, tax_percentage, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)), reimbursement_statements:billing_statements!source_pr_id(id, statement_number, status, total_amount, voided_at, created_at, gst_invoice_number, supporting_documents:reimbursement_supporting_documents(id))`
       )
       .eq("id", id)
       .single(),
@@ -637,6 +638,14 @@ export async function PUT(
   }
 
   const { items, ...prData } = parsed.data;
+
+  // One line per asset — the same asset on two lines would double-count it.
+  if (prData.department === "amc") {
+    const assetIds = items.map((i) => i.linked_asset_id).filter((a): a is string => !!a);
+    if (new Set(assetIds).size !== assetIds.length) {
+      return NextResponse.json({ error: "Each asset can only appear on one line" }, { status: 400 });
+    }
+  }
   const newDepartment = prData.department;
   const crossesReimbursement =
     newDepartment !== pr.department &&
@@ -715,6 +724,7 @@ export async function PUT(
         estimated_price: item.estimated_price ?? null,
         total_estimated: item.estimated_price ? round2(item.quantity * item.estimated_price) : null,
         notes: item.notes || null,
+        linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
       }))
     )
     .select("id");

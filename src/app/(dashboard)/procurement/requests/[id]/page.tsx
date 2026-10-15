@@ -37,6 +37,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
@@ -271,6 +272,8 @@ export default function PurchaseRequestDetailPage() {
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
   const [approvalThreshold, setApprovalThreshold] = useState<number>(PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE);
   const [loading, setLoading] = useState(true);
+  // AMC lines ticked to be ordered together as one PO
+  const [combineIds, setCombineIds] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Dialog state
@@ -494,6 +497,17 @@ export default function PurchaseRequestDetailPage() {
           const amcItem = pr.purchase_request_items?.[0];
           const cycle = cycleFromUnit(amcItem?.unit);
           const cycles = Number(amcItem?.quantity ?? 1);
+          if ((pr.purchase_request_items?.length ?? 0) > 1) {
+            return (
+              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
+                <p className="font-medium text-blue-900">Next step: create a Purchase Order for each asset</p>
+                <p className="text-xs text-blue-800 mt-0.5">
+                  Each asset line below has its own payment schedule, so it becomes its own PO. Service reports and
+                  vendor invoices are recorded on each PO.
+                </p>
+              </div>
+            );
+          }
           if (cycles <= 1) return null;
           return (
             <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
@@ -512,7 +526,7 @@ export default function PurchaseRequestDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
-          {["approved", "partially_ordered"].includes(pr.status) && (
+          {["approved", "partially_ordered"].includes(pr.status) && !(pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) && (
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
@@ -873,7 +887,9 @@ export default function PurchaseRequestDetailPage() {
               <div>
                 <p className="text-xs text-muted-foreground">Asset</p>
                 <p className="font-medium">
-                  {pr.linked_asset
+                  {pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1
+                    ? `${pr.purchase_request_items?.length} assets (see lines below)`
+                    : pr.linked_asset
                     ? `${pr.linked_asset.name}${pr.linked_asset.asset_code ? ` (${pr.linked_asset.asset_code})` : ""}`
                     : "—"}
                 </p>
@@ -898,7 +914,7 @@ export default function PurchaseRequestDetailPage() {
                 <p className="text-xs text-muted-foreground">End Date</p>
                 <p className="font-medium">{pr.amc_end_date ?? "—"}</p>
               </div>
-              {(() => {
+              {!(pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) && (() => {
                 const amcItem = pr.purchase_request_items?.[0];
                 const cycle = cycleFromUnit(amcItem?.unit);
                 const cycles = Number(amcItem?.quantity ?? 1);
@@ -917,7 +933,7 @@ export default function PurchaseRequestDetailPage() {
                   <p className="text-xs text-muted-foreground">
                     {(() => {
                       const cycles = Number(pr.purchase_request_items?.[0]?.quantity ?? 1);
-                      return cycles > 1 ? "Total Contract Value (pre-GST)" : "Annual Amount (pre-GST)";
+                      return cycles > 1 || (pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) ? "Total Contract Value (pre-GST)" : "Annual Amount (pre-GST)";
                     })()}
                   </p>
                   <p className="font-bold text-base">{formatCurrency(pr.total_estimated_amount ?? 0)}</p>
@@ -957,6 +973,100 @@ export default function PurchaseRequestDetailPage() {
                 {pr.advance_notes && <p className="text-xs text-muted-foreground mt-1">{pr.advance_notes}</p>}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* One line per asset — each is ordered as its own service PO */}
+      {pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Assets covered</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(pr.purchase_request_items ?? []).map((line) => {
+              const cycle = cycleFromUnit(line.unit);
+              const cycles = Number(line.quantity ?? 1);
+              const ordered = (line.already_ordered_qty ?? 0) >= cycles;
+              const canOrder = ["approved", "partially_ordered"].includes(pr.status) && !ordered;
+              return (
+                <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 first:border-t-0 first:pt-0">
+                  <div className="flex items-start gap-3">
+                    {["approved", "partially_ordered"].includes(pr.status) && (
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4"
+                        aria-label="Select to combine"
+                        disabled={ordered}
+                        checked={combineIds.includes(line.id)}
+                        onChange={(e) =>
+                          setCombineIds((prev) => (e.target.checked ? [...prev, line.id] : prev.filter((x) => x !== line.id)))
+                        }
+                      />
+                    )}
+                  <div>
+                    <p className="font-medium">
+                      {line.linked_asset
+                        ? `${line.linked_asset.name}${line.linked_asset.asset_code ? ` (${line.linked_asset.asset_code})` : ""}`
+                        : line.item_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {BILLING_CYCLE_LABELS[cycle]} · {cycles} cycle{cycles === 1 ? "" : "s"}
+                      {canSeePrices && line.estimated_price
+                        ? ` · ${formatCurrency(Number(line.estimated_price))} per ${CYCLE_UNIT_LABEL[cycle]}`
+                        : ""}
+                    </p>
+                  </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className={ordered ? "text-green-700" : "text-muted-foreground"}>
+                      {ordered ? "Ordered" : "Not yet ordered"}
+                    </Badge>
+                    {canOrder && (
+                      <Button
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700"
+                        onClick={() => router.push(`/procurement/orders/new-service?from_mr=${pr.id}&item=${line.id}`)}
+                      >
+                        <ShoppingCart className="h-4 w-4 mr-1" /> Create PO
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {["approved", "partially_ordered"].includes(pr.status) && (() => {
+              const picked = (pr.purchase_request_items ?? []).filter((l) => combineIds.includes(l.id));
+              if (picked.length === 0) return null;
+              const check = canCombineLines(picked);
+              const cycle = cycleFromUnit(picked[0].unit);
+              return (
+                <div className="border-t pt-3 space-y-2">
+                  {check.ok ? (
+                    <p className="text-xs text-muted-foreground">
+                      One PO for {picked.map((l) => l.linked_asset?.asset_code ?? l.item_name).join(" + ")}:{" "}
+                      {BILLING_CYCLE_LABELS[cycle]} · {Number(picked[0].quantity)} cycles
+                      {canSeePrices ? ` · ${formatCurrency(combinedPerCycleCost(picked))} per ${CYCLE_UNIT_LABEL[cycle]}` : ""}.
+                      One vendor, one invoice per {CYCLE_UNIT_LABEL[cycle]} for all assets.
+                    </p>
+                  ) : picked.length > 1 ? (
+                    <p className="text-xs text-amber-700">{check.reason}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Tick at least two lines to combine them into one PO.</p>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!check.ok}
+                    onClick={() =>
+                      router.push(`/procurement/orders/new-service?from_mr=${pr.id}&items=${picked.map((l) => l.id).join(",")}`)
+                    }
+                  >
+                    <ShoppingCart className="h-4 w-4 mr-1" /> Combine selected into one PO
+                  </Button>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}

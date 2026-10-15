@@ -52,7 +52,7 @@ interface AmcRow {
   procurement_vendors: { id: string; name: string } | null;
   locations: { id: string; name: string } | null;
   purchase_requests: { id: string; pr_number: string; department: string; expenditure_type: string } | null;
-  purchase_order_items: Array<{ id: string; item_name: string; unit: string }>;
+  purchase_order_items: Array<{ id: string; item_name: string; unit: string; linked_asset?: { id: string; name: string; asset_code: string } | null }>;
   linked_asset: { id: string; name: string; asset_code: string } | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
@@ -124,6 +124,13 @@ function daysRemaining(endDate: string | null): number | null {
   if (!endDate) return null;
   const diff = new Date(endDate).getTime() - Date.now();
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+// A combined PO has one asset per PO line; otherwise it is the PO-level asset.
+function coveredAssets(row: { purchase_order_items: Array<{ linked_asset?: { id: string; name: string; asset_code: string } | null }> }) {
+  const seen = new Map<string, { id: string; name: string; asset_code: string }>();
+  for (const it of row.purchase_order_items ?? []) if (it.linked_asset) seen.set(it.linked_asset.id, it.linked_asset);
+  return Array.from(seen.values());
 }
 
 function VisitsBar({ used, covered }: { used: number; covered: number | null }) {
@@ -471,7 +478,16 @@ export default function AmcRegisterPage() {
                             <span className="capitalize">{row.purchase_requests.department}</span>
                           </>
                         )}
-                        {row.linked_asset && (
+                        {coveredAssets(row).length > 1 && (
+                          <>
+                            <span>·</span>
+                            <span title={coveredAssets(row).map((a) => `${a.asset_code} ${a.name}`).join("\n")}>
+                              {coveredAssets(row).length} assets ·{" "}
+                              <span className="font-mono">{coveredAssets(row).map((a) => a.asset_code).join(", ")}</span>
+                            </span>
+                          </>
+                        )}
+                        {coveredAssets(row).length <= 1 && row.linked_asset && (
                           <>
                             <span>·</span>
                             <Link
