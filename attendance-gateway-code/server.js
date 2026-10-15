@@ -851,9 +851,19 @@ async function init() {
   await db.prepare(`INSERT OR IGNORE INTO holidays (date, name) VALUES ${nationalHolidayRows.join(', ')}`).run(...nationalHolidayArgs);
 
   // Admin actions were logged to admin_audit_log before activity_log existed. Copy them
-  // across once (the table is empty of admin rows only before this has ever run) so the
-  // Activity Log reaches back to the start. admin_audit_log itself is no longer written.
-  if (!(await db.prepare("SELECT 1 FROM activity_log WHERE category = 'admin' LIMIT 1").get())) {
+  // across once so the Activity Log reaches back to the start. admin_audit_log itself is
+  // no longer written.
+  //
+  // The claim has to be atomic, not "is the table empty yet?": on Vercel this file is
+  // imported per lambda, so ensureInit only dedupes inside one process and two cold
+  // starts can both read an empty table and both copy. Inserting the marker first lets
+  // exactly one instance win on the primary key — every other startup step here is
+  // idempotent (ADD COLUMN, INSERT OR IGNORE) and this one now is too. It matters
+  // because the result is unprunable: the log is append-only by design.
+  const backfillClaim = await db.prepare(
+    "INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES ('activity_log_backfilled', '1', ?, 'system') ON CONFLICT(key) DO NOTHING"
+  ).run(formatTimestamp(new Date()));
+  if (backfillClaim.changes > 0) {
     await db.exec(`
       INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details)
       SELECT a.created_at, 'admin', a.action,
@@ -5016,13 +5026,27 @@ async function getSessionUser(req) {
   return session;
 }
 
-// Sign-in events, before there is a session. A failed attempt records the username as
-// typed (it may not exist) and, when it does exist, whose account it was.
+// Sign-in events, before there is a session. A failed attempt records whose account was
+// targeted — but only when the typed username actually matches one.
+//
+// The raw text from the username box is never stored. People put their password in that
+// box: a mis-focus, or a password manager filling the wrong field. This log is permanent
+// by design ("nothing is ever deleted"), readable by every admin and manager, and
+// exported to CSV, so a password that lands in it cannot be taken back out. Trying to
+// tell a password from a username by its shape doesn't work either — an API key and an
+// employee id are both just short printable strings. Matching against the users table is
+// the only test that can't be fooled, and a miss tells us all we need: someone tried an
+// account that doesn't exist. The IP, device and time are still recorded, so a real
+// intrusion attempt stays just as visible.
+function safeLoginUsername(username, account) {
+  return account ? account.username : '';
+}
 async function logLoginEvent(action, username, account) {
   if (account === undefined) account = await db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
+  const safe = safeLoginUsername(username, account);
   await logActivity(action, account ? account.employee_id : null,
-    action === 'login' ? '' : `Username entered: ${String(username || '').slice(0, 60)}`,
-    { actorUsername: account ? account.username : String(username || '').slice(0, 60), actorRole: account ? account.role : '' });
+    action === 'login' ? '' : (safe ? `Username entered: ${safe}` : 'No such username (what was typed is not recorded)'),
+    { actorUsername: safe || '(unknown)', actorRole: account ? account.role : '' });
 }
 
 // Every route handler lives in here, unchanged. The wrapper below catches whatever
@@ -6704,6 +6728,8 @@ module.exports.ensureInit = ensureInit;
 module.exports.init = init;
 // Exported for the unit tests — a pure string function, no server needed.
 module.exports.csvField = csvField;
+// Exported for the unit tests — pure, no server needed.
+module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the

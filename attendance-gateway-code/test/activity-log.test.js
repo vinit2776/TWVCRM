@@ -62,3 +62,34 @@ test('activityCsvRow lines up with the CSV headers', () => {
   assert.equal(row.length, ACTIVITY_CSV_HEADERS.length);
   assert.deepEqual(row.slice(0, 7), ['2026-10-15 09:28:00', 'EMP-005', 'Prema R', '', 'device', 'Punches and breaks', 'Punch in']);
 });
+
+// --- what a failed login is allowed to record -------------------------------------
+// server.js builds its database client at import time, so give it a throwaway URL.
+// Requiring it starts no listener — that's behind `require.main === module`.
+process.env.TURSO_DATABASE_URL = process.env.TURSO_DATABASE_URL || 'file::memory:';
+const { safeLoginUsername } = require('../server');
+
+test('a failed login records the account only when the username matches one', () => {
+  assert.equal(safeLoginUsername('EMP-001', { username: 'EMP-001' }), 'EMP-001');
+  assert.equal(safeLoginUsername('admin', { username: 'admin' }), 'admin');
+});
+
+test('a failed login never records what was typed when no account matches', () => {
+  // The case this exists for: a password in the username box. The log is permanent,
+  // admin- and manager-readable and exported to CSV, so none of these may reach it.
+  // Shape can't be the test — an API key and an employee id look alike — so anything
+  // that doesn't match a real account is dropped, whatever it looks like.
+  for (const typed of [
+    'Hunter2!myRealPassword',
+    'p@ssw0rd with spaces',
+    'sk-live-0123456789abcdef',
+    'correct-horse',
+    'someone@theworkvilla.com',
+    'EMP-999',
+    '',
+    null,
+    undefined,
+  ]) {
+    assert.equal(safeLoginUsername(typed, undefined), '', JSON.stringify(typed));
+  }
+});

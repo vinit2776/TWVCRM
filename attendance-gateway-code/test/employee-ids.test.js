@@ -71,6 +71,7 @@ const ACTOR_COLUMNS = [
   ['device_commands', 'requested_by'],
   ['app_settings', 'updated_by'],
   ['deviation_reviews', 'reviewed_by'],
+  ['activity_log', 'actor_username'],
   ['employee_documents', 'uploaded_by'],
 ];
 
@@ -92,6 +93,7 @@ test('renaming moves every record and the login to the new id, leaving nothing b
     INSERT INTO app_settings VALUES ('office_radius', 'EMP-001');
     INSERT INTO employee_documents (employee_id, uploaded_by) VALUES ('EMP-002', 'EMP-001');
     INSERT INTO deviation_reviews VALUES ('EMP-001', '2026-10-14', 'absent', 'EMP-001');
+    INSERT INTO activity_log (employee_id, actor_username) VALUES ('EMP-001', 'EMP-001');
   `);
   for (const table of EMPLOYEE_TABLES) db.prepare(`INSERT INTO ${table} (employee_id) VALUES ('EMP-001')`).run();
 
@@ -115,9 +117,11 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   // day silently loses its Absent/Half Day status and returns to the pending queue.
   assert.equal(db.prepare("SELECT decision FROM deviation_reviews WHERE employee_id = 'EMP-027'").get().decision, 'absent');
 
-  // An activity entry follows the employee it's about, but who did it stays as it was.
-  db.prepare("INSERT INTO activity_log (employee_id, actor_username) VALUES ('EMP-027', 'EMP-001')").run();
-  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM activity_log WHERE employee_id = 'EMP-027'").get().c, 2);
+  // Both halves of an activity entry follow the employee. Moving only employee_id makes
+  // the Activity Log read "EMP-027 ... by EMP-001" for their own login — the page decides
+  // "someone else did this" by comparing the two — naming an id nobody holds any more.
+  const entry = db.prepare("SELECT employee_id, actor_username FROM activity_log").get();
+  assert.deepEqual({ ...entry }, { employee_id: 'EMP-027', actor_username: 'EMP-027' });
 
   // Nothing anywhere still points at the old id.
   for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions', 'deviation_reviews']) {
