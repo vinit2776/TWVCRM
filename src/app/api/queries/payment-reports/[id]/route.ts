@@ -194,6 +194,23 @@ export async function PATCH(
       return NextResponse.json({ error: "That payment doesn't exist" }, { status: 400 });
     }
 
+    // One payment settles one report. Linking a payment that another report
+    // already claimed would let two reports (and two reporters) both count the
+    // same money as theirs.
+    const { data: alreadyLinked } = await admin
+      .from("query_payment_reports")
+      .select("id")
+      .eq("billing_payment_id", paymentId)
+      .eq("status", "verified")
+      .neq("id", id)
+      .limit(1);
+    if (alreadyLinked && alreadyLinked.length > 0) {
+      return NextResponse.json(
+        { error: "That payment is already linked to another verified report" },
+        { status: 409 },
+      );
+    }
+
     // Guard against verifying against someone else's invoice. A report on a
     // statement must point at that statement; a report on a contract must
     // point at a statement belonging to it. Getting this wrong would mark a
