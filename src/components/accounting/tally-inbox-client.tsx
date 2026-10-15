@@ -45,6 +45,8 @@ import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
 import { ToVerifyPanel } from "./to-verify-panel";
+import { PaymentDateFields } from "@/components/billing/payment-date-fields";
+import { todayIst } from "@/lib/payment-dates";
 import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { StatementPaymentPanel, paymentModeLabel } from "@/components/billing/payment-collected-panel";
 import { DepositGuardWarning, DepositOverrideField, looksLikeDepositAdjustment } from "@/components/billing/deposit-guard-notice";
@@ -548,7 +550,7 @@ export function TallyInboxClient() {
     const balance = Math.max(0, row.statement_total_amount - (row.total_paid ?? 0));
     setPayRow({ id: row.statement_id, statement_number: row.statement_number, balance_due: balance });
     setPayAmount(String(balance));
-    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayDate(todayIst());
     setPayMode("bank_transfer");
     setPayRef("");
     setPayNotes("");
@@ -1096,10 +1098,7 @@ export function TallyInboxClient() {
                   <Label>Amount (₹)</Label>
                   <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
                 </div>
-                <div>
-                  <Label>Payment date</Label>
-                  <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
-                </div>
+                <PaymentDateFields value={payDate} onChange={setPayDate} />
               </div>
               <div>
                 <Label>Payment mode</Label>

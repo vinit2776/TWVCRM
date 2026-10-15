@@ -268,7 +268,10 @@ export function voBillParty(source: {
 export interface InboxPayment {
   id: string;
   amount: number;
+  /** When the money reached the bank. */
   payment_date: string;
+  /** When the payment was entered into the CRM. */
+  created_at: string;
   payment_mode: string;
   payment_reference: string | null;
   notes: string | null;

@@ -12,6 +12,7 @@ import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog"
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
+import { formatRecordedOn } from "@/lib/payment-dates";
 import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -57,6 +58,7 @@ interface RecordedPayment {
   amount: number | string;
   tds_amount: number | string | null;
   payment_date: string;
+  created_at?: string;
   payment_mode: string;
   payment_reference: string | null;
 }
@@ -277,8 +279,9 @@ export function PaymentReportCard({
                       {" · "}
                       {STATEMENT_PAYMENT_MODE_LABELS[p.payment_mode] ?? p.payment_mode}
                       {p.payment_reference ? ` · ${p.payment_reference}` : ""}
-                      {" · "}
+                      {" · received "}
                       {formatDate(p.payment_date)}
+                      {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
                     </span>
                     <Button
                       size="sm"
