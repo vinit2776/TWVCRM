@@ -73,6 +73,9 @@ function NewServicePOForm() {
 
   // AMC fields — pre-activate if URL param ?amc=1 or ?from_mr=<id> (always AMC)
   const fromMrId = searchParams.get("from_mr");
+  // Which request line this PO is for (multi-asset AMC requests have one line per asset).
+  const itemParam = searchParams.get("item");
+  const [prItemId, setPrItemId] = useState<string | null>(null);
   const isAmcFromUrl = searchParams.get("amc") === "1" || !!fromMrId;
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
   // AMC contracts may be paid monthly or quarterly. Default yearly so the
@@ -179,11 +182,20 @@ function NewServicePOForm() {
         }
         setSourceMrNumber(pr.pr_number ?? null);
         if (pr.companies) setInheritedCompany(pr.companies);
+        // The line this PO fulfils: the one asked for, the only one, or the next unordered one.
+        const lines: Array<{ id: string; item_name?: string; unit?: string; quantity?: number; estimated_price?: number | null; linked_asset_id?: string | null; already_ordered_qty?: number }> =
+          pr.purchase_request_items ?? [];
+        const mrItem =
+          lines.find((l) => l.id === itemParam) ??
+          (lines.length === 1 ? lines[0] : lines.find((l) => (l.already_ordered_qty ?? 0) < Number(l.quantity)) ?? lines[0]);
+        if (mrItem) setPrItemId(mrItem.id);
         // Service identity
-        if (pr.service_item_name) setCustomName(pr.service_item_name);
-        else if (pr.purchase_request_items?.[0]?.item_name) setCustomName(pr.purchase_request_items[0].item_name);
+        if (lines.length > 1 && mrItem?.item_name) setCustomName(mrItem.item_name);
+        else if (pr.service_item_name) setCustomName(pr.service_item_name);
+        else if (lines[0]?.item_name) setCustomName(lines[0].item_name);
         if (pr.location_id) setLocationId(pr.location_id);
-        if (pr.linked_asset_id) setLinkedAssetId(pr.linked_asset_id);
+        const lineAsset = mrItem?.linked_asset_id ?? pr.linked_asset_id;
+        if (lineAsset) setLinkedAssetId(lineAsset);
         // AMC coverage + dates
         if (pr.amc_coverage_type) setAmcCoverageType(pr.amc_coverage_type);
         if (pr.amc_start_date) {
@@ -196,13 +208,12 @@ function NewServicePOForm() {
         // Frequency, cycle count and per-cycle cost all come off the MR's line item.
         // total_estimated_amount is the whole commitment, so using it as the unit
         // cost would multiply a monthly contract by its own cycle count.
-        const mrItem = pr.purchase_request_items?.[0];
         setAmcBillingCycle(cycleFromUnit(mrItem?.unit));
         if (mrItem?.quantity && Number(mrItem.quantity) > 1) {
           setAmcCycleCountOverride(String(mrItem.quantity));
         }
         if (mrItem?.estimated_price) setUnitCost(String(mrItem.estimated_price));
-        else if (pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
+        else if (lines.length <= 1 && pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
         // Contacts
         if (pr.amc_contact_name) setAmcContactName(pr.amc_contact_name);
         if (pr.amc_helpline_number) setAmcHelpline(pr.amc_helpline_number);
@@ -222,7 +233,7 @@ function NewServicePOForm() {
         if (pr.notes) setNotes(pr.notes);
       })
       .catch(() => toast.error("Could not load source MR for pre-fill"));
-  }, [fromMrId, router]);
+  }, [fromMrId, itemParam, router]);
 
   const serviceItemName = customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
@@ -287,7 +298,7 @@ function NewServicePOForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           po_type: "service",
-          ...(fromMrId ? { pr_id: fromMrId } : { company_id: companyId }),
+          ...(fromMrId ? { pr_id: fromMrId, ...(prItemId && { pr_item_id: prItemId }) } : { company_id: companyId }),
           vendor_id: vendorId,
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
