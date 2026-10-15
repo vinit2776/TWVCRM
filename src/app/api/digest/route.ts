@@ -689,6 +689,7 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .from("vendor_bills")
       .select("invoice_number, total_amount, amount_paid, due_date, payment_status, vendor:procurement_vendors!vendor_bills_vendor_id_fkey(company_name)")
       .neq("payment_status", "paid")
+      .neq("approval_status", "withdrawn")
       .order("due_date", { ascending: true }),
     supabase
       .from("contracts")

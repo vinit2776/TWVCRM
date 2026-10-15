@@ -80,10 +80,16 @@ export async function createVendorBill(
   if (input.po_id && input.invoice_file_url) {
     const { data: linkedPo } = await supabase
       .from("purchase_orders")
-      .select("po_type")
+      .select("po_type, status")
       .eq("id", input.po_id)
       .single();
     if (linkedPo?.po_type !== "service") {
+      // Remember where the PO was so an admin withdrawing this bill can put it
+      // back. Skipped when another bill already moved it (status is then an
+      // invoice_* value and says nothing about receiving).
+      if (linkedPo && !["invoice_received", "invoice_approved", "cancelled"].includes(linkedPo.status)) {
+        await supabase.from("vendor_bills").update({ po_status_before_bill: linkedPo.status }).eq("id", bill.id);
+      }
       await supabase
         .from("purchase_orders")
         .update({ status: "invoice_received" })

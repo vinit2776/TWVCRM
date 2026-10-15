@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cleanAliases, nameKey } from "@/lib/electricity-connections";
 import { connectionConflictMessages } from "@/lib/electricity-connections-server";
@@ -125,7 +126,7 @@ export async function findDuplicateVendorBill(
     .from("vendor_bills")
     .select("id, bill_number, invoice_number, invoice_date, total_amount, approval_status")
     .eq("vendor_id", vendorId)
-    .neq("approval_status", "rejected")
+    .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
     .not("invoice_number", "is", null)
     .limit(2000);
   if (error) throw new Error(error.message);

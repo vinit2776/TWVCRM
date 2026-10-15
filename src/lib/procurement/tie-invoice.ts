@@ -25,6 +25,9 @@ export function checkTieInvoiceToCycle(i: TieCheckInput): { ok: true } | { ok: f
   if (i.bill.approval_status === "rejected") {
     return { ok: false, error: "A rejected invoice can't be tied to a cycle. Correct and resubmit it, or leave it rejected", status: 422 };
   }
+  if (i.bill.approval_status === "withdrawn") {
+    return { ok: false, error: "A withdrawn invoice can't be tied to a cycle", status: 422 };
+  }
   if (!i.report || i.report.po_id !== i.bill.po_id) {
     return { ok: false, error: "That service report does not belong to this purchase order", status: 422 };
   }

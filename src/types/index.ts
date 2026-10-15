@@ -2327,7 +2327,7 @@ export type { ItemUnit };
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
 export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
-export type BillApprovalStatus = "pending" | "approved" | "rejected";
+export type BillApprovalStatus = "pending" | "approved" | "rejected" | "withdrawn";
 export type RejectionOutcome = "return" | "replacement" | "void";
 export type PaymentBatchType = "immediate" | "15th" | "25th";
 
@@ -2684,6 +2684,8 @@ export interface PurchaseOrder {
 
 export interface VendorBill {
   id: string;
+  withdrawn_at?: string | null;
+  withdrawn_reason?: string | null;
   bill_number: string;
   company_id: string;
   po_id?: string;

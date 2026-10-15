@@ -1,3 +1,4 @@
+import { isDeadBillStatus } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { computeAmcCommitted } from "@/lib/procurement/amc-budget";
@@ -83,12 +84,12 @@ export async function GET(request: NextRequest) {
     // Rejected bills do not consume a billing cycle — that cycle is still unbilled.
     // Matches the cap enforced when a bill is created.
     const liveBills = (bills ?? []).filter(
-      (b: { approval_status?: string | null }) => b.approval_status !== "rejected"
+      (b: { approval_status?: string | null }) => !isDeadBillStatus(b.approval_status)
     );
     return {
       ...rest,
       amc_status: computed,
-      payment_state: computePaymentState(bills),
+      payment_state: computePaymentState(liveBills),
       bills_raised: liveBills.length,
     };
   });

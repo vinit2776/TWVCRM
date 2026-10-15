@@ -33,6 +33,10 @@ describe("checkTieInvoiceToCycle", () => {
     expect(checkTieInvoiceToCycle(with_({ bill: { ...base.bill, approval_status: "rejected" } }))).toMatchObject({ ok: false });
   });
 
+  it("refuses a withdrawn invoice", () => {
+    expect(checkTieInvoiceToCycle(with_({ bill: { ...base.bill, approval_status: "withdrawn" } }))).toMatchObject({ ok: false });
+  });
+
   it("refuses a report from another PO", () => {
     expect(checkTieInvoiceToCycle(with_({ report: { po_id: "other" } }))).toMatchObject({ ok: false });
     expect(checkTieInvoiceToCycle(with_({ report: null }))).toMatchObject({ ok: false });

@@ -226,6 +226,7 @@ export async function listVendorsMissingEmail(
   const { data: bills } = await supabase
     .from("vendor_bills")
     .select("vendor_id, total_amount, invoice_date, approval_status, payment_status")
+    .neq("approval_status", "withdrawn")
     .in("vendor_id", vendorIds);
 
   // Dismissal counts within current escalation window

@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
@@ -53,7 +54,7 @@ export async function tryAutoApproveAmcBill(
     .select("id, approval_status, payment_batch_type")
     .eq("po_id", poId)
     .neq("id", billId)
-    .neq("approval_status", "rejected");
+    .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
 
   if (!priorBills || priorBills.length === 0) {
     return { autoApproved: false, note: "First invoice on this AMC contract — always manual" };

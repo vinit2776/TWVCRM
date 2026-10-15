@@ -62,6 +62,9 @@ export async function PATCH(
     || bill.created_by === dbUser.id;
   if (!canAct) return NextResponse.json({ error: "Access denied" }, { status: 403 });
 
+  if (bill.approval_status === "withdrawn") {
+    return NextResponse.json({ error: "This bill was withdrawn — its documents are locked." }, { status: 403 });
+  }
   if (bill.approval_status === "approved") {
     return NextResponse.json(
       { error: "This bill is approved — documents are locked. Attach a new document instead of editing this one." },
@@ -117,6 +120,9 @@ export async function DELETE(
     || bill.created_by === dbUser.id;
   if (!canAct) return NextResponse.json({ error: "Access denied" }, { status: 403 });
 
+  if (bill.approval_status === "withdrawn") {
+    return NextResponse.json({ error: "This bill was withdrawn — its documents are locked." }, { status: 403 });
+  }
   if (bill.approval_status === "approved") {
     return NextResponse.json(
       { error: "This bill is approved — documents are locked and can't be deleted." },

@@ -93,8 +93,10 @@ function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBil
  */
 export function ServiceCyclesCard({
   accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle,
-  reports, bills, onRecordReport, onUploadInvoice, onEditInvoice, canTie, onChanged,
+  reports, bills: allBills, onRecordReport, onUploadInvoice, onEditInvoice, canTie, onChanged,
 }: Props) {
+  // A withdrawn invoice is out of play, so its cycle reads as un-invoiced again.
+  const bills = allBills.filter((b) => b.approval_status !== "withdrawn");
   const [tieBill, setTieBill] = useState<CycleBill | null>(null);
   const [tieReportId, setTieReportId] = useState("");
   const [tying, setTying] = useState(false);

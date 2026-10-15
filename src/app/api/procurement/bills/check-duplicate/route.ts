@@ -82,6 +82,7 @@ export async function POST(request: NextRequest) {
     .select(`id, bill_number, invoice_number, invoice_date, total_amount, approval_status,
              procurement_vendors(name)`)
     .eq("vendor_id", input.vendor_id)
+    .neq("approval_status", "withdrawn")
     .gte("invoice_date", cutoff.split("T")[0])
     .order("invoice_date", { ascending: false })
     .limit(50);
