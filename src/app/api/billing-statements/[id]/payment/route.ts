@@ -5,6 +5,7 @@ import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { canRecordPayments } from "@/lib/constants";
+import { OVERPAYMENT_CODE, overpaymentMessage } from "@/lib/overpayment-guard";
 import { DEPOSIT_ADJUSTMENT_MODE, DEPOSIT_OVERRIDE_NOTE_MARKER, evaluateDepositGuard } from "@/lib/deposit-payment-guard";
 
 /**
@@ -127,27 +128,54 @@ export async function POST(
     );
   }
 
-  // Insert payment
-  const { data: payment, error: insertErr } = await supabase
-    .from("billing_payments")
-    .insert({
-      billing_statement_id: id,
-      amount: Number(amount),
-      payment_date,
-      payment_mode,
-      payment_reference: payment_reference || null,
-      proof_path: proof_path || null,
-      notes: guard.overridden
-        ? `${notes ? `${notes}\n` : ""}${DEPOSIT_OVERRIDE_NOTE_MARKER} — ${overrideReason!.trim()}]`
-        : notes || null,
-      tds_amount: tdsAmount,
-      tds_section: tdsSection,
-      recorded_by: dbUser.id,
-    })
-    .select()
-    .single();
+  // Insert payment — through the guarded RPC, which locks the statement, sums
+  // what is already settled and refuses anything that would over-credit it.
+  // A route-side check followed by an insert would still lose a race between
+  // two submissions (and did let a receipt be recorded twice, days apart).
+  const guarded = await createAdminClient().rpc("record_billing_payment_guarded", {
+    p_statement_id: id,
+    p_amount: Number(amount),
+    p_payment_date: payment_date,
+    p_payment_mode: payment_mode,
+    p_payment_reference: payment_reference || null,
+    p_proof_path: proof_path || null,
+    p_notes: guard.overridden
+      ? `${notes ? `${notes}\n` : ""}${DEPOSIT_OVERRIDE_NOTE_MARKER} — ${overrideReason!.trim()}]`
+      : notes || null,
+    p_tds_amount: tdsAmount,
+    p_tds_section: tdsSection,
+    p_recorded_by: dbUser.id,
+  });
+  if (guarded.error) return NextResponse.json({ error: guarded.error.message }, { status: 500 });
 
-  if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
+  const outcome = (guarded.data as Array<{
+    success: boolean;
+    error_code: string | null;
+    outstanding: number | string | null;
+    settled: number | string | null;
+    payment: Record<string, unknown> | null;
+  }> | null)?.[0];
+  if (!outcome) return NextResponse.json({ error: "Could not record payment" }, { status: 500 });
+
+  if (!outcome.success) {
+    if (outcome.error_code === OVERPAYMENT_CODE) {
+      const outstanding = Number(outcome.outstanding ?? 0);
+      return NextResponse.json(
+        {
+          error: overpaymentMessage({
+            outstanding,
+            settled: Number(outcome.settled ?? 0),
+            attempted: Number(amount) + tdsAmount,
+          }),
+          code: OVERPAYMENT_CODE,
+          outstanding,
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ error: "Statement not found" }, { status: 404 });
+  }
+  const payment = outcome.payment as { id: string } & Record<string, unknown>;
 
   // Handoff v2: when the flag is on, the legacy bridge receipt-voucher
   // enqueue is bypassed. Accounts records the receipt in Tally directly,
