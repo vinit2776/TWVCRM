@@ -8,6 +8,7 @@ import {
   isPaymentReportOutcome,
   statusForOutcome,
   validatePaymentReport,
+  lastCheckedChip,
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
@@ -200,5 +201,31 @@ describe("statementReference", () => {
   it("never renders an empty label", () => {
     expect(statementReference({ statement_number: null, gst_invoice_number: null })).toBe("Draft");
     expect(statementReference({})).toBe("Draft");
+  });
+});
+
+describe("lastCheckedChip", () => {
+  const now = Date.parse("2026-10-15T08:00:00Z");
+  const ago = (days: number) => new Date(now - days * 86_400_000 - 1000).toISOString();
+
+  it("says not checked when accounts have never answered not-found", () => {
+    expect(lastCheckedChip(null, now)).toEqual({ label: "not checked yet", tone: "never" });
+    expect(lastCheckedChip(undefined, now).tone).toBe("never");
+  });
+
+  it("is fresh today and yesterday", () => {
+    expect(lastCheckedChip(new Date(now - 3_600_000).toISOString(), now)).toEqual({
+      label: "checked today",
+      tone: "fresh",
+    });
+    expect(lastCheckedChip(ago(1), now)).toEqual({ label: "checked yesterday", tone: "fresh" });
+  });
+
+  it("goes stale from two days on, with the day count", () => {
+    expect(lastCheckedChip(ago(5), now)).toEqual({ label: "checked 5 days ago", tone: "stale" });
+  });
+
+  it("never reports a negative age for a clock-skewed timestamp", () => {
+    expect(lastCheckedChip(new Date(now + 86_400_000).toISOString(), now).label).toBe("checked today");
   });
 });

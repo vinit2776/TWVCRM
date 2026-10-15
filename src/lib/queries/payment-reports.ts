@@ -248,3 +248,25 @@ export function describeReport(fields: PaymentReportFields, modeLabel: string): 
   if (fields.payer_differs && fields.payer_name) parts.push(`from ${fields.payer_name}`);
   return parts.join(" · ");
 }
+
+/** How recently accounts last looked for a report in the bank. */
+export type LastCheckedTone = "never" | "fresh" | "stale";
+
+/**
+ * The "last checked" chip on the Tally Inbox To verify list.
+ *
+ * `lastCheckedAt` is the newest 'payment_not_found' event on the thread —
+ * accounts saying "not in the bank yet" — so a reply or a nudge never counts
+ * as a check. Fresh means today or yesterday; anything older is stale, which
+ * is what tells accounts a report has gone cold even if it was looked at once.
+ */
+export function lastCheckedChip(
+  lastCheckedAt: string | null | undefined,
+  now: number,
+): { label: string; tone: LastCheckedTone } {
+  if (!lastCheckedAt) return { label: "not checked yet", tone: "never" };
+  const days = Math.max(0, Math.floor((now - Date.parse(lastCheckedAt)) / 86_400_000));
+  if (days === 0) return { label: "checked today", tone: "fresh" };
+  if (days === 1) return { label: "checked yesterday", tone: "fresh" };
+  return { label: `checked ${days} days ago`, tone: "stale" };
+}

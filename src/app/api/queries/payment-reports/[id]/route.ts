@@ -241,10 +241,16 @@ export async function PATCH(
   }
 
   // ── Timeline ────────────────────────────────────────────────────────────
-  // 'not_found' posts an ordinary message so the thread stays a conversation
-  // and the escalation clock resets off it, exactly like a typed reply.
+  // 'not_found' has its own event type so "last checked" is exact, but it
+  // still counts as the latest message for the escalation clock (chase.ts
+  // reads the newest event of any type), so the chase resets off it exactly
+  // like a typed reply.
   const eventType =
-    outcome === "verified" ? "payment_verified" : outcome === "rejected" ? "payment_rejected" : "message";
+    outcome === "verified"
+      ? "payment_verified"
+      : outcome === "rejected"
+        ? "payment_rejected"
+        : "payment_not_found";
 
   const defaultNote =
     outcome === "verified"

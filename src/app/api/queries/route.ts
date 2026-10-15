@@ -10,9 +10,10 @@ import {
   fanOutQueryEvent,
   logQueryAudit,
 } from "@/lib/queries/server";
+import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
-import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryListItem, type QueryModule, type QueryStats } from "@/lib/queries/types";
+import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryMessageEventType, type QueryListItem, type QueryModule, type QueryStats } from "@/lib/queries/types";
 
 /**
  * GET  /api/queries — list threads (tabbed), or ?stats=true for the header
@@ -38,8 +39,16 @@ const THREAD_SELECT = `
     body, event_type, created_at, created_by,
     author:users!query_messages_created_by_fkey(id, full_name, role)
   ),
-  payment_report:query_payment_reports!query_payment_reports_query_id_fkey(amount, status)
+  payment_report:query_payment_reports!query_payment_reports_query_id_fkey(amount, status, payment_mode, payment_reference, paid_on)
 `;
+
+interface PaymentReportRow {
+  amount: number;
+  status: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  paid_on: string;
+}
 
 interface QueryRow {
   id: string;
@@ -56,10 +65,10 @@ interface QueryRow {
   resolved_at: string | null;
   created_by: QueryAuthor;
   resolved_by: QueryAuthor | null;
-  payment_report: { amount: number; status: string } | Array<{ amount: number; status: string }> | null;
+  payment_report: PaymentReportRow | PaymentReportRow[] | null;
   messages: Array<{
     body: string | null;
-    event_type: "message" | "resolved" | "reopened" | "retargeted";
+    event_type: QueryMessageEventType;
     created_at: string;
     created_by: string;
     author: QueryAuthor | null;
@@ -144,6 +153,14 @@ function toListItem(
     reported_amount: (() => {
       const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
       return r ? Number(r.amount) : null;
+    })(),
+    last_checked_at:
+      [...messages].reverse().find((m) => m.event_type === "payment_not_found")?.created_at ?? null,
+    reported_payment: (() => {
+      const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
+      return r
+        ? { payment_mode: r.payment_mode, payment_reference: r.payment_reference, paid_on: r.paid_on }
+        : null;
     })(),
     last_message: last
       ? { body: last.body, event_type: last.event_type, created_at: last.created_at }
@@ -247,6 +264,11 @@ async function loadStats(
       overdue: open.filter(({ row }) => !!row.needed_by && row.needed_by < today).length,
       resolved_this_week: resolvedRes.count,
       new_24h: open.filter(({ row }) => row.created_at >= dayAgo).length,
+      // Reviewers only: showing a count to someone who can't act on it is a
+      // badge they can never clear.
+      to_verify: canReviewPaymentReport(viewer.role)
+        ? open.filter(({ row }) => row.kind === "payment_reported").length
+        : 0,
     },
   };
 }

@@ -85,7 +85,8 @@ export type QueryMessageEventType =
   | "retargeted"
   | "nudged"
   | "payment_verified"
-  | "payment_rejected";
+  | "payment_rejected"
+  | "payment_not_found";
 
 export interface QueryAuthor {
   id: string;
@@ -163,6 +164,12 @@ export interface QueryListItem extends QueryTargeting {
   last_message: { body: string | null; event_type: QueryMessageEventType; created_at: string } | null;
   /** The amount claimed, on 'payment_reported' threads only. Null elsewhere. */
   reported_amount?: number | null;
+  /** The rest of the claim, on 'payment_reported' threads only, so a list row
+   *  can show how it was paid without opening the thread. */
+  /** When accounts last answered "not found yet" on a payment report, i.e. last
+   *  looked at the bank for it. Null if never checked. */
+  last_checked_at?: string | null;
+  reported_payment?: { payment_mode: string; payment_reference: string | null; paid_on: string } | null;
   /** True when this viewer is the one expected to act next. Computed by
    *  isAwaitingUser() in audience.ts. */
   awaiting_viewer: boolean;
@@ -200,6 +207,10 @@ export interface QueryStats {
    *  accounts dashboard. Counted over the same role-filtered set as `open`,
    *  so it never exceeds it. */
   new_24h: number;
+  /** Open payment reports this viewer is allowed to act on. Zero for roles
+   *  that can't verify (see canReviewPaymentReport). Drives the Tally Inbox
+   *  "To verify" tab count and the sidebar badge. */
+  to_verify: number;
 }
 
 /**

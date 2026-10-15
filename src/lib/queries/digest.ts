@@ -36,7 +36,8 @@ export type DigestBadgeKind =
   | "reopened"
   | "rerouted"
   | "payment_verified"
-  | "payment_rejected";
+  | "payment_rejected"
+  | "payment_not_found";
 
 export interface DigestBadge {
   kind: DigestBadgeKind;
@@ -111,6 +112,7 @@ const STATE_EVENTS: Record<string, { kind: DigestBadgeKind; label: string }> = {
   retargeted: { kind: "rerouted", label: "Re-routed" },
   payment_verified: { kind: "payment_verified", label: "Payment verified" },
   payment_rejected: { kind: "payment_rejected", label: "Payment rejected" },
+  payment_not_found: { kind: "payment_not_found", label: "Not in the bank yet" },
 };
 
 /** Lower sorts first. */
@@ -121,6 +123,7 @@ const BADGE_URGENCY: Record<DigestBadgeKind, number> = {
   replied: 3,
   reopened: 4,
   rerouted: 5,
+  payment_not_found: 5,
   payment_rejected: 6,
   payment_verified: 7,
   resolved: 8,
@@ -172,7 +175,10 @@ export function buildQueryDigest(params: {
     // mistaken for the asker speaking — either as a participant or as activity.
     const human = ordered.filter((m) => m.event_type !== "nudged");
     const openingMessageId = human.find((m) => m.event_type === "message")?.id ?? null;
-    const lastSpeaker = [...human].reverse().find((m) => m.event_type === "message") ?? null;
+    // A "not found yet" answer is accounts speaking, so it counts as the last
+    // word for whose turn it is; it just isn't a reply (it earns its own badge).
+    const lastSpeaker =
+      [...human].reverse().find((m) => m.event_type === "message" || m.event_type === "payment_not_found") ?? null;
 
     const participantIds = [...new Set([thread.created_by, ...human.map((m) => m.created_by)])];
 
@@ -268,7 +274,7 @@ export function buildQueryDigest(params: {
       const latest = inAlerts
         ? [...human]
             .reverse()
-            .find((m) => m.event_type === "message" && m.id !== openingMessageId && m.created_at >= windowStart && m.created_by !== personId)
+            .find((m) => (m.event_type === "message" || m.event_type === "payment_not_found") && m.id !== openingMessageId && m.created_at >= windowStart && m.created_by !== personId)
         : undefined;
 
       addItem(personId, {
