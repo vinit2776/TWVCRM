@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { handleStatementPaid } from "@/lib/tally-handoff-server";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { canRecordPayments } from "@/lib/constants";
+import { OVERPAYMENT_CODE, overpaymentMessage } from "@/lib/overpayment-guard";
 
 /**
  * POST /api/invoices/[id]/payment
@@ -112,14 +113,44 @@ export async function POST(
 
   // ── Record the payment + route through the shared Tally-handoff pipeline ───
   if (statement) {
-    await adminSupabase.from("billing_payments").insert({
-      billing_statement_id: statement.id,
-      amount,
-      payment_date: paidAt.slice(0, 10),
-      payment_mode: "other",
-      payment_reference: reference,
-      recorded_by: actor.id,
+    // Same guard as the statement payment route: one receipt must not be able
+    // to credit an ad-hoc invoice twice, whichever screen it is recorded from.
+    const guarded = await adminSupabase.rpc("record_billing_payment_guarded", {
+      p_statement_id: statement.id,
+      p_amount: amount,
+      p_payment_date: paidAt.slice(0, 10),
+      p_payment_mode: "other",
+      p_payment_reference: reference,
+      p_proof_path: null,
+      p_notes: null,
+      p_tds_amount: 0,
+      p_tds_section: null,
+      p_recorded_by: actor.id,
     });
+    if (guarded.error) {
+      console.error("[invoice payment] guarded insert failed:", guarded.error.message);
+      return NextResponse.json({ error: "Failed to record payment" }, { status: 500 });
+    }
+    const outcome = (guarded.data as Array<{
+      success: boolean;
+      error_code: string | null;
+      outstanding: number | string | null;
+      settled: number | string | null;
+    }> | null)?.[0];
+    if (!outcome?.success) {
+      if (outcome?.error_code === OVERPAYMENT_CODE) {
+        const outstanding = Number(outcome.outstanding ?? 0);
+        return NextResponse.json(
+          {
+            error: overpaymentMessage({ outstanding, settled: Number(outcome.settled ?? 0), attempted: amount }),
+            code: OVERPAYMENT_CODE,
+            outstanding,
+          },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ error: "Failed to record payment" }, { status: 500 });
+    }
     await adminSupabase
       .from("billing_statements")
       .update({ payment_status: "paid" })

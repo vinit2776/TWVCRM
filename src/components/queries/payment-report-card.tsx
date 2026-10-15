@@ -51,6 +51,16 @@ interface Props {
   onChanged: () => void;
 }
 
+/** A payment already recorded on the statement the report points at. */
+interface RecordedPayment {
+  id: string;
+  amount: number | string;
+  tds_amount: number | string | null;
+  payment_date: string;
+  payment_mode: string;
+  payment_reference: string | null;
+}
+
 interface StatementOption {
   id: string;
   statement_number: string | null;
@@ -85,6 +95,11 @@ export function PaymentReportCard({
     report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
   );
   const [recordOpen, setRecordOpen] = useState(false);
+  // Payments already on the chosen invoice. The usual way a report ends up
+  // double-counted is accounts recording the receipt first, then verifying the
+  // report with "Verify and record" — which would record it again. Showing
+  // what's already there lets them link it instead.
+  const [recorded, setRecorded] = useState<RecordedPayment[]>([]);
 
   const needsAllocation = entityType === "contract" && !isDeposit;
 
@@ -111,6 +126,25 @@ export function PaymentReportCard({
     })();
     return () => { cancelled = true; };
   }, [canReview, needsAllocation, entityId, report.claimed_statement_id]);
+
+  useEffect(() => {
+    if (!canReview || isDeposit || !statementId) {
+      setRecorded([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/billing-statements/${encodeURIComponent(statementId)}/payment`, { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        const json = (await res.json()) as { data?: RecordedPayment[] };
+        if (!cancelled) setRecorded(json.data ?? []);
+      } catch {
+        if (!cancelled) setRecorded([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canReview, isDeposit, statementId]);
 
   const settle = useCallback(
     async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
@@ -226,6 +260,37 @@ export function PaymentReportCard({
                     </SelectContent>
                   </Select>
                 )}
+              </div>
+            )}
+
+            {mode === "idle" && recorded.length > 0 && (
+              <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
+                <p className="text-[11px] font-medium">Already recorded on this invoice</p>
+                <p className="text-[11px] opacity-80">
+                  If this is the same payment, link it here. &ldquo;Verify and record&rdquo; adds a second
+                  payment, and is refused if it would over-credit the invoice.
+                </p>
+                {recorded.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      <span className="font-medium tabular-nums">{formatCurrency(Number(p.amount))}</span>
+                      {" · "}
+                      {STATEMENT_PAYMENT_MODE_LABELS[p.payment_mode] ?? p.payment_mode}
+                      {p.payment_reference ? ` · ${p.payment_reference}` : ""}
+                      {" · "}
+                      {formatDate(p.payment_date)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[11px] bg-background flex-none"
+                      disabled={busy}
+                      onClick={() => void settle("verified", p.id)}
+                    >
+                      Link and verify
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
 
