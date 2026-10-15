@@ -9,6 +9,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const { createClient } = require('@libsql/client');
 const {
   createAttendanceLogic,
@@ -23,6 +24,9 @@ const {
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
 const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, isBranchDeviation } = require('./geofence');
+const {
+  ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
+} = require('./activity-log');
 const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
 } = require('./employee-ids');
@@ -553,6 +557,26 @@ const SCHEMA_SQL = `
     details TEXT DEFAULT '',
     created_at TEXT NOT NULL
   );
+  -- Everything people do in the app, newest last: sign-ins, punches, breaks, requests
+  -- and every admin/manager action (see activity-log.js). employee_id is whose record
+  -- it concerns; actor_username is who did it ('' for the device and the system).
+  -- Kept forever, by request. Supersedes admin_audit_log, which is copied in once.
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    category TEXT NOT NULL,
+    action TEXT NOT NULL,
+    employee_id TEXT,
+    actor_username TEXT NOT NULL DEFAULT '',
+    actor_role TEXT NOT NULL DEFAULT '',
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id TEXT NOT NULL DEFAULT '',
+    details TEXT NOT NULL DEFAULT '',
+    ip TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at);
+  CREATE INDEX IF NOT EXISTS idx_activity_log_emp_created ON activity_log(employee_id, created_at);
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -826,6 +850,30 @@ async function init() {
   }
   await db.prepare(`INSERT OR IGNORE INTO holidays (date, name) VALUES ${nationalHolidayRows.join(', ')}`).run(...nationalHolidayArgs);
 
+  // Admin actions were logged to admin_audit_log before activity_log existed. Copy them
+  // across once so the Activity Log reaches back to the start. admin_audit_log itself is
+  // no longer written.
+  //
+  // The claim has to be atomic, not "is the table empty yet?": on Vercel this file is
+  // imported per lambda, so ensureInit only dedupes inside one process and two cold
+  // starts can both read an empty table and both copy. Inserting the marker first lets
+  // exactly one instance win on the primary key — every other startup step here is
+  // idempotent (ADD COLUMN, INSERT OR IGNORE) and this one now is too. It matters
+  // because the result is unprunable: the log is append-only by design.
+  const backfillClaim = await db.prepare(
+    "INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES ('activity_log_backfilled', '1', ?, 'system') ON CONFLICT(key) DO NOTHING"
+  ).run(formatTimestamp(new Date()));
+  if (backfillClaim.changes > 0) {
+    await db.exec(`
+      INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details)
+      SELECT a.created_at, 'admin', a.action,
+             CASE WHEN a.target_type = 'employee' THEN a.target_id END,
+             a.actor_username, COALESCE(u.role, ''), a.target_type, a.target_id, COALESCE(a.details, '')
+      FROM admin_audit_log a LEFT JOIN users u ON u.username = a.actor_username
+      ORDER BY a.id
+    `);
+  }
+
   // Sweep sessions already past the absolute TTL so restarts don't leave dead rows.
   await db.prepare('DELETE FROM sessions WHERE created_at < ?').run(Date.now() - SESSION_ABSOLUTE_TTL_MS);
 
@@ -912,7 +960,27 @@ async function recordPunch(employeeId, timestamp, direction, source, note = '', 
   if (await isDuplicatePunch(employeeId, timestamp)) return false;
   await db.prepare('INSERT INTO punches (employee_id, timestamp, direction, source, note, location, marked_by, location_address, branch, deviation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(employeeId, timestamp, direction, source, note, location, markedBy, locationAddress, branch, deviation ? 1 : 0);
+  await logActivity(direction === 'out' ? 'punch_out' : 'punch_in', employeeId, punchActivityDetails(timestamp, source, note, branch, deviation, locationAddress, location),
+    // The device and the 7 PM timer act on their own; a correction is credited to the
+    // manager who approved it. Otherwise it's whoever is signed in (the employee).
+    source === 'biometric' ? { actorUsername: '', actorRole: 'device' }
+      : source === 'auto' ? { actorUsername: '', actorRole: 'system' }
+      : {});
   return true;
+}
+const PUNCH_SOURCE_DESCRIPTIONS = {
+  biometric: 'Biometric device', office: 'Punch button', remote: 'Punch button', wifi: 'Punch button',
+  correction: 'Approved correction', auto: '7 PM auto-checkout',
+};
+// "Punch time 09:31 · Punch button · at Branch 1 (office)". The punch time is spelled
+// out because it can differ from when the log line was written — the device catches up
+// after an outage, and a correction fills in a past day.
+function punchActivityDetails(timestamp, source, note, branch, deviation, locationAddress, location) {
+  const parts = [`Punch time ${timestamp}`, PUNCH_SOURCE_DESCRIPTIONS[source] || source];
+  if (branch) parts.push(`at ${branch}${deviation ? ' (not their branch)' : source === 'office' ? ' (office)' : ''}`);
+  else if (source === 'remote') parts.push(`remote${locationAddress ? `: ${locationAddress}` : location ? `: ${location}` : ''}`);
+  if (note && source === 'correction') parts.push(note);
+  return parts.join(' · ');
 }
 async function getEmployeeByDevicePin(pin) {
   return await db.prepare('SELECT * FROM employees WHERE device_pin = ?').get(String(pin));
@@ -1017,13 +1085,38 @@ async function createNotification(employeeId, message) {
   await db.prepare('INSERT INTO notifications (employee_id, message, created_at, read) VALUES (?, ?, ?, 0)')
     .run(employeeId, message, formatTimestamp(new Date()));
 }
-async function logAdminAction(actorUsername, action, targetType, targetId, details = '') {
-  await db.prepare(
-    'INSERT INTO admin_audit_log (actor_username, action, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(actorUsername, action, targetType, String(targetId), details, formatTimestamp(new Date()));
+// The request being handled, if any, so a log entry can say who did it and from what
+// device without every call site passing req and user along. Empty for work that isn't
+// a request, like the 7 PM auto-checkout timer.
+const requestContext = new AsyncLocalStorage();
+
+// Never lets a logging failure break the action being logged — the punch or approval
+// already happened; a missing log line is the lesser problem.
+async function writeActivity({ category, action, employeeId = null, actorUsername, actorRole, targetType = '', targetId = '', details = '' }) {
+  const ctx = requestContext.getStore() || {};
+  const user = ctx.user;
+  try {
+    await db.prepare(
+      'INSERT INTO activity_log (created_at, category, action, employee_id, actor_username, actor_role, target_type, target_id, details, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      formatTimestamp(new Date()), category, action, employeeId || null,
+      actorUsername !== undefined ? actorUsername : (user ? user.username : ''),
+      actorRole !== undefined ? actorRole : (user ? user.role : ''),
+      targetType, String(targetId), details,
+      ctx.req ? getClientIp(ctx.req) : '',
+      ctx.req ? String(ctx.req.headers['user-agent'] || '').slice(0, 300) : '',
+    );
+  } catch (err) {
+    console.error('[activity-log] could not record', action, err && err.message);
+  }
 }
-async function getAdminAuditLog(limit = 200) {
-  return await db.prepare('SELECT * FROM admin_audit_log ORDER BY created_at DESC LIMIT ?').all(limit);
+// An employee-side event from activity-log.js's ACTIONS (login, punch_in, leave_applied…).
+async function logActivity(action, employeeId, details = '', actor = {}) {
+  await writeActivity({ category: categoryOf(action), action, employeeId, details, ...actor });
+}
+// employeeId is whose record the action concerns, when it concerns one.
+async function logAdminAction(actorUsername, action, targetType, targetId, details = '', employeeId = targetType === 'employee' ? targetId : null) {
+  await writeActivity({ category: 'admin', action, employeeId, actorUsername, targetType, targetId, details });
 }
 async function getNotifications(employeeId) {
   return await db.prepare('SELECT * FROM notifications WHERE employee_id = ? ORDER BY created_at DESC').all(employeeId);
@@ -1844,7 +1937,7 @@ async function employeeSwitcher(currentId, basePath) {
   return `<select onchange="location.href='${basePath}?employee_id=' + this.value" style="font-size:0.95em;padding:6px 10px;border-radius:6px;border:1px solid #D0D5DA;">${options}</select>`;
 }
 
-const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'remote-punches', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
+const ADMIN_TABLE_VIEWS = ['dashboard', 'leave', 'remote-punches', 'activity-log', 'permission', 'corrections', 'overtime', 'notifications', 'device-pins', 'field-trip', 'employee-registration', 'reports', 'calendar-company', 'settings']; // table pages — no single-employee switcher here
 
 async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}) {
   const isAdmin = isManagementRole(user);
@@ -2012,6 +2105,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         ${isAdmin ? `<a href="/admin/remote-punches" class="${activeNav === 'remote-punches' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">Remote Punches</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/deviations" class="${activeNav === 'deviations' ? 'active' : ''}"><span class="ico">⚠️</span> <span class="lbl">Deviations${pendingDeviations ? ` (${pendingDeviations})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
+        ${isAdmin ? `<a href="/admin/activity-log" class="${activeNav === 'activity-log' ? 'active' : ''}"><span class="ico">🗂️</span> <span class="lbl">Activity Log</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
           ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${unreadCount ? ` (${unreadCount})` : ''}</span></a>`
@@ -3618,6 +3712,91 @@ async function renderAdminDeviations(user, { from, to }) {
   return pageShell('Deviations', '', 'deviations', body, user);
 }
 
+const ACTIVITY_PAGE_LIMIT = 500;
+const ACTIVITY_PILL_STYLE = {
+  sign_in: 'background:#EDE7F6;color:#4527A0;',
+  attendance: 'background:#E0F2F1;color:#00695C;',
+  request: 'background:#E3F2FD;color:#1565C0;',
+  admin: 'background:#FFF3E0;color:#B26A00;',
+  other: 'background:#F0F2F4;color:#4C5A68;',
+  failed: 'background:#FFEBEE;color:#C62828;',
+};
+// The page's filters as given, with today as the default range — the log only grows,
+// so opening it on "everything" would get slower every month.
+function activityFiltersFrom(searchParams) {
+  const today = todayStr();
+  return {
+    employeeId: searchParams.get('employee_id') || '',
+    category: searchParams.get('category') || '',
+    from: searchParams.get('from') || today,
+    to: searchParams.get('to') || today,
+  };
+}
+async function queryActivity(filters, limit) {
+  const { where, args } = activityFilterSql(filters);
+  return await db.prepare(`SELECT * FROM activity_log ${where} ORDER BY created_at DESC, id DESC${limit ? ' LIMIT ?' : ''}`)
+    .all(...args, ...(limit ? [limit] : []));
+}
+async function renderActivityLog(user, filters) {
+  const employees = await allEmployees();
+  const names = Object.fromEntries(employees.map(e => [e.id, e.name]));
+  const rows = await queryActivity(filters, ACTIVITY_PAGE_LIMIT + 1);
+  const truncated = rows.length > ACTIVITY_PAGE_LIMIT;
+  const select = 'padding:6px;border-radius:6px;border:1px solid #D0D5DA;';
+  const who = (r) => {
+    const subject = r.employee_id
+      ? `<strong>${escapeHtml(names[r.employee_id] || r.employee_id)}</strong> <span style="color:#9AA5B1;">(${escapeHtml(r.employee_id)})</span>`
+      : '';
+    const actorName = r.actor_role === 'device' ? 'Biometric device'
+      : r.actor_role === 'system' ? 'System'
+      : names[r.actor_username] || r.actor_username;
+    // Only say who did it when it isn't the employee themselves.
+    const byOther = actorName && r.actor_username !== r.employee_id;
+    if (!subject) return escapeHtml(actorName || '—');
+    return `${subject}${byOther ? `<div style="color:#7C8896;font-size:0.85em;">by ${escapeHtml(actorName)}${r.actor_role && !['device', 'system'].includes(r.actor_role) ? ` (${escapeHtml(r.actor_role)})` : ''}</div>` : ''}`;
+  };
+  const tableRows = rows.slice(0, ACTIVITY_PAGE_LIMIT).map(r => {
+    const failed = r.action === 'login_failed' || r.action === 'login_blocked';
+    const meta = [describeDevice(r.user_agent), r.ip].filter(Boolean).join(' · ');
+    return `
+    <tr>
+      <td style="white-space:nowrap;color:#4C5A68;">${escapeHtml(r.created_at)}</td>
+      <td>${who(r)}</td>
+      <td>
+        <span style="display:inline-block;padding:2px 9px;border-radius:999px;font-size:0.85em;font-weight:600;${ACTIVITY_PILL_STYLE[failed ? 'failed' : r.category] || ACTIVITY_PILL_STYLE.other}">${escapeHtml(activityLabel(r))}</span>
+        ${r.details ? `<div style="margin-top:3px;">${escapeHtml(r.details)}</div>` : ''}
+        ${meta ? `<div style="color:#9AA5B1;font-size:0.82em;margin-top:2px;">${escapeHtml(meta)}</div>` : ''}
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" style="color:#9AA5B1;">No activity for these filters</td></tr>';
+  const query = new URLSearchParams(Object.entries({ employee_id: filters.employeeId, category: filters.category, from: filters.from, to: filters.to }).filter(([, v]) => v)).toString();
+
+  const body = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+        <div style="font-weight:700;">Activity Log</div>
+        <a href="/admin/activity-log.csv?${escapeHtml(query)}" style="padding:7px 14px;border-radius:6px;border:1px solid #D0D5DA;background:#fff;color:#1565C0;font-weight:600;text-decoration:none;font-size:0.9em;">⬇ Download CSV</a>
+      </div>
+      <p style="color:#7C8896;font-size:0.9em;margin-top:0;">Everything people do in the app: logins and logouts, punches and breaks, requests, and every admin and manager action. Newest first. Nothing is ever deleted.</p>
+      <form method="GET" action="/admin/activity-log" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;">
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">Employee</label>
+          <select name="employee_id" style="${select}"><option value="">All employees</option>
+            ${employees.map(e => `<option value="${escapeHtml(e.id)}" ${e.id === filters.employeeId ? 'selected' : ''}>${escapeHtml(e.name)} (${escapeHtml(e.id)})</option>`).join('')}
+          </select></div>
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">Activity</label>
+          <select name="category" style="${select}"><option value="">All activity</option>
+            ${ACTIVITY_CATEGORIES.map(c => `<option value="${c.key}" ${c.key === filters.category ? 'selected' : ''}>${escapeHtml(c.label)}</option>`).join('')}
+          </select></div>
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">From</label><input type="date" name="from" value="${escapeHtml(filters.from)}" style="${select}"></div>
+        <div><label style="display:block;font-size:0.8em;color:#7C8896;">To</label><input type="date" name="to" value="${escapeHtml(filters.to)}" style="${select}"></div>
+        <button type="submit" style="padding:7px 14px;border-radius:6px;border:none;background:#1565C0;color:#fff;font-weight:600;cursor:pointer;">Show</button>
+      </form>
+      ${truncated ? `<p style="color:#B26A00;font-size:0.88em;">Showing the latest ${ACTIVITY_PAGE_LIMIT}. Narrow the dates or pick an employee to see the rest, or download the CSV, which has everything.</p>` : ''}
+      <div style="overflow-x:auto;"><table><tr><th>Time</th><th>Who</th><th>What</th></tr>${tableRows}</table></div>
+    </div>`;
+  return pageShell('Activity Log', '', 'activity-log', body, user);
+}
+
 const REMOTE_PUNCH_LOG_LIMIT = 100;
 // Every remote punch made away from every branch, newest first, with where it was.
 async function renderAdminRemotePunches(punches, user) {
@@ -4842,7 +5021,32 @@ async function getSessionUser(req) {
   }
   session.lastActivityAt = now; // sliding window: any authenticated request extends the idle timer
   await db.prepare('UPDATE sessions SET last_activity_at = ? WHERE token = ?').run(now, token);
+  const ctx = requestContext.getStore();
+  if (ctx) ctx.user = session;
   return session;
+}
+
+// Sign-in events, before there is a session. A failed attempt records whose account was
+// targeted — but only when the typed username actually matches one.
+//
+// The raw text from the username box is never stored. People put their password in that
+// box: a mis-focus, or a password manager filling the wrong field. This log is permanent
+// by design ("nothing is ever deleted"), readable by every admin and manager, and
+// exported to CSV, so a password that lands in it cannot be taken back out. Trying to
+// tell a password from a username by its shape doesn't work either — an API key and an
+// employee id are both just short printable strings. Matching against the users table is
+// the only test that can't be fooled, and a miss tells us all we need: someone tried an
+// account that doesn't exist. The IP, device and time are still recorded, so a real
+// intrusion attempt stays just as visible.
+function safeLoginUsername(username, account) {
+  return account ? account.username : '';
+}
+async function logLoginEvent(action, username, account) {
+  if (account === undefined) account = await db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
+  const safe = safeLoginUsername(username, account);
+  await logActivity(action, account ? account.employee_id : null,
+    action === 'login' ? '' : (safe ? `Username entered: ${safe}` : 'No such username (what was typed is not recorded)'),
+    { actorUsername: safe || '(unknown)', actorRole: account ? account.role : '' });
 }
 
 // Every route handler lives in here, unchanged. The wrapper below catches whatever
@@ -4983,8 +5187,10 @@ async function handleRequest(req, res) {
     const now = formatTimestamp(new Date());
     if (currentStatus.onBreak) {
       await db.prepare('UPDATE breaks SET end_ts = ? WHERE employee_id = ? AND end_ts IS NULL').run(now, employee_id);
+      await logActivity('break_end', employee_id);
     } else {
       await db.prepare('INSERT INTO breaks (employee_id, start_ts) VALUES (?, ?)').run(employee_id, now);
+      await logActivity('break_start', employee_id);
     }
     const dayStatus = await computeDayStatus(employee_id, today);
     return sendJson(res, 200, { employee_id, onBreak: dayStatus.onBreak, timestamp: now, dayStatus });
@@ -5032,6 +5238,7 @@ async function handleRequest(req, res) {
       await db.prepare(
         'INSERT INTO field_trips (employee_id, date, recorded_at, from_address, to_address, distance_km) VALUES (?, ?, ?, ?, ?, ?)'
       ).run(sessionUser.employeeId, now.split(' ')[0], now, r.fromResolved, r.toResolved, r.distanceKm);
+      await logActivity('field_trip', sessionUser.employeeId, `${r.fromResolved} to ${r.toResolved}, ${r.distanceKm} km`);
       return sendJson(res, 200, { recorded: true, ...r });
     } catch (e) {
       return sendJson(res, e.status || 502, { error: e.message || 'Could not record the trip.' });
@@ -5212,6 +5419,7 @@ async function handleRequest(req, res) {
 
     if (await isLoginRateLimited(username || '', ip)) {
       logSecurityEvent('login_rate_limited', { username, ip });
+      await logLoginEvent('login_blocked', username);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(renderLogin('Too many attempts. Try again in a few minutes.'));
     }
@@ -5220,10 +5428,12 @@ async function handleRequest(req, res) {
     if (!account || !verifyPassword(password || '', account.password_hash)) {
       await recordLoginAttempt(username || '', ip, false);
       logSecurityEvent('login_failed', { username, ip });
+      await logLoginEvent('login_failed', username, account);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(renderLogin('Incorrect username or password.'));
     }
     await recordLoginAttempt(username, ip, true);
+    await logLoginEvent('login', username, account);
     const token = await createSession(account);
     res.writeHead(302, {
       'Set-Cookie': `session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_ABSOLUTE_TTL_MS / 1000)}`,
@@ -5234,7 +5444,11 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/logout' && req.method === 'GET') {
     const token = parseCookies(req).session;
-    if (token) await deleteSession(token);
+    if (token) {
+      const session = await db.prepare('SELECT username, role, employee_id FROM sessions WHERE token = ?').get(token);
+      if (session) await logActivity('logout', session.employee_id, '', { actorUsername: session.username, actorRole: session.role });
+      await deleteSession(token);
+    }
     res.writeHead(302, { 'Set-Cookie': 'session=; HttpOnly; Path=/; Max-Age=0', Location: '/login' });
     return res.end();
   }
@@ -5271,6 +5485,7 @@ async function handleRequest(req, res) {
     }
     await db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
       .run(hashPassword(form.new_password), user.userId);
+    await logActivity('password_changed', user.employeeId);
     res.writeHead(302, { Location: '/' });
     return res.end();
   }
@@ -5280,6 +5495,7 @@ async function handleRequest(req, res) {
       const form = await readFormBody(req);
       const lang = form.lang === 'ta' ? 'ta' : 'en';
       await db.prepare('UPDATE users SET language = ?, language_set = 1 WHERE id = ?').run(lang, user.userId);
+      if (lang !== user.language) await logActivity('language_changed', user.employeeId, lang === 'ta' ? 'Tamil' : 'English');
     }
     res.writeHead(302, { Location: (parsed.searchParams.get('return')) || '/dashboard' });
     return res.end();
@@ -5392,6 +5608,7 @@ async function handleRequest(req, res) {
     await db.prepare(
       'INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(employeeId, leaveType, startDate, endDate, reason, 'pending', formatTimestamp(new Date()));
+    await logActivity('leave_applied', employeeId, `${leaveType}, ${startDate} to ${endDate}${reason ? ` · ${reason}` : ''}`);
     res.writeHead(302, { Location: `/leave?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -5414,12 +5631,12 @@ async function handleRequest(req, res) {
           .run(days, request.employee_id, request.leave_type);
       }
       await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`);
+      await logAdminAction(user.username, 'approve', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
     } else if (action === 'reject') {
       await db.prepare("UPDATE leave_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(request.employee_id, `Your ${request.leave_type} request for ${request.start_date} to ${request.end_date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`);
+      await logAdminAction(user.username, 'reject', 'leave_request', id, `${request.employee_id}: ${request.leave_type} ${request.start_date}–${request.end_date}`, request.employee_id);
     }
     res.writeHead(302, { Location: '/leave' });
     return res.end();
@@ -5477,6 +5694,7 @@ async function handleRequest(req, res) {
     await db.prepare(
       'INSERT INTO permission_requests (employee_id, date, leave_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(employeeId, date, leaveTime, reason, 'pending', formatTimestamp(new Date()));
+    await logActivity('permission_applied', employeeId, `Leave at ${leaveTime} on ${date}${reason ? ` · ${reason}` : ''}`);
     res.writeHead(302, { Location: `/permission?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -5493,12 +5711,12 @@ async function handleRequest(req, res) {
       await db.prepare("UPDATE permission_requests SET status = 'approved', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`);
+      await logAdminAction(user.username, 'approve', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
     } else if (action === 'reject') {
       await db.prepare("UPDATE permission_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(request.employee_id, `Your permission to leave at ${request.leave_time} on ${request.date} has been rejected.`);
-      await logAdminAction(user.username, 'reject', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`);
+      await logAdminAction(user.username, 'reject', 'permission_request', id, `${request.employee_id}: leave at ${request.leave_time} on ${request.date}`, request.employee_id);
     }
     res.writeHead(302, { Location: '/permission' });
     return res.end();
@@ -5536,6 +5754,9 @@ async function handleRequest(req, res) {
     await db.prepare(
       'INSERT INTO correction_requests (employee_id, date, kind, check_in_time, check_out_time, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(employee.id, request.date, request.kind, request.check_in_time, request.check_out_time, request.reason, 'pending', formatTimestamp(new Date()));
+    await logActivity('correction_applied', employee.id, [request.date,
+      request.check_in_time && `in ${request.check_in_time}`, request.check_out_time && `out ${request.check_out_time}`,
+      request.reason].filter(Boolean).join(' · '));
     res.writeHead(302, { Location: `/corrections?employee_id=${encodeURIComponent(employee.id)}` });
     return res.end();
   }
@@ -5566,14 +5787,14 @@ async function handleRequest(req, res) {
         if (request.check_in_time) await recordPunch(request.employee_id, `${request.date} ${request.check_in_time}:00`, 'in', 'correction', `Correction #${request.id}`, '', user.username);
         if (request.check_out_time) await recordPunch(request.employee_id, `${request.date} ${request.check_out_time}:00`, 'out', 'correction', `Correction #${request.id}`, '', user.username);
         await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been approved.`);
-        await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary);
+        await logAdminAction(user.username, 'approve', 'correction_request', request.id, summary, request.employee_id);
       }
     } else if (form.action === 'reject') {
       const rejected = await db.prepare("UPDATE correction_requests SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'")
         .run(formatTimestamp(new Date()), user.username, request.id);
       if (rejected.changes) {
         await createNotification(request.employee_id, `Your correction for ${request.date} (${correctionTimesText(request, 'en')}) has been rejected.`);
-        await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary);
+        await logAdminAction(user.username, 'reject', 'correction_request', request.id, summary, request.employee_id);
       }
     }
     res.writeHead(302, { Location: '/corrections' });
@@ -5645,7 +5866,7 @@ async function handleRequest(req, res) {
       await db.prepare(
         'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
       ).run(employeeId, date, Number(plannedHours), reason, 'approved', timestamp, timestamp);
-      await logAdminAction(user.username, 'record', 'overtime_request', employeeId, `${employeeId}: ${date}, ${plannedHours}h planned (filed by admin, auto-approved)`);
+      await logAdminAction(user.username, 'record', 'overtime_request', employeeId, `${employeeId}: ${date}, ${plannedHours}h planned (filed by admin, auto-approved)`, employeeId);
       await createNotification(employeeId, `Your admin recorded ${plannedHours}h of overtime for you on ${date}.`);
       res.writeHead(302, { Location: '/overtime' });
       return res.end();
@@ -5653,6 +5874,7 @@ async function handleRequest(req, res) {
     await db.prepare(
       'INSERT INTO overtime_requests (employee_id, date, planned_hours, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(employeeId, date, Number(plannedHours), reason, 'pending', formatTimestamp(new Date()));
+    await logActivity('overtime_applied', employeeId, `${date}, ${plannedHours}h planned${reason ? ` · ${reason}` : ''}`);
     res.writeHead(302, { Location: `/overtime?employee_id=${encodeURIComponent(employeeId)}` });
     return res.end();
   }
@@ -5669,15 +5891,30 @@ async function handleRequest(req, res) {
       await db.prepare("UPDATE overtime_requests SET status = 'approved', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(request.employee_id, `Your overtime request for ${request.date} has been approved.`);
-      await logAdminAction(user.username, 'approve', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`);
+      await logAdminAction(user.username, 'approve', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
     } else if (action === 'reject') {
       await db.prepare("UPDATE overtime_requests SET status = 'rejected', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
-      await logAdminAction(user.username, 'reject', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`);
+      await logAdminAction(user.username, 'reject', 'overtime_request', id, `${request.employee_id}: ${request.date}, ${request.planned_hours}h planned`, request.employee_id);
       await createNotification(request.employee_id, `Your overtime request for ${request.date} has been rejected.`);
     }
     res.writeHead(302, { Location: '/overtime' });
     return res.end();
+  }
+
+  if (parsed.pathname === '/admin/activity-log' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    return sendHtml(res, await renderActivityLog(user, activityFiltersFrom(parsed.searchParams)));
+  }
+
+  if (parsed.pathname === '/admin/activity-log.csv' && req.method === 'GET') {
+    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    const filters = activityFiltersFrom(parsed.searchParams);
+    const names = Object.fromEntries((await allEmployees()).map(e => [e.id, e.name]));
+    const rows = await queryActivity(filters);
+    await logAdminAction(user.username, 'download_report', 'activity_log', `${filters.from}..${filters.to}`, filters.employeeId || '', filters.employeeId || null);
+    return sendCsv(res, `activity-log-${filters.from}-to-${filters.to}.csv`,
+      toCsv(ACTIVITY_CSV_HEADERS, rows.map(r => activityCsvRow(r, names[r.employee_id]))));
   }
 
   if (parsed.pathname === '/admin/remote-punches' && req.method === 'GET') {
@@ -5713,13 +5950,13 @@ async function handleRequest(req, res) {
     }
     if (decision === 'undo') {
       await db.prepare('DELETE FROM deviation_reviews WHERE employee_id = ? AND date = ?').run(employeeId, date);
-      await logAdminAction(user.username, 'deviation_undo', 'deviation', `${employeeId}:${date}`, '');
+      await logAdminAction(user.username, 'deviation_undo', 'deviation', `${employeeId}:${date}`, '', employeeId);
     } else {
       await db.prepare(
         'INSERT INTO deviation_reviews (employee_id, date, decision, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?) ' +
         'ON CONFLICT(employee_id, date) DO UPDATE SET decision = excluded.decision, reviewed_by = excluded.reviewed_by, reviewed_at = excluded.reviewed_at'
       ).run(employeeId, date, decision, user.username, formatTimestamp(new Date()));
-      await logAdminAction(user.username, `deviation_${decision}`, 'deviation', `${employeeId}:${date}`, DEVIATION_DECISION_LABELS[decision]);
+      await logAdminAction(user.username, `deviation_${decision}`, 'deviation', `${employeeId}:${date}`, DEVIATION_DECISION_LABELS[decision], employeeId);
       if (decision !== 'accepted') {
         const where = [...new Set((await getPunchesForDay(employeeId, date)).filter(p => p.deviation).map(p => p.branch))].join(', ');
         await createNotification(employeeId, `Your attendance on ${date} was marked ${decision === 'absent' ? 'Absent' : 'Half Day'}: you punched at ${where}, which isn't your branch${employee.branch && employee.branch !== MULTI_BRANCH ? ` (${employee.branch})` : ''}.`);
@@ -5760,12 +5997,12 @@ async function handleRequest(req, res) {
       await db.prepare("UPDATE field_trips SET status = 'approved', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) has been approved for reimbursement.`);
-      await logAdminAction(user.username, 'approve', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`);
+      await logAdminAction(user.username, 'approve', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
     } else if (action === 'reject') {
       await db.prepare("UPDATE field_trips SET status = 'rejected', decided_at = ? WHERE id = ?")
         .run(formatTimestamp(new Date()), id);
       await createNotification(trip.employee_id, `Your field trip on ${trip.date} (${trip.from_address} → ${trip.to_address}) was not approved for reimbursement.`);
-      await logAdminAction(user.username, 'reject', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`);
+      await logAdminAction(user.username, 'reject', 'field_trip', id, `${trip.employee_id}: ${trip.date}, ${trip.distance_km}km`, trip.employee_id);
     }
     res.writeHead(302, { Location: '/field-trip' });
     return res.end();
@@ -5962,7 +6199,10 @@ async function handleRequest(req, res) {
     await db.prepare(
       'INSERT INTO employee_documents (employee_id, doc_type, filename, content_type, size_bytes, data, uploaded_by, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(employee_id, doc_type, String(filename).slice(0, 255), content_type, data.length, data, user.username, formatTimestamp(new Date()));
-    await logAdminAction(user.username, 'upload_document', 'employee', employee_id, `${DOCUMENT_TYPES.find(d => d.key === doc_type).label}: ${filename}`);
+    const docSummary = `${DOCUMENT_TYPES.find(d => d.key === doc_type).label}: ${filename}`;
+    // Employees upload their own paperwork too — that isn't an admin action.
+    if (isManagementRole(user)) await logAdminAction(user.username, 'upload_document', 'employee', employee_id, docSummary);
+    else await logActivity('document_uploaded', employee_id, docSummary);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -6439,7 +6679,7 @@ async function serve(req, res) {
   await loadSettings();
   warnAboutUnsetSettings();
   try {
-    await handleRequest(req, res);
+    await requestContext.run({ req, user: null }, () => handleRequest(req, res));
   } catch (err) {
     console.error(`[error] ${req.method} ${req.url}:`, err);
     logSecurityEvent('unhandled_error', { method: req.method, url: req.url, message: err && err.message });
@@ -6488,6 +6728,8 @@ module.exports.ensureInit = ensureInit;
 module.exports.init = init;
 // Exported for the unit tests — a pure string function, no server needed.
 module.exports.csvField = csvField;
+// Exported for the unit tests — pure, no server needed.
+module.exports.safeLoginUsername = safeLoginUsername;
 module.exports.sendCsv = sendCsv;
 
 // Standalone mode: only when run directly (`node server.js`) — local dev and the

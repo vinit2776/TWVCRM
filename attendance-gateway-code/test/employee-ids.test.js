@@ -46,6 +46,7 @@ function setup() {
     CREATE TABLE employee_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, uploaded_by TEXT);
     CREATE TABLE device_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, requested_by TEXT);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, updated_by TEXT NOT NULL DEFAULT '');
+    CREATE TABLE activity_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'other', action TEXT NOT NULL DEFAULT 'login', employee_id TEXT, actor_username TEXT NOT NULL DEFAULT '');
     CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, reviewed_by TEXT NOT NULL, PRIMARY KEY (employee_id, date));
   `);
   return db;
@@ -70,12 +71,13 @@ const ACTOR_COLUMNS = [
   ['device_commands', 'requested_by'],
   ['app_settings', 'updated_by'],
   ['deviation_reviews', 'reviewed_by'],
+  ['activity_log', 'actor_username'],
   ['employee_documents', 'uploaded_by'],
 ];
 
 const EMPLOYEE_TABLES = [
   'punches', 'breaks', 'notifications', 'leave_requests', 'permission_requests',
-  'correction_requests', 'overtime_requests', 'field_trips', 'employee_documents',
+  'correction_requests', 'overtime_requests', 'field_trips', 'employee_documents', 'activity_log',
 ];
 
 test('renaming moves every record and the login to the new id, leaving nothing behind', () => {
@@ -91,6 +93,7 @@ test('renaming moves every record and the login to the new id, leaving nothing b
     INSERT INTO app_settings VALUES ('office_radius', 'EMP-001');
     INSERT INTO employee_documents (employee_id, uploaded_by) VALUES ('EMP-002', 'EMP-001');
     INSERT INTO deviation_reviews VALUES ('EMP-001', '2026-10-14', 'absent', 'EMP-001');
+    INSERT INTO activity_log (employee_id, actor_username) VALUES ('EMP-001', 'EMP-001');
   `);
   for (const table of EMPLOYEE_TABLES) db.prepare(`INSERT INTO ${table} (employee_id) VALUES ('EMP-001')`).run();
 
@@ -113,6 +116,12 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   // A manager's decision on a deviation day must follow the employee: left behind, the
   // day silently loses its Absent/Half Day status and returns to the pending queue.
   assert.equal(db.prepare("SELECT decision FROM deviation_reviews WHERE employee_id = 'EMP-027'").get().decision, 'absent');
+
+  // Both halves of an activity entry follow the employee. Moving only employee_id makes
+  // the Activity Log read "EMP-027 ... by EMP-001" for their own login — the page decides
+  // "someone else did this" by comparing the two — naming an id nobody holds any more.
+  const entry = db.prepare("SELECT employee_id, actor_username FROM activity_log").get();
+  assert.deepEqual({ ...entry }, { employee_id: 'EMP-027', actor_username: 'EMP-027' });
 
   // Nothing anywhere still points at the old id.
   for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions', 'deviation_reviews']) {

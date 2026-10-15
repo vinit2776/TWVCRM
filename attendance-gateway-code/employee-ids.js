@@ -63,6 +63,7 @@ function renameEmployeeStatements(oldId, newId) {
     s('UPDATE field_trips SET employee_id = ? WHERE employee_id = ?'),
     s('UPDATE employee_documents SET employee_id = ? WHERE employee_id = ?'),
     s('UPDATE deviation_reviews SET employee_id = ? WHERE employee_id = ?'),
+    s('UPDATE activity_log SET employee_id = ? WHERE employee_id = ?'),
     // "Done by" columns hold the actor's username — a manager's is their employee id.
     s('UPDATE punches SET marked_by = ? WHERE marked_by = ?'),
     s('UPDATE correction_requests SET decided_by = ? WHERE decided_by = ?'),
@@ -70,6 +71,10 @@ function renameEmployeeStatements(oldId, newId) {
     s('UPDATE device_commands SET requested_by = ? WHERE requested_by = ?'),
     s('UPDATE app_settings SET updated_by = ? WHERE updated_by = ?'),
     s('UPDATE deviation_reviews SET reviewed_by = ? WHERE reviewed_by = ?'),
+    // Leaving this one behind doesn't preserve history, it corrupts it: the Activity Log
+    // decides "someone else did this" by comparing actor_username with employee_id, so a
+    // renamed employee's own logins start reading "by EMP-002" — an id nobody holds.
+    s('UPDATE activity_log SET actor_username = ? WHERE actor_username = ?'),
   ];
 }
 
