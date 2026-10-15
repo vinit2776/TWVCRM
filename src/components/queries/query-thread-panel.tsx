@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Search, Send, Users, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Search, Send, Users, XCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -387,17 +387,10 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
       <div className="space-y-2">
         {thread.messages.map((m) => {
           if (m.event_type !== "message") {
-            // A nudge has no human actor — created_by is the thread's asker
-            // only because the column is NOT NULL, so don't credit them with
-            // having done it.
-            if (m.event_type === "nudged") {
-              return (
-                <div key={m.id} className="text-[11px] text-amber-700 flex items-center gap-1 pl-1 flex-wrap">
-                  <BellRing className="h-3 w-3" />
-                  Chased automatically · {timeAgo(m.created_at)}
-                </div>
-              );
-            }
+            // Automatic chases are bookkeeping, not conversation — a thread
+            // chased daily would otherwise bury the real messages under them.
+            // The events stay in the database; only the thread view skips them.
+            if (m.event_type === "nudged") return null;
             const label =
               m.event_type === "resolved" ? "Resolved"
               : m.event_type === "reopened" ? "Reopened"

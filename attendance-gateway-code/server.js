@@ -31,14 +31,20 @@ const {
   formatEmployeeId, parseEmployeeNumber, nextEmployeeNumber, renameEmployeeStatements,
 } = require('./employee-ids');
 
-// Two roles have full run of the app — 'admin' and 'manager' are deliberately
-// equivalent everywhere, including settings and password resets. The only
-// meaningful distinction anywhere in this app is "management" vs. "employee";
-// nothing currently depends on telling admin and manager apart from each other.
-// Kept as a function (not a Set.has check inlined everywhere) so that if a
-// narrower manager role is ever wanted, there is exactly one place to change it.
+// Two roles have full run of the app — 'admin' and 'manager' are equivalent almost
+// everywhere, including settings and password resets. The main distinction is
+// "management" vs. "employee", which is what isManagementRole below is for.
+//
+// The Activity Log is the one exception (isAdminRole). It records what every person
+// in the app does, managers included, so a manager who could read it could check
+// who had been looking at their own record. The main CRM draws the same line — its
+// audit trail is admin-only (src/app/api/audit-logs/route.ts) — and this matches it.
+// Anything else added later is management-wide unless there's a reason like that one.
 function isManagementRole(user) {
   return !!user && (user.role === 'admin' || user.role === 'manager');
+}
+function isAdminRole(user) {
+  return !!user && user.role === 'admin';
 }
 
 // Only employee accounts can be in Tamil — management pages always render in
@@ -2105,7 +2111,7 @@ async function pageShell(title, employeeId, activeNav, bodyHtml, user, opts = {}
         ${isAdmin ? `<a href="/admin/remote-punches" class="${activeNav === 'remote-punches' ? 'active' : ''}"><span class="ico">📍</span> <span class="lbl">Remote Punches</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/deviations" class="${activeNav === 'deviations' ? 'active' : ''}"><span class="ico">⚠️</span> <span class="lbl">Deviations${pendingDeviations ? ` (${pendingDeviations})` : ''}</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/reports" class="${activeNav === 'reports' ? 'active' : ''}"><span class="ico">📊</span> <span class="lbl">Reports</span></a>` : ''}
-        ${isAdmin ? `<a href="/admin/activity-log" class="${activeNav === 'activity-log' ? 'active' : ''}"><span class="ico">🗂️</span> <span class="lbl">Activity Log</span></a>` : ''}
+        ${isAdminRole(user) ? `<a href="/admin/activity-log" class="${activeNav === 'activity-log' ? 'active' : ''}"><span class="ico">🗂️</span> <span class="lbl">Activity Log</span></a>` : ''}
         ${isAdmin ? `<a href="/admin/settings" class="${activeNav === 'settings' ? 'active' : ''}"><span class="ico">⚙️</span> <span class="lbl">Settings</span></a>` : ''}
         ${isAdmin
           ? `<a href="/notifications" class="${activeNav === 'notifications' ? 'active' : ''}"><span class="ico">🔔</span> <span class="lbl">Notifications${unreadCount ? ` (${unreadCount})` : ''}</span></a>`
@@ -5903,12 +5909,12 @@ async function handleRequest(req, res) {
   }
 
   if (parsed.pathname === '/admin/activity-log' && req.method === 'GET') {
-    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    if (!isAdminRole(user)) { res.writeHead(403); return res.end('Admin access only.'); }
     return sendHtml(res, await renderActivityLog(user, activityFiltersFrom(parsed.searchParams)));
   }
 
   if (parsed.pathname === '/admin/activity-log.csv' && req.method === 'GET') {
-    if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
+    if (!isAdminRole(user)) { res.writeHead(403); return res.end('Admin access only.'); }
     const filters = activityFiltersFrom(parsed.searchParams);
     const names = Object.fromEntries((await allEmployees()).map(e => [e.id, e.name]));
     const rows = await queryActivity(filters);
