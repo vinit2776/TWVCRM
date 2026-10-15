@@ -1062,10 +1062,10 @@ export default function ProposalDetailPage({
         <JourneyPanel leadId={proposal.lead_id} proposalId={proposal.id} />
       )}
 
-      {/* Lifecycle Timeline */}
+      {/* History: dates, references and reasons. What to do next is in the Customer journey panel above. */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Lifecycle</CardTitle>
+          <CardTitle className="text-base">Proposal history</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <ProposalLifecycle proposal={proposal} />

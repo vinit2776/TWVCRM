@@ -129,7 +129,7 @@ function ActivityItem({
   activity: Activity;
   leadId: string;
   onActionComplete: () => void;
-  /** Refreshes the parent lead record (status pill, Lead Journey) — the
+  /** Refreshes the parent lead record (status pill, Customer journey panel) — the
    * timeline's own refresh only re-fetches activities, not the lead. */
   onLeadRefresh?: () => void;
   highlightId?: string;
@@ -694,7 +694,7 @@ interface LeadTimelineProps {
   /** Activity ID to scroll-to + highlight on mount */
   highlightId?: string;
   /** Refreshes the parent lead record — needed so inline actions (e.g.
-   * marking a tour completed) update the status pill / Lead Journey without
+   * marking a tour completed) update the status pill / journey panel without
    * a page reload. */
   onLeadRefresh?: () => void;
 }
