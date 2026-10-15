@@ -78,12 +78,17 @@ export async function POST(
   // Fetch PO to validate and get visit counts
   const { data: po } = await supabase
     .from("purchase_orders")
-    .select("id, po_type, amc_visits_covered, amc_visits_used, amc_start_date, amc_status")
+    .select("id, po_type, status, amc_visits_covered, amc_visits_used, amc_start_date, amc_status")
     .eq("id", poId)
     .single();
 
   if (!po) return NextResponse.json({ error: "PO not found" }, { status: 404 });
   if (po.po_type !== "service") return NextResponse.json({ error: "Not a service PO" }, { status: 422 });
+  // A cancelled contract is no longer being serviced under this PO. The screens hide the
+  // button already; this stops the API logging against it directly.
+  if (po.status === "cancelled") {
+    return NextResponse.json({ error: "This purchase order is cancelled, so visits can't be logged against it" }, { status: 422 });
+  }
 
   const body = await request.json();
   const parsed = createEventSchema.safeParse(body);
