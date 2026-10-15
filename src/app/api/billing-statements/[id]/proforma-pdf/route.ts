@@ -6,6 +6,7 @@ import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from 
 import { computeGstAndRounding } from "@/lib/gst-math";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 import QRCode from "qrcode";
+import { usageLine, toUsageLineInput, type UsageChargeRow } from "@/lib/booking-usage-line";
 
 export const maxDuration = 30;
 
@@ -63,7 +64,7 @@ export async function GET(
         aggregator:aggregators!cases_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number)
       ),
       aggregator:aggregators!billing_statements_aggregator_id_fkey(id, name, primary_email, primary_phone, gst_number, pan_number),
-      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code)
+      usage_charges:usage_charges(id, description, quantity, unit_price, total, is_waived, hsn_sac_code, charge_date, booking_charge_kind, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name))
     `)
     .eq("id", id)
     .single();
@@ -136,7 +137,7 @@ export async function GET(
   // the source of truth, not the section captured at generation time. Every
   // other section type (facility/service/booking usage) has no post-
   // generation edit path, so the frozen snapshot is safe to trust as-is.
-  const usageCharges = ((statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number; is_waived: boolean }[])
+  const usageCharges = ((statement.usage_charges || []) as (UsageChargeRow & { is_waived: boolean })[])
     .filter((c) => !c.is_waived);
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
@@ -186,7 +187,8 @@ export async function GET(
     lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
   }
   for (const charge of usageCharges) {
-    lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    const line = usageLine(toUsageLineInput(charge));
+    lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // Payment link + QR

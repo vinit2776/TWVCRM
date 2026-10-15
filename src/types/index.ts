@@ -69,7 +69,7 @@ export interface Location {
 // ==========================================
 // User Types
 // ==========================================
-export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin" | "it_manager" | "it_technician" | "viewer";
+export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin" | "it_manager" | "it_technician" | "viewer" | "enquiry_viewer";
 
 export interface User {
   id: string;
@@ -719,6 +719,8 @@ export interface Contract {
   // Pro-rata collection for mid-month renewals
   prorata_billing_statement_id?: string | null;
   prorata_payment_status?: "not_applicable" | "pending" | "paid" | "waived";
+  /** Set by GET /api/contracts/[id]: a mid-month renewal whose pro-rata invoice is neither sent, paid nor waived. */
+  renewal_prorata_blocking?: boolean;
   created_by?: string;
   created_at: string;
   updated_at: string;

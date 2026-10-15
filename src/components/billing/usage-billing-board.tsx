@@ -27,6 +27,7 @@ import {
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { UsageContractGroup, UsageMonthGroup } from "@/lib/usage-billing";
 import { UsageSendDialog, type UsageInvoiceToSend } from "@/components/billing/usage-send-dialog";
+import { usageSourceLabel } from "@/lib/usage-source-label";
 
 export type BoardCharge = UsageMonthGroup["charges"][number];
 
@@ -51,8 +52,6 @@ interface Props {
   onEdit: (c: BoardCharge) => void;
   onAddCharge: (contractId: string) => void;
 }
-
-const SOURCE_LABEL: Record<BoardCharge["source"], string> = { manual: "Manual", print: "Print", facility: "Facility" };
 
 function routeBadge(mode: UsageContractGroup["billingMode"]) {
   return mode === "gst_direct"
@@ -79,7 +78,7 @@ function ChargeRow({ c, g, canWaive, actions }: { c: BoardCharge; g: UsageContra
       <div className="min-w-0">
         <p className={`text-sm truncate ${c.status === "within_quota" ? "text-muted-foreground" : ""}`} title={c.description}>{c.description}</p>
         <p className="text-xs text-muted-foreground flex flex-wrap gap-x-1.5">
-          <span>{SOURCE_LABEL[c.source]}</span>
+          <span>{usageSourceLabel(c.source, !!c.bookingNumber)}</span>
           {c.bookingNumber && <span>· {c.bookingNumber}</span>}
           <span>· {formatDate(c.date)}</span>
           {c.status === "held" && <span className="text-amber-700 font-medium">· On hold{c.holdReason ? `: ${c.holdReason}` : ""}</span>}
@@ -87,7 +86,7 @@ function ChargeRow({ c, g, canWaive, actions }: { c: BoardCharge; g: UsageContra
           {c.status === "within_quota" && <span>· Within quota, not billed</span>}
         </p>
       </div>
-      <span className={`text-sm tabular-nums text-right ${c.status === "billable" ? "font-medium" : "text-muted-foreground line-through decoration-muted-foreground/40"}`}>
+      <span className={`text-sm tabular-nums text-right ${c.status === "billable" ? "font-medium" : "text-muted-foreground"}`}>
         {formatCurrency(c.amount)}
       </span>
       <div className="col-span-2 sm:col-span-1 flex items-center justify-end gap-1.5 flex-wrap">

@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/select";
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
   enquiryOutcomeLabel,
@@ -45,6 +47,10 @@ function defaultFromDate(): string {
 }
 
 export default function EnquiryLogPage() {
+  const { user } = useCurrentUser();
+  // Read-only role: names aren't links into the lead record and there's no mobile column.
+  const readOnly = user?.role === ENQUIRY_VIEWER_ROLE;
+  const columnCount = readOnly ? 7 : 8;
   const [rows, setRows] = useState<EnquiryItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -180,7 +186,7 @@ export default function EnquiryLogPage() {
                 <th className="px-3 py-2 text-left">When</th>
                 <th className="px-3 py-2 text-left">Reference</th>
                 <th className="px-3 py-2 text-left">Name</th>
-                <th className="px-3 py-2 text-left">Mobile</th>
+                {!readOnly && <th className="px-3 py-2 text-left">Mobile</th>}
                 <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-left">Status</th>
                 <th className="px-3 py-2 text-left">Resolved by</th>
@@ -189,10 +195,10 @@ export default function EnquiryLogPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={columnCount} className="p-6 text-center text-muted-foreground">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
+                <tr><td colSpan={columnCount} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
               )}
               {!loading &&
                 rows.map((row) => (
@@ -202,16 +208,22 @@ export default function EnquiryLogPage() {
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">{row.reference}</td>
                     <td className="px-3 py-2">
-                      <Link href={`/leads/${row.leadId}`} className="font-medium hover:underline">
-                        {row.name}
-                      </Link>
+                      {readOnly ? (
+                        <span className="font-medium">{row.name}</span>
+                      ) : (
+                        <Link href={`/leads/${row.leadId}`} className="font-medium hover:underline">
+                          {row.name}
+                        </Link>
+                      )}
                       {row.isReEnquiry && (
                         <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
                           Re-enquiry
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
+                    {!readOnly && (
+                      <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
+                    )}
                     <td className="px-3 py-2 text-xs">{ENQUIRY_SOURCE_LABEL[row.sourceTag] ?? row.source}</td>
                     <td className="px-3 py-2">
                       {row.resolutionOutcome ? (

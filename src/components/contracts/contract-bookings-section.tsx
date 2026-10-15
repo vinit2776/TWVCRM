@@ -62,13 +62,13 @@ function chargeLabel(kind: string | null): string {
   return "Usage";
 }
 
-/** Actual duration rounded UP to the next whole hour — matches the
- *  backend's checkout-time rounding (roundedActualHours in
+/** Actual duration in hours to the minute (two decimals) — matches the
+ *  backend's checkout-time calculation (exactActualHours in
  *  bookings/[id]/route.ts), so "hours beyond the booked slot" here lines
  *  up with what was actually pooled against quota. */
 function actualHoursCeil(checkInAt: string, checkOutAt: string): number {
   const ms = new Date(checkOutAt).getTime() - new Date(checkInAt).getTime();
-  return Math.ceil(Math.max(0, ms) / 3600000);
+  return Math.round((Math.max(0, ms) / 3600000) * 100) / 100;
 }
 
 interface ChargeSplit {
