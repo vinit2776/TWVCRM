@@ -1735,6 +1735,13 @@ export default function PurchaseOrderDetailPage() {
             setActionDialog("record_service_report");
           }}
           onUploadInvoice={() => {
+            // The banner only offers this when a report is waiting for its invoice,
+            // so preselect the oldest one instead of making the user pick it.
+            const invoiced = new Set((po.vendor_bills ?? []).map((bl) => bl.service_report_id).filter(Boolean));
+            const open = [...((po.po_service_reports as PoServiceReport[] | undefined) ?? [])]
+              .sort((x, y) => x.cycle_number - y.cycle_number)
+              .find((sr) => !invoiced.has(sr.id));
+            setInvServiceReportId(open?.id ?? "");
             setInvDate(today);
             setInvAmount(String(po.unit_cost_per_cycle || ""));
             setActionDialog("add_invoice");

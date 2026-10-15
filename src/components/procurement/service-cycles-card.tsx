@@ -44,6 +44,37 @@ const PAYMENT_LABEL: Record<string, string> = {
   unpaid: "Unpaid",
 };
 
+const LIFECYCLE_STEPS = [
+  { label: "Order placed", owner: "Procurement" },
+  { label: "Service report", owner: "Logged on this page" },
+  { label: "Invoice", owner: "Procurement uploads" },
+  { label: "Approval", owner: "Admin, or automatic" },
+  { label: "Payment", owner: "Accounts" },
+] as const;
+
+type ChipState = "paid" | "progress" | "current" | "upcoming";
+
+const CHIP_CLASS: Record<ChipState, string> = {
+  paid: "bg-green-100 text-green-800 border-green-300",
+  progress: "bg-amber-100 text-amber-800 border-amber-300",
+  current: "bg-blue-100 text-blue-800 border-blue-500 border-2",
+  upcoming: "text-muted-foreground border-border",
+};
+
+/** Which of the five lifecycle steps the contract is on; 5 = past the last step. */
+function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBill[]): number {
+  switch (next.kind) {
+    case "not_ordered": return 0;
+    case "log_report": return 1;
+    case "upload_invoice": return 2;
+    case "all_billed":
+      if (bills.some((b) => b.approval_status === "pending")) return 3;
+      if (bills.some((b) => b.approval_status === "approved" && b.payment_status !== "paid")) return 4;
+      return 5;
+    default: return -1;
+  }
+}
+
 /**
  * One place to run a service / AMC contract's billing: a banner naming the next
  * action, and a row per cycle showing its report, invoice and payment together.
@@ -65,6 +96,21 @@ export function ServiceCyclesCard({
     reportsFiled: reports.length,
     invoicesFiled: bills.length,
     cycleCount,
+  });
+
+  const currentStep = lifecycleStep(next, bills);
+  const currentCycle = next.kind === "log_report" || next.kind === "upload_invoice" ? next.cycle : null;
+  const chipCount = Math.max(total, sorted.length);
+  const chips = Array.from({ length: chipCount }, (_, i) => {
+    const n = i + 1;
+    const sr = sorted.find((r) => r.cycle_number === n);
+    const bill = sr ? billFor(sr.id) : undefined;
+    let state: ChipState = "upcoming";
+    let text = "not yet due";
+    if (bill?.approval_status === "approved" && bill.payment_status === "paid") { state = "paid"; text = "paid"; }
+    else if (bill) { state = "progress"; text = bill.approval_status === "approved" ? "awaiting payment" : bill.approval_status === "rejected" ? "invoice rejected" : "awaiting approval"; }
+    else if (n === currentCycle) { state = "current"; text = next.kind === "log_report" ? "report due" : "invoice due"; }
+    return { n, state, text };
   });
 
   // One more placeholder row for the cycle after the last report, so the user
@@ -121,6 +167,47 @@ export function ServiceCyclesCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {currentStep >= 0 && (
+          <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+            <div className="flex items-baseline justify-between gap-2 flex-wrap">
+              <p className="text-sm font-medium">How this contract is billed</p>
+              {total > 1 && <span className="text-xs text-muted-foreground">Steps 2 to 5 repeat for each of the {total} {unit}s</span>}
+            </div>
+            <ol className="grid grid-cols-5 gap-1.5">
+              {LIFECYCLE_STEPS.map((st, i) => {
+                const done = i < currentStep;
+                const now = i === currentStep;
+                return (
+                  <li key={st.label} className="text-center min-w-0">
+                    <div className={`mx-auto mb-1.5 flex h-7 w-7 items-center justify-center rounded-full border text-xs ${
+                      done ? "bg-green-100 text-green-700 border-green-300"
+                        : now ? "bg-blue-100 text-blue-700 border-blue-500 border-2"
+                        : "bg-background text-muted-foreground"}`}>
+                      {done ? <CheckCircle2 className="h-4 w-4" /> : i + 1}
+                    </div>
+                    <p className={`text-xs leading-tight ${now ? "font-semibold text-blue-800" : "font-medium"}`}>{st.label}</p>
+                    <p className="hidden sm:block text-[11px] text-muted-foreground mt-0.5 leading-tight">{st.owner}</p>
+                    {now && <p className="text-[11px] text-blue-700 mt-0.5">You are here</p>}
+                  </li>
+                );
+              })}
+            </ol>
+            {chips.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {chips.map((ch) => (
+                  <span key={ch.n} title={`${Unit} ${ch.n}: ${ch.text}`}
+                    className={`text-xs px-2.5 py-1 rounded-md border ${CHIP_CLASS[ch.state]}`}>
+                    {chips.length <= 4 ? `${Unit} ${ch.n} · ${ch.text}` : `${Unit.charAt(0)}${ch.n}`}
+                  </span>
+                ))}
+              </div>
+            )}
+            {chips.length > 4 && (
+              <p className="text-[11px] text-muted-foreground">Green is paid, amber is invoiced and in progress, blue is the {unit} you are on, grey is upcoming.</p>
+            )}
+          </div>
+        )}
+
         <div className="rounded-lg border-2 border-blue-200 bg-blue-50/60 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-medium text-blue-900">{banner.title}</p>
