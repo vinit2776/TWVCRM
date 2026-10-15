@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { z } from "zod";
+
+// unvoid_consumption_log (00604) raises these as the exception message.
+const UNVOID_ERRORS: Record<string, string> = {
+  NOT_VOIDED: "This log is not voided",
+  REPLACED_BY_RELOG: "This log was replaced by a re-log. Void the replacement first, then restore this one.",
+};
 
 const patchConsumptionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("void"),
     reason: z.string().min(5, "Reason must be at least 5 characters"),
+  }),
+  z.object({
+    /** Admin rollback: put a voided log (and its stock deduction) back. */
+    action: z.literal("unvoid"),
+    reason: rollbackReasonSchema,
   }),
   z.object({
     action: z.literal("adjust"),
@@ -80,14 +92,15 @@ export async function PATCH(
 
   if (fetchError || !log) return NextResponse.json({ error: "Consumption log not found" }, { status: 404 });
 
-  if (log.status === "voided") {
-    return NextResponse.json({ error: "Cannot modify a voided consumption log" }, { status: 422 });
-  }
-
   const body = await request.json();
   const parsed = patchConsumptionSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  // A voided log is frozen — except that an admin may restore it.
+  if (log.status === "voided" && parsed.data.action !== "unvoid") {
+    return NextResponse.json({ error: "Cannot modify a voided consumption log. An admin can restore it first." }, { status: 422 });
   }
 
   const { action } = parsed.data;
@@ -159,6 +172,47 @@ export async function PATCH(
       });
 
       return NextResponse.json({ data: { id, status: "voided" } });
+    }
+
+    // ── UNVOID (admin) ──────────────────────────────────────────────────────
+    case "unvoid": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can restore a voided consumption log" }, { status: 403 });
+      }
+      if (log.status !== "voided") {
+        return NextResponse.json({ error: UNVOID_ERRORS.NOT_VOIDED }, { status: 422 });
+      }
+      const { data: result, error: rpcError } = await createAdminClient().rpc("unvoid_consumption_log", {
+        p_log_id: id,
+        p_actor: dbUser.id,
+        p_reason: parsed.data.reason,
+      });
+      if (rpcError) {
+        const short = rpcError.message.match(/INSUFFICIENT_STOCK:(.+)$/m);
+        if (short) {
+          return NextResponse.json(
+            { error: `Not enough stock to restore this log: ${short[1].trim()} has been used since it was voided.` },
+            { status: 422 }
+          );
+        }
+        const known = Object.entries(UNVOID_ERRORS).find(([code]) => rpcError.message.includes(code));
+        if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+        console.error(`[consumption/${id}] restore failed:`, rpcError.message);
+        return NextResponse.json({ error: "Could not restore the consumption log" }, { status: 500 });
+      }
+
+      await logAudit(supabase, {
+        entityType: "consumption_log",
+        entityId: id,
+        action: "rollback",
+        performedBy: dbUser.id,
+        changes: {
+          status: { old: "voided", new: "active" },
+          rollback_kind: { old: null, new: "consumption_restored" },
+          rollback_reason: { old: null, new: parsed.data.reason },
+        },
+      });
+      return NextResponse.json({ data: { id, status: "active", ...result } });
     }
 
     // ── ADJUST ──────────────────────────────────────────────────────────────

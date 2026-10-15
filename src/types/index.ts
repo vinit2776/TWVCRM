@@ -1148,6 +1148,7 @@ export type AuditEntityType =
   | "location"
   | "stock_transfer"
   | "consumption_log"
+  | "tds_challan"
   | "beverage_log"
   | "location_floor"
   | "space_unit"
@@ -2603,6 +2604,8 @@ export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expi
 export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
 
 export interface AmcServiceEvent {
+  voided_at?: string | null;
+  void_reason?: string | null;
   id: string;
   po_id: string;
   event_number: number;
@@ -2684,6 +2687,7 @@ export interface PurchaseOrder {
 
 export interface VendorBill {
   id: string;
+  cheque_signed_at?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
   bill_number: string;

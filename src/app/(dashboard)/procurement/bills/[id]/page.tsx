@@ -638,6 +638,7 @@ export default function VendorBillDetailPage() {
             billNumber={bill.bill_number}
             approvalStatus={bill.approval_status}
             payments={chain?.bill.vendor_bill_payments ?? []}
+            chequeSigned={!!bill.cheque_signed_at}
             isAdmin={currentUserRole === "admin"}
             onDone={fetchAll}
           />

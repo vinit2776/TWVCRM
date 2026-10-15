@@ -16,7 +16,7 @@ import {
 
 type RollbackAction =
   | "unorder" | "unmark_received" | "restore_cancelled"
-  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance";
+  | "restore_partial_cancel" | "reopen_advance" | "reverse_advance" | "reinstate_amc";
 
 type Props = {
   poId: string;
@@ -24,6 +24,8 @@ type Props = {
   status: string;
   advanceStatus: string | null;
   advanceApprovalStatus: string | null;
+  /** AMC contract was terminated mid-term. */
+  amcTerminated?: boolean;
   isAdmin: boolean;
   onDone: () => void;
 };
@@ -89,6 +91,18 @@ const COPY: Record<RollbackAction, { menu: string; title: string; button: string
       "Refused once the advance has been paid",
     ],
   },
+  reinstate_amc: {
+    menu: "Reinstate terminated AMC…",
+    title: "Reinstate AMC",
+    button: "Reinstate AMC",
+    done: "AMC reinstated",
+    intro: "The contract was terminated by mistake or the vendor has resumed service.",
+    impact: [
+      "The termination is cleared and the AMC returns to the status its dates and visits imply",
+      "New visits can be logged against it again",
+      "Refused if the purchase order itself is cancelled — restore that first",
+    ],
+  },
   reverse_advance: {
     menu: "Reverse advance payment…",
     title: "Reverse advance payment",
@@ -104,7 +118,7 @@ const COPY: Record<RollbackAction, { menu: string; title: string; button: string
 
 // Admin-only "Correct" menu for a purchase order. Each action undoes ONE step;
 // the server refuses when a later step still stands, and says which to undo first.
-export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceApprovalStatus, isAdmin, onDone }: Props) {
+export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceApprovalStatus, amcTerminated, isAdmin, onDone }: Props) {
   const [action, setAction] = useState<RollbackAction | null>(null);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -118,6 +132,8 @@ export function PoCorrectMenu({ poId, poNumber, status, advanceStatus, advanceAp
   if (status === "partially_cancelled") available.push("restore_partial_cancel");
   if (advanceStatus === "processed") available.push("reverse_advance");
   else if (advanceApprovalStatus === "approved" || advanceApprovalStatus === "rejected") available.push("reopen_advance");
+
+  if (amcTerminated) available.push("reinstate_amc");
 
   const invoiced = status === "invoice_received" || status === "invoice_approved";
   if (available.length === 0 && !invoiced) return null;

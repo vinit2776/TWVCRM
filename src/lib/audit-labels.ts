@@ -61,6 +61,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
       kind === "payment_reversed" ? `Payment of ${INR(c.amount_reversed?.new)} reversed`
       : kind === "approval_reversed" ? "Approval reversed"
       : kind === "bill_withdrawn" ? "Bill withdrawn"
+      : kind === "cheque_unsigned" ? "Cheque signature removed"
       : "Rolled back";
     return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
   }
@@ -196,6 +197,8 @@ function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary |
       : kind === "partial_cancel_restored" ? "Partial cancellation reversed — PO restored"
       : kind === "advance_reopened" ? "Advance approval re-opened"
       : kind === "advance_reversed" ? "Advance payment reversed"
+      : kind === "amc_reinstated" ? "AMC termination reversed — contract reinstated"
+      : kind === "amc_visit_voided" ? `Visit voided${typeof c.amc_event_voided?.new === "string" ? ` — ${c.amc_event_voided.new}` : ""}`
       : "Rolled back";
     return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
   }

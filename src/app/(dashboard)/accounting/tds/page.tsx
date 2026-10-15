@@ -1,5 +1,7 @@
 "use client";
 
+import { useCurrentUser } from "@/providers/current-user-provider";
+import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
@@ -1010,6 +1012,8 @@ export default function TdsPayablePage() {
   const [challanDialog, setChallanDialog] = useState<{
     month: number; year: number; sectionCode: string; sectionDesc: string; entries: TdsEntry[];
   } | null>(null);
+  const { user: currentUser } = useCurrentUser();
+  const [voidChallan, setVoidChallan] = useState<{ id: string; ref: string } | null>(null);
 
   const fetchEntries = useCallback(async () => {
     setLoading(true);
@@ -1232,6 +1236,15 @@ export default function TdsPayablePage() {
                                 {e.status === "deposited" && e.challan && (
                                   <p className="text-xs text-green-700 mt-0.5">
                                     ✓ Challan {e.challan.challan_ref} · BSR {e.challan.bsr_code} · {formatDate(e.challan.deposit_date)}
+                                    {currentUser?.role === "admin" && (
+                                      <button
+                                        type="button"
+                                        className="ml-2 text-red-700 underline underline-offset-2 hover:text-red-800"
+                                        onClick={() => setVoidChallan({ id: e.challan!.id, ref: e.challan!.challan_ref })}
+                                      >
+                                        Void challan
+                                      </button>
+                                    )}
                                   </p>
                                 )}
                               </div>
@@ -1260,6 +1273,24 @@ export default function TdsPayablePage() {
       <ReportsPanel />
 
       {/* Record Challan Dialog */}
+      {voidChallan && (
+        <RollbackDialog
+          open
+          onOpenChange={(o) => { if (!o) setVoidChallan(null); }}
+          title={`Void challan ${voidChallan.ref}`}
+          description="Use this when the challan was entered with wrong details. The deposit itself is not touched."
+          impact={[
+            "Every TDS entry on this challan goes back to Pending so it can go on the right one",
+            "The challan stays in the audit trail, marked voided",
+            "It drops out of Form 26Q and Form 16A until the entries are re-deposited",
+          ]}
+          confirmLabel="Void challan"
+          successMessage={`Challan ${voidChallan.ref} voided`}
+          url={`/api/tds/challans/${voidChallan.id}/void`}
+          onDone={fetchEntries}
+        />
+      )}
+
       {challanDialog && (
         <RecordChallanDialog
           open
