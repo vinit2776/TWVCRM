@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep, serviceNextStep } from "../procurement/amc-billing";
+import { cyclesBetween, contractTotal, billingProgress, cycleFromUnit, CYCLE_ITEM_UNIT, serviceBillingStep, serviceNextStep, partitionBillsByCycle } from "../procurement/amc-billing";
 
 describe("cyclesBetween", () => {
   it("a standard financial year is 12 monthly cycles", () => {
@@ -183,5 +183,28 @@ describe("serviceNextStep", () => {
 
   it("a terminated contract has no next step", () => {
     expect(serviceNextStep({ ...base, terminated: true, reportsFiled: 0, invoicesFiled: 0 })).toEqual({ kind: "terminated" });
+  });
+});
+
+describe("partitionBillsByCycle", () => {
+  it("separates invoices tied to a report from legacy ones", () => {
+    const bills = [
+      { id: "a", service_report_id: "r1" },
+      { id: "b", service_report_id: null },
+      { id: "c" },
+      { id: "d", service_report_id: "gone" },
+    ];
+    const { cycleBills, untiedBills } = partitionBillsByCycle(bills, ["r1"]);
+    expect(cycleBills.map((b) => b.id)).toEqual(["a"]);
+    expect(untiedBills.map((b) => b.id)).toEqual(["b", "c", "d"]);
+  });
+
+  it("legacy invoices no longer make a contract look fully billed", () => {
+    const { cycleBills } = partitionBillsByCycle(
+      [{ service_report_id: "r1" }, { service_report_id: null }, { service_report_id: null }],
+      ["r1"]
+    );
+    expect(serviceNextStep({ status: "ordered", terminated: false, cycleCount: 2, reportsFiled: 1, invoicesFiled: cycleBills.length }))
+      .toEqual({ kind: "log_report", cycle: 2 });
   });
 });

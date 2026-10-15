@@ -20,6 +20,8 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseOrder, Company } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
+import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
+import { PoTypeChip } from "@/components/procurement/po-type-chip";
 
 // ── Month helpers ──────────────────────────────────────────────────────────────
 
@@ -384,6 +386,7 @@ export default function PurchaseOrdersPage() {
             <tbody>
               {orders.map((po) => {
                 const dept = (po as unknown as { purchase_requests?: { department?: string } }).purchase_requests?.department;
+                const kind = poKind(po);
                 return (
                   <tr
                     key={po.id}
@@ -393,7 +396,8 @@ export default function PurchaseOrdersPage() {
                       router.push(`/procurement/orders/${po.id}`);
                     }}
                   >
-                    <td className="px-4 py-3 font-mono text-xs font-medium">
+                    <td className="relative px-4 py-3 font-mono text-xs font-medium">
+                      <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${PO_KIND_STYLES[kind].bar}`} />
                       <Link
                         href={`/procurement/orders/${po.id}`}
                         className="text-primary hover:underline"
@@ -416,6 +420,7 @@ export default function PurchaseOrdersPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        <PoTypeChip kind={kind} />
                         <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
                           {PO_STATUS_LABELS[po.status]}
                         </Badge>

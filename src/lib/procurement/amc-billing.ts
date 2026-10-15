@@ -187,3 +187,21 @@ export function serviceNextStep(input: {
   if (nextAction === "upload_invoice") return { kind: "upload_invoice", cycle: input.invoicesFiled + 1 };
   return { kind: "log_report", cycle: input.reportsFiled + 1 };
 }
+
+/**
+ * Split a service PO's bills into those tied to one of its service reports and
+ * those that are not. Only the first group counts towards billing cycles; a
+ * contract first raised as a goods PO can carry invoices from before cycles existed.
+ */
+export function partitionBillsByCycle<T extends { service_report_id?: string | null }>(
+  bills: T[],
+  reportIds: Iterable<string>
+): { cycleBills: T[]; untiedBills: T[] } {
+  const ids = new Set(reportIds);
+  const cycleBills: T[] = [];
+  const untiedBills: T[] = [];
+  for (const b of bills) {
+    (b.service_report_id && ids.has(b.service_report_id) ? cycleBills : untiedBills).push(b);
+  }
+  return { cycleBills, untiedBills };
+}

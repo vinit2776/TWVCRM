@@ -36,6 +36,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
+import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
+import { PoTypeChip } from "@/components/procurement/po-type-chip";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
@@ -941,6 +943,9 @@ export default function PurchaseOrderDetailPage() {
     (po.purchase_order_items ?? []).some((i) => Number(i.quantity_received ?? 0) < Number(i.quantity_ordered));
   const canCancelOrder = ["pending", "ordered", "partially_received", "received"].includes(po.status);
 
+  const kind = poKind(po);
+  const accent = PO_KIND_STYLES[kind];
+
   const amcStatus = (po.amc_status ?? "inactive") as AmcStatus;
   const amcVisitsUsed = po.amc_visits_used ?? 0;
   const amcVisitsCoveredNum = po.amc_visits_covered ?? null;
@@ -953,14 +958,16 @@ export default function PurchaseOrderDetailPage() {
         fallbackParent={{ href: "/procurement/orders", label: "Purchase Orders" }}
       />
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="relative flex items-start justify-between gap-4 pt-4">
+        <span aria-hidden className={`absolute inset-x-0 top-0 h-1 rounded-full ${accent.bar}`} />
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/procurement/orders")}>
             <ChevronLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold font-mono">{po.po_number}</h1>
+              <PoTypeChip kind={kind} />
               <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
                 {PO_STATUS_LABELS[po.status]}
               </Badge>
@@ -1223,7 +1230,8 @@ export default function PurchaseOrderDetailPage() {
 
       {/* Service Contract Info */}
       {po.po_type === "service" && (
-        <Card>
+        <Card className="relative overflow-hidden">
+          <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accent.bar}`} />
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <ClipboardList className="h-4 w-4 text-muted-foreground" />
@@ -1262,7 +1270,7 @@ export default function PurchaseOrderDetailPage() {
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Invoices Filed</p>
-                <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
+                <p className="font-medium">{(po.vendor_bills ?? []).filter((b) => b.service_report_id).length} / {po.cycle_count ?? "?"}</p>
               </div>
             </div>
           </CardContent>
@@ -1291,7 +1299,8 @@ export default function PurchaseOrderDetailPage() {
           && (liveLc.status === "active" || liveLc.status === "expiring");
 
         return (
-          <Card className="border-blue-200">
+          <Card className="relative overflow-hidden">
+            <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accent.bar}`} />
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1721,6 +1730,7 @@ export default function PurchaseOrderDetailPage() {
       {/* Service billing: next step + one row per cycle */}
       {po.po_type === "service" && (
         <ServiceCyclesCard
+          accentBar={accent.bar}
           status={po.status}
           terminated={!!po.amc_terminated_at}
           billingCycle={po.billing_cycle ?? null}

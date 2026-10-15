@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { CYCLE_UNIT_LABEL, serviceNextStep } from "@/lib/procurement/amc-billing";
+import { CYCLE_UNIT_LABEL, partitionBillsByCycle, serviceNextStep } from "@/lib/procurement/amc-billing";
 import type { ServicePoBillingCycle } from "@/lib/constants";
 import type { PoServiceReport } from "@/types";
 
@@ -20,6 +20,8 @@ export interface CycleBill {
 }
 
 interface Props {
+  /** Background class of the po-type colour bar down the card edge. */
+  accentBar?: string;
   status: string;
   terminated: boolean;
   billingCycle: ServicePoBillingCycle | null;
@@ -82,7 +84,7 @@ function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBil
  * as several invoices on the same contract.
  */
 export function ServiceCyclesCard({
-  status, terminated, billingCycle, cycleCount, unitCostPerCycle,
+  accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle,
   reports, bills, onRecordReport, onUploadInvoice, onEditInvoice,
 }: Props) {
   const unit = billingCycle ? CYCLE_UNIT_LABEL[billingCycle] : "cycle";
@@ -90,15 +92,19 @@ export function ServiceCyclesCard({
   const total = cycleCount ?? 0;
   const sorted = [...reports].sort((a, b) => a.cycle_number - b.cycle_number);
   const billFor = (srId: string) => bills.find((b) => b.service_report_id === srId);
+  // Only invoices tied to a report count towards the cycles. A legacy contract
+  // (e.g. an AMC first raised as a goods PO) can carry invoices with no cycle;
+  // counting them would read as "all cycles invoiced" while a report is still due.
+  const { cycleBills, untiedBills } = partitionBillsByCycle(bills, reports.map((r) => r.id));
 
   const next = serviceNextStep({
     status, terminated,
     reportsFiled: reports.length,
-    invoicesFiled: bills.length,
+    invoicesFiled: cycleBills.length,
     cycleCount,
   });
 
-  const currentStep = lifecycleStep(next, bills);
+  const currentStep = lifecycleStep(next, cycleBills);
   const currentCycle = next.kind === "log_report" || next.kind === "upload_invoice" ? next.cycle : null;
   const chipCount = Math.max(total, sorted.length);
   const chips = Array.from({ length: chipCount }, (_, i) => {
@@ -117,7 +123,7 @@ export function ServiceCyclesCard({
   // can see what is coming and why its invoice is locked.
   const upcomingCycle = sorted.length + 1;
   const showUpcoming = total === 0 || upcomingCycle <= total;
-  const awaiting = bills.filter((b) => b.approval_status === "pending");
+  const awaiting = cycleBills.filter((b) => b.approval_status === "pending");
 
   const banner = (() => {
     switch (next.kind) {
@@ -159,7 +165,8 @@ export function ServiceCyclesCard({
   })();
 
   return (
-    <Card>
+    <Card className="relative overflow-hidden">
+      {accentBar && <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accentBar}`} />}
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
           <ClipboardList className="h-4 w-4 text-muted-foreground" />
@@ -296,6 +303,28 @@ export function ServiceCyclesCard({
             </tbody>
           </table>
         </div>
+
+        {untiedBills.length > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 space-y-1.5">
+            <p className="text-sm font-medium text-amber-900">Invoices not tied to a {unit}</p>
+            <p className="text-xs text-amber-800">
+              These were uploaded before this contract had {unit}ly billing, so they don&apos;t count towards the table above.
+              Check each one: a duplicate should be rejected, and a genuine invoice needs to be matched to its {unit}.
+            </p>
+            <ul className="space-y-1">
+              {untiedBills.map((b) => {
+                const ap = APPROVAL_BADGE[b.approval_status] ?? APPROVAL_BADGE.pending;
+                return (
+                  <li key={b.id} className="flex items-center gap-2 text-xs">
+                    <Link href={`/procurement/bills/${b.id}`} className="font-mono text-primary hover:underline">{b.bill_number}</Link>
+                    <span>{formatCurrency(b.total_amount)}</span>
+                    <Badge variant="secondary" className={`text-[10px] ${ap.cls}`}>{ap.label}</Badge>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
 
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
