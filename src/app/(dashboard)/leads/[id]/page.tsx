@@ -64,6 +64,7 @@ const LeadDepositSummary = dynamic(
 );
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
 import { LeadEnquiriesCard } from "@/components/leads/lead-enquiries-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
@@ -241,6 +242,8 @@ export default function LeadDetailPage({
           )}
         </div>
       </div>
+
+      <JourneyPanel leadId={lead.id} />
 
       <Tabs defaultValue={initialTab}>
         <TabsList>
