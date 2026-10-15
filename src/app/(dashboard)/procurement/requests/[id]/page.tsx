@@ -37,6 +37,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
+import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
@@ -271,6 +272,8 @@ export default function PurchaseRequestDetailPage() {
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
   const [approvalThreshold, setApprovalThreshold] = useState<number>(PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE);
   const [loading, setLoading] = useState(true);
+  // AMC lines ticked to be ordered together as one PO
+  const [combineIds, setCombineIds] = useState<string[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Dialog state
@@ -988,6 +991,19 @@ export default function PurchaseRequestDetailPage() {
               const canOrder = ["approved", "partially_ordered"].includes(pr.status) && !ordered;
               return (
                 <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 first:border-t-0 first:pt-0">
+                  <div className="flex items-start gap-3">
+                    {["approved", "partially_ordered"].includes(pr.status) && (
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4"
+                        aria-label="Select to combine"
+                        disabled={ordered}
+                        checked={combineIds.includes(line.id)}
+                        onChange={(e) =>
+                          setCombineIds((prev) => (e.target.checked ? [...prev, line.id] : prev.filter((x) => x !== line.id)))
+                        }
+                      />
+                    )}
                   <div>
                     <p className="font-medium">
                       {line.linked_asset
@@ -1000,6 +1016,7 @@ export default function PurchaseRequestDetailPage() {
                         ? ` · ${formatCurrency(Number(line.estimated_price))} per ${CYCLE_UNIT_LABEL[cycle]}`
                         : ""}
                     </p>
+                  </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className={ordered ? "text-green-700" : "text-muted-foreground"}>
@@ -1018,6 +1035,38 @@ export default function PurchaseRequestDetailPage() {
                 </div>
               );
             })}
+            {["approved", "partially_ordered"].includes(pr.status) && (() => {
+              const picked = (pr.purchase_request_items ?? []).filter((l) => combineIds.includes(l.id));
+              if (picked.length === 0) return null;
+              const check = canCombineLines(picked);
+              const cycle = cycleFromUnit(picked[0].unit);
+              return (
+                <div className="border-t pt-3 space-y-2">
+                  {check.ok ? (
+                    <p className="text-xs text-muted-foreground">
+                      One PO for {picked.map((l) => l.linked_asset?.asset_code ?? l.item_name).join(" + ")}:{" "}
+                      {BILLING_CYCLE_LABELS[cycle]} · {Number(picked[0].quantity)} cycles
+                      {canSeePrices ? ` · ${formatCurrency(combinedPerCycleCost(picked))} per ${CYCLE_UNIT_LABEL[cycle]}` : ""}.
+                      One vendor, one invoice per {CYCLE_UNIT_LABEL[cycle]} for all assets.
+                    </p>
+                  ) : picked.length > 1 ? (
+                    <p className="text-xs text-amber-700">{check.reason}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Tick at least two lines to combine them into one PO.</p>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!check.ok}
+                    onClick={() =>
+                      router.push(`/procurement/orders/new-service?from_mr=${pr.id}&items=${picked.map((l) => l.id).join(",")}`)
+                    }
+                  >
+                    <ShoppingCart className="h-4 w-4 mr-1" /> Combine selected into one PO
+                  </Button>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}

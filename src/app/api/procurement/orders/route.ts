@@ -4,6 +4,8 @@ import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { ITEM_UNITS } from "@/lib/constants";
 import { computeOrderedQtyMap, recalculatePrStatus } from "@/lib/procurement/pr-status";
+import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
+import { cycleFromUnit } from "@/lib/procurement/amc-billing";
 
 const createPoItemSchema = z.object({
   pr_item_id: z.string().uuid().nullish(),
@@ -55,6 +57,9 @@ const createServicePoSchema = z.object({
   // Which request line this PO fulfils. Optional while a request has a single
   // line (that line is used); required once a request carries several.
   pr_item_id: z.string().uuid().nullish(),
+  // Combined PO: several request lines (one asset each) ordered as one PO. Cost, cycles
+  // and frequency are then taken from the lines, not from the body.
+  pr_item_ids: z.array(z.string().uuid()).min(2).nullish(),
   company_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
@@ -317,6 +322,15 @@ export async function POST(request: NextRequest) {
     // refine() above. po_number is trigger-assigned, company-scoped.
     let servicePoCompanyId = parsed.data.company_id ?? null;
     let servicePrItemId: string | null = null;
+    // What the PO will actually be created with. A combined PO overrides the body's
+    // schedule and cost with the sum of its lines.
+    const svc = {
+      billingCycle: parsed.data.billing_cycle,
+      cycleCount: parsed.data.cycle_count,
+      unitCost: parsed.data.unit_cost_per_cycle,
+      linkedAssetId: parsed.data.linked_asset_id ?? null,
+    };
+    let combinedLines: Array<{ id: string; item_name: string; quantity: number; unit: string; estimated_price: number; linked_asset_id: string }> = [];
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
         .from("purchase_requests")
@@ -340,34 +354,64 @@ export async function POST(request: NextRequest) {
       }
       servicePoCompanyId = parentPr.company_id;
 
-      // Tie this PO to the request line it fulfils. Without the link the request
+      // Tie this PO to the request line(s) it fulfils. Without the link the request
       // never registers as ordered, stays "approved", and can be ordered again.
       const { data: prLines } = await supabase
         .from("purchase_request_items")
-        .select("id, quantity")
+        .select("id, item_name, quantity, unit, estimated_price, linked_asset_id")
         .eq("pr_id", parsed.data.pr_id);
-      const line = parsed.data.pr_item_id
-        ? prLines?.find((l) => l.id === parsed.data.pr_item_id)
-        : prLines?.length === 1 ? prLines[0] : undefined;
-      if (!line) {
-        return NextResponse.json({
-          error: parsed.data.pr_item_id
-            ? "That line does not belong to this request"
-            : "Choose which request line this order is for",
-        }, { status: 422 });
+
+      if (parsed.data.pr_item_ids?.length) {
+        // ── Combined PO ──
+        const wanted = new Set(parsed.data.pr_item_ids);
+        const picked = (prLines ?? []).filter((l) => wanted.has(l.id));
+        if (picked.length !== wanted.size) {
+          return NextResponse.json({ error: "One of those lines does not belong to this request" }, { status: 422 });
+        }
+        const orderedMap = await computeOrderedQtyMap(supabase, picked.map((l) => l.id));
+        const check = canCombineLines(picked.map((l) => ({ ...l, already_ordered_qty: orderedMap[l.id] ?? 0 })));
+        if (!check.ok) return NextResponse.json({ error: check.reason }, { status: 422 });
+        combinedLines = picked.map((l) => ({
+          id: l.id,
+          item_name: l.item_name,
+          quantity: Number(l.quantity),
+          unit: l.unit as string,
+          estimated_price: Number(l.estimated_price ?? 0),
+          linked_asset_id: l.linked_asset_id as string,
+        }));
+        svc.billingCycle = cycleFromUnit(combinedLines[0].unit);
+        svc.cycleCount = combinedLines[0].quantity;
+        svc.unitCost = combinedPerCycleCost(picked);
+        svc.linkedAssetId = combinedLines[0].linked_asset_id;
+      } else {
+        const line = parsed.data.pr_item_id
+          ? prLines?.find((l) => l.id === parsed.data.pr_item_id)
+          : prLines?.length === 1 ? prLines[0] : undefined;
+        if (!line) {
+          return NextResponse.json({
+            error: parsed.data.pr_item_id
+              ? "That line does not belong to this request"
+              : "Choose which request line this order is for",
+          }, { status: 422 });
+        }
+        const alreadyOrdered = (await computeOrderedQtyMap(supabase, [line.id]))[line.id] ?? 0;
+        if (alreadyOrdered >= Number(line.quantity)) {
+          return NextResponse.json({
+            error: "This request line has already been ordered. Cancel the existing order first if it needs to be redone.",
+          }, { status: 422 });
+        }
+        servicePrItemId = line.id;
       }
-      const alreadyOrdered = (await computeOrderedQtyMap(supabase, [line.id]))[line.id] ?? 0;
-      if (alreadyOrdered >= Number(line.quantity)) {
-        return NextResponse.json({
-          error: "This request line has already been ordered. Cancel the existing order first if it needs to be redone.",
-        }, { status: 422 });
-      }
-      servicePrItemId = line.id;
     }
 
-    const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
+    const totalAmount = svc.unitCost * svc.cycleCount;
     const svcGstRate = parsed.data.gst_rate ?? 0;
-    const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
+    // A combined PO's GST is the sum of its lines' GST, so the PO total always equals the lines.
+    const combinedLineGst = (l: { quantity: number; estimated_price: number }) =>
+      Math.round(l.quantity * l.estimated_price * svcGstRate) / 100;
+    const svcGstAmount = combinedLines.length
+      ? combinedLines.reduce((sum, l) => sum + combinedLineGst(l), 0)
+      : Math.round(totalAmount * svcGstRate) / 100;
     const totalWithGst = totalAmount + svcGstAmount;
 
     // Advance cannot exceed PO total (including GST)
@@ -408,9 +452,9 @@ export async function POST(request: NextRequest) {
         vendor_id: parsed.data.vendor_id,
         location_id: parsed.data.location_id ?? null,
         service_start_date: parsed.data.service_start_date,
-        billing_cycle: parsed.data.billing_cycle,
-        cycle_count: parsed.data.cycle_count,
-        unit_cost_per_cycle: parsed.data.unit_cost_per_cycle,
+        billing_cycle: svc.billingCycle,
+        cycle_count: svc.cycleCount,
+        unit_cost_per_cycle: svc.unitCost,
         notes: parsed.data.notes ?? null,
         payment_terms: parsed.data.payment_terms ?? null,
         terms_and_conditions: parsed.data.terms_and_conditions ?? null,
@@ -432,7 +476,8 @@ export async function POST(request: NextRequest) {
         amc_helpline_number: parsed.data.amc_helpline_number ?? null,
         amc_contact_email: parsed.data.amc_contact_email ?? null,
         amc_status: amcStatus,
-        linked_asset_id: parsed.data.linked_asset_id ?? null,
+        // A combined PO holds its first asset here; every asset is on its own PO line.
+        linked_asset_id: svc.linkedAssetId,
         amc_coverage_type: parsed.data.amc_coverage_type ?? null,
         amc_escalation_name: parsed.data.amc_escalation_name ?? null,
         amc_escalation_phone: parsed.data.amc_escalation_phone ?? null,
@@ -446,21 +491,44 @@ export async function POST(request: NextRequest) {
 
     if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
 
-    // Insert a single representative line item for the service
+    // Line items: one representative line for a single-asset service, or one line per
+    // asset for a combined PO. Each carries its asset and (when ordered from a request) its request line.
     const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", half_yearly: "half_year", yearly: "year" };
-    await supabase.from("purchase_order_items").insert({
-      po_id: po.id,
-      pr_item_id: servicePrItemId,
-      item_id: parsed.data.item_id ?? null,
-      item_name: parsed.data.service_item_name,
-      quantity_ordered: parsed.data.cycle_count,
-      quantity_received: 0,
-      unit: unitMap[parsed.data.billing_cycle],
-      unit_price: parsed.data.unit_cost_per_cycle,
-      total_amount: totalAmount,
-      gst_rate: svcGstRate,
-      gst_amount: svcGstAmount,
-    });
+    const serviceLines = combinedLines.length
+      ? combinedLines.map((l) => ({
+          po_id: po.id,
+          pr_item_id: l.id,
+          item_id: null,
+          item_name: l.item_name,
+          quantity_ordered: l.quantity,
+          quantity_received: 0,
+          unit: unitMap[svc.billingCycle],
+          unit_price: l.estimated_price,
+          total_amount: l.quantity * l.estimated_price,
+          gst_rate: svcGstRate,
+          gst_amount: combinedLineGst(l),
+          linked_asset_id: l.linked_asset_id,
+        }))
+      : [{
+          po_id: po.id,
+          pr_item_id: servicePrItemId,
+          item_id: parsed.data.item_id ?? null,
+          item_name: parsed.data.service_item_name,
+          quantity_ordered: svc.cycleCount,
+          quantity_received: 0,
+          unit: unitMap[svc.billingCycle],
+          unit_price: svc.unitCost,
+          total_amount: totalAmount,
+          gst_rate: svcGstRate,
+          gst_amount: svcGstAmount,
+          linked_asset_id: svc.linkedAssetId,
+        }];
+    const { error: serviceItemsError } = await supabase.from("purchase_order_items").insert(serviceLines);
+    if (serviceItemsError) {
+      // A service PO with no lines is unusable and would invite a duplicate on retry.
+      await supabase.from("purchase_orders").delete().eq("id", po.id);
+      return NextResponse.json({ error: serviceItemsError.message }, { status: 500 });
+    }
 
     await logAudit(supabase, {
       entityType: "purchase_order",
@@ -472,8 +540,9 @@ export async function POST(request: NextRequest) {
         po_type: { old: null, new: "service" },
         vendor_id: { old: null, new: parsed.data.vendor_id },
         total_ordered_amount: { old: null, new: totalAmount },
-        billing_cycle: { old: null, new: parsed.data.billing_cycle },
-        cycle_count: { old: null, new: parsed.data.cycle_count },
+        billing_cycle: { old: null, new: svc.billingCycle },
+        cycle_count: { old: null, new: svc.cycleCount },
+        ...(combinedLines.length ? { combined_assets: { old: null, new: combinedLines.length } } : {}),
         ...(parsed.data.pr_id ? { pr_id: { old: null, new: parsed.data.pr_id } } : {}),
       },
     });
