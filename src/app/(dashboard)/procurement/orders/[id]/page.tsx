@@ -168,7 +168,7 @@ function buildTimeline(
       ts: po.advance_processed_at,
       type: "advance",
       title: "Advance Payment Processed",
-      subtitle: `${formatCurrency(po.advance_amount ?? 0)} · ${PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode ?? ""] ?? ""}${po.advance_payment_date ? ` · ${formatDate(po.advance_payment_date)}` : ""}`,
+      subtitle: `${formatCurrency(po.advance_amount ?? 0)} · ${po.advance_payment_mode ? PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode] ?? po.advance_payment_mode.toUpperCase() : ""}${po.advance_payment_date ? ` · ${formatDate(po.advance_payment_date)}` : ""}`,
     });
   }
 
@@ -1645,18 +1645,28 @@ export default function PurchaseOrderDetailPage() {
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Mode</p>
-                <p className="font-medium">{PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode ?? ""] ?? "—"}</p>
+                <p className="font-medium">
+                  {po.advance_payment_mode
+                    ? PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode] ?? po.advance_payment_mode.toUpperCase()
+                    : "—"}
+                </p>
               </div>
-              {po.advance_payment_reference && (
+              {(po.advance_payment_reference || po.advance_status === "processed") && (
                 <div>
-                  <p className="text-muted-foreground mb-0.5">Reference</p>
-                  <p className="font-medium font-mono text-xs">{po.advance_payment_reference}</p>
+                  <p className="text-muted-foreground mb-0.5">Reference (UTR / cheque no.)</p>
+                  <p className="font-medium font-mono text-xs">{po.advance_payment_reference || "—"}</p>
                 </div>
               )}
-              {po.advance_payment_date && (
+              {(po.advance_payment_date || po.advance_status === "processed") && (
                 <div>
                   <p className="text-muted-foreground mb-0.5">Paid On</p>
-                  <p className="font-medium">{formatDate(po.advance_payment_date)}</p>
+                  <p className="font-medium">{po.advance_payment_date ? formatDate(po.advance_payment_date) : "—"}</p>
+                </div>
+              )}
+              {po.advance_status === "processed" && (
+                <div>
+                  <p className="text-muted-foreground mb-0.5">Recorded On</p>
+                  <p className="font-medium">{po.advance_processed_at ? formatDate(po.advance_processed_at) : "—"}</p>
                 </div>
               )}
             </div>
