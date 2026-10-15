@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
       challan:tds_challans(id, challan_ref, bsr_code, challan_serial, deposit_date, section_code)
     `)
     .eq("status", "deposited")
+    .is("reversed_at", null)
     .in("period_month", months);
 
   // For Q4 (Jan-Mar), year stored in period_year will be the next calendar year

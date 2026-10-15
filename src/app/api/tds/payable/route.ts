@@ -33,6 +33,9 @@ export async function GET(req: NextRequest) {
     .order("period_month", { ascending: false })
     .order("created_at", { ascending: false });
 
+  // Reversed payments take their TDS with them (see 00597).
+  query = query.is("reversed_at", null);
+
   if (status !== "all") {
     query = query.eq("status", status);
   }

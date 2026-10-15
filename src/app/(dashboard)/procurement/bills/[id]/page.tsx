@@ -1,5 +1,6 @@
 "use client";
 
+import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { emitApprovalChanged } from "@/lib/approval-events";
@@ -64,6 +65,9 @@ type ChainData = {
       id: string; amount: number; payment_mode: string;
       payment_reference: string | null; payment_date: string;
       notes: string | null;
+      reversed_at?: string | null;
+      reversal_reason?: string | null;
+      petty_cash_book_id?: string | null;
       recorder: { id: string; full_name: string } | null;
     }>;
   };
@@ -627,6 +631,14 @@ export default function VendorBillDetailPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          <BillCorrectMenu
+            billId={bill.id}
+            billNumber={bill.bill_number}
+            approvalStatus={bill.approval_status}
+            payments={chain?.bill.vendor_bill_payments ?? []}
+            isAdmin={currentUserRole === "admin"}
+            onDone={fetchAll}
+          />
           {bill.approval_status === "pending" && canApprove && (
             <>
               <Button
@@ -1433,10 +1445,15 @@ export default function VendorBillDetailPage() {
                 {(chain.bill.vendor_bill_payments ?? [])
                   .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
                   .map((pmt, idx) => (
-                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"} ${pmt.reversed_at ? "opacity-60" : ""}`}>
                       <td className="px-4 py-2.5 text-xs">{formatDate(pmt.payment_date)}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                      <td className={`px-4 py-2.5 text-right font-semibold ${pmt.reversed_at ? "text-muted-foreground line-through" : "text-green-700"}`}>
                         {formatCurrency(pmt.amount)}
+                        {pmt.reversed_at && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-medium">
+                            Reversed
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
                         {pmt.payment_mode.replace(/_/g, " ")}
@@ -1448,7 +1465,7 @@ export default function VendorBillDetailPage() {
                         {pmt.recorder?.full_name ?? "—"}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground italic">
-                        {pmt.notes ?? "—"}
+                        {pmt.reversed_at ? `Reversed: ${pmt.reversal_reason ?? "—"}` : (pmt.notes ?? "—")}
                       </td>
                     </tr>
                   ))}

@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
       challan:tds_challans(challan_ref, bsr_code, challan_serial, deposit_date)
     `)
     .eq("status", "deposited")
+    .is("reversed_at", null)
     .in("period_month", months)
     .eq("period_year", calYear);
 

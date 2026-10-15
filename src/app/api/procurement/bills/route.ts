@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
        purchase_orders(id, po_number, po_type, expected_delivery_date, purchase_requests(department, expenditure_type)),
        companies(id, name, brand_name),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
-       vendor_bill_payments(id, payment_reference)`,
+       vendor_bill_payments(id, payment_reference, reversed_at)`,
       { count: "exact" }
     )
     // Scoped to one vendor the page groups rows by invoice month, so rows

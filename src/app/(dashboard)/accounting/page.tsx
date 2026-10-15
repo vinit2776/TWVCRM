@@ -96,6 +96,7 @@ type VendorBillItem = {
     amount: number;
     payment_mode: string;
     payment_reference: string | null;
+    reversed_at?: string | null;
     payment_date: string;
     notes: string | null;
     recorder: { id: string; full_name: string } | null;
@@ -1486,7 +1487,7 @@ export default function AccountingPage() {
                                 </td>
                                 <td className="px-4 py-2.5 hidden lg:table-cell text-xs font-mono text-muted-foreground max-w-[160px]">
                                   {bill.vendor_bill_payments && bill.vendor_bill_payments.length > 0
-                                    ? [...new Set(bill.vendor_bill_payments.map((p) => p.payment_reference).filter(Boolean))].join(", ") || "—"
+                                    ? [...new Set(bill.vendor_bill_payments.filter((p) => !p.reversed_at).map((p) => p.payment_reference).filter(Boolean))].join(", ") || "—"
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5">
