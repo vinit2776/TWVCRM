@@ -6,6 +6,7 @@ import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { confirmFirstBillIfNeeded } from "@/lib/procurement/recurring-bill-rules-server";
 import { z } from "zod";
+import { checkTieInvoiceToCycle } from "@/lib/procurement/tie-invoice";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
 
@@ -117,6 +118,14 @@ const patchBillSchema = z.discriminatedUnion("action", [
      */
     action: z.literal("update_amount_and_resubmit"),
     total_amount: z.number().positive("Amount must be greater than zero"),
+  }),
+  z.object({
+    /**
+     * Ties an untied invoice on a service PO to one of its service-report cycles.
+     * Admin only — repairs invoices uploaded before the contract had cycle billing.
+     */
+    action: z.literal("link_service_report"),
+    service_report_id: z.string().uuid(),
   }),
   z.object({
     /**
@@ -813,6 +822,27 @@ export async function PATCH(
         manual_department: parsed.data.manual_department ?? null,
         manual_expenditure_type: parsed.data.manual_expenditure_type ?? null,
       };
+      break;
+    }
+
+    case "link_service_report": {
+      const [{ data: linkPo }, { data: linkReport }, { count: billsOnReport }] = await Promise.all([
+        bill.po_id
+          ? supabase.from("purchase_orders").select("po_type, status, unit_cost_per_cycle, amc_terminated_at").eq("id", bill.po_id).single()
+          : Promise.resolve({ data: null }),
+        supabase.from("po_service_reports").select("id, po_id").eq("id", parsed.data.service_report_id).maybeSingle(),
+        supabase.from("vendor_bills").select("id", { count: "exact", head: true }).eq("service_report_id", parsed.data.service_report_id),
+      ]);
+      const verdict = checkTieInvoiceToCycle({
+        role: dbUser.role,
+        bill,
+        po: linkPo,
+        report: linkReport,
+        billsOnReport: billsOnReport ?? 0,
+        billPoId: bill.po_id,
+      });
+      if (!verdict.ok) return NextResponse.json({ error: verdict.error }, { status: verdict.status });
+      updatePayload = { service_report_id: parsed.data.service_report_id };
       break;
     }
 

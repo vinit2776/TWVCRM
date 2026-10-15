@@ -1757,6 +1757,8 @@ export default function PurchaseOrderDetailPage() {
             setActionDialog("add_invoice");
           }}
           onEditInvoice={openEditInvoice}
+          canTie={user?.role === "admin"}
+          onChanged={fetchPo}
         />
       )}
 
