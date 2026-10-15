@@ -62,12 +62,14 @@ function renameEmployeeStatements(oldId, newId) {
     s('UPDATE overtime_requests SET employee_id = ? WHERE employee_id = ?'),
     s('UPDATE field_trips SET employee_id = ? WHERE employee_id = ?'),
     s('UPDATE employee_documents SET employee_id = ? WHERE employee_id = ?'),
+    s('UPDATE deviation_reviews SET employee_id = ? WHERE employee_id = ?'),
     // "Done by" columns hold the actor's username — a manager's is their employee id.
     s('UPDATE punches SET marked_by = ? WHERE marked_by = ?'),
     s('UPDATE correction_requests SET decided_by = ? WHERE decided_by = ?'),
     s('UPDATE employee_documents SET uploaded_by = ? WHERE uploaded_by = ?'),
     s('UPDATE device_commands SET requested_by = ? WHERE requested_by = ?'),
     s('UPDATE app_settings SET updated_by = ? WHERE updated_by = ?'),
+    s('UPDATE deviation_reviews SET reviewed_by = ? WHERE reviewed_by = ?'),
   ];
 }
 

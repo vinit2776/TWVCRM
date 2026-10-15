@@ -46,6 +46,7 @@ function setup() {
     CREATE TABLE employee_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, uploaded_by TEXT);
     CREATE TABLE device_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, requested_by TEXT);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, updated_by TEXT NOT NULL DEFAULT '');
+    CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, reviewed_by TEXT NOT NULL, PRIMARY KEY (employee_id, date));
   `);
   return db;
 }
@@ -68,6 +69,7 @@ const ACTOR_COLUMNS = [
   ['correction_requests', 'decided_by'],
   ['device_commands', 'requested_by'],
   ['app_settings', 'updated_by'],
+  ['deviation_reviews', 'reviewed_by'],
   ['employee_documents', 'uploaded_by'],
 ];
 
@@ -88,6 +90,7 @@ test('renaming moves every record and the login to the new id, leaving nothing b
     INSERT INTO device_commands (requested_by) VALUES ('EMP-001');
     INSERT INTO app_settings VALUES ('office_radius', 'EMP-001');
     INSERT INTO employee_documents (employee_id, uploaded_by) VALUES ('EMP-002', 'EMP-001');
+    INSERT INTO deviation_reviews VALUES ('EMP-001', '2026-10-14', 'absent', 'EMP-001');
   `);
   for (const table of EMPLOYEE_TABLES) db.prepare(`INSERT INTO ${table} (employee_id) VALUES ('EMP-001')`).run();
 
@@ -107,9 +110,12 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   assert.equal(db.prepare('SELECT requested_by FROM device_commands').get().requested_by, 'EMP-027');
   assert.equal(db.prepare('SELECT updated_by FROM app_settings').get().updated_by, 'EMP-027');
   assert.equal(db.prepare('SELECT uploaded_by FROM employee_documents WHERE employee_id = ?').get('EMP-002').uploaded_by, 'EMP-027');
+  // A manager's decision on a deviation day must follow the employee: left behind, the
+  // day silently loses its Absent/Half Day status and returns to the pending queue.
+  assert.equal(db.prepare("SELECT decision FROM deviation_reviews WHERE employee_id = 'EMP-027'").get().decision, 'absent');
 
   // Nothing anywhere still points at the old id.
-  for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions']) {
+  for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions', 'deviation_reviews']) {
     assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE employee_id = 'EMP-001'`).get().c, 0, table);
   }
   // The "done by" columns hold the actor's username, which for a manager is their

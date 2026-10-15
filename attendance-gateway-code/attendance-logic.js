@@ -85,6 +85,11 @@ function createAttendanceLogic(db) {
   function getHoliday(dateStr) {
     return db.prepare('SELECT * FROM holidays WHERE date = ?').get(dateStr);
   }
+  // A manager's decision on a day the employee punched at a branch that isn't theirs:
+  // 'accepted', or rejected as 'absent' / 'half_day'. None means still pending.
+  function getDeviationReview(employeeId, dateStr) {
+    return db.prepare('SELECT * FROM deviation_reviews WHERE employee_id = ? AND date = ?').get(employeeId, dateStr);
+  }
   function getApprovedLeaveForDate(employeeId, dateStr) {
     return db.prepare(
       `SELECT * FROM leave_requests WHERE employee_id = ? AND status = 'approved' AND date(?) BETWEEN date(start_date) AND date(end_date)`
@@ -110,7 +115,8 @@ function createAttendanceLogic(db) {
   async function computeDayStatus(employeeId, dateStr) {
     const employee = await getEmployee(employeeId);
     if (!employee) return null;
-    const punches = effectivePunches(await getPunchesForDay(employeeId, dateStr));
+    const dayPunches = await getPunchesForDay(employeeId, dateStr);
+    const punches = effectivePunches(dayPunches);
 
     if (punches.length === 0) {
       // An employee's own join date is authoritative for "no attendance obligation
@@ -201,9 +207,21 @@ function createAttendanceLogic(db) {
       isHalfDay = true;
     }
 
+    // Punched at a branch that isn't theirs (see deviation in server.js). Until a manager
+    // decides, the day keeps its normal status and is only flagged; a rejection replaces
+    // the status with the outcome the manager chose.
+    const deviationReview = dayPunches.some(p => p.deviation) ? await getDeviationReview(employeeId, dateStr) : null;
+    const deviation = dayPunches.some(p => p.deviation) ? (deviationReview ? deviationReview.decision : 'pending') : null;
+    if (deviation === 'half_day') isHalfDay = true;
+
     let status;
-    if (punches.length % 2 !== 0) {
+    if (deviation === 'absent') {
+      status = 'Absent';
+      hoursWorked = 0;
+    } else if (punches.length % 2 !== 0) {
       status = dateStr === todayStr() ? 'Active' : 'Punch Error';
+    } else if (deviation === 'half_day') {
+      status = 'Half Day';
     } else if (missedCheckout) {
       status = 'Missed Checkout';
     } else if (isHalfDay) {
@@ -233,6 +251,8 @@ function createAttendanceLogic(db) {
       breakMinutes,
       onBreak: !!openBreak,
       breakStart: openBreak ? openBreak.start_ts : null,
+      // null, or 'pending' / 'accepted' / 'absent' / 'half_day'.
+      deviation,
     };
   }
 
@@ -244,6 +264,7 @@ function createAttendanceLogic(db) {
     getHoliday,
     getApprovedLeaveForDate,
     getApprovedPermissionForDate,
+    getDeviationReview,
     getActiveCorrectionsForMonth,
     computeDayStatus,
   };
