@@ -16,7 +16,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ITEM_UNIT_GROUPS, ITEM_UNIT_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
+import { ITEM_UNIT_GROUPS, ITEM_UNIT_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
 import Link from "next/link";
@@ -172,6 +172,13 @@ function NewPurchaseOrderFormWithPr({
       .then((json) => {
         const pr = json.data;
         if (!pr) return;
+        // An AMC request is ordered on the service PO form — send the user there
+        // instead of letting them fill in a goods form the server will reject.
+        if (pr.department === "amc") {
+          toast.info("This is an AMC request — opening the service PO form.");
+          router.replace(`/procurement/orders/new-service?from_mr=${prId}`);
+          return;
+        }
         setPrData(pr);
         setLocationId(pr.location_id ?? "");
         // Carry forward PR-level notes to PO
@@ -213,7 +220,7 @@ function NewPurchaseOrderFormWithPr({
         }
       })
       .finally(() => setLoadingPr(false));
-  }, [prId, setPrData, setLocationId, setItems, setLoadingPr]);
+  }, [prId, router, setPrData, setLocationId, setItems, setLoadingPr]);
 
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
@@ -455,6 +462,9 @@ function NewPurchaseOrderFormWithPr({
       {/* PR context banner */}
       {prData && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm text-blue-800">
+          <span className="mr-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium">
+            Goods PO · {PROCUREMENT_DEPARTMENT_LABELS[prData.department] ?? prData.department}
+          </span>
           Items pre-populated from <strong>{prData.pr_number}</strong>. Quantities and prices cannot exceed approved values.
           {prData.approval_code && (
             <span className="ml-2 font-mono text-xs">Approval: {prData.approval_code}</span>

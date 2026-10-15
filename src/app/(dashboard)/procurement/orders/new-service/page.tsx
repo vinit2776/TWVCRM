@@ -171,6 +171,12 @@ function NewServicePOForm() {
       .then((j) => {
         const pr = j.data;
         if (!pr) return;
+        // Only AMC requests are ordered here — anything else is a goods PO.
+        if (pr.department !== "amc") {
+          toast.info("This isn't an AMC request — opening the goods PO form.");
+          router.replace(`/procurement/orders/new?pr_id=${fromMrId}`);
+          return;
+        }
         setSourceMrNumber(pr.pr_number ?? null);
         if (pr.companies) setInheritedCompany(pr.companies);
         // Service identity
@@ -216,7 +222,7 @@ function NewServicePOForm() {
         if (pr.notes) setNotes(pr.notes);
       })
       .catch(() => toast.error("Could not load source MR for pre-fill"));
-  }, [fromMrId]);
+  }, [fromMrId, router]);
 
   const serviceItemName = customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
@@ -344,6 +350,7 @@ function NewServicePOForm() {
 
       {fromMrId && sourceMrNumber && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <span className="mr-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium">Service PO · AMC</span>
           Creating PO from <span className="font-semibold">{sourceMrNumber}</span>. Asset, dates, contacts and advance are pre-filled from the MR. Select the vendor below to proceed.
           {inheritedCompany && (
             <div className="mt-1 text-xs text-blue-700">
