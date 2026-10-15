@@ -93,6 +93,7 @@ import {
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
+import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
@@ -1381,7 +1382,7 @@ export default function ContractDetailPage({
               </div>
             );
           })()}
-          {contract.status === "active" && ["admin", "manager", "accounts"].includes(userRole ?? "") && (
+          {canUseInvoiceWizard(contractDisplayStatus(contract), userRole) && (
             <Button onClick={() => setInvoiceWizardOpen(true)}>
               <Receipt className="mr-2 h-4 w-4" />
               Invoice wizard
@@ -3165,6 +3166,7 @@ export default function ContractDetailPage({
         contractNumber={contract.contract_number}
         leadId={contract.lead_id}
         userRole={userRole}
+        contractStatus={contractDisplayStatus(contract)}
         depositShortfall={contract.deposit_shortfall}
         locationId={contract.location_id}
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}

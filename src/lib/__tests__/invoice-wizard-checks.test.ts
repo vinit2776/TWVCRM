@@ -1,7 +1,40 @@
 import { describe, it, expect } from "vitest";
-import { rentCheck, usageCheck, electricityCheck, type RentRow, type UsageGroup } from "@/lib/invoice-wizard-checks";
+import { rentCheck, usageCheck, electricityCheck, actionableRentRows, type RentRow, type UsageGroup } from "@/lib/invoice-wizard-checks";
 
 const row = (category: string, periodLabel: string): RentRow => ({ contractId: "c1", category, periodLabel });
+
+const gap = (period: string, backfill = true): RentRow => ({
+  ...row("rent_gap", `${period} · gap`),
+  id: `rent_gap:c1:${period}`,
+  ...(backfill ? { backfillTarget: { month: 7, year: 2026 } } : {}),
+});
+const draftRow = (): RentRow => ({ ...row("current_cycle", "November 2026 · current cycle"), id: "stmt-1", statementId: "stmt-1" });
+
+describe("actionableRentRows", () => {
+  it("keeps missed months that can be billed directly and this cycle's draft", () => {
+    expect(actionableRentRows([gap("August 2026"), draftRow()]).map((r) => r.id)).toEqual(["rent_gap:c1:August 2026", "stmt-1"]);
+  });
+
+  it("drops old gaps (waived, not billed), rows with accounts, and sent rows", () => {
+    const rows = [gap("March 2026", false), row("current_cycle_tally", "x"), row("current_cycle_sent", "y"), row("current_cycle", "z")];
+    expect(actionableRentRows(rows)).toEqual([]);
+  });
+});
+
+describe("rentCheck nothingToOpen", () => {
+  it("is false when a month can be invoiced, true when nothing can be opened", () => {
+    expect(rentCheck([gap("August 2026")]).nothingToOpen).toBe(false);
+    expect(rentCheck([draftRow()]).nothingToOpen).toBe(false);
+    expect(rentCheck([row("current_cycle_sent", "October 2026 · sent")]).nothingToOpen).toBe(true);
+    expect(rentCheck([]).nothingToOpen).toBe(true);
+  });
+
+  it("is true for gaps too old to bill directly, which still warn", () => {
+    const c = rentCheck([gap("March 2026", false)]);
+    expect(c.tone).toBe("warn");
+    expect(c.nothingToOpen).toBe(true);
+  });
+});
 
 describe("rentCheck", () => {
   it("warns about missed months, naming them, ahead of anything else", () => {
@@ -20,7 +53,7 @@ describe("rentCheck", () => {
 
   it("points at a draft that is ready to review", () => {
     const c = rentCheck([row("current_cycle", "November 2026 · current cycle")]);
-    expect(c).toEqual({ tone: "info", text: "November 2026 draft is ready to review and send" });
+    expect(c).toEqual({ tone: "info", nothingToOpen: true, text: "November 2026 draft is ready to review and send" });
   });
 
   it("says when the month is with accounts", () => {
@@ -28,7 +61,7 @@ describe("rentCheck", () => {
   });
 
   it("reports an already-sent month as fine", () => {
-    expect(rentCheck([row("current_cycle_sent", "October 2026 · sent")])).toEqual({ tone: "ok", text: "October 2026 rent is already sent" });
+    expect(rentCheck([row("current_cycle_sent", "October 2026 · sent")])).toEqual({ tone: "ok", nothingToOpen: true, text: "October 2026 rent is already sent" });
   });
 
   it("says nothing is waiting when the contract has no rows, or only renewal rows", () => {

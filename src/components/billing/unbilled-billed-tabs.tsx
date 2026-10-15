@@ -103,11 +103,13 @@ interface Props {
   initialSearch?: string;
   /** With initialSearch set to a contract number: open that contract's invoice dialog once the queue loads (the Invoice wizard). */
   autoOpen?: boolean;
+  /** Open exactly this queue row's invoice dialog once the queue loads (chosen in the Invoice wizard's month picker). */
+  autoOpenRowId?: string;
 }
 
 const BILLING_ROLES = ["admin", "manager", "accounts"];
 
-export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement, initialSearch, autoOpen }: Props) {
+export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement, initialSearch, autoOpen, autoOpenRowId }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">(type === "usage" ? "billed" : "unbilled");
   // One search box for whichever tab is open. Unbilled filters in the browser
   // (the whole queue is already loaded); Billed searches server-side.
@@ -207,14 +209,12 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   // contract. With several months waiting, leave the filtered list for the user to pick.
   const autoOpenedRef = useRef(false);
   useEffect(() => {
-    if (!autoOpen || !initialSearch || autoOpenedRef.current || unbilledLoading || !userRole) return;
+    if ((!autoOpen && !autoOpenRowId) || !initialSearch || autoOpenedRef.current || unbilledLoading || !userRole) return;
     autoOpenedRef.current = true;
     const mine = unbilledRows.filter((r) => r.contractNumber === initialSearch);
-    const actionable = mine.filter(
-      (r) => (r.backfillTarget && canBill) || (r.category === "current_cycle" && r.statementId && canReviewSend),
-    );
-    if (actionable.length === 1) {
-      const r = actionable[0];
+    const isActionable = (r: UnbilledRow) =>
+      (r.backfillTarget && canBill) || (r.category === "current_cycle" && r.statementId && canReviewSend);
+    const openRow = (r: UnbilledRow) => {
       if (r.backfillTarget && canBill) void openBackfillDialog(r);
       else setReviewTarget({
         statementId: r.statementId!,
@@ -225,13 +225,20 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         periodLabel: r.periodLabel.split(" · ")[0],
         amount: r.amount,
       });
-    } else if (actionable.length === 0) {
-      toast.info(`Nothing to invoice for ${initialSearch} in the rent queue.`);
-    } else {
-      toast.info(`${actionable.length} rent months are waiting for ${initialSearch}. Pick one below.`);
+    };
+    // A month picked in the wizard opens exactly that row, never a different one.
+    if (autoOpenRowId) {
+      const picked = mine.find((r) => r.id === autoOpenRowId);
+      if (picked && isActionable(picked)) openRow(picked);
+      else toast.info("That month isn't waiting to be invoiced any more. Pick one from the list.");
+      return;
     }
+    const actionable = mine.filter(isActionable);
+    if (actionable.length === 1) openRow(actionable[0]);
+    else if (actionable.length === 0) toast.info(`Nothing to invoice for ${initialSearch} in the rent queue.`);
+    else toast.info(`${actionable.length} rent months are waiting for ${initialSearch}. Pick one below.`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpen, initialSearch, unbilledLoading, unbilledRows, userRole]);
+  }, [autoOpen, autoOpenRowId, initialSearch, unbilledLoading, unbilledRows, userRole]);
 
   const confirmBackfill = async () => {
     if (!backfillRow?.backfillTarget) return;
