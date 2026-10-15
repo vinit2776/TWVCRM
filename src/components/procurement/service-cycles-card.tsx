@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { CheckCircle2, ClipboardList, Receipt, Paperclip, Info, Lock, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { CYCLE_UNIT_LABEL, partitionBillsByCycle, serviceNextStep } from "@/lib/procurement/amc-billing";
 import type { ServicePoBillingCycle } from "@/lib/constants";
@@ -32,6 +36,10 @@ interface Props {
   onRecordReport: () => void;
   onUploadInvoice: () => void;
   onEditInvoice: (billId: string) => void;
+  /** Admins can tie a loose invoice to a cycle. */
+  canTie?: boolean;
+  /** Called after a successful tie so the page can reload. */
+  onChanged?: () => void;
 }
 
 const APPROVAL_BADGE: Record<string, { label: string; cls: string }> = {
@@ -85,8 +93,11 @@ function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBil
  */
 export function ServiceCyclesCard({
   accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle,
-  reports, bills, onRecordReport, onUploadInvoice, onEditInvoice,
+  reports, bills, onRecordReport, onUploadInvoice, onEditInvoice, canTie, onChanged,
 }: Props) {
+  const [tieBill, setTieBill] = useState<CycleBill | null>(null);
+  const [tieReportId, setTieReportId] = useState("");
+  const [tying, setTying] = useState(false);
   const unit = billingCycle ? CYCLE_UNIT_LABEL[billingCycle] : "cycle";
   const Unit = unit.charAt(0).toUpperCase() + unit.slice(1);
   const total = cycleCount ?? 0;
@@ -103,6 +114,28 @@ export function ServiceCyclesCard({
     invoicesFiled: cycleBills.length,
     cycleCount,
   });
+
+  const tieTargets = sorted.filter((r) => !bills.some((b) => b.service_report_id === r.id));
+
+  const submitTie = async () => {
+    if (!tieBill || !tieReportId) return;
+    setTying(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${tieBill.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "link_service_report", service_report_id: tieReportId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(typeof json.error === "string" ? json.error : "Couldn't tie the invoice"); return; }
+      toast.success(`${tieBill.bill_number} tied to ${unit} ${sorted.find((r) => r.id === tieReportId)?.cycle_number ?? ""}`);
+      setTieBill(null);
+      setTieReportId("");
+      onChanged?.();
+    } finally {
+      setTying(false);
+    }
+  };
 
   const currentStep = lifecycleStep(next, cycleBills);
   const currentCycle = next.kind === "log_report" || next.kind === "upload_invoice" ? next.cycle : null;
@@ -319,6 +352,15 @@ export function ServiceCyclesCard({
                     <Link href={`/procurement/bills/${b.id}`} className="font-mono text-primary hover:underline">{b.bill_number}</Link>
                     <span>{formatCurrency(b.total_amount)}</span>
                     <Badge variant="secondary" className={`text-[10px] ${ap.cls}`}>{ap.label}</Badge>
+                    {canTie && b.approval_status !== "rejected" && (
+                      <button
+                        type="button"
+                        className="text-primary hover:underline"
+                        onClick={() => { setTieBill(b); setTieReportId(tieTargets[0]?.id ?? ""); }}
+                      >
+                        Tie to {unit}
+                      </button>
+                    )}
                   </li>
                 );
               })}
@@ -331,6 +373,38 @@ export function ServiceCyclesCard({
           One invoice per {unit}. A rejected invoice is corrected on its own row rather than uploaded again.
         </p>
       </CardContent>
+      <Dialog open={!!tieBill} onOpenChange={(o) => { if (!o) { setTieBill(null); setTieReportId(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Tie {tieBill?.bill_number} to a {unit}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-sm text-muted-foreground">
+              This counts the invoice ({tieBill ? formatCurrency(tieBill.total_amount) : ""}) against that {unit}. Amounts and approval are not changed.
+            </p>
+            {tieTargets.length === 0 ? (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                No {unit} is free. Record the service report for the {unit} this invoice covers first, then tie it.
+              </p>
+            ) : (
+              <Select value={tieReportId} onValueChange={setTieReportId}>
+                <SelectTrigger><SelectValue placeholder={`Select the ${unit}`} /></SelectTrigger>
+                <SelectContent>
+                  {tieTargets.map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {Unit} {r.cycle_number} ({formatDate(r.period_from)} – {formatDate(r.period_to)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTieBill(null)}>Cancel</Button>
+            <Button onClick={submitTie} disabled={tying || !tieReportId}>Tie invoice</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
