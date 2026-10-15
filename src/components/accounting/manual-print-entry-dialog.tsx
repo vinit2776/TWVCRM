@@ -36,6 +36,7 @@ import { Loader2, Printer, AlertCircle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { usageContractOption } from "@/lib/usage-contract-label";
+import { printTotals, waivedNote, type WaiverInfo } from "@/lib/print-usage-markers";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,15 @@ interface ExistingEntry {
    *  without needing quota rows (contracts with no quota have no rows to
    *  cross-reference against, which was the original pre-fill bug). */
   printer_column?: string | null;
+  waived_at?: string | null;
+  waive_reason?: string | null;
+  waived_by_user?: { full_name?: string | null } | null;
+}
+
+interface HandAddedCharge {
+  id: string;
+  description: string;
+  total: number;
 }
 
 interface CatalogRates {
@@ -126,6 +136,7 @@ export function ManualPrintEntryDialog({
   const [quotas, setQuotas]                   = useState<ServiceQuota[]>([]);
   const [quotasLoading, setQuotasLoading]     = useState(false);
   const [existing, setExisting]               = useState<ExistingEntry[]>([]);
+  const [handAdded, setHandAdded]               = useState<HandAddedCharge[]>([]);
   const [catalogRates, setCatalogRates]       = useState<CatalogRates | null>(null);
   const [saving, setSaving]                   = useState(false);
 
@@ -171,6 +182,7 @@ export function ManualPrintEntryDialog({
       setNotes("");
       setQuotas([]);
       setExisting([]);
+      setHandAdded([]);
       setCatalogRates(null);
     }
   }, [open, defaultContractId]);
@@ -179,7 +191,7 @@ export function ManualPrintEntryDialog({
   // The print-usage GET also returns catalogRates so we can always show
   // a cost preview regardless of whether quota rows exist.
   useEffect(() => {
-    if (!contractId) { setQuotas([]); setExisting([]); return; }
+    if (!contractId) { setQuotas([]); setExisting([]); setHandAdded([]); return; }
 
     setQuotasLoading(true);
     Promise.all([
@@ -195,6 +207,7 @@ export function ManualPrintEntryDialog({
         );
         setQuotas(printQuotas);
         setExisting(existingJson.data || []);
+        setHandAdded(existingJson.handAddedCharges || []);
 
         // Capture catalogue default rates returned by the GET endpoint
         if (existingJson.catalogRates) {
@@ -237,6 +250,11 @@ export function ManualPrintEntryDialog({
   const bwAmount     = parseFloat((bwOverage     * effectiveBwRate).toFixed(2));
   const colourAmount = parseFloat((colourOverage * effectiveColourRate).toFixed(2));
   const totalAmount  = bwAmount + colourAmount;
+
+  const bwWaiver     = existing.find(e => e.printer_column === "bw" && e.waived_at);
+  const colourWaiver = existing.find(e => e.printer_column === "colour" && e.waived_at);
+  const totals       = printTotals({ bwAmount, colourAmount, bwWaived: !!bwWaiver, colourWaived: !!colourWaiver });
+  const anyWaived    = !!bwWaiver || !!colourWaiver;
 
   const isReentry     = existing.length > 0;
   const noPrintQuotas = quotas.length === 0 && !quotasLoading && !!contractId;
@@ -361,7 +379,25 @@ export function ManualPrintEntryDialog({
           {isReentry && (
             <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <span>Existing entry for {monthLabel(periodYear, periodMonth)} found — submitting will replace it.</span>
+              <span>
+                Existing entry for {monthLabel(periodYear, periodMonth)} found — submitting will replace{" "}
+                {anyWaived ? "the pages and keep any waiver shown below." : "it."}
+              </span>
+            </div>
+          )}
+
+          {/* Hand-added print charge for this month: a second route to billing the same pages */}
+          {handAdded.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>
+                {handAdded.length === 1 ? "A hand-added charge" : `${handAdded.length} hand-added charges`} for {monthLabel(periodYear, periodMonth)} already{" "}
+                {handAdded.length === 1 ? "exists" : "exist"} on this contract:{" "}
+                {handAdded.map((c, i) => (
+                  <span key={c.id}>{i > 0 && "; "}&ldquo;{c.description}&rdquo; ({formatCurrency(c.total)})</span>
+                ))}
+                . Check you are not billing the same pages twice.
+              </span>
             </div>
           )}
 
@@ -375,6 +411,7 @@ export function ManualPrintEntryDialog({
               {/* B&W */}
               <div>
                 <Label className="text-xs">
+                  {bwWaiver && <Badge variant="secondary" className="mr-1.5 bg-amber-50 text-amber-700 border-amber-200 text-[10px] px-1.5 py-0">Waived</Badge>}
                   B&W Pages
                   {bwQuota ? (
                     <span className="ml-1 text-muted-foreground font-normal">
@@ -401,14 +438,17 @@ export function ManualPrintEntryDialog({
                         Overage:{" "}
                         <span className={bwOverage > 0 ? "text-red-600 font-medium" : "text-green-700"}>
                           {bwOverage > 0
-                            ? `${bwOverage.toLocaleString()} pages → ${formatCurrency(bwAmount)}`
+                            ? bwWaiver
+                              ? <>{bwOverage.toLocaleString()} pages → <span className="line-through">{formatCurrency(bwAmount)}</span> not billed</>
+                              : `${bwOverage.toLocaleString()} pages → ${formatCurrency(bwAmount)}`
                             : "within quota"}
                         </span>
                       </>
                     ) : (
                       // No quota row → all pages are billable at catalogue rate
                       <span className="text-red-600 font-medium">
-                        {bwParsed.toLocaleString()} pages → {formatCurrency(bwAmount)}
+                        {bwParsed.toLocaleString()} pages →{" "}
+                        {bwWaiver ? <><span className="line-through">{formatCurrency(bwAmount)}</span> not billed</> : formatCurrency(bwAmount)}
                       </span>
                     )}
                   </p>
@@ -418,6 +458,7 @@ export function ManualPrintEntryDialog({
               {/* Colour */}
               <div>
                 <Label className="text-xs">
+                  {colourWaiver && <Badge variant="secondary" className="mr-1.5 bg-amber-50 text-amber-700 border-amber-200 text-[10px] px-1.5 py-0">Waived</Badge>}
                   Colour Pages
                   {colourQuota ? (
                     <span className="ml-1 text-muted-foreground font-normal">
@@ -444,13 +485,16 @@ export function ManualPrintEntryDialog({
                         Overage:{" "}
                         <span className={colourOverage > 0 ? "text-red-600 font-medium" : "text-green-700"}>
                           {colourOverage > 0
-                            ? `${colourOverage.toLocaleString()} pages → ${formatCurrency(colourAmount)}`
+                            ? colourWaiver
+                              ? <>{colourOverage.toLocaleString()} pages → <span className="line-through">{formatCurrency(colourAmount)}</span> not billed</>
+                              : `${colourOverage.toLocaleString()} pages → ${formatCurrency(colourAmount)}`
                             : "within quota"}
                         </span>
                       </>
                     ) : (
                       <span className="text-red-600 font-medium">
-                        {colourParsed.toLocaleString()} pages → {formatCurrency(colourAmount)}
+                        {colourParsed.toLocaleString()} pages →{" "}
+                        {colourWaiver ? <><span className="line-through">{formatCurrency(colourAmount)}</span> not billed</> : formatCurrency(colourAmount)}
                       </span>
                     )}
                   </p>
@@ -459,13 +503,26 @@ export function ManualPrintEntryDialog({
             </div>
           )}
 
+          {/* Who waived what, and why */}
+          {anyWaived && !quotasLoading && (
+            <div className="space-y-0.5 text-[11px] text-amber-700">
+              {bwWaiver && <p>B&W: {waivedNote(bwWaiver as WaiverInfo)}</p>}
+              {colourWaiver && <p>Colour: {waivedNote(colourWaiver as WaiverInfo)}</p>}
+            </div>
+          )}
+
           {/* Total preview */}
           {hasUsage && totalAmount > 0 && (
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm flex items-center justify-between">
-              <span className="text-muted-foreground">Total charge (ex-GST)</span>
-              <Badge variant="secondary" className="bg-red-50 text-red-700 border-red-200">
-                {formatCurrency(totalAmount)}
-              </Badge>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">{anyWaived ? "Billable (ex-GST)" : "Total charge (ex-GST)"}</span>
+                <Badge variant="secondary" className="bg-red-50 text-red-700 border-red-200">
+                  {formatCurrency(anyWaived ? totals.billable : totalAmount)}
+                </Badge>
+              </div>
+              {anyWaived && totals.waived > 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">{formatCurrency(totals.waived)} waived, not billed</p>
+              )}
             </div>
           )}
           {hasUsage && totalAmount === 0 && bwQuota && colourQuota && (

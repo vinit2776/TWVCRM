@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { isContractOperational } from "@/lib/constants";
+import { isPrintLikeCharge } from "@/lib/print-usage-markers";
 import { z } from "zod";
 
 const ALLOWED_ROLES = ["admin", "accounts", "manager"];
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest) {
   // centre's standard rate in that case).
   let query = supabase
     .from("service_usage_records")
-    .select("id, service_id, period_year, period_month, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, source, notes, created_at")
+    .select("id, service_id, period_year, period_month, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, source, notes, created_at, waived_at, waive_reason, waived_by_user:users!service_usage_records_waived_by_fkey(full_name)")
     .eq("contract_id", contractId)
     .eq("source", "manual")
     .order("period_year", { ascending: false })
@@ -84,7 +85,32 @@ export async function GET(request: NextRequest) {
     printer_column: catalogMap.get(rec.service_id) ?? null,
   }));
 
-  return NextResponse.json({ data: enrichedData, catalogRates });
+  // Hand-added charges for the same month that look like print usage. The dialog
+  // warns about these so the same pages are not billed twice (TWV-C-0044, Oct 2026:
+  // the B&W entry was waived and the amount re-added as a manual charge).
+  let handAddedCharges: Array<{ id: string; description: string; total: number }> = [];
+  if (periodYear && periodMonth) {
+    const y = parseInt(periodYear);
+    const m = parseInt(periodMonth);
+    const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+    const monthEnd = `${y}-${String(m).padStart(2, "0")}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+    const { data: charges } = await supabase
+      .from("usage_charges")
+      .select("id, description, notes, total")
+      .eq("contract_id", contractId)
+      .gte("charge_date", monthStart)
+      .lte("charge_date", monthEnd)
+      .is("booking_id", null)
+      .is("contract_facility_id", null)
+      .eq("status", "pending")
+      .eq("is_waived", false)
+      .is("billing_statement_id", null);
+    handAddedCharges = (charges ?? [])
+      .filter((c) => isPrintLikeCharge(c.description, c.notes))
+      .map((c) => ({ id: c.id, description: c.description, total: Number(c.total) }));
+  }
+
+  return NextResponse.json({ data: enrichedData, catalogRates, handAddedCharges });
 }
 
 // ── POST ─────────────────────────────────────────────────────────────────────
