@@ -45,6 +45,8 @@ import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
 import { ToVerifyPanel } from "./to-verify-panel";
+import { ReportedPaymentSheet } from "@/components/queries/reported-payment-sheet";
+import { paymentModeLabel as reportedModeLabel } from "@/components/billing/payment-collected-panel";
 import { PaymentDateFields } from "@/components/billing/payment-date-fields";
 import { todayIst } from "@/lib/payment-dates";
 import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
@@ -1528,6 +1530,7 @@ const InboxRowItem = memo(function InboxRowItem({
     row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
   );
   const [queryOpen, setQueryOpen] = useState(false);
+  const [reportSheet, setReportSheet] = useState<{ query_id: string; entity_type: string; entity_id: string; title: string } | null>(null);
   const [waivePromptOpen, setWaivePromptOpen] = useState(false);
   const [waiveReasonInput, setWaiveReasonInput] = useState("");
   const [waiving, setWaiving] = useState(false);
@@ -1854,6 +1857,23 @@ const InboxRowItem = memo(function InboxRowItem({
             onToggle={() => setQueryOpen((v) => !v)}
             title="Raise or answer a question about this statement"
           />
+          {row.reported_payments.map((rp) => (
+            <button
+              key={rp.id}
+              type="button"
+              onClick={() => setReportSheet({
+                query_id: rp.query_id,
+                entity_type: rp.entity_type,
+                entity_id: rp.entity_id,
+                title: partyDisplay(row),
+              })}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+              title={`Reported by ${rp.reported_by_name ?? "someone"} — open to accept, verify or reject`}
+            >
+              <IndianRupee className="h-3 w-3" />
+              Payment reported · {formatCurrency(rp.amount)} · {reportedModeLabel(rp.payment_mode)}
+            </button>
+          ))}
           {row.payments_received.length > 0 && (
             <button
               type="button"
@@ -2028,6 +2048,11 @@ const InboxRowItem = memo(function InboxRowItem({
           <QueryThreadPanel entityType="billing_statement" entityId={row.statement_id} onChanged={onQueryChanged} />
         </div>
       )}
+      <ReportedPaymentSheet
+        report={reportSheet}
+        onClose={() => setReportSheet(null)}
+        onChanged={onQueryChanged}
+      />
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}
