@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Send, Users, XCircle } from "lucide-react";
+import { BellRing, CalendarClock, CheckCircle2, Loader2, MessageCircleQuestion, Paperclip, RotateCcw, Search, Send, Users, XCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -403,6 +403,7 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
               : m.event_type === "reopened" ? "Reopened"
               : m.event_type === "payment_verified" ? "Payment verified and recorded"
               : m.event_type === "payment_rejected" ? "Closed — no such payment"
+              : m.event_type === "payment_not_found" ? "Checked — not in the bank yet"
               : "Re-assigned";
             return (
               <div key={m.id} className="text-[11px] text-muted-foreground flex items-center gap-1 pl-1 flex-wrap">
@@ -410,6 +411,8 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                   <CheckCircle2 className="h-3 w-3 text-green-600" />
                 ) : m.event_type === "payment_rejected" ? (
                   <XCircle className="h-3 w-3 text-red-600" />
+                ) : m.event_type === "payment_not_found" ? (
+                  <Search className="h-3 w-3 text-amber-600" />
                 ) : (
                   <RotateCcw className="h-3 w-3" />
                 )}

@@ -283,6 +283,7 @@ Not a bucket and not backed by `billing_statements`. It lists open Queries threa
 - Data: `GET /api/queries?tab=open&kind=payment_reported` (the same feed as the Payment reports filter on `/queries`). `GET /api/queries?stats=true` carries the count as `to_verify`, which also drives the Tally Inbox sidebar badge.
 - Clicking a row opens a drawer that embeds the ordinary `QueryThreadPanel`, so verify / "Not found yet" / "No such payment" run through `PaymentReportCard` and the existing Record Payment dialog. Nothing in the inbox records a payment itself.
 - A report leaves the tab when verified or rejected; "Not found yet" keeps it listed. Full history stays on `/queries` and the AR page.
+- Each row carries a **waiting** chip (since the report was raised; red past `needed_by`) and a **last checked** chip. "Not found yet" is recorded as its own `payment_not_found` timeline event (migration 00593), and the chip reads the newest one, so a reply or nudge never counts as a check. Reports answered before 00593 show "not checked yet".
 - The daily inbox digest email (`/api/cron/inbox-digest`) gains a "Payments to verify" block, and now also sends when there are no open inbox items but reports are pending.
 
 ---

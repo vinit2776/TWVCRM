@@ -103,6 +103,7 @@ const EVENT_LABELS: Record<string, string> = {
   nudged: "Chased automatically",
   payment_verified: "Verified and recorded",
   payment_rejected: "Closed — no such payment",
+  payment_not_found: "Checked — not in the bank yet",
 };
 
 export function ReportPaymentDialog({

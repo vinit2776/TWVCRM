@@ -7,6 +7,7 @@ import { QUERIES_CHANGED_EVENT } from "@/hooks/use-sidebar-badges";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { lastCheckedChip, type LastCheckedTone } from "@/lib/queries/payment-reports";
 import type { QueryListItem } from "@/lib/queries/types";
 
 /**
@@ -35,6 +36,12 @@ function daysWaiting(createdAt: string): number {
 function waitingLabel(days: number): string {
   return days === 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
 }
+
+const CHECKED_CHIP_CLASS: Record<LastCheckedTone, string> = {
+  never: "border-dashed text-muted-foreground",
+  fresh: "bg-green-50 border-green-200 text-green-800",
+  stale: "bg-muted text-muted-foreground",
+};
 
 export function ToVerifyPanel({ onChanged }: Props) {
   const [items, setItems] = useState<QueryListItem[]>([]);
@@ -133,6 +140,7 @@ export function ToVerifyPanel({ onChanged }: Props) {
         {items.map((item) => {
           const days = daysWaiting(item.created_at);
           const overdue = !!item.needed_by && item.needed_by < today;
+          const checked = lastCheckedChip(item.last_checked_at, Date.now());
           const modeLabel = item.reported_payment
             ? (STATEMENT_PAYMENT_MODE_LABELS[item.reported_payment.payment_mode] ??
               item.reported_payment.payment_mode)
@@ -164,14 +172,19 @@ export function ToVerifyPanel({ onChanged }: Props) {
               </span>
               <span className="min-w-0">
                 <span className="block truncate">{item.created_by.full_name}</span>
-                <span
-                  className={`inline-block mt-0.5 text-[11px] px-2 py-0.5 rounded-full border ${
-                    overdue
-                      ? "bg-red-50 border-red-200 text-red-800"
-                      : "bg-amber-50 border-amber-200 text-amber-800"
-                  }`}
-                >
-                  waiting {waitingLabel(days)}
+                <span className="flex flex-wrap gap-1 mt-0.5">
+                  <span
+                    className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                      overdue
+                        ? "bg-red-50 border-red-200 text-red-800"
+                        : "bg-amber-50 border-amber-200 text-amber-800"
+                    }`}
+                  >
+                    waiting {waitingLabel(days)}
+                  </span>
+                  <span className={`text-[11px] px-2 py-0.5 rounded-full border ${CHECKED_CHIP_CLASS[checked.tone]}`}>
+                    {checked.label}
+                  </span>
                 </span>
               </span>
               <ChevronRight className="hidden md:block h-4 w-4 text-muted-foreground" aria-hidden />

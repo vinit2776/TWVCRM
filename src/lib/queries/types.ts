@@ -85,7 +85,8 @@ export type QueryMessageEventType =
   | "retargeted"
   | "nudged"
   | "payment_verified"
-  | "payment_rejected";
+  | "payment_rejected"
+  | "payment_not_found";
 
 export interface QueryAuthor {
   id: string;
@@ -165,6 +166,9 @@ export interface QueryListItem extends QueryTargeting {
   reported_amount?: number | null;
   /** The rest of the claim, on 'payment_reported' threads only, so a list row
    *  can show how it was paid without opening the thread. */
+  /** When accounts last answered "not found yet" on a payment report, i.e. last
+   *  looked at the bank for it. Null if never checked. */
+  last_checked_at?: string | null;
   reported_payment?: { payment_mode: string; payment_reference: string | null; paid_on: string } | null;
   /** True when this viewer is the one expected to act next. Computed by
    *  isAwaitingUser() in audience.ts. */

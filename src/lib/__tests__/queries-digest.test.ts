@@ -152,6 +152,15 @@ describe("thread state changes", () => {
     });
     expect(kinds(build([t]), "meera")).toContain("payment_verified");
   });
+
+  it("tells the reporter a payment isn't in the bank yet, as a state and not a reply", () => {
+    const t = thread({
+      messages: [msg("meera", 100), msg("priya", 2, { event_type: "payment_not_found", body: "Not on the 12-14 Oct statements." })],
+    });
+    const k = kinds(build([t]), "meera");
+    expect(k).toContain("payment_not_found");
+    expect(k).not.toContain("replied");
+  });
 });
 
 describe("overdue and silent threads", () => {

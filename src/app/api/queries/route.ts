@@ -13,7 +13,7 @@ import {
 import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 import { parseQueryRequest, storeAttachments } from "@/lib/queries/attachments";
 import { UploadValidationError } from "@/lib/uploads/normalize-upload-server";
-import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryListItem, type QueryModule, type QueryStats } from "@/lib/queries/types";
+import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryMessageEventType, type QueryListItem, type QueryModule, type QueryStats } from "@/lib/queries/types";
 
 /**
  * GET  /api/queries — list threads (tabbed), or ?stats=true for the header
@@ -68,7 +68,7 @@ interface QueryRow {
   payment_report: PaymentReportRow | PaymentReportRow[] | null;
   messages: Array<{
     body: string | null;
-    event_type: "message" | "resolved" | "reopened" | "retargeted";
+    event_type: QueryMessageEventType;
     created_at: string;
     created_by: string;
     author: QueryAuthor | null;
@@ -154,6 +154,8 @@ function toListItem(
       const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
       return r ? Number(r.amount) : null;
     })(),
+    last_checked_at:
+      [...messages].reverse().find((m) => m.event_type === "payment_not_found")?.created_at ?? null,
     reported_payment: (() => {
       const r = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
       return r
