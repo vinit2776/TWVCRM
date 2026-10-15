@@ -62,6 +62,8 @@ export interface UnbilledUsageCharge {
   holdReason: string | null;
   reviewed: boolean;
   bookingNumber: string | null;
+  /** When a hand-entered charge was saved (YYYY-MM-DD), so a charge for an earlier month shows when it was captured. */
+  enteredAt?: string | null;
 }
 
 export type MonthBlock = "open_month" | "accounting_locked" | null;
@@ -235,7 +237,7 @@ function one<T>(v: T | T[] | null | undefined): T | null {
 export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?: string): Promise<UnbilledUsageCharge[]> {
   let manualQ = supabase
     .from("usage_charges")
-    .select("id, contract_id, description, quantity, unit_price, total, charge_date, booking_charge_kind, held_at, hold_reason, reviewed_at, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name)")
+    .select("id, contract_id, description, quantity, unit_price, total, charge_date, created_at, booking_charge_kind, held_at, hold_reason, reviewed_at, booking:bookings!usage_charges_booking_id_fkey(booking_number, check_in_at, check_out_at), contract_facility:contract_facilities!usage_charges_contract_facility_id_fkey(name)")
     .eq("status", "pending")
     .is("billing_statement_id", null)
     .not("contract_id", "is", null);
@@ -274,6 +276,7 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
       amount: Number(r.total || 0), date: r.charge_date, year, month,
       held: !!r.held_at, holdReason: r.hold_reason ?? null, reviewed: !!r.reviewed_at,
       bookingNumber: one<any>(r.booking)?.booking_number ?? null,
+      enteredAt: r.created_at ? String(r.created_at).slice(0, 10) : null,
     });
   }
   for (const r of (printRes.data ?? []) as any[]) {

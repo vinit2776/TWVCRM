@@ -80,7 +80,7 @@ function ChargeRow({ c, g, canWaive, actions }: { c: BoardCharge; g: UsageContra
         <p className="text-xs text-muted-foreground flex flex-wrap gap-x-1.5">
           <span>{usageSourceLabel(c.source, !!c.bookingNumber)}</span>
           {c.bookingNumber && <span>· {c.bookingNumber}</span>}
-          <span>· {formatDate(c.date)}</span>
+          <span>· {c.source === "manual" && !c.bookingNumber && c.enteredAt && c.enteredAt.slice(0, 7) !== c.date.slice(0, 7) ? `Usage month ${new Date(c.date + "T00:00:00").toLocaleString("en-IN", { month: "short", year: "numeric" })} · entered ${formatDate(c.enteredAt)}` : formatDate(c.date)}</span>
           {c.status === "held" && <span className="text-amber-700 font-medium">· On hold{c.holdReason ? `: ${c.holdReason}` : ""}</span>}
           {c.status === "needs_review" && <span className="text-red-600 font-medium">· Over 60 days — needs review, not in total</span>}
           {c.status === "within_quota" && <span>· Within quota, not billed</span>}
