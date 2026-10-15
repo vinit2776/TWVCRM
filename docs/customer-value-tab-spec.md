@@ -68,7 +68,7 @@ range selectors, last computed time, Recompute) sits above the sub-tabs.
 | Sub-tab | Contents (section refs) | Reads from | Load |
 |---|---|---|---|
 | **Summary** (default) | pillar scores, story and suggested action, 12-month score line, renewal outlook, top evidence rows (5.2, part of 5.3) | latest `customer_value_scores` row + last 12 monthly rows | 2 queries, ~15 KB, no chart library |
-| **Journey** | age, breaks, extensions, renewals, contract timeline, rent per seat and escalation history (5.1) | contracts, rate phases, renewal cases | 3 small queries, ~25 KB, computed on read |
+| **Journey** | age, breaks, extensions, renewals, contract timeline, rent per seat and escalation history (5.1) | contracts, rate phases, parent contract | 3 small queries, ~25 KB, computed on read |
 | **Performance** | pillar trends, days to pay per invoice, seats paid vs used, tickets by type, full evidence list (5.3) | monthly snapshot rows for the range, invoice list | 3 queries, ~40 KB, chart library loaded here only |
 | **Compare** | comparison with the rest of the center (5.4) | precomputed `center_value_benchmarks` + his monthly rows | 2 queries, ~10 KB |
 | **Costs** | lifetime summary, payment history, concessions ledger, cost simulator (5.6), electricity contribution (5.5, loads when expanded) | monthly cost data, `value_cost_parameters`, electricity aggregates on expand | 3 queries + 1 lazy, ~30 KB |
@@ -90,12 +90,17 @@ The renewal outlook card on Summary appears once phase 6 is built.
 | Renewal count | `renewal_sequence`, `is_renewal`, `parent_contract_id`; `renewal_declined*` if any |
 | Contract timeline (Gantt) | contracts, with gaps, extensions, a today marker, and pending renewal |
 | Rent per seat graph | `contract_rate_phases` plus contract rate over time |
-| Escalation history | contract escalation fields (type none/percentage/flat/step_up, value, frequency, next date), `escalation_approval_status`, `escalation_waived*` with reason, approval requests, and `cases.renewal_escalation_percentage` for what was asked at renewal |
+| Escalation history | contract escalation fields (type none/percentage/flat/step_up, value, frequency, next date), `escalation_approval_status`, `escalation_waived*` with reason, approval requests. The **ask** is the parent contract's `escalation_percentage` (the standing clause; the renew route defaults to 10 when empty); the **agreed** figure is the renewal contract's own `escalation_percentage`. (`cases.renewal_escalation_percentage` belongs to Leave & License cases, not customer contracts, and is not used here.) |
 
-**Negotiation is inferred, not stored.** "Asked X%, agreed Y%" comes from comparing the renewal case's
-requested percentage with the new contract's actual rate. Where the ask was not recorded (older
-renewals) show **"ask not recorded"** rather than guessing. To make this reliable going forward, add an
-optional **"agreed with note"** field on renewals (see phase 1).
+**Negotiation is inferred, not stored.** "Asked X%, agreed Y%" comes from comparing the parent contract's
+`escalation_percentage` with the renewal contract's. The renew route (`POST /api/contracts/[id]/renew`)
+accepts an `escalation_percentage` override "because negotiation may result in a different rate", and it
+creates an approval request when a non-admin reduces or waives the escalation, so a lower figure, an
+`escalation_waived` flag or an approval record all signal a negotiation. The applied change can be
+cross-checked against the rate phases. Where parent or renewal carries no escalation value, or the
+renewal was created outside the renew route, show **"ask not recorded"** rather than guessing. There is no
+free-text record of the conversation, so add an optional **"agreed with note"** field on renewals (see
+phase 1) to capture it going forward.
 
 ### 5.2 Pillar scores
 
@@ -294,14 +299,15 @@ Verified from migrations and types on 2026-10-16. **Production row counts were n
 | Wi-Fi: usage history | **Missing** | Read live from UniFi today, nothing persisted; needs a ledger (5.7). Look-back on real consoles unverified. |
 | Wi-Fi: per-client quality, load | Partial | bytes, signal, AP, duration exist in API responses; DPI/app categories not used in code and unverified; only for locations configured for UniFi (`isUnifiLocation`) |
 | Communication | Partial | outbound logged (`communications_log`, `whatsapp_messages`); inbound is patchy; Gmail intake has never run |
-| Escalation ask vs agreed | Partial | ask stored on renewal case; older renewals may lack it |
+| Escalation ask vs agreed | Ready for renewals made through the renew route | parent clause vs renewal `escalation_percentage`, waiver flags, approvals. No free-text negotiation note, hence the new field. |
 | Message sentiment | Missing | out of scope |
 | Cross-pillar insights | Missing | computed later from snapshots |
 
 **Phase 0 deliverable:** one read-only coverage query (run by Vinit on production) reporting, per center:
 statements with a due date, contracts with door-access history and from when, tickets linkable to a
-customer, tickets with time logs, renewals with a recorded ask. This decides which charts can be full on
-day one and which start empty.
+customer, tickets with time logs, renewals with comparable escalation values. This decides which charts can be full on
+day one and which start empty. The query is `docs/customer-value-phase0-coverage.sql` (read-only, counts and dates only); it was
+syntax-checked against staging, which proves it runs but says nothing about production coverage.
 
 ## 7. Architecture
 
