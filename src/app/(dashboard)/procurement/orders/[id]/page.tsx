@@ -60,7 +60,6 @@ type ActionType =
   | "reject_delivery"
   | "edit_delivery"
   | "edit_invoice"
-  | "process_advance"
   | "approve_advance"
   | "reject_advance"
   | "terminate_amc"
@@ -392,8 +391,6 @@ export default function PurchaseOrderDetailPage() {
   const [editInvSaving, setEditInvSaving] = useState(false);
   const editInvFileRef = useRef<HTMLInputElement>(null);
 
-  // Process Advance
-  const [advancePaymentDate, setAdvancePaymentDate] = useState("");
 
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
@@ -513,7 +510,6 @@ export default function PurchaseOrderDetailPage() {
         mark_ordered: "Order marked as ordered",
         cancel: "Order cancelled",
         partial_cancel: "Order closed short — undelivered qty released back to PR",
-        process_advance: "Advance payment marked as processed",
         approve_advance: "Advance payment approved — accounts can now process payment",
         reject_advance: "Advance payment rejected",
         terminate_amc: "AMC terminated — events history preserved",
@@ -1696,17 +1692,16 @@ export default function PurchaseOrderDetailPage() {
                     <p className="text-xs text-amber-600 font-medium">Awaiting admin approval before payment can be processed</p>
                   )}
                   {isApproved && !po.amc_terminated_at && (
-                    <Button
-                      size="sm"
-                      className="bg-orange-600 hover:bg-orange-700"
-                      onClick={() => {
-                        setAdvancePaymentDate(today);
-                        setActionDialog("process_advance");
-                      }}
-                      disabled={actionLoading}
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
-                    </Button>
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        Approved. Finance releases this advance, with the payment mode and reference, from Acc Payables.
+                      </p>
+                      {["admin", "accounts", "office_admin"].includes(currentUserRole ?? "") && (
+                        <Button asChild size="sm" className="bg-orange-600 hover:bg-orange-700">
+                          <Link href="/accounting?tab=vendor-payments">Release in Finance</Link>
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               );
@@ -2010,47 +2005,6 @@ export default function PurchaseOrderDetailPage() {
             >
               {srUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Record Report
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Process Advance dialog ────────────────────────────────────────── */}
-      <Dialog
-        open={actionDialog === "process_advance"}
-        onOpenChange={() => { setActionDialog(null); setAdvancePaymentDate(today); }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Process Advance Payment</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Confirm that the advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> has
-              been transferred to <strong>{vendor?.name}</strong>.
-            </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="adv_date">Payment Date <span className="text-red-500">*</span></Label>
-              <Input
-                id="adv_date"
-                type="date"
-                value={advancePaymentDate}
-                onChange={(e) => setAdvancePaymentDate(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setActionDialog(null)}>Cancel</Button>
-            <Button
-              className="bg-orange-600 hover:bg-orange-700"
-              onClick={() => {
-                if (!advancePaymentDate) { toast.error("Payment date is required"); return; }
-                performAction("process_advance", { advance_payment_date: advancePaymentDate });
-              }}
-              disabled={actionLoading}
-            >
-              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Confirm Payment
             </Button>
           </DialogFooter>
         </DialogContent>
