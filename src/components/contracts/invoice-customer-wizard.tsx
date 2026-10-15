@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { InvoiceForm } from "@/components/invoices/invoice-form";
+import { useInvoiceWizardChecks, type CheckKey, type CheckTone } from "@/components/contracts/use-invoice-wizard-checks";
+import { cn } from "@/lib/utils";
 import {
   ADHOC_ATTRIBUTION_PURPOSE_LABELS,
   type AccountingHead,
@@ -26,10 +28,17 @@ interface Props {
   customerName?: string | null;
   locationId?: string | null;
   userRole: string | null;
+  depositShortfall?: number | null;
   /** Open the Add-on / Collect-deposit dialogs that live on the contract page. */
   onOpenAddon: () => void;
   onOpenDeposit: () => void;
 }
+
+const CHECK_TONE_CLASS: Record<CheckTone, string> = {
+  ok: "text-green-700",
+  warn: "text-amber-700",
+  info: "text-muted-foreground",
+};
 
 type ChoiceKey = "rent" | "usage" | "electricity" | "deposit" | "addon" | "other";
 
@@ -75,12 +84,14 @@ const ONE_OFF_PURPOSES: OneOffPurpose[] = [
 
 // The wizard only chooses a destination — every screen it opens already exists.
 export function InvoiceCustomerWizard({
-  open, onOpenChange, contractId, contractNumber, leadId, customerName, locationId, userRole, onOpenAddon, onOpenDeposit,
+  open, onOpenChange, contractId, contractNumber, leadId, customerName, locationId, userRole, depositShortfall, onOpenAddon, onOpenDeposit,
 }: Props) {
   const router = useRouter();
   const search = encodeURIComponent(contractNumber);
   const [step, setStep] = useState<"why" | "other">("why");
   const [invoicePurpose, setInvoicePurpose] = useState<OneOffPurpose | null>(null);
+
+  const { checks, loading: checksLoading } = useInvoiceWizardChecks({ open: open && step === "why", contractId, depositShortfall });
 
   const canCreateInvoice = !!userRole && CREATE_INVOICE_ROLES.includes(userRole);
   const choices = CHOICES.filter((c) => c.key !== "other" || canCreateInvoice);
@@ -158,12 +169,17 @@ export function InvoiceCustomerWizard({
                     key={key}
                     type="button"
                     onClick={() => pick(key)}
-                    className="rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex flex-col items-start justify-start rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Icon className="h-5 w-5 text-blue-600" aria-hidden />
                     <p className="mt-2 text-sm font-medium">{title}</p>
                     <p className="text-sm text-muted-foreground">{description}</p>
                     <p className="mt-2 text-xs text-muted-foreground">{outcome}</p>
+                    {key !== "other" && (() => {
+                      const check = checks[key as CheckKey];
+                      if (check) return <p className={cn("mt-1 text-xs font-medium", CHECK_TONE_CLASS[check.tone])}>{check.text}</p>;
+                      return checksLoading ? <p className="mt-1 text-xs text-muted-foreground">Checking…</p> : null;
+                    })()}
                   </button>
                 ))}
               </div>
@@ -182,7 +198,7 @@ export function InvoiceCustomerWizard({
                     key={p.key}
                     type="button"
                     onClick={() => pickOneOff(p)}
-                    className="rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex flex-col items-start justify-start rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <p.icon className="h-5 w-5 text-blue-600" aria-hidden />
                     <p className="mt-2 text-sm font-medium">{p.title}</p>
@@ -192,7 +208,7 @@ export function InvoiceCustomerWizard({
                 <button
                   type="button"
                   onClick={() => openOnPage("section-deposit-topups", onOpenDeposit)}
-                  className="rounded-xl border border-dashed bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex flex-col items-start justify-start rounded-xl border border-dashed bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ShieldCheck className="h-5 w-5 text-blue-600" aria-hidden />
                   <p className="mt-2 text-sm font-medium">Security deposit</p>

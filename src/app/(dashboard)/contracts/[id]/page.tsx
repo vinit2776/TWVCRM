@@ -3165,6 +3165,7 @@ export default function ContractDetailPage({
         contractNumber={contract.contract_number}
         leadId={contract.lead_id}
         userRole={userRole}
+        depositShortfall={contract.deposit_shortfall}
         locationId={contract.location_id}
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
         onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}
