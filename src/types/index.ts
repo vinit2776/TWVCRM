@@ -291,7 +291,7 @@ export interface Task {
 // ==========================================
 // Proposal Types
 // ==========================================
-export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired";
+export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired" | "superseded";
 
 export interface LineItem {
   description: string;
@@ -426,6 +426,13 @@ export interface Proposal {
   deposit_waiver_otp?: string;
   deposit_waiver_otp_expires?: string;
   deposit_waiver_verified_at?: string;
+  /** The proposal this one revises (PROP-0231 for PROP-0231-R2). */
+  revision_of?: string | null;
+  /** 1 for an original proposal, 2 for -R2, and so on. */
+  revision_number?: number;
+  /** Set on the old proposal once a revision replaces it. */
+  superseded_by?: string | null;
+  superseded_at?: string | null;
   deposit_waiver_verified_by?: string;
   deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;

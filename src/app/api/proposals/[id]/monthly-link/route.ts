@@ -25,6 +25,10 @@ export async function POST(
 
   if (!proposal) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
 
+  if (proposal.status === "superseded") {
+    return NextResponse.json({ error: "This proposal has been replaced by a newer revision." }, { status: 409 });
+  }
+
   if (proposal.razorpay_payment_link_url) {
     return NextResponse.json({ payment_link_url: proposal.razorpay_payment_link_url, message: "Link already exists" });
   }

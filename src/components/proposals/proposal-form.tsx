@@ -47,6 +47,13 @@ interface ProposalFormProps {
   /** Present in edit mode — the proposal being edited. */
   proposalId?: string;
   initialProposal?: Proposal;
+  /**
+   * Revise a sent proposal: same prefilled form, but submitting creates a new
+   * revision (PROP-xxxx-R2) via POST /api/proposals/[id]/revise instead of
+   * editing in place. `onRevised` receives the new proposal.
+   */
+  revise?: boolean;
+  onRevised?: (revision: { id: string; proposal_number: string }) => void;
 }
 
 export function ProposalForm({
@@ -57,6 +64,8 @@ export function ProposalForm({
   onSuccess,
   proposalId,
   initialProposal,
+  revise = false,
+  onRevised,
 }: ProposalFormProps) {
   const isEditMode = Boolean(proposalId && initialProposal);
   const [title, setTitle] = useState("");
@@ -323,21 +332,30 @@ export function ProposalForm({
       notice_period_months: noticePeriodMonths,
     };
 
-    const res = await fetch(isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals", {
-      method: isEditMode ? "PATCH" : "POST",
+    const url = revise ? `/api/proposals/${proposalId}/revise` : isEditMode ? `/api/proposals/${proposalId}` : "/api/proposals";
+    const res = await fetch(url, {
+      method: isEditMode && !revise ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
 
     setSubmitting(false);
     if (res.ok) {
+      if (revise) {
+        const json = await res.json().catch(() => null);
+        toast.success(`Revision ${json?.data?.proposal_number ?? ""} created. Send it to the customer.`);
+        onOpenChange(false);
+        if (json?.data?.id && onRevised) onRevised(json.data);
+        else onSuccess();
+        return;
+      }
       toast.success(isEditMode ? "Proposal updated successfully" : "Proposal created successfully");
       if (!isEditMode) resetForm();
       onOpenChange(false);
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || (isEditMode ? "Failed to update proposal" : "Failed to create proposal"));
+      toast.error(err?.error || (revise ? "Failed to create revision" : isEditMode ? "Failed to update proposal" : "Failed to create proposal"));
     }
   };
 
@@ -345,8 +363,15 @@ export function ProposalForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEditMode ? "Edit Proposal" : "Create Proposal"}</DialogTitle>
+          <DialogTitle>{revise ? `Revise ${initialProposal?.proposal_number ?? "proposal"}` : isEditMode ? "Edit Proposal" : "Create Proposal"}</DialogTitle>
         </DialogHeader>
+        {revise && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            This proposal has already been sent, so its terms are locked. Saving creates a new revision as a draft.
+            The original is marked superseded and its payment links are cancelled, so the customer can no longer pay
+            or accept the old terms. Nothing is sent until you send the revision.
+          </div>
+        )}
         <form onSubmit={handleSubmit} onKeyDown={preventEnterSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -685,7 +710,7 @@ export function ProposalForm({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isEditMode ? "Save Changes" : "Create Proposal"}
+              {revise ? "Create revision" : isEditMode ? "Save Changes" : "Create Proposal"}
             </Button>
           </div>
         </form>

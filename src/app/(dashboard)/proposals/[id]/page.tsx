@@ -51,11 +51,13 @@ import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
   PROPOSAL_EDITABLE_STATUSES,
+  PROPOSAL_REVISABLE_STATUSES,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
@@ -90,6 +92,7 @@ export default function ProposalDetailPage({
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
   const [loading, setLoading] = useState(true);
   const [editProposalOpen, setEditProposalOpen] = useState(false);
+  const [reviseOpen, setReviseOpen] = useState(false);
 
   // Current user (rep) profile for PDF/email attribution
   const { user: currentUser } = useCurrentUser();
@@ -221,7 +224,7 @@ export default function ProposalDetailPage({
       setProposal(p);
 
       // Auto-generate Razorpay payment link if not yet created
-      if (p && !p.razorpay_payment_link_url && p.status !== "rejected") {
+      if (p && !p.razorpay_payment_link_url && p.status !== "rejected" && p.status !== "superseded") {
         fetch(`/api/proposals/${id}/payment-link`, { method: "POST" })
           .then((r) => r.ok ? r.json() : null)
           .then((data) => {
@@ -919,7 +922,7 @@ export default function ProposalDetailPage({
             </>
           )}
           {/* Smart Email dropdown ----------------------------------------- */}
-          {(() => {
+          {proposal.status !== "superseded" && (() => {
             const isActive = !["draft", "rejected"].includes(proposal.status);
             const hasDeposit = Number(proposal.security_deposit_months || 0) > 0;
             const depositPaid = proposal.deposit_payment_status === "paid";
@@ -1031,6 +1034,12 @@ export default function ProposalDetailPage({
               Edit
             </Button>
           )}
+          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason(proposal) && (
+            <Button variant="outline" size="sm" onClick={() => setReviseOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Revise
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -1056,6 +1065,35 @@ export default function ProposalDetailPage({
           )}
         </div>
       </div>
+
+      {/* Version notices. A sent proposal's terms are locked; changes go through a revision. */}
+      {proposal.status === "superseded" && proposal.superseded_by && (
+        <Card className="border-slate-300 bg-slate-50">
+          <CardContent className="pt-6 text-sm text-slate-800">
+            This proposal has been replaced by a newer revision, and its payment links are cancelled.{" "}
+            <Link href={`/proposals/${proposal.superseded_by}`} className="font-medium text-primary hover:underline">
+              Open the latest revision
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+      {proposal.revision_of && proposal.status !== "superseded" && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="pt-6 text-sm text-blue-900">
+            This is revision {proposal.revision_number ?? 2} of an earlier proposal.{" "}
+            <Link href={`/proposals/${proposal.revision_of}`} className="font-medium hover:underline">
+              View the previous version
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+      {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && revisionBlockedReason(proposal) && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="pt-6 text-sm text-amber-900">
+            This proposal has been sent, so its terms are locked. {revisionBlockedReason(proposal)}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Lifecycle Timeline */}
       <Card>
@@ -1206,6 +1244,7 @@ export default function ProposalDetailPage({
               can't be created until the agreed terms are recorded. */}
           {!(PROPOSAL_EDITABLE_STATUSES as readonly string[]).includes(proposal.status) &&
             proposal.status !== "rejected" &&
+            proposal.status !== "superseded" &&
             !hasCommitmentTerms(proposal) && (
               <Card className="border-amber-200 bg-amber-50">
                 <CardContent className="pt-6 text-sm text-amber-900 space-y-2">
@@ -1828,6 +1867,21 @@ export default function ProposalDetailPage({
           )}
         </div>
       </div>
+
+      {/* Revise (sent proposal): creates PROP-xxxx-R2 and supersedes this one */}
+      {reviseOpen && proposal.lead_id && (
+        <ProposalForm
+          leadId={proposal.lead_id}
+          leadLocationId={proposal.location_id}
+          open={reviseOpen}
+          onOpenChange={setReviseOpen}
+          onSuccess={fetchProposal}
+          proposalId={proposal.id}
+          initialProposal={proposal}
+          revise
+          onRevised={(revision) => router.push(`/proposals/${revision.id}`)}
+        />
+      )}
 
       {/* Edit Proposal Dialog */}
       {editProposalOpen && proposal.lead_id && (
