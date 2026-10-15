@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -83,6 +84,9 @@ export async function POST(
 
   if (!po) return NextResponse.json({ error: "PO not found" }, { status: 404 });
   if (po.po_type !== "service") return NextResponse.json({ error: "Not a service PO" }, { status: 422 });
+
+  const lockedChain = await chainLockedResponse(supabase, { poId });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = createEventSchema.safeParse(body);

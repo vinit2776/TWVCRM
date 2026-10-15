@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -231,6 +232,10 @@ export async function PATCH(
       { status: 422 }
     );
   }
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { billId: id });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);

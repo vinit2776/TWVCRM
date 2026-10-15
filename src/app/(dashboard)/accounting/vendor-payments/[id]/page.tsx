@@ -1,5 +1,6 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { use, useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -310,6 +311,7 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
 
 export default function VendorPaymentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ billId: id });
   const router = useRouter();
 
   const { user } = useCurrentUser();
@@ -949,8 +951,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             approvalStatus={bill.approval_status}
             payments={chain?.bill.vendor_bill_payments ?? []}
             chequeSigned={!!bill.cheque_signed_at}
+            locked={locked}
             isAdmin={userRole === "admin"}
-            onDone={fetchChain}
+            onDone={() => { fetchChain(); reloadChain(); }}
           />
           {!isFullyPaid && canHoldPayment && !isOnHold && (
             <Button size="sm" variant="outline" onClick={() => setHoldDialog(true)} className="gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-50">
@@ -977,6 +980,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={userRole === "admin"} onChanged={() => { fetchChain(); reloadChain(); }} />
 
       {/* Payment Hold Banner */}
       {isOnHold && (

@@ -62,6 +62,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
       : kind === "approval_reversed" ? "Approval reversed"
       : kind === "bill_withdrawn" ? "Bill withdrawn"
       : kind === "cheque_unsigned" ? "Cheque signature removed"
+      : kind === "chain_reopened" ? "Closed cycle reopened"
       : "Rolled back";
     return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
   }
@@ -198,6 +199,7 @@ function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary |
       : kind === "advance_reopened" ? "Advance approval re-opened"
       : kind === "advance_reversed" ? "Advance payment reversed"
       : kind === "amc_reinstated" ? "AMC termination reversed — contract reinstated"
+      : kind === "chain_reopened" ? "Closed cycle reopened"
       : kind === "amc_visit_voided" ? `Visit voided${typeof c.amc_event_voided?.new === "string" ? ` — ${c.amc_event_voided.new}` : ""}`
       : "Rolled back";
     return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
@@ -242,6 +244,10 @@ function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary |
 }
 
 function summarizePurchaseRequest(c: AuditChanges, action: string): AuditSummary | null {
+  if (action === "rollback" && c.rollback_kind?.new === "chain_reopened") {
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    return { label: "Closed cycle reopened", tone: "red", detail: reason ? `reason: ${reason}` : undefined };
+  }
   if (went(c, "status", "draft", "submitted")) return { label: "Submitted for approval", tone: "blue" };
   if (went(c, "status", "submitted", "approved")) return { label: "Material request approved", tone: "green" };
   if (went(c, "status", "submitted", "rejected")) return { label: "Material request rejected", tone: "red" };

@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
@@ -117,6 +118,10 @@ export async function PATCH(
     .single();
 
   if (fetchError || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId: id });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = patchPoSchema.safeParse(body);

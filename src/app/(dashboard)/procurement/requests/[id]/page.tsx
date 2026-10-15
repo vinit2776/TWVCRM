@@ -1,5 +1,6 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -265,6 +266,7 @@ function buildDisplayAuditEvents(events: AuditEvent[]): DisplayAuditEvent[] {
 export default function PurchaseRequestDetailPage() {
   const { user } = useCurrentUser();
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, reload: reloadChain } = useChainState({ prId: id });
   const router = useRouter();
 
   const userRole = user?.role ?? "";
@@ -618,6 +620,9 @@ export default function PurchaseRequestDetailPage() {
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ prId: id }} isAdmin={userRole === "admin"} onChanged={reloadChain} />
+      {cycle && cycle.state === "open" && ["approved", "partially_ordered", "po_created"].includes(pr?.status ?? "") && <ChainStatusCard chain={cycle} />}
 
       {/* Rejection reason callout */}
       {pr.status === "rejected" && pr.rejection_reason && (
