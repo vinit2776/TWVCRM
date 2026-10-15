@@ -412,7 +412,10 @@ function BillingPageInner() {
   // ?location_id= preselects the electricity tab's location filter.
   const [initialLocationId] = useState(() => searchParams.get("location_id") ?? "");
   // ?open=1 opens the dialog for the thing being invoiced (rent invoice, Capture Bill).
-  const [initialOpen] = useState(() => searchParams.get("open") === "1");
+  // "1" = open the one invoiceable item; any other value is a specific rent queue row id.
+  const [initialOpenParam] = useState(() => searchParams.get("open") ?? "");
+  const initialOpen = initialOpenParam === "1";
+  const initialOpenRowId = initialOpenParam && initialOpenParam !== "1" ? initialOpenParam : "";
   // ?add_charge=<contract id> opens the Add usage charge dialog for that contract.
   const [initialAddChargeContractId] = useState(() => searchParams.get("add_charge") ?? "");
 
@@ -1610,7 +1613,7 @@ function BillingPageInner() {
               scoped to the page-level MonthPicker above (that still drives
               the other tabs on this page) — Unbilled computes its own "now",
               Billed is unscoped. */}
-          <UnbilledBilledTabs type="rent" initialSearch={initialSearch} autoOpen={initialOpen} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+          <UnbilledBilledTabs type="rent" initialSearch={initialSearch} autoOpen={initialOpen} autoOpenRowId={initialOpenRowId} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
         </TabsContent>
 
         {/* ── Usage ─────────────────────────────────────────────────────── */}

@@ -25,6 +25,8 @@ async function getJson(url: string, signal: AbortSignal) {
 export function useInvoiceWizardChecks({ open, contractId, depositShortfall }: Args) {
   const [checks, setChecks] = useState<Partial<Record<CheckKey, WizardCheck>>>({});
   const [loading, setLoading] = useState(false);
+  // Rent rows for this contract, once loaded. Undefined = unknown (still loading, or the request failed).
+  const [rentRows, setRentRows] = useState<RentRow[] | undefined>(undefined);
 
   useEffect(() => {
     if (!open) return;
@@ -36,6 +38,7 @@ export function useInvoiceWizardChecks({ open, contractId, depositShortfall }: A
     const monthLabel = now.toLocaleString("en-IN", { month: "long", year: "numeric" });
     setLoading(true);
     setChecks({});
+    setRentRows(undefined);
 
     (async () => {
       const [rent, usage, elecCfg, elecBills, addons] = await Promise.allSettled([
@@ -49,7 +52,9 @@ export function useInvoiceWizardChecks({ open, contractId, depositShortfall }: A
 
       const next: Partial<Record<CheckKey, WizardCheck>> = {};
       if (rent.status === "fulfilled") {
-        next.rent = rentCheck(((rent.value.data ?? []) as RentRow[]).filter((r) => r.contractId === contractId));
+        const mine = ((rent.value.data ?? []) as RentRow[]).filter((r) => r.contractId === contractId);
+        next.rent = rentCheck(mine);
+        setRentRows(mine);
       }
       if (usage.status === "fulfilled") {
         next.usage = usageCheck(((usage.value.data ?? []) as UsageGroup[]).find((g) => g.contractId === contractId));
@@ -74,5 +79,5 @@ export function useInvoiceWizardChecks({ open, contractId, depositShortfall }: A
     return () => ctrl.abort();
   }, [open, contractId, depositShortfall]);
 
-  return { checks, loading };
+  return { checks, loading, rentRows };
 }
