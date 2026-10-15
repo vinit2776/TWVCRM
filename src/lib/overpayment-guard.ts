@@ -3,7 +3,7 @@ import { formatCurrency } from "@/lib/utils";
 /**
  * What accounts are told when a payment would credit a statement beyond what
  * it still owes. The decision itself is made in the database
- * (record_billing_payment_guarded, 00598) under a row lock; this only words it.
+ * (record_billing_payment_guarded, 00603) under a row lock; this only words it.
  *
  * The wording matters: the commonest cause is the same receipt being recorded
  * twice, and the right next step then is to link the existing payment rather
