@@ -457,12 +457,32 @@ export async function POST(request: NextRequest) {
   // ── 1. Validate PR exists and is in an approvable state ──
   const { data: pr, error: prFetchError } = await supabase
     .from("purchase_requests")
-    .select("id, status, company_id, purchase_request_items(id, quantity, estimated_price)")
+    .select("id, status, company_id, department, expenditure_type, purchase_request_items(id, quantity, estimated_price)")
     .eq("id", parsed.data.pr_id)
     .single();
 
   if (prFetchError || !pr) {
     return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+  }
+
+  // A goods PO has no billing cycles, service reports or one-invoice-per-cycle
+  // rule, so an AMC ordered this way ends up with no way to log service
+  // reports and invoices that pile up unlinked. Services go through the
+  // service PO flow only.
+  if (pr.department === "amc" || pr.expenditure_type === "amc") {
+    return NextResponse.json({
+      error: "AMC requests are ordered through a service PO, not a goods PO. Use Create service PO on the request.",
+    }, { status: 422 });
+  }
+  const { data: goodsVendor } = await supabase
+    .from("procurement_vendors")
+    .select("name, is_service_provider")
+    .eq("id", parsed.data.vendor_id)
+    .single();
+  if (goodsVendor?.is_service_provider) {
+    return NextResponse.json({
+      error: `${goodsVendor.name} is a service provider — order from them through a service PO, not a goods PO.`,
+    }, { status: 422 });
   }
   if (!["approved", "partially_ordered"].includes(pr.status)) {
     return NextResponse.json({

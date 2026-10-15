@@ -2112,7 +2112,7 @@ export const PO_STATUS_LABELS: Record<string, string> = {
   invoice_received: "Invoice Received",
   invoice_approved: "Invoice Approved",
   cancelled: "Cancelled",
-  partially_cancelled: "Partially Cancelled",
+  partially_cancelled: "Closed Short",
 };
 
 export const PO_STATUS_COLORS: Record<string, string> = {

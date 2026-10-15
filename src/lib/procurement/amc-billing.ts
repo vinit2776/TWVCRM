@@ -154,3 +154,54 @@ export function serviceBillingStep(
     cyclesRemaining: Math.max(0, total - invoicesFiled),
   };
 }
+
+export type ServiceNextStep =
+  | { kind: "not_ordered" }
+  | { kind: "terminated" }
+  | { kind: "closed" }
+  | { kind: "log_report"; cycle: number }
+  | { kind: "upload_invoice"; cycle: number }
+  | { kind: "all_billed" };
+
+/**
+ * The single next action for a service / AMC PO page — drives the banner so the
+ * user never has to work out which of several buttons applies.
+ *
+ * Billing only opens once the PO is ordered. After that it is strictly
+ * report → invoice, one cycle at a time; `cycle` is the 1-based cycle that
+ * action applies to.
+ */
+export function serviceNextStep(input: {
+  status: string;
+  terminated: boolean;
+  reportsFiled: number;
+  invoicesFiled: number;
+  cycleCount: number | null | undefined;
+}): ServiceNextStep {
+  if (input.terminated) return { kind: "terminated" };
+  if (input.status !== "ordered") {
+    return input.status === "pending" ? { kind: "not_ordered" } : { kind: "closed" };
+  }
+  const { nextAction } = serviceBillingStep(input.reportsFiled, input.invoicesFiled, input.cycleCount);
+  if (nextAction === "none") return { kind: "all_billed" };
+  if (nextAction === "upload_invoice") return { kind: "upload_invoice", cycle: input.invoicesFiled + 1 };
+  return { kind: "log_report", cycle: input.reportsFiled + 1 };
+}
+
+/**
+ * Split a service PO's bills into those tied to one of its service reports and
+ * those that are not. Only the first group counts towards billing cycles; a
+ * contract first raised as a goods PO can carry invoices from before cycles existed.
+ */
+export function partitionBillsByCycle<T extends { service_report_id?: string | null }>(
+  bills: T[],
+  reportIds: Iterable<string>
+): { cycleBills: T[]; untiedBills: T[] } {
+  const ids = new Set(reportIds);
+  const cycleBills: T[] = [];
+  const untiedBills: T[] = [];
+  for (const b of bills) {
+    (b.service_report_id && ids.has(b.service_report_id) ? cycleBills : untiedBills).push(b);
+  }
+  return { cycleBills, untiedBills };
+}
