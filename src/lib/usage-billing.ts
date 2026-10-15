@@ -37,7 +37,7 @@ import { buildServiceDescription, ensureAccountingPeriod, monthLabel } from "@/l
 import { dispatchGstDirect, dispatchProforma } from "@/lib/send-proforma";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
-import { usageLine, toUsageLineInput } from "@/lib/booking-usage-line";
+import { usageLine, toUsageLineInput, overageWorkings, monthYearLabel } from "@/lib/booking-usage-line";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -62,6 +62,8 @@ export interface UnbilledUsageCharge {
   holdReason: string | null;
   reviewed: boolean;
   bookingNumber: string | null;
+  /** Printed under the description on the invoice, e.g. "158 pages used, 70 free = 88 over x Rs. 5 per page". */
+  workings?: string | null;
   /** When a hand-entered charge was saved (YYYY-MM-DD), so a charge for an earlier month shows when it was captured. */
   enteredAt?: string | null;
 }
@@ -243,14 +245,14 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
     .not("contract_id", "is", null);
   let printQ = supabase
     .from("service_usage_records")
-    .select("id, contract_id, overage_quantity, overage_rate_snapshot, amount, period_year, period_month, held_at, hold_reason, reviewed_at, service:service_catalog(name, printer_column)")
+    .select("id, contract_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, period_year, period_month, held_at, hold_reason, reviewed_at, service:service_catalog(name, printer_column)")
     .eq("is_billed", false)
     .is("billing_statement_id", null)
     .is("waived_at", null)
     .not("contract_id", "is", null);
   let facilityQ = supabase
     .from("facility_usage_records")
-    .select("id, contract_id, billable_quantity, unit_price, total_charge, held_at, hold_reason, reviewed_at, accounting_period:accounting_periods(year, month), contract_facility:contract_facilities(name, unit)")
+    .select("id, contract_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge, held_at, hold_reason, reviewed_at, accounting_period:accounting_periods(year, month), contract_facility:contract_facilities(name, unit)")
     .is("billing_statement_id", null)
     .is("waived_at", null)
     .not("contract_id", "is", null);
@@ -272,7 +274,7 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
     const line = usageLine(toUsageLineInput(r));
     out.push({
       key: `manual:${r.id}`, id: r.id, source: "manual", contractId: r.contract_id,
-      description: line.description, quantity: line.quantity, unitPrice: line.unitPrice,
+      description: line.description, workings: line.workings ?? null, quantity: line.quantity, unitPrice: line.unitPrice,
       amount: Number(r.total || 0), date: r.charge_date, year, month,
       held: !!r.held_at, holdReason: r.hold_reason ?? null, reviewed: !!r.reviewed_at,
       bookingNumber: one<any>(r.booking)?.booking_number ?? null,
@@ -282,7 +284,8 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
   for (const r of (printRes.data ?? []) as any[]) {
     out.push({
       key: `print:${r.id}`, id: r.id, source: "print", contractId: r.contract_id,
-      description: `${buildServiceDescription(r.service)} — ${Number(r.overage_quantity)} over quota`,
+      description: `${buildServiceDescription(r.service)}, ${monthYearLabel(r.period_year, r.period_month)}`,
+      workings: overageWorkings({ used: Number(r.quantity_used), free: Number(r.quota_snapshot ?? 0), over: Number(r.overage_quantity), rate: Number(r.overage_rate_snapshot), unit: "page" }),
       quantity: Number(r.overage_quantity), unitPrice: Number(r.overage_rate_snapshot),
       amount: Number(r.overage_quantity) > 0 ? Number(r.amount || 0) : 0,
       date: lastDayOfMonth(r.period_year, r.period_month), year: r.period_year, month: r.period_month,
@@ -295,7 +298,8 @@ export async function fetchUnbilledCharges(supabase: SupabaseClient, contractId?
     const facility = one<any>(r.contract_facility);
     out.push({
       key: `facility:${r.id}`, id: r.id, source: "facility", contractId: r.contract_id,
-      description: `${facility?.name ?? "Facility"} — ${Number(r.billable_quantity)} ${facility?.unit ?? "units"} over quota`,
+      description: `${facility?.name ?? "Facility"}, ${monthYearLabel(period.year, period.month)}`,
+      workings: overageWorkings({ used: Number(r.quantity_used), free: Number(r.free_quota_applied ?? 0), over: Number(r.billable_quantity), rate: Number(r.unit_price), unit: String(facility?.unit ?? "unit") }),
       quantity: Number(r.billable_quantity), unitPrice: Number(r.unit_price),
       amount: Number(r.billable_quantity) > 0 ? Number(r.total_charge || 0) : 0,
       date: lastDayOfMonth(period.year, period.month), year: period.year, month: period.month,
@@ -399,19 +403,19 @@ export function buildUsageLineItems(charges: UnbilledUsageCharge[], year: number
       {
         type: "ad_hoc_charges" as const,
         label: `Ad-hoc Charges — ${label}`,
-        items: manual.map((c) => ({ usage_charge_id: c.id, description: c.description, quantity: c.quantity, unit_price: c.unitPrice, amount: c.amount })),
+        items: manual.map((c) => ({ usage_charge_id: c.id, description: c.description, workings: c.workings ?? undefined, quantity: c.quantity, unit_price: c.unitPrice, amount: c.amount })),
         subtotal: sum(manual),
       },
       {
         type: "facility_usage" as const,
         label: `Facility Usage — ${label}`,
-        items: facility.map((c) => ({ facility_usage_record_id: c.id, description: c.description, qty: c.quantity, unit_price: c.unitPrice, billable: c.quantity, rate: c.unitPrice, amount: c.amount })),
+        items: facility.map((c) => ({ facility_usage_record_id: c.id, description: c.description, workings: c.workings ?? undefined, qty: c.quantity, unit_price: c.unitPrice, billable: c.quantity, rate: c.unitPrice, amount: c.amount })),
         subtotal: sum(facility),
       },
       {
         type: "service_usage" as const,
         label: `Service Usage — ${label}`,
-        items: print.map((c) => ({ service_usage_record_id: c.id, description: c.description, qty: c.quantity, unit_price: c.unitPrice, overage: c.quantity, rate: c.unitPrice, amount: c.amount })),
+        items: print.map((c) => ({ service_usage_record_id: c.id, description: c.description, workings: c.workings ?? undefined, qty: c.quantity, unit_price: c.unitPrice, overage: c.quantity, rate: c.unitPrice, amount: c.amount })),
         subtotal: sum(print),
       },
     ].filter((s) => s.items.length > 0),

@@ -176,6 +176,7 @@ export async function GET(
         }
         lineItems.push({
           description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: resolveLineItemQty(item, "proforma-pdf"),
           rate: resolveLineItemRate(item),
@@ -188,7 +189,7 @@ export async function GET(
   }
   for (const charge of usageCharges) {
     const line = usageLine(toUsageLineInput(charge));
-    lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+    lineItems.push({ description: line.description, workings: line.workings, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // Payment link + QR

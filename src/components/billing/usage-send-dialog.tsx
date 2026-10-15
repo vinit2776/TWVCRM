@@ -31,7 +31,7 @@ export interface UsageInvoiceToSend {
   chargeKeys: string[];
   subtotal: number;
   total: number;
-  lines: Array<{ key: string; description: string; amount: number }>;
+  lines: Array<{ key: string; description: string; workings?: string | null; amount: number }>;
 }
 
 type RowState =
@@ -227,7 +227,7 @@ export function UsageSendDialog({ invoices, onClose }: { invoices: UsageInvoiceT
                   {phase !== "done" && r.kind !== "sent" && (
                     <ul className="text-xs text-muted-foreground pl-3 space-y-0.5">
                       {inv.lines.map((l) => (
-                        <li key={l.key} className="flex justify-between gap-3"><span className="truncate">{l.description}</span><span className="tabular-nums shrink-0">{formatCurrency(l.amount)}</span></li>
+                        <li key={l.key} className="flex justify-between gap-3"><span className="min-w-0"><span className="block truncate">{l.description}</span>{l.workings && <span className="block truncate text-[11px] text-muted-foreground">{l.workings}</span>}</span><span className="tabular-nums shrink-0">{formatCurrency(l.amount)}</span></li>
                       ))}
                     </ul>
                   )}

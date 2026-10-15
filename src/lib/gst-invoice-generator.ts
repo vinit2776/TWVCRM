@@ -12,6 +12,7 @@ import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
 import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { sanitizeForPdf } from "@/lib/pdf-text";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101];
@@ -174,7 +175,8 @@ export interface GstInvoiceData {
   /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
   dueDate?: string;
   // Line items
-  lineItems: { description: string; hsnSac: string; qty: number; rate: number; amount: number }[];
+  /** `workings` prints under the description (e.g. "158 pages used, 70 free = 88 over x Rs. 5 per page"). */
+  lineItems: { description: string; workings?: string; hsnSac: string; qty: number; rate: number; amount: number }[];
   /**
    * Renders the line-item table as just Description | Amount — no HSN, qty,
    * rate, or per-line tax columns. Only the bottom totals block carries the
@@ -385,7 +387,9 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
       ];
 
   const tableRows = data.lineItems.map((item, i) => {
-    if (compact) return [item.description, fmt(item.amount)];
+    // Cleaned here, not by callers: one stray character (a typed rupee sign) breaks the whole line.
+    const text = sanitizeForPdf(item.workings ? `${item.description}\n${item.workings}` : item.description);
+    if (compact) return [text, fmt(item.amount)];
 
     const itemCgst = Math.round(item.amount * (halfRate / 100));
     const itemSgst = itemCgst;
@@ -393,7 +397,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     const itemTotal = Math.round(item.amount) + (data.isInterstate ? itemIgst : itemCgst + itemSgst);
 
     return [
-      String(i + 1), item.description, item.hsnSac,
+      String(i + 1), text, item.hsnSac,
       ...(showQtyRate ? [String(item.qty), fmt(item.rate)] : []),
       fmt(item.amount),
       ...(data.isInterstate ? [fmt(itemIgst)] : [fmt(itemCgst), fmt(itemSgst)]),
