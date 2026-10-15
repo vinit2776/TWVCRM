@@ -122,13 +122,25 @@ export function useIdleGuide(): {
   }, [pathname]); // re-run only on route change
 
   /** Show the guide if role check passes and user hasn't seen it this session */
-  function tryShow(guide: FlowGuide) {
+  async function tryShow(guide: FlowGuide) {
     if (hasBeenSeen(guide.key)) return;
 
     if (guide.roles) {
       const role = userRoleRef.current;
       if (!role) return; // role not loaded yet; will retry when role resolves
       if (!guide.roles.includes(role)) return;
+    }
+
+    if (guide.contractStatuses) {
+      const contractId = pathname.split("/")[2];
+      const { data } = await createClient()
+        .from("contracts")
+        .select("status")
+        .eq("id", contractId)
+        .maybeSingle();
+      // Unknown status → stay quiet rather than show advice that may not apply.
+      if (!data || !guide.contractStatuses.includes(data.status)) return;
+      if (hasBeenSeen(guide.key)) return; // re-fired while the lookup was in flight
     }
 
     markSeen(guide.key); // mark before showing so rapid re-fires don't double-show
