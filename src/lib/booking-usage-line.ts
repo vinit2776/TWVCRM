@@ -22,12 +22,30 @@ export interface BookingUsageChargeInput {
 
 export interface UsageLine {
   description: string;
+  /** Printed under the description so the customer can follow the sum (proformas hide Qty and Rate columns). */
+  workings?: string;
   quantity: number;
   unitPrice: number;
   amount: number;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** "Rs. 1,000" / "Rs. 12.5" (plain text: the PDF font cannot draw the rupee sign). */
+export function formatRs(n: number): string {
+  return "Rs. " + new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+export function monthYearLabel(year: number, month: number): string {
+  return `${MONTH_NAMES[month - 1]} ${year}`;
+}
+
+/** Workings for metered usage: "158 pages used, 70 free = 88 over x Rs. 5 per page". */
+export function overageWorkings(p: { used: number; free: number; over: number; rate: number; unit: string }): string {
+  const plural = (n: number) => (round2(n) === 1 ? p.unit : `${p.unit}s`);
+  return `${fmtHours(p.used)} ${plural(p.used)} used, ${fmtHours(p.free)} free = ${fmtHours(p.over)} over x ${formatRs(p.rate)} per ${p.unit}`;
+}
 
 /** 5.5 -> "5.5", 4 -> "4", 4.58 -> "4.58" */
 export function fmtHours(n: number): string {
@@ -47,19 +65,25 @@ function dayMonth(isoDate: string): string {
 export function usageLine(c: BookingUsageChargeInput): UsageLine {
   const unitPrice = Number(c.unit_price) || 0;
   const amount = Number(c.total) || 0;
-  const asIs: UsageLine = { description: c.description, quantity: Number(c.quantity) || 1, unitPrice, amount };
+  const quantity = Number(c.quantity) || 1;
+  const asIs: UsageLine = { description: c.description, quantity, unitPrice, amount };
 
+  // A hand-added charge (no booking, no metered kind): show the sum behind its amount.
+  if (!c.booking_charge_kind && !c.booking?.booking_number) {
+    return unitPrice > 0 ? { ...asIs, workings: `${fmtHours(quantity)} x ${formatRs(unitPrice)}` } : asIs;
+  }
   if (c.booking_charge_kind !== "pooled_usage" || !c.booking?.booking_number || unitPrice <= 0) return asIs;
 
   const used = Number(c.quantity) || 0;
   const billed = round2(amount / unitPrice);
   const free = Math.max(0, round2(used - billed));
   const window = c.booking.check_in_at && c.booking.check_out_at
-    ? `, ${istTime(c.booking.check_in_at)} to ${istTime(c.booking.check_out_at)}`
+    ? `${istTime(c.booking.check_in_at)} to ${istTime(c.booking.check_out_at)}: `
     : "";
 
   return {
-    description: `${c.facility_name || "Facility"}: ${dayMonth(c.charge_date)}, ${c.booking.booking_number}${window} (used ${fmtHours(used)} h, free ${fmtHours(free)} h)`,
+    description: `${c.facility_name || "Facility"}: ${dayMonth(c.charge_date)}, ${c.booking.booking_number}`,
+    workings: `${window}${fmtHours(used)} h used, ${fmtHours(free)} h free = ${fmtHours(billed)} h billed x ${formatRs(unitPrice)} per hour`,
     quantity: billed,
     unitPrice,
     amount,

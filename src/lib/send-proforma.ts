@@ -312,6 +312,7 @@ export async function dispatchProforma(
         }
         lineItems.push({
           description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: resolveLineItemQty(item, "send-proforma"),
           rate: resolveLineItemRate(item),
@@ -324,7 +325,7 @@ export async function dispatchProforma(
   }
   for (const charge of usageCharges) {
     const line = usageLine(toUsageLineInput(charge));
-    lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+    lineItems.push({ description: line.description, workings: line.workings, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // ── Generate PDF ─────────────────────────────────────────────────────────
@@ -776,7 +777,8 @@ export async function dispatchGstDirect(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
+        lineItems.push({ description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined, hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
   } else if (fixedAmount > 0) {
@@ -784,7 +786,7 @@ export async function dispatchGstDirect(
   }
   for (const charge of usageCharges) {
     const line = usageLine(toUsageLineInput(charge));
-    lineItems.push({ description: line.description, hsnSac: "997212", qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+    lineItems.push({ description: line.description, workings: line.workings, hsnSac: "997212", qty: line.quantity, rate: line.unitPrice, amount: line.amount });
   }
 
   // ── Generate PDF (actual GST invoice, not proforma) ───────────────────────

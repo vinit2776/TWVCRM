@@ -187,14 +187,15 @@ export async function POST(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label), qty: resolveLineItemQty(item, "gst-invoice"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
+        lineItems.push({ description: withProrationBreakdown(label || section.label, item),
+          workings: item.workings ? String(item.workings) : undefined, hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label), qty: resolveLineItemQty(item, "gst-invoice"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
   } else {
     if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
     for (const charge of usageCharges) {
       const line = usageLine(toUsageLineInput(charge));
-      lineItems.push({ description: line.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
+      lineItems.push({ description: line.description, workings: line.workings, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: line.quantity, rate: line.unitPrice, amount: line.amount });
     }
   }
 

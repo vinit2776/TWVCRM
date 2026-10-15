@@ -64,7 +64,7 @@ export function toInvoice(g: UsageContractGroup, m: UsageMonthGroup): UsageInvoi
     contractId: g.contractId, contractNumber: g.contractNumber, customerName: g.customerName,
     billingMode: g.billingMode, year: m.year, month: m.month, label: m.label,
     chargeKeys: m.billableKeys, subtotal: m.subtotal, total: m.total,
-    lines: m.charges.filter((c) => c.status === "billable").map((c) => ({ key: c.key, description: c.description, amount: c.amount })),
+    lines: m.charges.filter((c) => c.status === "billable").map((c) => ({ key: c.key, description: c.description, workings: c.workings ?? null, amount: c.amount })),
   };
 }
 
@@ -77,6 +77,7 @@ function ChargeRow({ c, g, canWaive, actions }: { c: BoardCharge; g: UsageContra
     <li className={`grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-4 gap-y-1 px-4 py-2.5 pl-8 ${c.status === "held" ? "bg-amber-50/60" : ""}`}>
       <div className="min-w-0">
         <p className={`text-sm truncate ${c.status === "within_quota" ? "text-muted-foreground" : ""}`} title={c.description}>{c.description}</p>
+        {c.workings && <p className="text-xs text-muted-foreground truncate" title={c.workings}>{c.workings}</p>}
         <p className="text-xs text-muted-foreground flex flex-wrap gap-x-1.5">
           <span>{usageSourceLabel(c.source, !!c.bookingNumber)}</span>
           {c.bookingNumber && <span>· {c.bookingNumber}</span>}
