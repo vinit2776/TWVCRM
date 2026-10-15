@@ -30,6 +30,8 @@ interface Props {
   depositShortfall?: number | null;
   /** Called after a top-up collects money toward the shortfall, so the parent can refresh its own display. */
   onShortfallCollected?: () => void;
+  /** Bump to open the Collect dialog (the contract page's Invoice wizard does this). */
+  openCollectSignal?: number;
 }
 
 const STATUS_ICON: Record<DepositTopupStatus, React.ReactNode> = {
@@ -53,7 +55,7 @@ const STATUS_LABEL: Record<DepositTopupStatus, string> = {
   cancelled: "Cancelled",
 };
 
-export function ContractDepositTopupsSection({ contractId, currentUserRole, depositShortfall, onShortfallCollected }: Props) {
+export function ContractDepositTopupsSection({ contractId, currentUserRole, depositShortfall, onShortfallCollected, openCollectSignal = 0 }: Props) {
   const [items, setItems] = useState<DepositTopup[]>([]);
   const [loading, setLoading] = useState(true);
   const [collectOpen, setCollectOpen] = useState(false);
@@ -86,6 +88,12 @@ export function ContractDepositTopupsSection({ contractId, currentUserRole, depo
     setCollectPrefillsShortfall(prefillShortfall);
     setCollectOpen(true);
   }
+
+  // Straight from the wizard: prefill the shortfall when there is one.
+  useEffect(() => {
+    if (openCollectSignal > 0 && canCollect) openCollectDialog(hasShortfall);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCollectSignal]);
 
   async function handleReverse(item: DepositTopup) {
     if (!reason.trim()) return;

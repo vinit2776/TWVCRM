@@ -51,6 +51,8 @@ interface Props {
   onReview: (c: BoardCharge, g: UsageContractGroup) => void;
   onEdit: (c: BoardCharge) => void;
   onAddCharge: (contractId: string) => void;
+  /** Seeds the search box, e.g. a contract number from the contract page's Invoice customer wizard. */
+  initialSearch?: string;
 }
 
 function routeBadge(mode: UsageContractGroup["billingMode"]) {
@@ -168,7 +170,7 @@ export function UsageBillingBoard(props: Props) {
   const [oldDrafts, setOldDrafts] = useState<OldUsageDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(props.initialSearch ?? "");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [quotaOpen, setQuotaOpen] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<UsageInvoiceToSend[] | null>(null);
