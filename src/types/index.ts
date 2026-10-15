@@ -2643,7 +2643,7 @@ export interface PurchaseOrder {
   total_amount_with_gst?: number;
   // Advance payment fields
   advance_amount?: number | null;
-  advance_payment_mode?: "cash" | "upi" | "bank_transfer" | null;
+  advance_payment_mode?: "cash" | "upi" | "bank_transfer" | "neft" | "rtgs" | "imps" | "cheque" | null;
   advance_payment_reference?: string | null;
   advance_notes?: string | null;
   advance_status?: PoAdvanceStatus;
