@@ -316,11 +316,23 @@ export async function POST(request: NextRequest) {
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
         .from("purchase_requests")
-        .select("company_id")
+        .select("company_id, status, department, expenditure_type")
         .eq("id", parsed.data.pr_id)
         .single();
       if (parentPrError || !parentPr) {
         return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+      }
+      // Mirror of the goods-PO guard: a service PO that points at a request must
+      // come from an AMC request, and one that is actually ready to order.
+      if (parentPr.department !== "amc" && parentPr.expenditure_type !== "amc") {
+        return NextResponse.json({
+          error: "Only AMC requests are ordered through a service PO. Use Create PO on the request to open the right form.",
+        }, { status: 422 });
+      }
+      if (!["approved", "partially_ordered"].includes(parentPr.status)) {
+        return NextResponse.json({
+          error: "A Purchase Order can only be created from an approved or partially ordered Purchase Request",
+        }, { status: 422 });
       }
       servicePoCompanyId = parentPr.company_id;
     }
