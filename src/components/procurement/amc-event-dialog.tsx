@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import type { AmcEventType } from "@/types";
+import { countsTowardVisits } from "@/lib/amc-lifecycle";
 
 const EVENT_TYPE_LABELS: Record<AmcEventType, string> = {
   breakdown:       "Breakdown / Emergency Call",
@@ -62,7 +63,8 @@ export function AmcEventDialog({
     setAssetId(defaultAssetId || "");
   }, [open, defaultAssetId]);
 
-  const atLimit = visitsCovered !== null && visitsUsed >= visitsCovered;
+  const countsAsVisit = countsTowardVisits(eventType);
+  const atLimit = countsAsVisit && visitsCovered !== null && visitsUsed >= visitsCovered;
 
   function reset() {
     setEventType("breakdown");
@@ -148,7 +150,7 @@ export function AmcEventDialog({
           <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
             <span>
-              Visit limit reached ({visitsUsed}/{visitsCovered}). Logging this event will exceed the contracted coverage.
+              Preventive visit limit reached ({visitsUsed}/{visitsCovered}). Logging this visit will exceed the contracted coverage.
               Please verify with the vendor before proceeding.
             </span>
           </div>
@@ -157,7 +159,9 @@ export function AmcEventDialog({
         {/* Visit count info */}
         {!atLimit && visitsCovered !== null && (
           <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2">
-            {visitsUsed} of {visitsCovered} visits used · {visitsCovered - visitsUsed} remaining after this event
+            {countsAsVisit
+              ? `${visitsUsed} of ${visitsCovered} preventive visits used · ${visitsCovered - visitsUsed} remaining after this visit`
+              : `This doesn't use up a contract visit (${visitsUsed} of ${visitsCovered} preventive visits used)`}
           </div>
         )}
 

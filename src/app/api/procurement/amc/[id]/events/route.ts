@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { countsTowardVisits } from "@/lib/amc-lifecycle";
 import { z } from "zod";
 
 const createEventSchema = z.object({
@@ -59,7 +60,7 @@ export async function GET(
 
 /**
  * POST /api/procurement/amc/[id]/events
- * Log a new service event — increments amc_visits_used
+ * Log a new service event — increments amc_visits_used for preventive / annual service only
  */
 export async function POST(
   request: NextRequest,
@@ -92,8 +93,12 @@ export async function POST(
   const visitsUsed = Number(po.amc_visits_used ?? 0);
   const visitsCovered = po.amc_visits_covered != null ? Number(po.amc_visits_covered) : null;
 
+  // Only scheduled service (preventive, annual) uses up a covered visit; a
+  // breakdown or remote call is unlimited, so it never trips the limit.
+  const countsAsVisit = countsTowardVisits(parsed.data.event_type);
+
   // Warn if at/over limit (but don't block — physical work may still happen)
-  const atLimit = visitsCovered !== null && visitsUsed >= visitsCovered;
+  const atLimit = countsAsVisit && visitsCovered !== null && visitsUsed >= visitsCovered;
 
   // Determine next event_number for this PO
   const { count: existingCount } = await supabase
@@ -159,23 +164,25 @@ export async function POST(
     }
   }
 
-  // Increment visits_used on the PO
-  const newVisitsUsed = visitsUsed + 1;
-  const newAmcStatus = computeAmcStatus(
-    po.amc_start_date,
-    null,                  // end date check happens in list API; no field here
-    visitsCovered,
-    newVisitsUsed,
-    new Date()
-  );
+  // Increment visits_used on the PO — counted visit types only
+  const newVisitsUsed = countsAsVisit ? visitsUsed + 1 : visitsUsed;
+  if (countsAsVisit) {
+    const newAmcStatus = computeAmcStatus(
+      po.amc_start_date,
+      null,                  // end date check happens in list API; no field here
+      visitsCovered,
+      newVisitsUsed,
+      new Date()
+    );
 
-  await supabase
-    .from("purchase_orders")
-    .update({
-      amc_visits_used: newVisitsUsed,
-      amc_status: newAmcStatus,
-    })
-    .eq("id", poId);
+    await supabase
+      .from("purchase_orders")
+      .update({
+        amc_visits_used: newVisitsUsed,
+        amc_status: newAmcStatus,
+      })
+      .eq("id", poId);
+  }
 
   await logAudit(supabase, {
     entityType: "purchase_order",
@@ -184,7 +191,7 @@ export async function POST(
     performedBy: dbUser.id,
     changes: {
       amc_event_logged: { old: null, new: `Event #${nextEventNumber}: ${parsed.data.event_type}` },
-      amc_visits_used: { old: visitsUsed, new: newVisitsUsed },
+      ...(countsAsVisit && { amc_visits_used: { old: visitsUsed, new: newVisitsUsed } }),
     },
   });
 
