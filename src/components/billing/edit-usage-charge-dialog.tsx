@@ -16,6 +16,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
 import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
+import { UsageMonthPicker } from "@/components/billing/usage-month-picker";
 
 interface EditableCharge {
   id: string;
@@ -86,7 +87,7 @@ export function EditUsageChargeDialog({
       return;
     }
     if (!chargeDate) {
-      toast.error("Please select a charge date");
+      toast.error("Please select a usage month");
       return;
     }
 
@@ -209,17 +210,7 @@ export function EditUsageChargeDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="edit-charge-date">
-              Charge Date <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="edit-charge-date"
-              type="date"
-              value={chargeDate}
-              onChange={(e) => setChargeDate(e.target.value)}
-            />
-          </div>
+          <UsageMonthPicker id="edit-charge-date" value={chargeDate} onChange={setChargeDate} description={description} originalDate={charge?.charge_date} />
 
           <div className="space-y-2">
             <Label htmlFor="edit-charge-notes">Notes</Label>

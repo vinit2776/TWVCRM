@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { ImproveWordingButton } from "@/components/billing/improve-wording-button";
+import { UsageMonthPicker } from "@/components/billing/usage-month-picker";
 import { Loader2, FileText, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
@@ -259,7 +260,7 @@ export function AddUsageChargeDialog({
       return;
     }
     if (!chargeDate) {
-      toast.error("Please select a charge date");
+      toast.error("Please select a usage month");
       return;
     }
 
@@ -581,27 +582,8 @@ export function AddUsageChargeDialog({
             </div>
           </div>
 
-          {/* Charge Date */}
-          <div className="space-y-2">
-            <Label htmlFor="charge-date">
-              Charge Date <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="charge-date"
-              type="date"
-              value={chargeDate}
-              onChange={(e) => setChargeDate(e.target.value)}
-            />
-            {chargeDate && (
-              <p className="text-xs text-muted-foreground">
-                Will appear in the{" "}
-                <span className="font-semibold text-foreground">
-                  {new Date(chargeDate + "T00:00:00").toLocaleString("en-IN", { month: "long", year: "numeric" })}
-                </span>{" "}
-                billing cycle
-              </p>
-            )}
-          </div>
+          {/* Usage month: files the charge under that month's invoice; the invoice itself is dated when it is sent */}
+          <UsageMonthPicker id="charge-date" value={chargeDate} onChange={setChargeDate} description={description} />
 
           {/* HSN / SAC code */}
           <div className="space-y-2">
