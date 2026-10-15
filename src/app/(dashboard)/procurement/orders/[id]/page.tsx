@@ -38,9 +38,12 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
 import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
 import { PoTypeChip } from "@/components/procurement/po-type-chip";
+import { ConvertToServiceDialog, type ConvertBill } from "@/components/procurement/convert-to-service-dialog";
+import { CONVERTIBLE_STATUSES } from "@/lib/procurement/convert-to-service";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
+import { countedVisitsByAsset } from "@/lib/procurement/amc-lines";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -343,6 +346,7 @@ export default function PurchaseOrderDetailPage() {
   // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
   const [hasBill, setHasBill] = useState(false);
+  const [showConvert, setShowConvert] = useState(false);
 
   // Record Delivery
   const [dcNumber, setDcNumber] = useState("");
@@ -937,6 +941,13 @@ export default function PurchaseOrderDetailPage() {
     po.po_type !== "service" &&
     po.status === "invoice_received" &&
     (po.purchase_order_items ?? []).some((i) => Number(i.quantity_received ?? 0) < Number(i.quantity_ordered));
+  // Admin only: an AMC raised as a goods PO can't log reports or bill by cycle until converted.
+  const canConvertToService =
+    currentUserRole === "admin" &&
+    po.po_type === "goods" &&
+    isAmcPo &&
+    !po.amc_terminated_at &&
+    (CONVERTIBLE_STATUSES as readonly string[]).includes(po.status);
   const canCancelOrder = ["pending", "ordered", "partially_received", "received"].includes(po.status);
 
   const kind = poKind(po);
@@ -946,6 +957,16 @@ export default function PurchaseOrderDetailPage() {
   const amcVisitsUsed = po.amc_visits_used ?? 0;
   const amcVisitsCoveredNum = po.amc_visits_covered ?? null;
   const amcVisitPct = amcVisitsCoveredNum ? Math.min(100, Math.round((amcVisitsUsed / amcVisitsCoveredNum) * 100)) : 0;
+  // Assets this PO covers: one per PO line on a combined PO. POs created before that
+  // only have the PO-level asset, so fall back to it.
+  const poAssets: Array<{ id: string; name: string; asset_code: string }> = (() => {
+    const seen = new Map<string, { id: string; name: string; asset_code: string }>();
+    for (const it of (po.purchase_order_items ?? []) as Array<{ linked_asset?: { id: string; name: string; asset_code: string | null } | null }>) {
+      if (it.linked_asset) seen.set(it.linked_asset.id, { id: it.linked_asset.id, name: it.linked_asset.name, asset_code: it.linked_asset.asset_code ?? "" });
+    }
+    return Array.from(seen.values());
+  })();
+  const perAssetUsed = countedVisitsByAsset(amcEvents, poAssets.map((a) => a.id));
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -1098,6 +1119,20 @@ export default function PurchaseOrderDetailPage() {
         </div>
       </div>
 
+      {canConvertToService && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-amber-900">This AMC was raised as a goods PO</p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              It can&apos;t record service reports or invoice by cycle. Convert it to a service contract to get the cycle billing flow.
+            </p>
+          </div>
+          <Button size="sm" className="bg-amber-600 hover:bg-amber-700" onClick={() => setShowConvert(true)}>
+            Convert to service contract
+          </Button>
+        </div>
+      )}
+
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
@@ -1237,8 +1272,12 @@ export default function PurchaseOrderDetailPage() {
           <CardContent>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
               <div>
-                <p className="text-muted-foreground mb-0.5">Service</p>
-                <p className="font-medium">{po.purchase_order_items?.[0]?.item_name ?? "—"}</p>
+                <p className="text-muted-foreground mb-0.5">{poAssets.length > 1 ? "Assets covered" : "Service"}</p>
+                <p className="font-medium">
+                  {poAssets.length > 1
+                    ? poAssets.map((a) => a.asset_code ?? a.name).join(", ")
+                    : po.purchase_order_items?.[0]?.item_name ?? "—"}
+                </p>
               </div>
               <div>
                 <p className="text-muted-foreground mb-0.5">Start Date</p>
@@ -1471,6 +1510,18 @@ export default function PurchaseOrderDetailPage() {
                       <Wrench className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                       <div className="flex-1">
                         <p className="text-xs text-muted-foreground mb-1">Preventive visits <span className="font-normal">(breakdowns are unlimited)</span></p>
+                        {poAssets.length > 1 && (
+                          <div className="mb-2 space-y-0.5">
+                            {poAssets.map((a) => (
+                              <div key={a.id} className="flex justify-between text-xs">
+                                <span>{a.asset_code ?? a.name}</span>
+                                <span className="font-medium">
+                                  {perAssetUsed[a.id] ?? 0}{amcVisitsCoveredNum !== null ? ` / ${amcVisitsCoveredNum}` : ""} used
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {amcVisitsCoveredNum === null ? (
                           <p className="text-sm font-medium">
                             {amcVisitsUsed} used · <span className="text-blue-600">∞ unlimited</span>
@@ -2981,6 +3032,25 @@ export default function PurchaseOrderDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {canConvertToService && (
+        <ConvertToServiceDialog
+          open={showConvert}
+          onOpenChange={setShowConvert}
+          po={{
+            id: po.id,
+            po_number: po.po_number,
+            po_type: po.po_type,
+            status: po.status,
+            total_ordered_amount: Number(po.total_ordered_amount),
+            amc_start_date: po.amc_start_date,
+            amc_end_date: po.amc_end_date,
+            amc_terminated_at: po.amc_terminated_at,
+          }}
+          bills={((po.vendor_bills ?? []) as unknown as ConvertBill[])}
+          onDone={fetchPo}
+        />
+      )}
+
       {/* AMC Service Event Dialog */}
       {isAmcPo && (
         <AmcEventDialog
@@ -2990,7 +3060,9 @@ export default function PurchaseOrderDetailPage() {
           eventNumber={(amcEvents.length) + 1}
           visitsCovered={amcVisitsCoveredNum}
           visitsUsed={amcVisitsUsed}
-          defaultAssetId={po.linked_asset_id ?? null}
+          defaultAssetId={poAssets.length > 1 ? null : po.linked_asset_id ?? null}
+          poAssets={poAssets}
+          perAssetUsed={perAssetUsed}
           onSuccess={() => {
             setAmcEventsLoaded(false);
             fetchAmcEvents();

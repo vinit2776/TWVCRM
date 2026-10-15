@@ -54,6 +54,25 @@ function generateLocalId() {
   return Math.random().toString(36).slice(2);
 }
 
+// One AMC contract line = one asset on its own payment schedule. Each line
+// becomes its own service PO after approval.
+interface AmcLine {
+  id: string;
+  assetId: string;
+  billingCycle: ServicePoBillingCycle;
+  cycleCountOverride: string;
+  perCycleCost: string; // pre-GST, INR
+}
+
+const newAmcLine = (over: Partial<AmcLine> = {}): AmcLine => ({
+  id: generateLocalId(),
+  assetId: "",
+  billingCycle: "yearly",
+  cycleCountOverride: "",
+  perCycleCost: "",
+  ...over,
+});
+
 const emptyItem = (): LineItem => ({
   id: generateLocalId(),
   item_id: null,
@@ -114,7 +133,6 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
   // ── AMC fields (used when department === "amc") ─────────────────────────────
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
-  const [linkedAssetId, setLinkedAssetId] = useState(pr?.linked_asset_id ?? "");
   const [serviceItemName, setServiceItemName] = useState(pr?.service_item_name ?? "");
   const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">(
     pr?.amc_coverage_type ?? "comprehensive"
@@ -128,21 +146,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const [amcVisitsCovered, setAmcVisitsCovered] = useState(
     pr?.amc_visits_covered != null ? String(pr.amc_visits_covered) : ""
   );
-  // AMC has no line-item editor — its single synthesized item carries the annual amount.
-  // The AMC line item is the single source of truth for how a contract is paid:
+  // AMC has no line-item editor — one AMC line per asset carries the commitment.
+  // Each line is the single source of truth for how that asset's contract is paid:
   // unit = frequency, quantity = cycle count, estimated_price = per-cycle cost.
-  const [amcBillingCycle, setAmcBillingCycle] = useState<ServicePoBillingCycle>(
-    cycleFromUnit(pr?.purchase_request_items?.[0]?.unit)
-  );
-  const [amcCycleCountOverride, setAmcCycleCountOverride] = useState<string>(() => {
-    const qty = pr?.purchase_request_items?.[0]?.quantity;
-    return qty && Number(qty) > 1 ? String(qty) : "";
+  const [amcLines, setAmcLines] = useState<AmcLine[]>(() => {
+    if (pr?.department !== "amc") return [newAmcLine()];
+    const prItems = pr.purchase_request_items ?? [];
+    const rows = prItems.map((it) =>
+      newAmcLine({
+        // A request saved before per-asset lines has its asset on the request itself.
+        assetId: it.linked_asset_id ?? (prItems.length === 1 ? pr.linked_asset_id ?? "" : ""),
+        billingCycle: cycleFromUnit(it.unit),
+        cycleCountOverride: it.quantity && Number(it.quantity) > 1 ? String(it.quantity) : "",
+        perCycleCost: it.estimated_price ? String(it.estimated_price) : "",
+      })
+    );
+    if (rows.length === 1 && !rows[0].perCycleCost && pr.total_estimated_amount) {
+      rows[0].perCycleCost = String(pr.total_estimated_amount);
+    }
+    return rows.length ? rows : [newAmcLine()];
   });
-  const [amcAnnualAmount, setAmcAnnualAmount] = useState(() => {
-    if (pr?.department !== "amc") return "";
-    const amt = pr.purchase_request_items?.[0]?.estimated_price ?? pr.total_estimated_amount;
-    return amt ? String(amt) : "";
-  }); // pre-GST, INR
   const [amcContactName, setAmcContactName] = useState(pr?.amc_contact_name ?? "");
   const [amcHelpline, setAmcHelpline] = useState(pr?.amc_helpline_number ?? "");
   const [amcContactEmail, setAmcContactEmail] = useState(pr?.amc_contact_email ?? "");
@@ -226,13 +249,23 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   }, [department, reimbursementContracts.length]);
 
   // Auto-fill service name + end date when asset/start date change.
-  const handleAssetSelect = (assetId: string) => {
-    setLinkedAssetId(assetId);
-    if (assetId && !serviceItemName) {
+  const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
+    setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  const handleAssetSelect = (lineId: string, assetId: string) => {
+    updateAmcLine(lineId, { assetId });
+    if (assetId && !serviceItemName && amcLines[0]?.id === lineId) {
       const a = assets.find((x) => x.id === assetId);
       if (a) setServiceItemName(`Annual Maintenance Contract — ${a.name}`);
     }
   };
+  const addAmcLine = () =>
+    setAmcLines((prev) => {
+      const last = prev[prev.length - 1];
+      return [...prev, newAmcLine({ billingCycle: last.billingCycle, cycleCountOverride: last.cycleCountOverride, perCycleCost: last.perCycleCost })];
+    });
+  const removeAmcLine = (id: string) => setAmcLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
+  const copyFirstAmcLineToAll = () =>
+    setAmcLines((prev) => prev.map((l) => ({ ...l, billingCycle: prev[0].billingCycle, cycleCountOverride: prev[0].cycleCountOverride, perCycleCost: prev[0].perCycleCost })));
   const handleAmcStartDateChange = (v: string) => {
     setAmcStartDate(v);
     if (v && !amcEndDate) {
@@ -364,27 +397,35 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   // total_estimated_amount must always be the FULL contract commitment, because
   // the AMC budget banner sums it. Storing a per-month figure there would make a
   // monthly contract consume a twelfth of the budget it actually commits.
-  const amcDerivedCycles = cyclesBetween(amcStartDate, amcEndDate, amcBillingCycle);
-  const amcCycleCount =
-    amcCycleCountOverride.trim() !== "" && parseInt(amcCycleCountOverride) > 0
-      ? parseInt(amcCycleCountOverride)
-      : amcDerivedCycles ?? 1;
-  const amcPerCycleCost = parseFloat(amcAnnualAmount) || 0;
-  const amcContractTotal = contractTotal(amcPerCycleCost, amcCycleCount);
+  const amcLineCalc = (l: AmcLine) => {
+    const derived = cyclesBetween(amcStartDate, amcEndDate, l.billingCycle);
+    const override = l.cycleCountOverride.trim() !== "" && parseInt(l.cycleCountOverride) > 0 ? parseInt(l.cycleCountOverride) : null;
+    const count = override ?? derived ?? 1;
+    const cost = parseFloat(l.perCycleCost) || 0;
+    return { derived, count, cost, total: contractTotal(cost, count) };
+  };
+  const amcContractTotal = amcLines.reduce((sum, l) => sum + amcLineCalc(l).total, 0);
 
   const buildPayload = (submit?: boolean) => {
     // For AMC, synthesize a single line item from the AMC service block so the
     // items table stays consistent (every PR has ≥1 item).
     const isAmc = department === "amc";
+    const amcBaseName = serviceItemName.trim() || "Annual Maintenance Contract";
     const payloadItems = isAmc
-      ? [{
-          item_id: null,
-          item_name: serviceItemName.trim() || "Annual Maintenance Contract",
-          quantity: amcCycleCount,
-          unit: CYCLE_ITEM_UNIT[amcBillingCycle] as ItemUnit,
-          estimated_price: amcPerCycleCost || null,
-          notes: undefined,
-        }]
+      ? amcLines.map((l) => {
+          const c = amcLineCalc(l);
+          const asset = assets.find((a) => a.id === l.assetId);
+          return {
+            item_id: null,
+            // With several lines, the asset name tells the PO step which line is which.
+            item_name: amcLines.length > 1 && asset ? `${amcBaseName} — ${asset.name}` : amcBaseName,
+            quantity: c.count,
+            unit: CYCLE_ITEM_UNIT[l.billingCycle] as ItemUnit,
+            estimated_price: c.cost || null,
+            notes: undefined,
+            linked_asset_id: l.assetId || null,
+          };
+        })
       : items.map((li) => ({
           item_id: li.item_id || null,
           item_name: li.item_name.trim(),
@@ -406,7 +447,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       // (server ignores them on non-AMC departments).
       ...(isAmc && {
         service_item_name: serviceItemName.trim() || null,
-        linked_asset_id: linkedAssetId || null,
+        // Kept on the request only while it has a single line, so older readers still work.
+        linked_asset_id: amcLines.length === 1 ? amcLines[0].assetId || null : null,
         amc_coverage_type: amcCoverageType,
         amc_start_date: amcStartDate || null,
         amc_end_date: amcEndDate || null,
@@ -509,16 +551,22 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       }
     }
     if (department === "amc") {
-      if (!linkedAssetId) return "Please select the asset this AMC covers";
+      const lineAssets = amcLines.map((l) => l.assetId);
       if (!serviceItemName.trim()) return "Please enter the service / contract name";
       if (!amcStartDate || !amcEndDate) return "AMC start and end dates are required";
       if (new Date(amcEndDate) <= new Date(amcStartDate)) return "AMC end date must be after the start date";
       if (!amcUnlimited && (!amcVisitsCovered || parseInt(amcVisitsCovered) <= 0))
         return "Enter the number of visits covered, or tick 'Unlimited visits'";
-      const amt = parseFloat(amcAnnualAmount);
-      if (!amt || amt <= 0) return `Enter the ${CYCLE_COST_LABEL[amcBillingCycle].toLowerCase()} (pre-GST)`;
-      if (amcCycleCountOverride.trim() !== "" && parseInt(amcCycleCountOverride) <= 0)
-        return "Number of cycles must be at least 1";
+      for (let i = 0; i < amcLines.length; i++) {
+        const l = amcLines[i];
+        const at = amcLines.length > 1 ? ` on line ${i + 1}` : "";
+        if (!l.assetId) return `Please select the asset this AMC covers${at}`;
+        const amt = parseFloat(l.perCycleCost);
+        if (!amt || amt <= 0) return `Enter the ${CYCLE_COST_LABEL[l.billingCycle].toLowerCase()} (pre-GST)${at}`;
+        if (l.cycleCountOverride.trim() !== "" && parseInt(l.cycleCountOverride) <= 0)
+          return `Number of cycles must be at least 1${at}`;
+      }
+      if (new Set(lineAssets).size !== lineAssets.length) return "Each asset can only appear on one line";
       if (!amcContactName.trim() || !amcHelpline.trim()) return "Primary contact name and helpline number are required";
       if (advanceRequired) {
         const adv = parseFloat(advanceAmount);
@@ -716,7 +764,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     // be typed GST-inclusive as the original was.
     const hasPricedItems =
       department === "amc"
-        ? parseFloat(amcAnnualAmount) > 0
+        ? amcLines.some((l) => parseFloat(l.perCycleCost) > 0)
         : items.some((li) => li.estimated_price && parseFloat(li.estimated_price) > 0);
     if (hasPricedItems && !preGstAcked) {
       setShowPreGstConfirm(true);
@@ -930,20 +978,6 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="amc-asset">Linked Asset <span className="text-red-500">*</span></Label>
-                <SearchableSelect
-                  options={assets.map((a) => ({
-                    value: a.id,
-                    label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
-                  }))}
-                  value={linkedAssetId}
-                  onValueChange={handleAssetSelect}
-                  placeholder="Select the asset this AMC covers..."
-                  emptyMessage="No active assets found"
-                />
-              </div>
-
-              <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="service-item-name">Service / Contract Name <span className="text-red-500">*</span></Label>
                 <Input
                   id="service-item-name"
@@ -1016,77 +1050,118 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                 </label>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="amc-billing-cycle">
-                  Payment Frequency <span className="text-red-500">*</span>
-                </Label>
-                <Select
-                  value={amcBillingCycle}
-                  onValueChange={(v) => setAmcBillingCycle(v as ServicePoBillingCycle)}
-                >
-                  <SelectTrigger id="amc-billing-cycle"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {SERVICE_PO_BILLING_CYCLES.map((c) => (
-                      <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            </div>
+
+            {/* Assets covered — one line per asset, each on its own payment schedule */}
+            <div className="border-t pt-4 space-y-3">
+              <div>
+                <p className="text-sm font-medium">Assets covered <span className="text-red-500">*</span></p>
                 <p className="text-xs text-muted-foreground">
-                  How often the vendor invoices — enter the cost for one {CYCLE_UNIT_LABEL[amcBillingCycle]} below, not the whole contract.
+                  One line per asset. Each line becomes its own PO with its own cycles, visits and invoices.
                 </p>
               </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="amc-amount">
-                  {CYCLE_COST_LABEL[amcBillingCycle]} (pre-GST) <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  id="amc-amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={amcAnnualAmount}
-                  onChange={(e) => setAmcAnnualAmount(e.target.value)}
-                />
+              {amcLines.map((l, idx) => {
+                const c = amcLineCalc(l);
+                const takenByOthers = new Set(amcLines.filter((x) => x.id !== l.id).map((x) => x.assetId));
+                return (
+                  <div key={l.id} className="rounded-lg border p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {amcLines.length > 1 ? `Line ${idx + 1}` : "Asset"}
+                      </span>
+                      {amcLines.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeAmcLine(l.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                          aria-label={`Remove line ${idx + 1}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Linked Asset <span className="text-red-500">*</span></Label>
+                      <SearchableSelect
+                        options={assets
+                          .filter((a) => !takenByOthers.has(a.id))
+                          .map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` }))}
+                        value={l.assetId}
+                        onValueChange={(v) => handleAssetSelect(l.id, v)}
+                        placeholder="Select the asset this line covers..."
+                        emptyMessage="No active assets found"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Payment Frequency <span className="text-red-500">*</span></Label>
+                        <Select
+                          value={l.billingCycle}
+                          onValueChange={(v) => updateAmcLine(l.id, { billingCycle: v as ServicePoBillingCycle })}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {SERVICE_PO_BILLING_CYCLES.map((cy) => (
+                              <SelectItem key={cy} value={cy}>{BILLING_CYCLE_LABELS[cy]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">
+                          {CYCLE_COST_LABEL[l.billingCycle]} (pre-GST) <span className="text-red-500">*</span>
+                        </Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={l.perCycleCost}
+                          onChange={(e) => updateAmcLine(l.id, { perCycleCost: e.target.value })}
+                        />
+                      </div>
+                      {l.billingCycle !== "yearly" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Number of {CYCLE_UNIT_LABEL[l.billingCycle]}s</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            step="1"
+                            // Derived from the contract period; overridable for irregular terms.
+                            placeholder={c.derived ? String(c.derived) : "Set the contract dates"}
+                            value={l.cycleCountOverride}
+                            onChange={(e) => updateAmcLine(l.id, { cycleCountOverride: e.target.value })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {c.cost > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {c.count} × {formatCurrency(c.cost)} per {CYCLE_UNIT_LABEL[l.billingCycle]} ={" "}
+                        <span className="font-medium text-foreground">{formatCurrency(c.total)}</span>
+                        {c.count > 1 && ` · ${c.count} separate vendor invoices, each needing its own service report`}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={addAmcLine}>
+                  <Plus className="h-4 w-4 mr-1" /> Add asset
+                </Button>
+                {amcLines.length > 1 && (
+                  <Button type="button" variant="ghost" size="sm" onClick={copyFirstAmcLineToAll}>
+                    Copy first line&apos;s payment terms to all
+                  </Button>
+                )}
               </div>
-
-              {amcBillingCycle !== "yearly" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="amc-cycles">
-                    Number of {CYCLE_UNIT_LABEL[amcBillingCycle]}s
-                  </Label>
-                  <Input
-                    id="amc-cycles"
-                    type="number"
-                    min="1"
-                    step="1"
-                    // Derived from the contract period; overridable for irregular terms.
-                    placeholder={amcDerivedCycles ? String(amcDerivedCycles) : "Set the contract dates"}
-                    value={amcCycleCountOverride}
-                    onChange={(e) => setAmcCycleCountOverride(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {amcDerivedCycles
-                      ? `From the contract period: ${amcDerivedCycles}. Leave blank to use it.`
-                      : "Set the AMC start and end dates to derive this."}
-                  </p>
-                </div>
-              )}
-
-              {amcPerCycleCost > 0 && amcCycleCount > 1 && (
-                <div className="sm:col-span-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              {amcContractTotal > 0 && (
+                <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
                   <span className="text-muted-foreground">Total commitment: </span>
                   <span className="font-semibold">{formatCurrency(amcContractTotal)}</span>
-                  <span className="text-muted-foreground">
-                    {" "}({amcCycleCount} × {formatCurrency(amcPerCycleCost)} per {CYCLE_UNIT_LABEL[amcBillingCycle]})
-                  </span>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     This is the figure counted against the AMC budget.
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    After approval this becomes {amcCycleCount} separate vendor invoices — one per{" "}
-                    {CYCLE_UNIT_LABEL[amcBillingCycle]}, each needing its own service report before it can be paid.
+                    {amcLines.length > 1 && ` After approval you can order each of the ${amcLines.length} lines as its own PO.`}
                   </p>
                 </div>
               )}
@@ -1599,9 +1674,11 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               <p className="text-xl font-bold">
                 {amcContractTotal > 0 ? formatCurrency(amcContractTotal) : "—"}
               </p>
-              {amcContractTotal > 0 && amcCycleCount > 1 && (
+              {amcContractTotal > 0 && (amcLines.length > 1 || amcLineCalc(amcLines[0]).count > 1) && (
                 <p className="text-xs text-muted-foreground">
-                  {amcCycleCount} × {formatCurrency(amcPerCycleCost)} per {CYCLE_UNIT_LABEL[amcBillingCycle]}
+                  {amcLines.length > 1
+                    ? `${amcLines.length} assets, one PO each`
+                    : `${amcLineCalc(amcLines[0]).count} × ${formatCurrency(amcLineCalc(amcLines[0]).cost)} per ${CYCLE_UNIT_LABEL[amcLines[0].billingCycle]}`}
                 </p>
               )}
             </div>

@@ -37,11 +37,15 @@ interface Props {
   visitsCovered: number | null;
   visitsUsed: number;
   defaultAssetId?: string | null;
+  /** Assets on this PO. More than one = a combined PO: the visit must name one of them. */
+  poAssets?: AssetOption[];
+  /** Counted visits per asset, for the "used" figure on a combined PO. */
+  perAssetUsed?: Record<string, number>;
   onSuccess: () => void;
 }
 
 export function AmcEventDialog({
-  open, onOpenChange, poId, eventNumber, visitsCovered, visitsUsed, defaultAssetId, onSuccess
+  open, onOpenChange, poId, eventNumber, visitsCovered, visitsUsed, defaultAssetId, poAssets, perAssetUsed, onSuccess
 }: Props) {
   const [eventType, setEventType] = useState<AmcEventType>("breakdown");
   const [eventDate, setEventDate] = useState(new Date().toISOString().split("T")[0]);
@@ -63,8 +67,11 @@ export function AmcEventDialog({
     setAssetId(defaultAssetId || "");
   }, [open, defaultAssetId]);
 
+  const isMultiAsset = (poAssets?.length ?? 0) > 1;
+  // On a combined PO visits are counted per asset, so use the chosen asset's own count.
+  const usedHere = isMultiAsset ? (assetId ? perAssetUsed?.[assetId] ?? 0 : 0) : visitsUsed;
   const countsAsVisit = countsTowardVisits(eventType);
-  const atLimit = countsAsVisit && visitsCovered !== null && visitsUsed >= visitsCovered;
+  const atLimit = countsAsVisit && visitsCovered !== null && usedHere >= visitsCovered;
 
   function reset() {
     setEventType("breakdown");
@@ -78,6 +85,10 @@ export function AmcEventDialog({
   }
 
   async function handleSubmit() {
+    if (isMultiAsset && !assetId) {
+      toast.error("Select which asset this visit was for");
+      return;
+    }
     if (!issueDescription.trim()) {
       toast.error("Please describe the issue or work done");
       return;
@@ -150,7 +161,7 @@ export function AmcEventDialog({
           <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
             <span>
-              Preventive visit limit reached ({visitsUsed}/{visitsCovered}). Logging this visit will exceed the contracted coverage.
+              Preventive visit limit reached ({usedHere}/{visitsCovered}). Logging this visit will exceed the contracted coverage.
               Please verify with the vendor before proceeding.
             </span>
           </div>
@@ -160,8 +171,8 @@ export function AmcEventDialog({
         {!atLimit && visitsCovered !== null && (
           <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2">
             {countsAsVisit
-              ? `${visitsUsed} of ${visitsCovered} preventive visits used · ${visitsCovered - visitsUsed} remaining after this visit`
-              : `This doesn't use up a contract visit (${visitsUsed} of ${visitsCovered} preventive visits used)`}
+              ? `${usedHere} of ${visitsCovered} preventive visits used${isMultiAsset ? " on this asset" : ""} · ${visitsCovered - usedHere} remaining after this visit`
+              : `This doesn't use up a contract visit (${usedHere} of ${visitsCovered} preventive visits used${isMultiAsset ? " on this asset" : ""})`}
           </div>
         )}
 
@@ -182,16 +193,16 @@ export function AmcEventDialog({
           </div>
 
           {/* Asset */}
-          {assets.length > 0 && (
+          {(isMultiAsset || assets.length > 0) && (
             <div className="space-y-1.5">
-              <Label>Asset</Label>
+              <Label>Asset{isMultiAsset && " *"}</Label>
               <select
                 value={assetId}
                 onChange={(e) => setAssetId(e.target.value)}
                 className="w-full h-9 px-2 rounded-md border bg-background text-sm"
               >
-                <option value="">— No specific asset —</option>
-                {assets.map((a) => (
+                <option value="">{isMultiAsset ? "— Select the asset —" : "— No specific asset —"}</option>
+                {(isMultiAsset ? poAssets! : assets).map((a) => (
                   <option key={a.id} value={a.id}>{a.asset_code} — {a.name}</option>
                 ))}
               </select>
