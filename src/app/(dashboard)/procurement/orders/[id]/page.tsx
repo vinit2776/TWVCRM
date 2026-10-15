@@ -38,6 +38,8 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
 import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
 import { PoTypeChip } from "@/components/procurement/po-type-chip";
+import { ConvertToServiceDialog, type ConvertBill } from "@/components/procurement/convert-to-service-dialog";
+import { CONVERTIBLE_STATUSES } from "@/lib/procurement/convert-to-service";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
@@ -343,6 +345,7 @@ export default function PurchaseOrderDetailPage() {
   // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
   const [hasBill, setHasBill] = useState(false);
+  const [showConvert, setShowConvert] = useState(false);
 
   // Record Delivery
   const [dcNumber, setDcNumber] = useState("");
@@ -937,6 +940,13 @@ export default function PurchaseOrderDetailPage() {
     po.po_type !== "service" &&
     po.status === "invoice_received" &&
     (po.purchase_order_items ?? []).some((i) => Number(i.quantity_received ?? 0) < Number(i.quantity_ordered));
+  // Admin only: an AMC raised as a goods PO can't log reports or bill by cycle until converted.
+  const canConvertToService =
+    currentUserRole === "admin" &&
+    po.po_type === "goods" &&
+    isAmcPo &&
+    !po.amc_terminated_at &&
+    (CONVERTIBLE_STATUSES as readonly string[]).includes(po.status);
   const canCancelOrder = ["pending", "ordered", "partially_received", "received"].includes(po.status);
 
   const kind = poKind(po);
@@ -1097,6 +1107,20 @@ export default function PurchaseOrderDetailPage() {
           )}
         </div>
       </div>
+
+      {canConvertToService && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-amber-900">This AMC was raised as a goods PO</p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              It can&apos;t record service reports or invoice by cycle. Convert it to a service contract to get the cycle billing flow.
+            </p>
+          </div>
+          <Button size="sm" className="bg-amber-600 hover:bg-amber-700" onClick={() => setShowConvert(true)}>
+            Convert to service contract
+          </Button>
+        </div>
+      )}
 
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2980,6 +3004,25 @@ export default function PurchaseOrderDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {canConvertToService && (
+        <ConvertToServiceDialog
+          open={showConvert}
+          onOpenChange={setShowConvert}
+          po={{
+            id: po.id,
+            po_number: po.po_number,
+            po_type: po.po_type,
+            status: po.status,
+            total_ordered_amount: Number(po.total_ordered_amount),
+            amc_start_date: po.amc_start_date,
+            amc_end_date: po.amc_end_date,
+            amc_terminated_at: po.amc_terminated_at,
+          }}
+          bills={((po.vendor_bills ?? []) as unknown as ConvertBill[])}
+          onDone={fetchPo}
+        />
+      )}
 
       {/* AMC Service Event Dialog */}
       {isAmcPo && (
