@@ -45,7 +45,7 @@ export async function loadJourney(
     admin
       .from("contracts")
       .select(
-        "id, contract_number, status, proposal_id, deposit_carried_from, seats, signed_document_id, stamp_reference, activated_at, location_id, created_at",
+        "id, contract_number, status, proposal_id, deposit_carried_from, seats, signed_document_id, stamp_reference, activated_at, welcome_done_at, location_id, created_at",
       )
       .eq("lead_id", leadId)
       .order("created_at", { ascending: false }),
@@ -172,6 +172,7 @@ export async function loadJourney(
       signedDocumentId: (contract.signed_document_id as string) ?? null,
       stamped: !!contract.stamp_reference,
       activated: !!contract.activated_at,
+      welcomeDone: !!contract.welcome_done_at,
       kycTotal: required.length,
       kycOutstanding,
       spacesAllocated: spaces.count ?? 0,
