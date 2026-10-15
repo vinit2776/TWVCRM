@@ -46,6 +46,7 @@ function setup() {
     CREATE TABLE employee_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, uploaded_by TEXT);
     CREATE TABLE device_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, requested_by TEXT);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, updated_by TEXT NOT NULL DEFAULT '');
+    CREATE TABLE activity_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'other', action TEXT NOT NULL DEFAULT 'login', employee_id TEXT, actor_username TEXT NOT NULL DEFAULT '');
     CREATE TABLE deviation_reviews (employee_id TEXT NOT NULL, date TEXT NOT NULL, decision TEXT NOT NULL, reviewed_by TEXT NOT NULL, PRIMARY KEY (employee_id, date));
   `);
   return db;
@@ -75,7 +76,7 @@ const ACTOR_COLUMNS = [
 
 const EMPLOYEE_TABLES = [
   'punches', 'breaks', 'notifications', 'leave_requests', 'permission_requests',
-  'correction_requests', 'overtime_requests', 'field_trips', 'employee_documents',
+  'correction_requests', 'overtime_requests', 'field_trips', 'employee_documents', 'activity_log',
 ];
 
 test('renaming moves every record and the login to the new id, leaving nothing behind', () => {
@@ -113,6 +114,10 @@ test('renaming moves every record and the login to the new id, leaving nothing b
   // A manager's decision on a deviation day must follow the employee: left behind, the
   // day silently loses its Absent/Half Day status and returns to the pending queue.
   assert.equal(db.prepare("SELECT decision FROM deviation_reviews WHERE employee_id = 'EMP-027'").get().decision, 'absent');
+
+  // An activity entry follows the employee it's about, but who did it stays as it was.
+  db.prepare("INSERT INTO activity_log (employee_id, actor_username) VALUES ('EMP-027', 'EMP-001')").run();
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM activity_log WHERE employee_id = 'EMP-027'").get().c, 2);
 
   // Nothing anywhere still points at the old id.
   for (const table of [...EMPLOYEE_TABLES, 'leave_balances', 'users', 'sessions', 'deviation_reviews']) {
