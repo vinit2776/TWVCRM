@@ -17,6 +17,7 @@ const complete = (): ChainInput => ({
   bills: [{ id: "b1", bill_number: "BILL-1", po_id: "po1", approval_status: "approved", payment_status: "paid", approved_at: iso(5), lastPaymentAt: iso(8) }],
   tds: [{ bill_id: "b1", status: "deposited", reversed_at: null, challanAt: iso(10) }],
   lastReopenAt: null,
+  lockEffectiveFrom: "2000-01-01T00:00:00.000Z", // lock long since switched on, unless a test says otherwise
 });
 
 describe("evaluateChain", () => {
@@ -114,18 +115,60 @@ describe("evaluateChain", () => {
     expect(evaluateChain(c, at(42 + CHAIN_LOCK_DELAY_DAYS)).state).toBe("locked");
   });
 
-  it("an undated legacy chain is already past the grace period", () => {
+  it("an undated legacy chain never locks", () => {
     const c = complete();
     c.pr!.approved_at = null; c.pos[0].lastReceiptAt = null;
     c.bills[0].approved_at = null; c.bills[0].lastPaymentAt = null; c.tds[0].challanAt = null;
-    expect(evaluateChain(c, at(1)).state).toBe("locked");
+    const r = evaluateChain(c, at(500));
+    expect(r.state).toBe("open");
+    expect(r.exempt).toBe(true);
+  });
+
+  describe("lock cut-off", () => {
+    it("a chain that completed before the cut-off never locks, however old", () => {
+      const c = complete(); // last step day 10
+      c.lockEffectiveFrom = iso(30);
+      const r = evaluateChain(c, at(500));
+      expect(r.state).toBe("open");
+      expect(r.exempt).toBe(true);
+      expect(r.lockAt).toBeNull();
+      expect(r.completeSince).toBe(iso(10));
+    });
+
+    it("a chain that completed on or after the cut-off locks normally", () => {
+      const c = complete();
+      c.lockEffectiveFrom = iso(10); // exactly the completion moment
+      expect(evaluateChain(c, at(10 + CHAIN_LOCK_DELAY_DAYS - 1)).state).toBe("closing");
+      expect(evaluateChain(c, at(10 + CHAIN_LOCK_DELAY_DAYS)).state).toBe("locked");
+    });
+
+    it("an old chain that is fixed after the cut-off starts locking from the fix", () => {
+      const c = complete();
+      c.lockEffectiveFrom = iso(30);
+      c.bills[0].lastPaymentAt = iso(40); // corrected payment after the cut-off
+      expect(evaluateChain(c, at(41)).state).toBe("closing");
+      expect(evaluateChain(c, at(40 + CHAIN_LOCK_DELAY_DAYS)).state).toBe("locked");
+    });
+
+    it("nothing locks while the cut-off is not set", () => {
+      const c = complete();
+      c.lockEffectiveFrom = null;
+      expect(evaluateChain(c, at(500)).state).toBe("open");
+      expect(evaluateChain(c, at(500)).exempt).toBe(true);
+    });
+
+    it("an incomplete chain is simply open, not exempt", () => {
+      const c = complete();
+      c.bills[0].payment_status = "unpaid";
+      expect(evaluateChain(c, at(500)).exempt).toBe(false);
+    });
   });
 
   it("evaluates a standalone bill chain", () => {
     const c: ChainInput = {
       root: { type: "bill", id: "b1" }, pr: null, pos: [],
       bills: [{ id: "b1", bill_number: "BILL-1", po_id: null, approval_status: "approved", payment_status: "paid", approved_at: iso(1), lastPaymentAt: iso(2) }],
-      tds: [], lastReopenAt: null,
+      tds: [], lastReopenAt: null, lockEffectiveFrom: "2000-01-01T00:00:00.000Z",
     };
     expect(evaluateChain(c, at(20)).state).toBe("locked");
     c.bills[0].payment_status = "unpaid";

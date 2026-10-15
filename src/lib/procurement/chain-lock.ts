@@ -8,6 +8,11 @@
 // "Closed" is COMPUTED from the real records every time — never a stored flag —
 // so it can't drift out of step with them. Only reopens are stored.
 //
+// CUT-OFF: only chains that completed on or after `lockEffectiveFrom`
+// (app_settings.procurement_chain_lock_effective_from, set when the lock shipped)
+// ever lock. Older ones stay correctable forever; so does everything if the
+// setting is missing — the fail-safe direction.
+//
 // This file is the single source of truth for the rules; the pure
 // `evaluateChain` is unit-tested, `loadChainInput` is the DB gatherer.
 
@@ -19,6 +24,8 @@ type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
 /** Days a complete chain stays correctable before it locks. */
 export const CHAIN_LOCK_DELAY_DAYS = 7;
+/** app_settings key holding the ISO timestamp from which chains may lock. */
+export const CHAIN_LOCK_EFFECTIVE_FROM_KEY = "procurement_chain_lock_effective_from";
 const DAY_MS = 86_400_000;
 
 export type ChainRootType = "pr" | "po" | "bill";
@@ -51,6 +58,8 @@ export type ChainInput = {
   tds: Array<{ bill_id: string; status: string; reversed_at: string | null; challanAt: string | null }>;
   /** Most recent reopen of this chain, if any. */
   lastReopenAt: string | null;
+  /** Chains that completed before this never lock; null = the lock is not switched on. */
+  lockEffectiveFrom: string | null;
 };
 
 export type ChainCondition = { key: "mr" | "received" | "approved" | "paid" | "tds"; label: string; done: boolean; detail: string };
@@ -63,6 +72,8 @@ export type ChainState = {
   completeSince: string | null;
   /** When it locks (closing) or locked (locked). */
   lockAt: string | null;
+  /** Complete, but finished before the lock cut-off — correctable and never locks. */
+  exempt: boolean;
   conditions: ChainCondition[];
 };
 
@@ -137,11 +148,10 @@ export function evaluateChain(input: ChainInput, now: Date = new Date()): ChainS
   const lastReopen = ms(input.lastReopenAt);
 
   if (!allDone) {
-    return { state: "open", reopened: lastReopen != null, completeSince: null, lockAt: null, conditions };
+    return { state: "open", reopened: lastReopen != null, completeSince: null, lockAt: null, exempt: false, conditions };
   }
 
-  // The moment the last step finished. Undated legacy chains fall back to the
-  // epoch, i.e. they are already past the grace period.
+  // The moment the last step finished (null for an undated legacy chain).
   const completeSince = latest([
     ms(input.pr?.approved_at),
     ...pos.map((p) => ms(p.lastReceiptAt)),
@@ -150,6 +160,19 @@ export function evaluateChain(input: ChainInput, now: Date = new Date()): ChainS
     ...liveBills.map((b) => ms(b.lastPaymentAt)),
     ...input.tds.filter((t) => billIds.has(t.bill_id) && !t.reversed_at).map((t) => ms(t.challanAt)),
   ]);
+
+  // Finished before the cut-off (or undated, or no cut-off set): never locks.
+  const effective = ms(input.lockEffectiveFrom);
+  if (effective == null || completeSince == null || completeSince < effective) {
+    return {
+      state: "open",
+      reopened: false,
+      completeSince: completeSince != null ? new Date(completeSince).toISOString() : null,
+      lockAt: null,
+      exempt: true,
+      conditions,
+    };
+  }
 
   // A reopen restarts the grace period, so an admin always gets a window to fix
   // things even if nothing new has been recorded yet.
@@ -160,6 +183,7 @@ export function evaluateChain(input: ChainInput, now: Date = new Date()): ChainS
     reopened: lastReopen != null && !locked && (completeSince == null || lastReopen >= completeSince),
     completeSince: completeSince != null ? new Date(completeSince).toISOString() : null,
     lockAt: new Date(lockAtMs).toISOString(),
+    exempt: false,
     conditions,
   };
 }
@@ -221,7 +245,7 @@ export async function loadChainInput(supabase: SupabaseClient, root: ChainRef): 
   }
   const billIds = billsRaw.map((b) => b.id as string);
 
-  const [itemsRes, receiptsRes, paymentsRes, tdsRes, reopenRes] = await Promise.all([
+  const [itemsRes, receiptsRes, paymentsRes, tdsRes, reopenRes, settingRes] = await Promise.all([
     poIds.length
       ? supabase.from("purchase_order_items").select("po_id, quantity_ordered, quantity_received").in("po_id", poIds)
       : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
@@ -236,6 +260,7 @@ export async function loadChainInput(supabase: SupabaseClient, root: ChainRef): 
       : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
     supabase.from("procurement_chain_reopens").select("reopened_at").eq("root_type", root.type).eq("root_id", root.id)
       .order("reopened_at", { ascending: false }).limit(1),
+    supabase.from("app_settings").select("value").eq("key", CHAIN_LOCK_EFFECTIVE_FROM_KEY).maybeSingle(),
   ]);
 
   const maxIso = (rows: Array<Record<string, unknown>> | null, key: string, field: string, id: string) => {
@@ -274,6 +299,11 @@ export async function loadChainInput(supabase: SupabaseClient, root: ChainRef): 
       return { bill_id: t.bill_id as string, status: t.status as string, reversed_at: (t.reversed_at as string) ?? null, challanAt };
     }),
     lastReopenAt: (reopenRes.data?.[0]?.reopened_at as string) ?? null,
+    // An unparseable value is treated as "not switched on".
+    lockEffectiveFrom: (() => {
+      const v = settingRes.data?.value as string | undefined;
+      return v && !Number.isNaN(new Date(v).getTime()) ? new Date(v).toISOString() : null;
+    })(),
   };
 }
 

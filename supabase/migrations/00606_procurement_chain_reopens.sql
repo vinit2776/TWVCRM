@@ -31,3 +31,13 @@ CREATE POLICY "Authenticated users can read chain reopens"
 
 -- No insert/update/delete policy on purpose: reopens are written only by the
 -- admin-checked API route, using the service role.
+
+-- ------------------------------------------------------------
+-- Lock cut-off. Only chains that COMPLETED on or after this moment ever lock;
+-- everything already finished when this migration ran stays correctable. Set to
+-- the time the migration is applied. Change it by updating this row (ISO
+-- timestamp). If the row is missing or unparseable, nothing locks.
+-- ------------------------------------------------------------
+INSERT INTO app_settings (key, value)
+VALUES ('procurement_chain_lock_effective_from', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+ON CONFLICT (key) DO NOTHING;

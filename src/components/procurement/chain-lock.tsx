@@ -22,6 +22,8 @@ export type ChainStateData = {
   reopened: boolean;
   completeSince: string | null;
   lockAt: string | null;
+  /** Complete but finished before the lock cut-off: correctable, never locks. */
+  exempt?: boolean;
   conditions: Array<{ key: string; label: string; done: boolean; detail: string }>;
   lastReopen: { reopened_at: string; reason: string; reopener: { full_name: string } | null } | null;
 };
@@ -123,9 +125,14 @@ export function ChainStatusCard({ chain }: { chain: ChainStateData | null }) {
   if (!chain) return null;
   const done = chain.conditions.filter((c) => c.done).length;
   const label =
-    chain.state === "locked" ? "Closed" : chain.state === "closing" ? "Complete" : `Open · ${done} of ${chain.conditions.length} done`;
+    chain.state === "locked" ? "Closed"
+    : chain.state === "closing" ? "Complete"
+    : chain.exempt ? "Complete · not locked"
+    : `Open · ${done} of ${chain.conditions.length} done`;
   const tone =
-    chain.state === "locked" ? "bg-indigo-100 text-indigo-800" : chain.state === "closing" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800";
+    chain.state === "locked" ? "bg-indigo-100 text-indigo-800"
+    : chain.state === "closing" || chain.exempt ? "bg-green-100 text-green-800"
+    : "bg-amber-100 text-amber-800";
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -145,7 +152,9 @@ export function ChainStatusCard({ chain }: { chain: ChainStateData | null }) {
           </div>
         ))}
         <p className="text-xs text-muted-foreground pt-2">
-          When every step is done the cycle closes after a 7-day correction window, and only an admin can reopen it.
+          {chain.exempt
+            ? "This cycle finished before the closed-cycle lock was switched on, so it stays correctable."
+            : "When every step is done the cycle closes after a 7-day correction window, and only an admin can reopen it."}
         </p>
       </CardContent>
     </Card>
