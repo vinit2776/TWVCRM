@@ -52,6 +52,9 @@ const createServicePoSchema = z.object({
   // company_id is inherited from that PR in that case. When there is no
   // parent PR (a standalone service PO), company_id must be supplied directly.
   pr_id: z.string().uuid().nullish(),
+  // Which request line this PO fulfils. Optional while a request has a single
+  // line (that line is used); required once a request carries several.
+  pr_item_id: z.string().uuid().nullish(),
   company_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
@@ -313,6 +316,7 @@ export async function POST(request: NextRequest) {
     // standalone value supplied in the request — enforced by the schema
     // refine() above. po_number is trigger-assigned, company-scoped.
     let servicePoCompanyId = parsed.data.company_id ?? null;
+    let servicePrItemId: string | null = null;
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
         .from("purchase_requests")
@@ -335,6 +339,30 @@ export async function POST(request: NextRequest) {
         }, { status: 422 });
       }
       servicePoCompanyId = parentPr.company_id;
+
+      // Tie this PO to the request line it fulfils. Without the link the request
+      // never registers as ordered, stays "approved", and can be ordered again.
+      const { data: prLines } = await supabase
+        .from("purchase_request_items")
+        .select("id, quantity")
+        .eq("pr_id", parsed.data.pr_id);
+      const line = parsed.data.pr_item_id
+        ? prLines?.find((l) => l.id === parsed.data.pr_item_id)
+        : prLines?.length === 1 ? prLines[0] : undefined;
+      if (!line) {
+        return NextResponse.json({
+          error: parsed.data.pr_item_id
+            ? "That line does not belong to this request"
+            : "Choose which request line this order is for",
+        }, { status: 422 });
+      }
+      const alreadyOrdered = (await computeOrderedQtyMap(supabase, [line.id]))[line.id] ?? 0;
+      if (alreadyOrdered >= Number(line.quantity)) {
+        return NextResponse.json({
+          error: "This request line has already been ordered. Cancel the existing order first if it needs to be redone.",
+        }, { status: 422 });
+      }
+      servicePrItemId = line.id;
     }
 
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
@@ -422,6 +450,7 @@ export async function POST(request: NextRequest) {
     const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", half_yearly: "half_year", yearly: "year" };
     await supabase.from("purchase_order_items").insert({
       po_id: po.id,
+      pr_item_id: servicePrItemId,
       item_id: parsed.data.item_id ?? null,
       item_name: parsed.data.service_item_name,
       quantity_ordered: parsed.data.cycle_count,
