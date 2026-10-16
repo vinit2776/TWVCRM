@@ -15,24 +15,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import {
-  buildJourney,
-  todayYmdIst,
-  type JourneyContractRow,
-} from "@/lib/customer-value/journey";
-import type { RatePhaseInput } from "@/lib/rate-phase-dates";
+import { buildJourney, todayYmdIst } from "@/lib/customer-value/journey";
+import { loadLeadContracts } from "@/lib/customer-value/load-contracts";
 
 export const maxDuration = 30;
 
 const paramsSchema = z.object({ id: z.string().uuid() });
-
-const CONTRACT_COLUMNS =
-  "id, contract_number, status, start_date, end_date, activated_at, terminated_at, seats, subtotal, " +
-  "escalation_percentage, escalation_waived, escalation_approval_status, parent_contract_id, " +
-  "renewal_sequence, days_extended, phase_start_date, renewal_declined";
-
-type ContractRecord = Omit<JourneyContractRow, "rate_phases">;
-type PhaseRecord = RatePhaseInput & { contract_id: string };
 
 export async function GET(
   _request: NextRequest,
@@ -57,48 +45,23 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const [leadRes, contractsRes] = await Promise.all([
+  const [leadRes, loaded] = await Promise.all([
     supabase.from("leads").select("created_at, source").eq("id", leadId).maybeSingle(),
-    supabase
-      .from("contracts")
-      .select(CONTRACT_COLUMNS)
-      .eq("lead_id", leadId)
-      .returns<ContractRecord[]>(),
+    loadLeadContracts(supabase, leadId),
   ]);
 
-  if (leadRes.error || contractsRes.error) {
-    console.error("[api/leads/value/journey] query failed:", leadRes.error?.message ?? contractsRes.error?.message);
+  if (leadRes.error || "error" in loaded) {
+    console.error(
+      "[api/leads/value/journey] query failed:",
+      leadRes.error?.message ?? ("error" in loaded ? loaded.error : "")
+    );
     return NextResponse.json({ error: "Failed to load journey" }, { status: 500 });
   }
   if (!leadRes.data) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
 
-  const contracts = contractsRes.data ?? [];
-  const phasesByContract = new Map<string, RatePhaseInput[]>();
-  if (contracts.length > 0) {
-    const { data: phases, error: phasesError } = await supabase
-      .from("contract_rate_phases")
-      .select("contract_id, phase_order, duration_months, monthly_rate, end_date")
-      .in("contract_id", contracts.map((c) => c.id))
-      .returns<PhaseRecord[]>();
-    if (phasesError) {
-      console.error("[api/leads/value/journey] phases query failed:", phasesError.message);
-      return NextResponse.json({ error: "Failed to load journey" }, { status: 500 });
-    }
-    for (const p of phases ?? []) {
-      const list = phasesByContract.get(p.contract_id) ?? [];
-      list.push({
-        phase_order: p.phase_order,
-        duration_months: p.duration_months,
-        monthly_rate: Number(p.monthly_rate),
-        end_date: p.end_date ?? null,
-      });
-      phasesByContract.set(p.contract_id, list);
-    }
-  }
-
   const journey = buildJourney({
     lead: { created_at: leadRes.data.created_at, source: leadRes.data.source ?? null },
-    contracts: contracts.map((c) => ({ ...c, rate_phases: phasesByContract.get(c.id) ?? [] })),
+    contracts: loaded.contracts,
     today: todayYmdIst(),
   });
 

@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { JourneyRentChart } from "@/components/leads/value/journey-rent-chart";
 import { JourneyTimeline } from "@/components/leads/value/journey-timeline";
+import { ValueStat } from "@/components/leads/value/value-stat";
 import { LEAD_SOURCE_LABELS } from "@/lib/constants";
 import {
   todayYmdIst,
@@ -39,16 +40,6 @@ function formatSpan(months: number): string {
   const rest = months % 12;
   if (years === 0) return `${rest} mo`;
   return rest === 0 ? `${years} yr` : `${years} yr ${rest} mo`;
-}
-
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-lg bg-muted/60 px-3 py-2.5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-0.5 text-lg font-semibold leading-tight">{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  );
 }
 
 function pctText(v: number | null): string {
@@ -135,28 +126,28 @@ export function JourneyPanel({ leadId }: { leadId: string }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Lead created" value={formatSpan(journey.leadAgeMonths) + " ago"} hint={`${formatDate(journey.leadCreatedAt)} · ${sourceLabel}`} />
-        <Stat
+        <ValueStat label="Lead created" value={formatSpan(journey.leadAgeMonths) + " ago"} hint={`${formatDate(journey.leadCreatedAt)} · ${sourceLabel}`} />
+        <ValueStat
           label="First contract"
           value={journey.customerSince ? formatDate(journey.customerSince) : "—"}
           hint={journey.daysToFirstContract !== null ? `${journey.daysToFirstContract} days after the enquiry` : undefined}
         />
-        <Stat
+        <ValueStat
           label="Customer for"
           value={journey.tenureMonths !== null ? formatSpan(journey.tenureMonths) : "—"}
           hint={`${journey.ranContractCount} contract${journey.ranContractCount === 1 ? "" : "s"}`}
         />
-        <Stat
+        <ValueStat
           label="Renewals"
           value={String(journey.renewalCount)}
           hint={journey.renewalsDeclined > 0 ? `${journey.renewalsDeclined} declined` : undefined}
         />
-        <Stat
+        <ValueStat
           label="Breaks"
           value={journey.breakCount === 0 ? "None" : String(journey.breakCount)}
           hint={journey.breakCount === 0 ? "No gap between contracts" : `Longest ${journey.longestGapDays} days`}
         />
-        <Stat
+        <ValueStat
           label="Extensions"
           value={journey.extension.events === 0 ? "None" : `${journey.extension.totalDays} days`}
           hint={
@@ -165,12 +156,12 @@ export function JourneyPanel({ leadId }: { leadId: string }) {
               : `${journey.extension.latestUsedDays} of ${journey.extension.lifetimeCap} used on the latest contract`
           }
         />
-        <Stat
+        <ValueStat
           label="Escalation record"
           value={answered.length === 0 ? "—" : `${accepted} of ${answered.length} accepted`}
           hint={journey.escalations.length === 0 ? "No renewals yet" : undefined}
         />
-        <Stat
+        <ValueStat
           label="Current contract"
           value={journey.current ? journey.current.contractNumber : "None live"}
           hint={

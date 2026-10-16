@@ -180,7 +180,7 @@ export function todayYmdIst(now: Date = new Date()): string {
 }
 
 /** Date part of an ISO timestamp, read in IST. */
-function isoToYmdIst(iso: string): string {
+export function isoToYmdIst(iso: string): string {
   return todayYmdIst(new Date(iso));
 }
 
