@@ -65,6 +65,12 @@ export async function PATCH(
 
   const allowedFields: Record<string, unknown> = {};
 
+  // `superseded` is only ever set by POST /api/proposals/[id]/revise, which also
+  // cancels the payment links. Setting or leaving it here would skip that.
+  if (body.status === "superseded" || oldProposal.status === "superseded") {
+    return NextResponse.json({ error: "A superseded proposal can't be changed." }, { status: 400 });
+  }
+
   if (body.status) allowedFields.status = body.status;
   if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.sent_at) allowedFields.sent_at = body.sent_at;
@@ -83,7 +89,11 @@ export async function PATCH(
   if (contentFieldsInBody.length > 0) {
     if (!PROPOSAL_EDITABLE_STATUSES.includes(oldProposal.status)) {
       return NextResponse.json(
-        { error: `Only draft, sent, viewed, or rejected proposals can be edited. This proposal is "${oldProposal.status}".` },
+        {
+          error: ["sent", "viewed"].includes(oldProposal.status)
+            ? "This proposal has been sent, so its terms are locked. Use Revise proposal to create a new version."
+            : `Only draft or rejected proposals can be edited. This proposal is "${oldProposal.status}".`,
+        },
         { status: 400 }
       );
     }

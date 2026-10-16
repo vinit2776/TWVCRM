@@ -43,7 +43,8 @@ Both routes are `"use client"` pages. There are no server-component wrappers.
 | GET | `/api/proposals` | List all proposals (paginated, filterable) |
 | POST | `/api/proposals` | Create proposal (Zod validated) |
 | GET | `/api/proposals/[id]` | Fetch single proposal with lead + location join |
-| PATCH | `/api/proposals/[id]` | Update allowed fields (status, timestamps, razorpay links, occupation date) |
+| PATCH | `/api/proposals/[id]` | Update allowed fields (status, timestamps, razorpay links, occupation date). Content (terms, items, pricing) is editable only in `draft`/`rejected`; a sent proposal returns 400 and must be revised |
+| POST | `/api/proposals/[id]/revise` | Revise a `sent`/`viewed` proposal: creates `PROP-xxxx-R2` as a draft from the full new content, marks the original `superseded`, voids its unpaid pro-rata invoice and cancels its payment links. 409 if money is collected/credited. admin/manager/sales_rep |
 | POST | `/api/proposals/[id]/accept` | Accept proposal: mark accepted, create deposit link, send booking confirmation email + WhatsApp |
 | POST | `/api/proposals/[id]/send-invoice` | Generate prorated GST invoice, send email + WhatsApp (supports `preview: true` mode) |
 | POST | `/api/proposals/[id]/deposit-link` | Create/reuse deposit Razorpay link, send email + WhatsApp (supports `preview: true`) |
@@ -181,7 +182,7 @@ UNIQUE constraint: `(proposal_id, service_id)`
 ## Status Machine
 
 ### `proposal_status` enum values
-`draft` → `sent` → `viewed` → `accepted` | `rejected` | `expired`
+`draft` → `sent` → `viewed` → `accepted` | `rejected` | `expired` | `superseded`
 
 ```
 draft
@@ -200,6 +201,8 @@ viewed       ← set by /track route when customer clicks email link (idempotent
   └──► rejected  ← manual only (requires rejection_reason)
 ```
 
+**`superseded`** (`00608`) is set only by `/revise`. Once a proposal is sent its terms are locked (no in-place edit). A revision is a new proposal numbered `PROP-0231-R2` (`revision_of`, `revision_number`), the original becomes `superseded` (`superseded_by`), its deposit/monthly links are cancelled (link ids are kept on the dead record so a late payment is still recorded, without reviving it), and its unpaid pro-rata invoice is voided. The public `/track` link of a superseded proposal shows a "proposal updated" notice. Once any money is collected or credited the proposal is fully locked and cannot be revised; an accepted proposal is never amended, a new proposal is created instead.
+
 **`expired`** exists in the enum but is not set by any code path in the current codebase. It may be set externally or reserved for future use.
 
 ### `deposit_payment_status` values (TEXT, not enum)
@@ -211,7 +214,7 @@ viewed       ← set by /track route when customer clicks email link (idempotent
 ### Status transitions enforced server-side
 
 - `/accept` route: only `sent` or `viewed` → `accepted` (HTTP 400 otherwise)
-- `/email` route: sets status to `sent` (from any status, no guard)
+- `/email` route: sets status to `sent` (from any status except `superseded`, which returns 409)
 - `/track` route: only `sent` → `viewed` (idempotent)
 - `/send-invoice` route: requires status in `['sent', 'viewed', 'accepted']`
 - `/deposit-link` route: requires status in `['sent', 'viewed', 'accepted']`

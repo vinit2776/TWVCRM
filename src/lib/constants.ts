@@ -228,6 +228,7 @@ export const PROPOSAL_STATUSES = [
   "accepted",
   "rejected",
   "expired",
+  "superseded",
 ] as const;
 
 export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
@@ -237,6 +238,7 @@ export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   accepted: "Accepted",
   rejected: "Rejected",
   expired: "Expired",
+  superseded: "Superseded",
 };
 
 export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
@@ -246,12 +248,16 @@ export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   accepted: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
   expired: "bg-orange-100 text-orange-800",
+  superseded: "bg-slate-100 text-slate-600",
 };
 
 // Content edits (line items, pricing, terms) are only allowed in these
 // statuses — enforced server-side in PATCH /api/proposals/[id]; mirrored
 // here so the Edit action only renders where it will actually be accepted.
-export const PROPOSAL_EDITABLE_STATUSES = ["draft", "sent", "viewed", "rejected"] as const;
+// Once a proposal is sent its terms are locked: changes go through
+// POST /api/proposals/[id]/revise (PROPOSAL_REVISABLE_STATUSES).
+export const PROPOSAL_EDITABLE_STATUSES = ["draft", "rejected"] as const;
+export const PROPOSAL_REVISABLE_STATUSES = ["sent", "viewed"] as const;
 
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 

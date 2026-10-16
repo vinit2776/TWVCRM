@@ -40,6 +40,10 @@ export async function POST(
     return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
   }
 
+  if (proposal.status === "superseded") {
+    return NextResponse.json({ error: "This proposal has been replaced by a newer revision." }, { status: 409 });
+  }
+
   // Already has a link — return it
   if (proposal.deposit_razorpay_link_url) {
     return NextResponse.json({

@@ -32,6 +32,22 @@ export async function GET(
     return new NextResponse("Proposal not found", { status: 404 });
   }
 
+  // A replaced proposal must not serve its old terms. The customer holds the
+  // old email/PDF, so tell them plainly to use the newer one.
+  if (proposal.status === "superseded") {
+    const notice = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Proposal updated — The WorkVilla</title>
+<style>body{font-family:Arial,sans-serif;background:#f9fafb;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}
+.card{background:#fff;border-radius:12px;padding:48px 40px;max-width:480px;text-align:center;box-shadow:0 2px 16px rgba(0,0,0,.08)}
+.logo{color:#015E65;font-size:22px;font-weight:bold;margin-bottom:24px}h2{color:#111;font-size:20px;margin:0 0 12px}p{color:#555;font-size:14px;line-height:1.6;margin:0 0 8px}</style></head>
+<body><div class="card"><div class="logo">The WorkVilla</div>
+<h2>This proposal has been updated</h2>
+<p>A newer version of this proposal has been sent to you. Please use the latest one, as this version is no longer valid.</p>
+<p>If you can't find it, reply to the email you received or call us at <strong>+91 97910 97900</strong>.</p></div></body></html>`;
+    return new NextResponse(notice, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
+
   // Advance status from "sent" → "viewed" (idempotent — don't overwrite later statuses)
   if (proposal.status === "sent") {
     await supabase
