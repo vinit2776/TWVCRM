@@ -97,3 +97,45 @@ test('deviation: only a single-branch employee at another branch', () => {
   assert.equal(isBranchDeviation('', 'Velachery'), false);
   assert.equal(isBranchDeviation('T. Nagar', ''), false);
 });
+
+test('employee branches: one name, all of them, or a JSON list of a few', () => {
+  const { employeeBranches, employeeBranchValue } = require('../geofence');
+  assert.deepEqual(employeeBranches('LGF'), { all: false, names: ['LGF'] });
+  assert.deepEqual(employeeBranches(MULTI_BRANCH), { all: true, names: [] });
+  assert.deepEqual(employeeBranches('["LGF","Arcade Center"]'), { all: false, names: ['LGF', 'Arcade Center'] });
+  assert.deepEqual(employeeBranches(null), { all: false, names: [] });
+  assert.deepEqual(employeeBranches('[not json'), { all: false, names: ['[not json'] });
+  assert.equal(employeeBranchValue(['LGF']), 'LGF');
+  assert.equal(employeeBranchValue(['LGF', 'Arcade Center', 'LGF']), '["LGF","Arcade Center"]');
+  assert.equal(employeeBranchValue([]), null);
+});
+
+test('employee branches: label and rename', () => {
+  const { employeeBranchLabel, renameEmployeeBranch } = require('../geofence');
+  assert.equal(employeeBranchLabel('["LGF","Arcade Center"]'), 'LGF, Arcade Center');
+  assert.equal(employeeBranchLabel(MULTI_BRANCH), 'All branches');
+  assert.equal(employeeBranchLabel(null), '');
+  assert.equal(renameEmployeeBranch('["LGF","Arcade Center"]', 'LGF', 'LGF Floor'), '["LGF Floor","Arcade Center"]');
+  assert.equal(renameEmployeeBranch('LGF', 'LGF', 'LGF Floor'), 'LGF Floor');
+  assert.equal(renameEmployeeBranch('Perungudi', 'LGF', 'LGF Floor'), 'Perungudi');
+  assert.equal(renameEmployeeBranch(MULTI_BRANCH, 'LGF', 'LGF Floor'), MULTI_BRANCH);
+});
+
+test('deviation: only at a branch outside an employee\'s selected few', () => {
+  const few = '["T. Nagar","Velachery"]';
+  assert.equal(isBranchDeviation(few, 'Velachery'), false);
+  assert.equal(isBranchDeviation(few, 'T. Nagar'), false);
+  assert.equal(isBranchDeviation(few, 'Perungudi'), true);
+});
+
+test('branch: any of an employee\'s selected branches within radius wins over a nearer other one', () => {
+  const sameBuilding = [
+    { name: 'LGF', location: { lat: 13.061981804658464, lng: 80.24683335350925 } },
+    { name: 'Arcade Center', location: { lat: 13.061978981125167, lng: 80.24662440563422 } },
+    { name: 'Kamala Arcade', location: { lat: 13.056436446421618, lng: 80.25594272871878 } },
+  ];
+  const punch = { lat: 13.06182, lng: 80.24672 };
+  assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","LGF"]').name, 'LGF');
+  assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","Arcade Center"]').name, 'Arcade Center');
+  assert.equal(branchAt(punch, sameBuilding, 150, MULTI_BRANCH).name, 'Arcade Center');
+});

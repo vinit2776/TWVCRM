@@ -23,7 +23,7 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
-const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, isBranchDeviation } = require('./geofence');
+const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranch, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
 } = require('./activity-log');
@@ -424,9 +424,65 @@ function branchAtPoint(point, employeeBranch) {
 function deviceBranch() {
   return CONFIG.BRANCH_LIST.find(b => b.has_device) || null;
 }
-// How an employee's branch reads on screen.
-function employeeBranchLabel(branch) {
-  return branch === MULTI_BRANCH ? 'Multi-branch' : (branch || '');
+// How many employees count each branch as theirs, by branch name. Someone at a few
+// branches counts towards each; someone at all of them counts towards none.
+async function employeeCountsByBranch() {
+  const counts = {};
+  for (const e of await db.prepare('SELECT branch FROM employees').all()) {
+    for (const name of employeeBranches(e.branch).names) counts[name] = (counts[name] || 0) + 1;
+  }
+  return counts;
+}
+// The Branch field on the registration and edit forms: one branch, a few, or all of
+// them. Posts branch_mode plus either branch (one) or branches (several); read back
+// with branchFromForm. Names already on file stay listed even if they've since left
+// the configured list.
+function branchFieldHtml(current = null, { allowNone = false } = {}) {
+  const { all, names } = employeeBranches(current);
+  const mode = all ? 'all' : names.length > 1 ? 'some' : 'one';
+  const choices = [...CONFIG.BRANCHES, ...names.filter(n => !CONFIG.BRANCHES.includes(n))];
+  const one = mode === 'one' ? names[0] || '' : '';
+  const radio = (value, label) => `<label style="display:flex;align-items:center;gap:6px;font-size:0.92em;margin:4px 0;"><input type="radio" name="branch_mode" value="${value}" ${mode === value ? 'checked' : ''} onchange="branchModeChanged(this.form)" style="width:auto;margin:0;"> ${label}</label>`;
+  return `
+        <div style="flex-basis:100%;">
+          <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${radio('one', 'One branch')}
+            <select name="branch" ${mode === 'one' ? '' : 'disabled'} style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
+              ${allowNone ? '<option value="">&mdash; None &mdash;</option>' : ''}
+              ${choices.map(b => `<option value="${escapeHtml(b)}" ${b === one ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+            </select>
+          </div>
+          ${radio('some', 'Selected branches')}
+          <div data-branch-list style="display:flex;flex-wrap:wrap;gap:4px 16px;margin:2px 0 4px 24px;${mode === 'some' ? '' : 'opacity:0.5;'}">
+            ${choices.map(b => `<label style="display:flex;align-items:center;gap:5px;font-size:0.88em;"><input type="checkbox" name="branches" value="${escapeHtml(b)}" ${mode === 'some' && names.includes(b) ? 'checked' : ''} ${mode === 'some' ? '' : 'disabled'} style="width:auto;margin:0;"> ${escapeHtml(b)}</label>`).join('')}
+          </div>
+          ${radio('all', 'All branches')}
+          <div style="font-size:0.8em;color:#7C8896;margin-left:24px;">Any branch counts as their office, including branches added later.</div>
+          <script>
+            function branchModeChanged(form) {
+              const mode = form.querySelector('input[name="branch_mode"]:checked').value;
+              form.querySelector('select[name="branch"]').disabled = mode !== 'one';
+              const list = form.querySelector('[data-branch-list]');
+              list.style.opacity = mode === 'some' ? '' : '0.5';
+              list.querySelectorAll('input').forEach(c => { c.disabled = mode !== 'some'; });
+            }
+          </script>
+        </div>`;
+}
+// The employees.branch value a Branch field posted (see branchFieldHtml), or an error.
+// Names already on file in `current` are accepted even if they've since left the
+// configured list, so re-saving an untouched form still works. An old cached form
+// posts only `branch`, which may be MULTI_BRANCH.
+function branchFromForm(form, current = null) {
+  const list = v => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+  const mode = form.branch_mode || (form.branch === MULTI_BRANCH ? 'all' : 'one');
+  if (mode === 'all') return { value: MULTI_BRANCH };
+  const names = [...new Set((mode === 'some' ? list(form.branches) : list(form.branch).slice(-1)).map(n => String(n).trim()).filter(Boolean))];
+  if (mode === 'some' && names.length < 2) return { error: 'Pick at least two branches, or choose One branch.' };
+  const known = new Set([...CONFIG.BRANCHES, ...employeeBranches(current).names]);
+  if (names.some(n => !known.has(n))) return { error: 'Unknown branch.' };
+  return { value: employeeBranchValue(names) };
 }
 
 function logSecurityEvent(type, details = {}) {
@@ -1885,7 +1941,7 @@ function placePill(kind, text) {
 // otherwise a remote punch shows its location.
 function punchPlaceHtml(p, employee = null) {
   if (p.deviation) {
-    const own = employee && employee.branch && employee.branch !== MULTI_BRANCH ? employee.branch : null;
+    const own = employee && !employeeBranches(employee.branch).all ? employeeBranchLabel(employee.branch) : '';
     return `${placePill('deviation', `⚠ ${p.branch}`)}${own ? `<br><span style="color:#C62828;white-space:nowrap;">Theirs: ${escapeHtml(own)}</span>` : ''}`;
   }
   if (p.branch) return placePill('own', p.branch);
@@ -2331,11 +2387,12 @@ function selfPunchBlock(dayStatus, lang) {
 // isBranchDeviation in geofence.js; the server decides again on every punch.
 function selfPunchScript(employee, lang) {
   const branches = CONFIG.BRANCH_LIST.filter(b => b.location).map(b => ({ name: b.name, lat: b.location.lat, lng: b.location.lng }));
-  const ownBranch = employee.branch && employee.branch !== MULTI_BRANCH ? employee.branch : null;
+  const own = employeeBranches(employee.branch);
+  const ownBranches = own.all ? [] : own.names;
   return `
       const selfPunchBranches = ${JSON.stringify(branches)};
       const selfPunchRadius = ${JSON.stringify(CONFIG.OFFICE_RADIUS_METERS)};
-      const selfPunchOwnBranch = ${JSON.stringify(ownBranch)};
+      const selfPunchOwnBranches = ${JSON.stringify(ownBranches)};
       function selfPunchDistance(b, lat, lng) {
         const rad = d => d * Math.PI / 180;
         const dLat = rad(lat - b.lat), dLng = rad(lng - b.lng);
@@ -2345,16 +2402,19 @@ function selfPunchScript(employee, lang) {
       function selfPunchShowWhere(pos) {
         const hint = document.getElementById('selfPunchHint');
         if (!hint || !selfPunchBranches.length) return;
-        let nearest = null, meters = Infinity;
-        for (const b of selfPunchBranches) {
-          const d = selfPunchDistance(b, pos.coords.latitude, pos.coords.longitude);
-          if (d < meters) { nearest = b; meters = d; }
-        }
-        const own = selfPunchBranches.find(b => b.name === selfPunchOwnBranch);
-        const ownMeters = own ? selfPunchDistance(own, pos.coords.latitude, pos.coords.longitude) : Infinity;
-        if (ownMeters <= selfPunchRadius) { nearest = own; meters = ownMeters; }
-        if (meters <= selfPunchRadius && selfPunchOwnBranch && nearest.name !== selfPunchOwnBranch) {
-          hint.textContent = '⚠️ ' + ${JSON.stringify(t(lang, 'dashboard.other_branch_hint'))}.replace('{{branch}}', nearest.name).replace('{{own}}', selfPunchOwnBranch);
+        const nearestOf = list => {
+          let best = null, bestMeters = Infinity;
+          for (const b of list) {
+            const d = selfPunchDistance(b, pos.coords.latitude, pos.coords.longitude);
+            if (d < bestMeters) { best = b; bestMeters = d; }
+          }
+          return [best, bestMeters];
+        };
+        // One of their own branches within the radius wins over a nearer other one.
+        let [nearest, meters] = nearestOf(selfPunchBranches.filter(b => selfPunchOwnBranches.includes(b.name)));
+        if (meters > selfPunchRadius) [nearest, meters] = nearestOf(selfPunchBranches);
+        if (meters <= selfPunchRadius && selfPunchOwnBranches.length && !selfPunchOwnBranches.includes(nearest.name)) {
+          hint.textContent = '⚠️ ' + ${JSON.stringify(t(lang, 'dashboard.other_branch_hint'))}.replace('{{branch}}', nearest.name).replace('{{own}}', selfPunchOwnBranches.join(', '));
         } else if (meters <= selfPunchRadius) {
           hint.textContent = '🏢 ' + ${JSON.stringify(t(lang, 'dashboard.at_branch_hint'))}.replace('{{branch}}', nearest.name);
         } else {
@@ -3957,13 +4017,7 @@ ${employeeIdField(parseEmployeeNumber(nextId))}
           <label style="display:block;font-size:0.8em;color:#7C8896;">Designation</label>
           <input type="text" name="designation" placeholder="e.g. Sales Associate" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
-          <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-            ${CONFIG.BRANCHES.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}
-            <option value="${MULTI_BRANCH}">Multi-branch (any branch counts as their office)</option>
-          </select>
-        </div>
+${branchFieldHtml()}
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">Reports To</label>
           <select name="reports_to" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
@@ -4043,15 +4097,7 @@ ${employeeIdField(parseEmployeeNumber(employee.id) || '')}
           <label style="display:block;font-size:0.8em;color:#7C8896;">Designation</label>
           <input type="text" name="designation" value="${escapeHtml(employee.designation || '')}" placeholder="e.g. Sales Associate" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
         </div>
-        <div>
-          <label style="display:block;font-size:0.8em;color:#7C8896;">Branch</label>
-          <select name="branch" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;">
-            <option value="">&mdash; None &mdash;</option>
-            ${(employee.branch && employee.branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(employee.branch) ? [employee.branch, ...CONFIG.BRANCHES] : CONFIG.BRANCHES)
-              .map(b => `<option value="${escapeHtml(b)}" ${b === employee.branch ? 'selected' : ''}>${escapeHtml(b)}</option>${b === employee.branch && !CONFIG.BRANCHES.includes(b) ? ' <!-- no longer in the configured list -->' : ''}`).join('')}
-            <option value="${MULTI_BRANCH}" ${employee.branch === MULTI_BRANCH ? 'selected' : ''}>Multi-branch (any branch counts as their office)</option>
-          </select>
-        </div>
+${branchFieldHtml(employee.branch, { allowNone: true })}
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:0.8em;color:#7C8896;">Reports To</label>
           <select name="reports_to" style="padding:6px;border-radius:6px;border:1px solid #D0D5DA;width:100%;">
@@ -4466,7 +4512,7 @@ async function punchesToRecheck() {
 // Branch names, locations and which one has the biometric device. Rows are posted as
 // parallel arrays (id[], name[], location[]); a blank id is a new branch.
 async function renderBranchesCard() {
-  const counts = Object.fromEntries((await db.prepare('SELECT branch, COUNT(*) AS c FROM employees GROUP BY branch').all()).map(r => [r.branch, Number(r.c)]));
+  const counts = await employeeCountsByBranch();
   const input = 'padding:7px;border-radius:6px;border:1px solid #D0D5DA;';
   const row = (b) => `
       <tr>
@@ -5969,7 +6015,7 @@ async function handleRequest(req, res) {
       await logAdminAction(user.username, `deviation_${decision}`, 'deviation', `${employeeId}:${date}`, DEVIATION_DECISION_LABELS[decision], employeeId);
       if (decision !== 'accepted') {
         const where = [...new Set((await getPunchesForDay(employeeId, date)).filter(p => p.deviation).map(p => p.branch))].join(', ');
-        await createNotification(employeeId, `Your attendance on ${date} was marked ${decision === 'absent' ? 'Absent' : 'Half Day'}: you punched at ${where}, which isn't your branch${employee.branch && employee.branch !== MULTI_BRANCH ? ` (${employee.branch})` : ''}.`);
+        await createNotification(employeeId, `Your attendance on ${date} was marked ${decision === 'absent' ? 'Absent' : 'Half Day'}: you punched at ${where}, which isn't your branch${employeeBranches(employee.branch).names.length ? ` (${employeeBranchLabel(employee.branch)})` : ''}.`);
       }
     }
     const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
@@ -6072,11 +6118,10 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/admin/employee-registration' && req.method === 'POST') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
-    const form = await readFormBody(req);
+    const form = await readFormBodyLists(req);
     const name = (form.name || '').trim();
     const role = (form.role || '').trim();
     const designation = (form.designation || '').trim();
-    const branch = (form.branch || '').trim();
     const reportsTo = (form.reports_to || '').trim();
     const shiftStart = (form.shift_start || '').trim();
     const shiftEnd = (form.shift_end || '').trim();
@@ -6099,8 +6144,9 @@ async function handleRequest(req, res) {
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown role.'));
     }
-    if (branch && branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(branch)) {
-      return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown branch.'));
+    const { value: branch, error: branchError } = branchFromForm(form);
+    if (branchError) {
+      return sendHtml(res, await renderEmployeeRegistration(user, branchError));
     }
     if (reportsTo && !(await getEmployee(reportsTo))) {
       return sendHtml(res, await renderEmployeeRegistration(user, 'Unknown "reports to" employee.'));
@@ -6258,14 +6304,13 @@ async function handleRequest(req, res) {
 
   if (parsed.pathname === '/admin/employee/edit' && req.method === 'POST') {
     if (!isManagementRole(user)) { res.writeHead(403); return res.end('Admin or manager access only.'); }
-    const form = await readFormBody(req);
+    const form = await readFormBodyLists(req);
     const employeeId = form.employee_id;
     const employee = await getEmployee(employeeId);
     if (!employee) { res.writeHead(404); return res.end('Unknown employee'); }
     const name = (form.name || '').trim();
     const role = (form.role || '').trim();
     const designation = (form.designation || '').trim();
-    const branch = (form.branch || '').trim();
     const reportsTo = (form.reports_to || '').trim();
     const shiftStart = (form.shift_start || '').trim();
     const shiftEnd = (form.shift_end || '').trim();
@@ -6284,12 +6329,13 @@ async function handleRequest(req, res) {
     if (role && !EMPLOYMENT_TYPES.includes(role)) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown role.'));
     }
-    // Also accepts the value already on file for this employee, even if it has since
+    // Also accepts branches already on file for this employee, even if they've since
     // been renamed or removed from the configured list — otherwise editing any other
     // field on this employee (or just re-saving the form untouched) would be blocked
-    // with "Unknown branch." until the admin manually picks a currently-valid one.
-    if (branch && branch !== employee.branch && branch !== MULTI_BRANCH && !CONFIG.BRANCHES.includes(branch)) {
-      return sendHtml(res, await renderEditEmployee(employee, user, 'Unknown branch.'));
+    // with "Unknown branch." until the admin manually picks currently-valid ones.
+    const { value: branch, error: branchError } = branchFromForm(form, employee.branch);
+    if (branchError) {
+      return sendHtml(res, await renderEditEmployee(employee, user, branchError));
     }
     if (reportsTo === employeeId) {
       return sendHtml(res, await renderEditEmployee(employee, user, 'An employee cannot report to themselves.'));
@@ -6564,16 +6610,18 @@ async function handleRequest(req, res) {
     const seen = new Set();
     for (const r of kept) {
       if (!r.name) error = 'Every branch needs a name.';
-      else if (r.name.toLowerCase() === 'multi-branch' || r.name === MULTI_BRANCH) error = '"Multi-branch" is reserved for floating employees.';
+      else if (['multi-branch', 'all branches'].includes(r.name.toLowerCase()) || r.name === MULTI_BRANCH) error = `"${r.name}" is reserved for employees at every branch.`;
+      else if (r.name.startsWith('[')) error = 'A branch name can\'t start with "[".';
       else if (seen.has(r.name.toLowerCase())) error = `There are two branches called ${r.name}.`;
       else if (r.location && !parseLatLng(r.location)) error = `${r.name}'s location must be "latitude, longitude", e.g. 13.06184, 80.24674.`;
       if (error) break;
       seen.add(r.name.toLowerCase());
     }
     const existing = Object.fromEntries(CONFIG.BRANCH_LIST.map(b => [b.id, b]));
+    const counts = await employeeCountsByBranch();
     for (const id of deleting) {
       const b = existing[id];
-      if (b && (await db.prepare('SELECT COUNT(*) AS c FROM employees WHERE branch = ?').get(b.name)).c > 0) error = `${b.name} still has employees. Move them to another branch first.`;
+      if (b && counts[b.name]) error = `${b.name} still has employees. Move them to another branch first.`;
     }
     if (error) return sendHtml(res, await renderAdminSettings(user, { error }));
 
@@ -6593,7 +6641,10 @@ async function handleRequest(req, res) {
       if (before) {
         await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ? WHERE id = ?').run(r.name, r.location, i, r.id);
         if (before.name !== r.name) {
-          await db.prepare('UPDATE employees SET branch = ? WHERE branch = ?').run(r.name, before.name);
+          for (const e of await db.prepare('SELECT id, branch FROM employees').all()) {
+            const renamed = renameEmployeeBranch(e.branch, before.name, r.name);
+            if (renamed !== e.branch) await db.prepare('UPDATE employees SET branch = ? WHERE id = ?').run(renamed, e.id);
+          }
           changed.push(`${before.name} renamed to ${r.name}`);
         }
         if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
