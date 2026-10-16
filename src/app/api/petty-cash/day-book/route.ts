@@ -39,7 +39,11 @@ export async function GET(request: Request) {
   const approvedEntries = entries || [];
   const issuedRequests = issuances || [];
 
+  // Every exit records a run. Only the send-success path used to, so any day without
+  // petty-cash activity left the health row frozen and the monitor could not tell
+  // "nothing to send" from "never ran".
   if (approvedEntries.length === 0 && issuedRequests.length === 0) {
+    await pingCronHealth("petty-cash/day-book", "ok", { sent_to: 0, date: targetDate, skipped: "no transactions" });
     return NextResponse.json({ message: "No transactions today, skipping email." });
   }
 
@@ -160,6 +164,7 @@ export async function GET(request: Request) {
 
   const emails = (recipients || []).map((r) => r.email).filter(Boolean);
   if (emails.length === 0) {
+    await pingCronHealth("petty-cash/day-book", "error", { date: targetDate, error: "no recipients" });
     return NextResponse.json({ message: "No recipients found" });
   }
 
@@ -173,6 +178,7 @@ export async function GET(request: Request) {
   });
 
   if (emailErr) {
+    await pingCronHealth("petty-cash/day-book", "error", { date: targetDate, error: emailErr.message.slice(0, 200) });
     return NextResponse.json({ error: emailErr.message }, { status: 500 });
   }
 

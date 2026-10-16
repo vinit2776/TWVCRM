@@ -16,7 +16,10 @@ async function handler(request: NextRequest) {
   const today = new Date().toISOString().split("T")[0];
   const in7Days = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
 
-  // Find pending payments due within 7 days that haven't been notified today
+  // Unpaid payments due within 7 days. "approved" is included because blanket-approved
+  // payments never sit in "pending" yet still need accounts to pay them. This runs once a
+  // day, so no per-payment "already notified" marker is needed (lease_payments has no
+  // notified_at column).
   const { data: payments, error } = await admin
     .from("lease_payments")
     .select(`
@@ -27,10 +30,9 @@ async function handler(request: NextRequest) {
         landlord:landlords(name, email)
       )
     `)
-    .eq("status", "pending")
+    .in("status", ["pending", "approved"])
     .gte("due_date", today)
-    .lte("due_date", in7Days)
-    .or(`notified_at.is.null,notified_at.lt.${today}`);
+    .lte("due_date", in7Days);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -93,13 +95,6 @@ async function handler(request: NextRequest) {
   } catch (emailErr) {
     console.error("lease-payment-reminders: email failed:", emailErr);
   }
-
-  // Mark notified_at on all these payments
-  const ids = payments.map((p) => p.id);
-  await admin
-    .from("lease_payments")
-    .update({ notified_at: new Date().toISOString() })
-    .in("id", ids);
 
   return NextResponse.json({ notified: payments.length });
 }

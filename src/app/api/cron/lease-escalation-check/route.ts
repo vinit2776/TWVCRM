@@ -21,7 +21,7 @@ async function handler(request: NextRequest) {
     .from("property_leases")
     .select(`
       id, base_rent_amount, escalation_type, escalation_value,
-      escalation_frequency_months, next_escalation_date,
+      next_escalation_date,
       location:locations(name),
       landlord:landlords(name)
     `)
@@ -39,6 +39,8 @@ async function handler(request: NextRequest) {
   }
 
   let created = 0;
+  let needsManual = 0;
+  let failed = 0;
 
   for (const lease of leases) {
     // Skip if a scheduled escalation already exists for this date
@@ -46,7 +48,7 @@ async function handler(request: NextRequest) {
       .from("lease_escalations")
       .select("id")
       .eq("lease_id", lease.id)
-      .eq("scheduled_date", lease.next_escalation_date!)
+      .eq("effective_date", lease.next_escalation_date!)
       .eq("status", "scheduled")
       .maybeSingle();
 
@@ -60,23 +62,36 @@ async function handler(request: NextRequest) {
       newRentAmount = lease.base_rent_amount + lease.escalation_value;
     }
 
+    // new_amount is NOT NULL: step-up schedules have no single computed figure, so those
+    // are left for an admin to enter and only flagged in the email below.
+    if (newRentAmount === null) {
+      needsManual++;
+      continue;
+    }
+
     const { error: insertErr } = await admin
       .from("lease_escalations")
       .insert({
         lease_id: lease.id,
-        scheduled_date: lease.next_escalation_date,
+        effective_date: lease.next_escalation_date,
+        previous_amount: lease.base_rent_amount,
+        new_amount: newRentAmount,
         escalation_type: lease.escalation_type,
         escalation_value: lease.escalation_value,
-        new_rent_amount: newRentAmount,
         status: "scheduled",
         notes: "Auto-created by escalation check cron",
       });
 
-    if (!insertErr) created++;
+    if (insertErr) {
+      failed++;
+      console.error(`lease-escalation-check: lease ${lease.id}:`, insertErr.message);
+    } else {
+      created++;
+    }
   }
 
   // Notify admin
-  if (created > 0) {
+  if (created > 0 || needsManual > 0) {
     const { data: admins } = await admin
       .from("users")
       .select("email")
@@ -128,7 +143,10 @@ async function handler(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ created, total: leases.length });
+  if (failed > 0) {
+    return NextResponse.json({ error: "Some escalations failed to create", created, failed, needsManual }, { status: 500 });
+  }
+  return NextResponse.json({ created, needsManual, total: leases.length });
 }
 
 export const GET = withCronHealth("cron/lease-escalation-check", handler);

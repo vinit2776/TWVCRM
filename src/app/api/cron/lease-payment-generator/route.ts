@@ -56,7 +56,7 @@ async function handler(request: NextRequest) {
 
   const { data: leases, error: leaseErr } = await admin
     .from("property_leases")
-    .select("id, base_rent_amount, tds_rate, maintenance_charges, approval_mode, blanket_on_hold, blanket_hold_until, blanket_expires_on, lease_end_date")
+    .select("id, base_rent_amount, tds_rate, approval_mode, blanket_on_hold, blanket_hold_until, blanket_expires_on, lease_end_date")
     .eq("status", "active");
 
   if (leaseErr) return NextResponse.json({ error: leaseErr.message }, { status: 500 });
@@ -64,6 +64,7 @@ async function handler(request: NextRequest) {
 
   let generated = 0;
   let skipped = 0;
+  let failed = 0;
   let holdLifts = 0;
 
   // Auto-lift expired holds before generating payments
@@ -85,7 +86,7 @@ async function handler(request: NextRequest) {
 
   for (const lease of leases) {
     const tdsRate   = lease.tds_rate ?? 10;
-    const grossRent = lease.base_rent_amount + (lease.maintenance_charges ?? 0);
+    const grossRent = lease.base_rent_amount;
     const tdsAmount = Math.round(grossRent * tdsRate / 100);
 
     const autoApprove  = isBlanketActive(lease, paymentMonth, todayDate);
@@ -108,12 +109,19 @@ async function handler(request: NextRequest) {
 
     if (insertErr) {
       if (insertErr.code === "23505") skipped++;
-      else console.error(`lease-payment-generator: lease ${lease.id}:`, insertErr.message);
+      else {
+        failed++;
+        console.error(`lease-payment-generator: lease ${lease.id}:`, insertErr.message);
+      }
     } else {
       generated++;
     }
   }
 
+  // A swallowed insert failure used to return 200 and leave the cron looking healthy.
+  if (failed > 0) {
+    return NextResponse.json({ error: "Some payments failed to generate", generated, skipped, failed, paymentMonth }, { status: 500 });
+  }
   return NextResponse.json({ generated, skipped, holdLifts, paymentMonth });
 }
 
