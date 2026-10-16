@@ -2,7 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLatLng, distanceMeters, isWithinOffice, branchAt, isBranchDeviation, MULTI_BRANCH } = require('../geofence');
+const {
+  parseLatLng, distanceMeters, isWithinOffice, branchAt, isBranchDeviation, MULTI_BRANCH,
+  renameEmployeeBranch, renameEmployeeBranches,
+} = require('../geofence');
 
 const OFFICE = { lat: 13.06184, lng: 80.24674 };
 
@@ -96,4 +99,72 @@ test('deviation: only a single-branch employee at another branch', () => {
   assert.equal(isBranchDeviation(null, 'Velachery'), false);
   assert.equal(isBranchDeviation('', 'Velachery'), false);
   assert.equal(isBranchDeviation('T. Nagar', ''), false);
+});
+
+test('employee branches: one name, all of them, or a JSON list of a few', () => {
+  const { employeeBranches, employeeBranchValue } = require('../geofence');
+  assert.deepEqual(employeeBranches('LGF'), { all: false, names: ['LGF'] });
+  assert.deepEqual(employeeBranches(MULTI_BRANCH), { all: true, names: [] });
+  assert.deepEqual(employeeBranches('["LGF","Arcade Center"]'), { all: false, names: ['LGF', 'Arcade Center'] });
+  assert.deepEqual(employeeBranches(null), { all: false, names: [] });
+  assert.deepEqual(employeeBranches('[not json'), { all: false, names: ['[not json'] });
+  assert.equal(employeeBranchValue(['LGF']), 'LGF');
+  assert.equal(employeeBranchValue(['LGF', 'Arcade Center', 'LGF']), '["LGF","Arcade Center"]');
+  assert.equal(employeeBranchValue([]), null);
+});
+
+test('employee branches: label and rename', () => {
+  const { employeeBranchLabel, renameEmployeeBranch } = require('../geofence');
+  assert.equal(employeeBranchLabel('["LGF","Arcade Center"]'), 'LGF, Arcade Center');
+  assert.equal(employeeBranchLabel(MULTI_BRANCH), 'All branches');
+  assert.equal(employeeBranchLabel(null), '');
+  assert.equal(renameEmployeeBranch('["LGF","Arcade Center"]', 'LGF', 'LGF Floor'), '["LGF Floor","Arcade Center"]');
+  assert.equal(renameEmployeeBranch('LGF', 'LGF', 'LGF Floor'), 'LGF Floor');
+  assert.equal(renameEmployeeBranch('Perungudi', 'LGF', 'LGF Floor'), 'Perungudi');
+  assert.equal(renameEmployeeBranch(MULTI_BRANCH, 'LGF', 'LGF Floor'), MULTI_BRANCH);
+});
+
+test('deviation: only at a branch outside an employee\'s selected few', () => {
+  const few = '["T. Nagar","Velachery"]';
+  assert.equal(isBranchDeviation(few, 'Velachery'), false);
+  assert.equal(isBranchDeviation(few, 'T. Nagar'), false);
+  assert.equal(isBranchDeviation(few, 'Perungudi'), true);
+});
+
+test('branch: any of an employee\'s selected branches within radius wins over a nearer other one', () => {
+  const sameBuilding = [
+    { name: 'LGF', location: { lat: 13.061981804658464, lng: 80.24683335350925 } },
+    { name: 'Arcade Center', location: { lat: 13.061978981125167, lng: 80.24662440563422 } },
+    { name: 'Kamala Arcade', location: { lat: 13.056436446421618, lng: 80.25594272871878 } },
+  ];
+  const punch = { lat: 13.06182, lng: 80.24672 };
+  assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","LGF"]').name, 'LGF');
+  assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","Arcade Center"]').name, 'Arcade Center');
+  assert.equal(branchAt(punch, sameBuilding, 150, MULTI_BRANCH).name, 'Arcade Center');
+});
+
+test('rename: several branches renamed in one save are applied in a single pass', () => {
+  // Branch renames land as one map, not one call after another. Applying A->B and then
+  // B->A in sequence would move an employee at A to B and straight back to A; the
+  // branches table already guards the same swap with its two-pass __renaming__ step.
+  const swap = new Map([['LGF', 'Arcade Center'], ['Arcade Center', 'LGF']]);
+  assert.equal(renameEmployeeBranches('LGF', swap), 'Arcade Center');
+  assert.equal(renameEmployeeBranches('Arcade Center', swap), 'LGF');
+  assert.equal(renameEmployeeBranches('["LGF","Perungudi"]', swap), '["Arcade Center","Perungudi"]');
+
+  // Renaming two of an employee's three branches at once.
+  const two = new Map([['LGF', 'LGF Floor'], ['Perungudi', 'Perungudi Annexe']]);
+  assert.equal(
+    renameEmployeeBranches('["LGF","Arcade Center","Perungudi"]', two),
+    '["LGF Floor","Arcade Center","Perungudi Annexe"]',
+  );
+
+  // Untouched values come back as they were, so nothing needless is written.
+  const raw = '["LGF","Arcade Center"]';
+  assert.equal(renameEmployeeBranches(raw, new Map([['Perungudi', 'Elsewhere']])), raw);
+  assert.equal(renameEmployeeBranches(MULTI_BRANCH, swap), MULTI_BRANCH);
+  assert.equal(renameEmployeeBranches(null, swap), null);
+  // The single-branch helper still behaves, and drops to one name when it should.
+  assert.equal(renameEmployeeBranch('["LGF","Arcade Center"]', 'LGF', 'LGF Floor'), '["LGF Floor","Arcade Center"]');
+  assert.equal(renameEmployeeBranch('LGF', 'LGF', 'LGF Floor'), 'LGF Floor');
 });
