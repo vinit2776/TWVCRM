@@ -1,3 +1,4 @@
+import { isDeadBillStatus } from "@/lib/constants";
 /**
  * Pure logic behind the dashboard Procurement widget: collapses a purchase
  * order's lifecycle status and its vendor bills into one state, and grades
@@ -95,7 +96,7 @@ export function derivePoState(po: { status: string | null }, bills: PoBillShape[
   const status = po.status ?? "";
   if (status === "cancelled") return "cancelled";
 
-  const live = bills.filter((b) => b.approval_status !== "rejected");
+  const live = bills.filter((b) => !isDeadBillStatus(b.approval_status));
   if (live.length > 0) {
     const billed = live.reduce((a, b) => a + num(b.total_amount), 0);
     const paid = live.reduce((a, b) => a + num(b.amount_paid), 0);

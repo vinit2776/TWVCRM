@@ -37,7 +37,8 @@ export async function GET() {
     adminSupabase
       .from("vendor_bills")
       .select("total_amount, amount_paid")
-      .in("payment_status", ["unpaid", "partially_paid"]),
+      .in("payment_status", ["unpaid", "partially_paid"])
+      .neq("approval_status", "withdrawn"),
 
     // Contracts with payment status overdue (if applicable)
     adminSupabase

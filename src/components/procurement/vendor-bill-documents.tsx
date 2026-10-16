@@ -28,7 +28,8 @@ interface VendorBillDocumentsProps {
 // lock in the UI so the buttons are disabled with an explanation rather than
 // failing silently.
 export function VendorBillDocuments({ billId, approvalStatus, approvedAt, documents, onChanged }: VendorBillDocumentsProps) {
-  const locked = approvalStatus === "approved";
+  const withdrawn = approvalStatus === "withdrawn";
+  const locked = approvalStatus === "approved" || withdrawn;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -123,7 +124,7 @@ export function VendorBillDocuments({ billId, approvalStatus, approvedAt, docume
       {locked && (
         <div className="flex items-start gap-2 rounded-md bg-teal-50 border border-teal-100 px-2.5 py-2 text-xs text-teal-900">
           <Lock className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-primary" />
-          <span>Approved — existing documents are locked. You can still attach new ones below.</span>
+          <span>{withdrawn ? "Withdrawn — documents are locked." : "Approved — existing documents are locked. You can still attach new ones below."}</span>
         </div>
       )}
 
@@ -192,7 +193,7 @@ export function VendorBillDocuments({ billId, approvalStatus, approvedAt, docume
           variant="outline"
           size="sm"
           className="h-7 text-xs mt-2"
-          disabled={uploading}
+          disabled={uploading || withdrawn}
           onClick={() => fileInputRef.current?.click()}
         >
           {uploading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}

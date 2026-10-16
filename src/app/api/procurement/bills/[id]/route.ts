@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
@@ -8,6 +9,7 @@ import { confirmFirstBillIfNeeded } from "@/lib/procurement/recurring-bill-rules
 import { z } from "zod";
 import { checkTieInvoiceToCycle } from "@/lib/procurement/tie-invoice";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
+import { poStatusAfterWithdraw } from "@/lib/procurement/po-status-after-withdraw";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
 
@@ -47,6 +49,11 @@ const patchBillSchema = z.discriminatedUnion("action", [
   z.object({
     /** Admin rollback: an approved, unpaid bill goes back to the approval queue. */
     action: z.literal("unapprove"),
+    reason: rollbackReasonSchema,
+  }),
+  z.object({
+    /** Admin rollback: pull back a pending/rejected bill (wrong PO, duplicate upload…). */
+    action: z.literal("withdraw"),
     reason: rollbackReasonSchema,
   }),
   z.object({
@@ -211,6 +218,15 @@ export async function PATCH(
   // Approval actions require admin only
   const canApproveOrReject = dbUser.role === "admin";
 
+  // A withdrawn bill is frozen history: nothing on it can change (GST, due
+  // date, cheque, invoice details...). It can't be revived — upload a fresh bill.
+  if (bill.approval_status === "withdrawn") {
+    return NextResponse.json(
+      { error: "This bill was withdrawn and can no longer be changed. Upload a new bill if it is still needed." },
+      { status: 422 }
+    );
+  }
+
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
   if (!parsed.success) {
@@ -229,6 +245,9 @@ export async function PATCH(
   // surfaced on the bill's audit timeline so investigators don't have to
   // join two tables to understand why a partial payment was recorded).
   const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
+  let extraPoChange: { old: string; new: string } | null = null;
+  // Side effects that must only run once the bill row itself has been updated.
+  let afterBillUpdate: (() => Promise<void>) | null = null;
   // Set by edit_invoice_details when the invoice file itself was replaced —
   // keeps the vendor_bill_documents "invoice" row in sync so the Supporting
   // Documents list (seeded from invoice_file_url at migration time) doesn't
@@ -385,6 +404,90 @@ export async function PATCH(
           extraAuditChanges.partial_payment_note = { old: null, new: parsed.data.notes.trim() };
         }
       }
+      break;
+    }
+
+    case "withdraw": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can withdraw a bill" }, { status: 403 });
+      }
+      if (bill.approval_status === "approved") {
+        return NextResponse.json(
+          { error: "This bill is approved. Reverse its payments and un-approve it first, then withdraw." },
+          { status: 422 }
+        );
+      }
+      if (bill.approval_status !== "pending" && bill.approval_status !== "rejected") {
+        return NextResponse.json({ error: "Only pending or rejected bills can be withdrawn" }, { status: 422 });
+      }
+      // An electricity-capture bill is tied to the electricity bill it came
+      // from (and the customer charges raised off it); withdrawing only the
+      // vendor side would orphan those.
+      if (bill.electricity_bill_id) {
+        return NextResponse.json(
+          { error: "This bill was created from an electricity bill. Remove it from the Electricity page instead." },
+          { status: 422 }
+        );
+      }
+      const { count: standingPayments } = await supabase
+        .from("vendor_bill_payments")
+        .select("*", { count: "exact", head: true })
+        .eq("bill_id", id)
+        .is("reversed_at", null);
+      if ((standingPayments ?? 0) > 0) {
+        return NextResponse.json({ error: "This bill has payments recorded. Reverse them first." }, { status: 422 });
+      }
+
+      const withdrawnAt = new Date().toISOString();
+      updatePayload = {
+        approval_status: "withdrawn",
+        withdrawn_at: withdrawnAt,
+        withdrawn_by: dbUser.id,
+        withdrawn_reason: parsed.data.reason,
+        rejection_outcome: null,
+        approval_code: null,
+        approved_by: null,
+        approved_at: null,
+        payment_batch_type: null,
+        payment_batch_date: null,
+        payment_batch_assigned_by: null,
+        payment_batch_assigned_at: null,
+        payment_hold_status: "none",
+      };
+      extraAuditChanges.rollback_kind = { old: null, new: "bill_withdrawn" };
+      extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
+
+      afterBillUpdate = async () => {
+        // A recurring rule that treated this as its established first bill must
+        // review the next one again.
+        await supabase
+          .from("procurement_recurring_bill_rules")
+          .update({ first_bill_id: null })
+          .eq("first_bill_id", id);
+
+        if (!bill.po_id) return;
+        const { data: po } = await supabase
+          .from("purchase_orders")
+          .select("po_type, status")
+          .eq("id", bill.po_id)
+          .single();
+        if (!po) return;
+        const [{ data: otherBills }, { data: items }] = await Promise.all([
+          supabase.from("vendor_bills").select("approval_status").eq("po_id", bill.po_id).neq("id", id),
+          supabase.from("purchase_order_items").select("quantity_ordered, quantity_received").eq("po_id", bill.po_id),
+        ]);
+        const next = poStatusAfterWithdraw({
+          poType: po.po_type,
+          poStatus: po.status,
+          statusBeforeBill: bill.po_status_before_bill ?? null,
+          otherBills: otherBills ?? [],
+          items: items ?? [],
+        });
+        if (next && next !== po.status) {
+          await supabase.from("purchase_orders").update({ status: next }).eq("id", bill.po_id);
+          extraPoChange = { old: po.status, new: next };
+        }
+      };
       break;
     }
 
@@ -892,7 +995,7 @@ export async function PATCH(
           ? supabase.from("purchase_orders").select("po_type, status, unit_cost_per_cycle, amc_terminated_at").eq("id", bill.po_id).single()
           : Promise.resolve({ data: null }),
         supabase.from("po_service_reports").select("id, po_id").eq("id", parsed.data.service_report_id).maybeSingle(),
-        supabase.from("vendor_bills").select("id", { count: "exact", head: true }).eq("service_report_id", parsed.data.service_report_id),
+        supabase.from("vendor_bills").select("id", { count: "exact", head: true }).eq("service_report_id", parsed.data.service_report_id).not("approval_status", "in", DEAD_BILL_STATUSES_FILTER),
       ]);
       const verdict = checkTieInvoiceToCycle({
         role: dbUser.role,
@@ -1118,7 +1221,7 @@ export async function PATCH(
           .select("*", { count: "exact", head: true })
           .eq("vendor_id", bill.vendor_id)
           .eq("invoice_number", trimmedInvoiceNumber)
-          .neq("approval_status", "rejected")
+          .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
           .neq("id", id);
         if (dupCount && dupCount > 0) {
           return NextResponse.json(
@@ -1193,6 +1296,13 @@ export async function PATCH(
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
+  if (afterBillUpdate) {
+    await (afterBillUpdate as () => Promise<void>)();
+    if (extraPoChange) {
+      extraAuditChanges.po_status = extraPoChange as { old: unknown; new: unknown };
+    }
+  }
+
   // Keep the Supporting Documents list in sync with a file replaced via
   // edit_invoice_details — otherwise the "invoice" document row still points
   // at the old file while vendor_bills.invoice_file_url has already moved on.
@@ -1222,7 +1332,7 @@ export async function PATCH(
   await logAudit(supabase, {
     entityType: "vendor_bill",
     entityId: id,
-    action: parsed.data.action === "unapprove" ? "rollback" : "update",
+    action: parsed.data.action === "unapprove" || parsed.data.action === "withdraw" ? "rollback" : "update",
     performedBy: dbUser.id,
     changes: {
       ...diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),

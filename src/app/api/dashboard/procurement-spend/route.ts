@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
     .select(
       "id, total_amount, invoice_date, po_id, po:purchase_orders(location_id, pr:purchase_requests(department))"
     )
+    .neq("approval_status", "withdrawn")
     .gte("invoice_date", fmt(startOfMonth))
     .lte("invoice_date", fmt(now));
 

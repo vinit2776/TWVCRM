@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { evaluateAutoApproval, type RecentBillLike, type RecurringBillRuleLike } from "./recurring-bill-rules";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
@@ -51,7 +52,7 @@ export async function tryAutoApproveBill(
     .select("id, invoice_number, invoice_date, total_amount")
     .eq("vendor_id", vendorId)
     .neq("id", billId)
-    .neq("approval_status", "rejected")
+    .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
     .gte("invoice_date", toISODateString(cutoff));
 
   const recentBills: RecentBillLike[] = (recentBillsRaw ?? []).map((b) => ({

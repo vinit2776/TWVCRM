@@ -171,14 +171,16 @@ export async function PATCH(
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
 
-      // Block cancellation if vendor bills exist — must handle bills first
+      // Block cancellation if vendor bills exist — must handle bills first.
+      // A withdrawn bill is out of play (admin pulled it back), so it doesn't block.
       const { count: billCount } = await supabase
         .from("vendor_bills")
         .select("id", { count: "exact", head: true })
-        .eq("po_id", id);
+        .eq("po_id", id)
+        .neq("approval_status", "withdrawn");
       if (billCount && billCount > 0) {
         return NextResponse.json({
-          error: "This PO has vendor bills. Delete or void the bills before cancelling.",
+          error: "This PO has vendor bills. An admin must withdraw them before the PO can be cancelled.",
         }, { status: 422 });
       }
 
@@ -248,7 +250,8 @@ export async function PATCH(
       const { data: existingBills } = await supabase
         .from("vendor_bills")
         .select("id, total_amount, amount_paid, payment_status")
-        .eq("po_id", id);
+        .eq("po_id", id)
+        .neq("approval_status", "withdrawn");
 
       for (const bill of existingBills ?? []) {
         const amountPaid = Number(bill.amount_paid);

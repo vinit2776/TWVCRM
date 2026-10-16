@@ -10,7 +10,7 @@
  * bookmarkable / shareable. Empty values are stripped to keep URLs short.
  */
 
-export type BillApprovalFilter = "" | "pending" | "approved" | "rejected";
+export type BillApprovalFilter = "" | "pending" | "approved" | "rejected" | "withdrawn";
 export type BillPaymentFilter = "" | "unpaid" | "partially_paid" | "paid";
 export type BillPaymentBatchTypeFilter = "" | "immediate" | "15th" | "25th";
 export type HasIrnFilter = "" | "true" | "false";

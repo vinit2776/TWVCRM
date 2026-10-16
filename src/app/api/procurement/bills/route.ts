@@ -1,3 +1,4 @@
+import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { sendPushToProcurementRoles } from "@/lib/push";
@@ -113,7 +114,8 @@ export async function GET(request: NextRequest) {
   if (includeTotals) {
     let totalsQuery = supabase
       .from("vendor_bills")
-      .select("total_amount, amount_paid, due_date, payment_status");
+      .select("total_amount, amount_paid, due_date, payment_status")
+      .neq("approval_status", "withdrawn");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     totalsQuery = applyBillFilters(totalsQuery as any, searchParams, { vendorIdsFromQ: vendorIds, poIdsFromQ: poIds }) as typeof totalsQuery;
 
@@ -247,7 +249,8 @@ export async function POST(request: NextRequest) {
       const { count: existingBillCount } = await supabase
         .from("vendor_bills")
         .select("*", { count: "exact", head: true })
-        .eq("service_report_id", parsed.data.service_report_id);
+        .eq("service_report_id", parsed.data.service_report_id)
+        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
       if (existingBillCount && existingBillCount > 0) {
         return NextResponse.json({ error: "An invoice has already been uploaded for this service report cycle" }, { status: 422 });
       }
@@ -262,7 +265,7 @@ export async function POST(request: NextRequest) {
           .from("vendor_bills")
           .select("*", { count: "exact", head: true })
           .eq("po_id", parsed.data.po_id)
-          .neq("approval_status", "rejected");
+          .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
         if ((liveBillCount ?? 0) >= cycleCap) {
           return NextResponse.json({
             error: `All ${cycleCap} billing cycle${cycleCap > 1 ? "s" : ""} on this purchase order have already been invoiced. Raise a new PO to bill beyond the contract term.`,
@@ -328,7 +331,7 @@ export async function POST(request: NextRequest) {
         .from("vendor_bills")
         .select("id, total_amount, bill_number")
         .eq("po_id", parsed.data.po_id)
-        .neq("approval_status", "rejected");
+        .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
       const invoiced = (liveBills ?? [])
         .filter((b) => b.id !== parsed.data.replaces_bill_id)
         .reduce((sum, b) => sum + Number(b.total_amount), 0);
@@ -355,7 +358,7 @@ export async function POST(request: NextRequest) {
       .select("*", { count: "exact", head: true })
       .eq("vendor_id", parsed.data.vendor_id)
       .eq("invoice_number", parsed.data.invoice_number.trim())
-      .neq("approval_status", "rejected");
+      .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER);
 
     if (dupCount && dupCount > 0) {
       return NextResponse.json(

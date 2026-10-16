@@ -35,7 +35,7 @@ type Props = {
   onDone: () => void;
 };
 
-type Mode = "reverse_payment" | "unapprove" | null;
+type Mode = "reverse_payment" | "unapprove" | "withdraw" | null;
 
 const MIN_REASON = 10;
 
@@ -56,7 +56,8 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
     .sort((a, b) => new Date(b.payment_date).getTime() - new Date(a.payment_date).getTime());
   const canReversePayment = standing.length > 0;
   const canUnapprove = approvalStatus === "approved" && standing.length === 0;
-  if (!canReversePayment && approvalStatus !== "approved") return null;
+  const canWithdraw = approvalStatus === "pending" || approvalStatus === "rejected";
+  if (!canReversePayment && !canUnapprove && !canWithdraw && approvalStatus !== "approved") return null;
 
   const selected = standing.find((p) => p.id === paymentId) ?? standing[0];
 
@@ -83,14 +84,18 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
           : await fetch(`/api/procurement/bills/${billId}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ action: "unapprove", reason: reason.trim() }),
+              body: JSON.stringify({ action: mode, reason: reason.trim() }),
             });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(json.error || "Could not complete the rollback");
         return;
       }
-      toast.success(mode === "reverse_payment" ? "Payment reversed" : `${billNumber} returned to approval`);
+      toast.success(
+        mode === "reverse_payment" ? "Payment reversed"
+        : mode === "withdraw" ? `${billNumber} withdrawn`
+        : `${billNumber} returned to approval`
+      );
       setMode(null);
       onDone();
     } finally {
@@ -114,12 +119,19 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
           <DropdownMenuItem disabled={!canReversePayment} onSelect={() => open("reverse_payment")}>
             <Undo2 className="h-3.5 w-3.5 mr-2" /> Reverse a payment…
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!canUnapprove} onSelect={() => open("unapprove")}>
-            <Undo2 className="h-3.5 w-3.5 mr-2" /> Un-approve bill…
-          </DropdownMenuItem>
+          {approvalStatus === "approved" && (
+            <DropdownMenuItem disabled={!canUnapprove} onSelect={() => open("unapprove")}>
+              <Undo2 className="h-3.5 w-3.5 mr-2" /> Un-approve bill…
+            </DropdownMenuItem>
+          )}
+          {canWithdraw && (
+            <DropdownMenuItem onSelect={() => open("withdraw")}>
+              <Undo2 className="h-3.5 w-3.5 mr-2" /> Withdraw bill…
+            </DropdownMenuItem>
+          )}
           {approvalStatus === "approved" && !canUnapprove && (
             <p className="px-2 pb-1.5 text-xs text-muted-foreground">
-              Reverse the payments first, then un-approve.
+              Reverse the payments first, then un-approve. A bill can be withdrawn once it is back to pending.
             </p>
           )}
         </DropdownMenuContent>
@@ -191,11 +203,34 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
             </>
           )}
 
+          {mode === "withdraw" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Withdraw — {billNumber}</DialogTitle>
+                <DialogDescription>
+                  Use this for a bill uploaded against the wrong PO, or twice. It stays in history marked Withdrawn.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                  <p className="font-medium mb-1">This will:</p>
+                  <ul className="list-disc pl-5 space-y-0.5 text-muted-foreground">
+                    <li>Take the bill out of every queue, total and duplicate check</li>
+                    <li>Return a linked goods PO to the status it had before this invoice (e.g. Received)</li>
+                    <li>Free the invoice number and the PO value so the right bill can be uploaded</li>
+                    <li>Lock this bill — it can&apos;t be edited or revived afterwards</li>
+                  </ul>
+                </div>
+                <ReasonField value={reason} onChange={setReason} />
+              </div>
+            </>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setMode(null)} disabled={submitting}>Cancel</Button>
             <Button variant="destructive" onClick={submit} disabled={submitting}>
               {submitting && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              {mode === "reverse_payment" ? "Reverse payment" : "Un-approve"}
+              {mode === "reverse_payment" ? "Reverse payment" : mode === "withdraw" ? "Withdraw bill" : "Un-approve"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -60,6 +60,7 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
     const label =
       kind === "payment_reversed" ? `Payment of ${INR(c.amount_reversed?.new)} reversed`
       : kind === "approval_reversed" ? "Approval reversed"
+      : kind === "bill_withdrawn" ? "Bill withdrawn"
       : "Rolled back";
     return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
   }

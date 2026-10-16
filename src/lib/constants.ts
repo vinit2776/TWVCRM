@@ -2151,19 +2151,32 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
 };
 
 // Bill Approval
-export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
+export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected", "withdrawn"] as const;
 export type BillApprovalStatus = (typeof BILL_APPROVAL_STATUSES)[number];
+
+/**
+ * Bills in these statuses are out of play: they never count toward a PO's
+ * invoiced total, a billing-cycle cap, a duplicate-invoice check or any payable.
+ * Use with `.not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)`.
+ * (rejected = admin said no; withdrawn = admin pulled it back, see 00599.)
+ */
+export const DEAD_BILL_STATUSES = ["rejected", "withdrawn"] as const;
+export const DEAD_BILL_STATUSES_FILTER = `(${DEAD_BILL_STATUSES.join(",")})`;
+export const isDeadBillStatus = (s: string | null | undefined): boolean =>
+  !!s && (DEAD_BILL_STATUSES as readonly string[]).includes(s);
 
 export const BILL_APPROVAL_STATUS_LABELS: Record<string, string> = {
   pending: "Pending Payment Approval",
   approved: "Approved for Payment",
   rejected: "Rejected",
+  withdrawn: "Withdrawn",
 };
 
 export const BILL_APPROVAL_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  withdrawn: "bg-gray-100 text-gray-600",
 };
 
 // Recurring Bill Rules — auto-approval of pre-vetted vendor invoices

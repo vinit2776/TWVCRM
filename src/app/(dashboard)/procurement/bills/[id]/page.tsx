@@ -606,9 +606,11 @@ export default function VendorBillDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold font-mono">{bill.bill_number}</h1>
-              <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
-                {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
-              </Badge>
+              {bill.approval_status !== "withdrawn" && (
+                <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
+                  {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
+                </Badge>
+              )}
               <Badge variant="secondary" className={BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}>
                 {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
               </Badge>
@@ -693,6 +695,22 @@ export default function VendorBillDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Withdrawn banner */}
+      {bill.approval_status === "withdrawn" && (
+        <div className="rounded-md border border-gray-300 bg-gray-50 px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-gray-500 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-medium text-gray-800">
+              This bill was withdrawn{bill.withdrawn_at ? ` on ${formatDate(bill.withdrawn_at)}` : ""}.
+            </p>
+            <p className="text-muted-foreground">
+              It is ignored by every queue, total and duplicate check, and can&apos;t be edited.
+              {bill.withdrawn_reason ? ` Reason: ${bill.withdrawn_reason}` : ""}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Pending approval banner */}
       {bill.approval_status === "pending" && (

@@ -33,7 +33,7 @@ export async function POST(
 
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
-    .select("id, created_by")
+    .select("id, created_by, approval_status")
     .eq("id", id)
     .single();
   if (fetchError || !bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
@@ -41,6 +41,10 @@ export async function POST(
   const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role)
     || bill.created_by === dbUser.id;
   if (!canAct) return NextResponse.json({ error: "Access denied" }, { status: 403 });
+
+  if (bill.approval_status === "withdrawn") {
+    return NextResponse.json({ error: "This bill was withdrawn — documents can't be added." }, { status: 403 });
+  }
 
   const body = await request.json();
   const parsed = bodySchema.safeParse(body);

@@ -51,6 +51,8 @@ export function summarizeBillsByMonth(
   const byMonth = new Map<string, MonthSummary>();
 
   for (const bill of bills) {
+    // A withdrawn bill is out of play — not money billed, owed or rejected.
+    if (bill.approval_status === "withdrawn") continue;
     const key = monthKey(bill.invoice_date);
     const m = byMonth.get(key) ?? {
       month: key, billCount: 0, total: 0, paid: 0, partiallyPaid: 0, unpaid: 0, rejected: 0, openQueries: 0,
