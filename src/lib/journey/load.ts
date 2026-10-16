@@ -175,6 +175,7 @@ export async function loadJourney(
       signedDocumentId: (contract.signed_document_id as string) ?? null,
       stamped: !!contract.stamp_reference,
       activated: !!contract.activated_at,
+      activatedAt: (contract.activated_at as string) ?? null,
       welcomeDone: !!contract.welcome_done_at,
       kycTotal: required.length,
       kycOutstanding,

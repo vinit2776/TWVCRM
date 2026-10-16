@@ -46,6 +46,7 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/lease-payment-reminders": DAILY,
   "cron/rent-gap-alert":          DAILY,
   "cron/journey-nudge":           DAILY,
+  "cron/journey-late":            DAILY,
   "cron/inbox-digest":            DAILY,
   "cron/query-digest":            DAILY,
   // Mon–Sat, 3×/day — the Sat 12:30 → Mon 04:30 gap is ~40h
