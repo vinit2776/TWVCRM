@@ -233,6 +233,7 @@ export default function VendorBillDetailPage() {
   const [approveType, setApproveType] = useState<"full" | "partial">("full");
   const [approveAmount, setApproveAmount] = useState("");
   const [approveNote, setApproveNote] = useState("");
+  const [approveToleranceAck, setApproveToleranceAck] = useState(false);
   const [approveReason, setApproveReason] = useState("");
   const [batchType, setBatchType] = useState<PaymentBatchType | "">("");
   const [approveGstAmount, setApproveGstAmount] = useState<string>("");
@@ -343,6 +344,7 @@ export default function VendorBillDetailPage() {
       action: "approve",
       batch_type: batchType,
       ...(gstVal !== null ? { gst_amount: gstVal } : {}),
+      ...(bill.out_of_tolerance ? { acknowledge_out_of_tolerance: approveToleranceAck } : {}),
     };
     if (approveType === "partial") {
       const amt = parseFloat(approveAmount);
@@ -727,6 +729,24 @@ export default function VendorBillDetailPage() {
           </p>
         </div>
       )}
+
+      {/* Price tolerance: outside the PO's agreed band, or over the PO value but inside it */}
+      {bill.out_of_tolerance ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-900">
+            <p className="font-medium">
+              Special approval needed — invoiced total on this PO is {Math.abs(Number(bill.variance_percent ?? 0))}% {Number(bill.variance_amount ?? 0) >= 0 ? "above" : "below"} the PO value
+              {" "}({formatCurrency(Math.abs(Number(bill.variance_amount ?? 0)))}), outside the agreed ± {bill.purchase_orders?.tolerance_percent ?? 0}%.
+            </p>
+            {bill.tolerance_exception_reason && <p className="mt-0.5">Reason given: &ldquo;{bill.tolerance_exception_reason}&rdquo;</p>}
+          </div>
+        </div>
+      ) : bill.variance_amount != null && Number(bill.variance_amount) !== 0 ? (
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">
+          Invoiced total on this PO is {Math.abs(Number(bill.variance_percent ?? 0))}% above the PO value ({formatCurrency(Math.abs(Number(bill.variance_amount)))}) — inside the agreed ± {bill.purchase_orders?.tolerance_percent ?? 0}%.
+        </div>
+      ) : null}
 
       {/* Vendor-email nag (touch point D — page-level banner) */}
       {chain?.vendor?.id && !chain.vendor.contact_email && (
@@ -1524,6 +1544,20 @@ export default function VendorBillDetailPage() {
               Invoice total: <strong>{formatCurrency(Number(bill.total_amount))}</strong>
             </p>
 
+            {bill.out_of_tolerance && (
+              <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={approveToleranceAck}
+                  onChange={(e) => setApproveToleranceAck(e.target.checked)}
+                />
+                <span>
+                  Invoiced total on this PO is {Math.abs(Number(bill.variance_percent ?? 0))}% {Number(bill.variance_amount ?? 0) >= 0 ? "above" : "below"} the PO value, outside the agreed tolerance. I&apos;ve reviewed the reason and approve the variance.
+                </span>
+              </label>
+            )}
+
             {/* ── GST Amount (optional at approval) ──────────────────────────── */}
             <div className="space-y-2">
               <Label htmlFor="approve-gst-amount">
@@ -1691,7 +1725,7 @@ export default function VendorBillDetailPage() {
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() => handleApprove()}
-              disabled={approveLoading}
+              disabled={approveLoading || (!!bill.out_of_tolerance && !approveToleranceAck)}
             >
               {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               {approveType === "partial" ? "Approve Partial" : "Approve Invoice"}

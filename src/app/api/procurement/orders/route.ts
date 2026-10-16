@@ -567,7 +567,7 @@ export async function POST(request: NextRequest) {
   // ── 1. Validate PR exists and is in an approvable state ──
   const { data: pr, error: prFetchError } = await supabase
     .from("purchase_requests")
-    .select("id, status, company_id, department, expenditure_type, purchase_request_items(id, quantity, estimated_price)")
+    .select("id, status, company_id, department, expenditure_type, tolerance_percent, purchase_request_items(id, quantity, estimated_price)")
     .eq("id", parsed.data.pr_id)
     .single();
 
@@ -663,6 +663,8 @@ export async function POST(request: NextRequest) {
     .from("purchase_orders")
     .insert({
       po_type: "goods",
+      // Inherited from the approved request; never set at PO time.
+      tolerance_percent: Number(pr.tolerance_percent ?? 0),
       company_id: pr.company_id,
       pr_id: poData.pr_id,
       vendor_id: poData.vendor_id,

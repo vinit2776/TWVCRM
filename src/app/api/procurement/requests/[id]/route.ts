@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS, PRICE_TOLERANCE_MAX_PERCENT } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 
@@ -13,6 +13,8 @@ const patchPrSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("approve"),
     notes: z.string().optional(),
+    // Final say on price tolerance (0-10). Omitted = accept what was requested.
+    tolerance_percent: z.number().int().min(0).max(PRICE_TOLERANCE_MAX_PERCENT).optional(),
     // Admin-only escape hatch for repeat / pre-approved orders where a fresh
     // vendor quotation adds no value. Mirrors payment_override_reason on contracts.
     quotation_override_reason: z.string().min(1).optional(),
@@ -64,6 +66,8 @@ const editPrSchema = z.object({
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   expenditure_type: z.enum(["operational", "amc"]).default("operational"),
+  tolerance_requested_percent: z.number().int().min(0).max(PRICE_TOLERANCE_MAX_PERCENT).default(0),
+  tolerance_reason: z.string().trim().optional().nullable(),
   items: z.array(editPrItemSchema).min(1, "At least one item is required"),
 
   billable_contract_id: z.string().uuid().optional().nullable(),
@@ -84,6 +88,9 @@ const editPrSchema = z.object({
   advance_amount: z.number().min(0).optional().nullable(),
   advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
   advance_notes: z.string().optional().nullable(),
+}).refine((data) => data.tolerance_requested_percent === 0 || !!data.tolerance_reason, {
+  message: "Say why the final invoice may differ from the estimate",
+  path: ["tolerance_reason"],
 }).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
   message: "billable_contract_id is required when department is 'reimbursement'",
   path: ["billable_contract_id"],
@@ -416,7 +423,15 @@ export async function PATCH(
       }
       // ── End budget enforcement ────────────────────────────────────────
       const approvalCode = await generateApprovalCode(supabase, id);
+      // Tolerance is decided here: accept what the requester asked for, or change it.
+      // AMC/service requests bill fixed cycle amounts, so tolerance never applies.
+      const approvedTolerance = pr.department === "amc" || pr.expenditure_type === "amc"
+        ? 0
+        : parsed.data.tolerance_percent ?? Number(pr.tolerance_requested_percent ?? 0);
       updatePayload = {
+        tolerance_percent: approvedTolerance,
+        tolerance_decided_by: dbUser.id,
+        tolerance_decided_at: new Date().toISOString(),
         status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
@@ -763,6 +778,8 @@ export async function PUT(
     expenditure_type: isAmc ? "amc" : "operational",
     billable_contract_id: newDepartment === "reimbursement" ? prData.billable_contract_id : null,
     total_estimated_amount: totalEstimated,
+    tolerance_requested_percent: isAmc ? 0 : prData.tolerance_requested_percent,
+    tolerance_reason: isAmc || prData.tolerance_requested_percent === 0 ? null : prData.tolerance_reason ?? null,
   };
   // Rewrite every AMC column each time so switching away from AMC clears stale values.
   for (const field of AMC_FIELDS) {

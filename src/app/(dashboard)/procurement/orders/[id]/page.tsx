@@ -993,6 +993,11 @@ export default function PurchaseOrderDetailPage() {
               <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
                 {PO_STATUS_LABELS[po.status]}
               </Badge>
+              {po.po_type !== "service" && (po.tolerance_percent ?? 0) > 0 && (
+                <Badge variant="outline" title="Invoice may differ from the PO value by this much without special approval">
+                  ± {po.tolerance_percent}% flexible
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}

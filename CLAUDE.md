@@ -217,6 +217,15 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 1. **Procurement** (`/procurement/bills/[id]`): Create bills, attach invoices. `admin` approves/rejects — `manager` cannot (`canApproveOrReject` in `src/app/api/procurement/bills/[id]/route.ts` is `role === "admin"`). **No payment recording here.**
 2. **Finance > Acc Payables** (`/accounting/vendor-payments/[id]`): `accounts`/`admin`/`office_admin` record payments on approved bills only. Uses `VendorEmailBanner` (`src/components/finance-intelligence/vendor-email-banner.tsx`) to prompt for missing vendor emails.
 
+### Price tolerance (goods POs)
+
+Lets the final vendor invoice drift from the PO value without a hard block (migration `00610`). Not offered for AMC/service POs (fixed cycle amounts).
+
+- **Request**: requester picks Firm / ±5% / ±10% (`purchase_requests.tolerance_requested_percent`, max `PRICE_TOLERANCE_MAX_PERCENT` = 10) with a reason.
+- **Approval**: whoever approves the request (`admin`/`manager`, same threshold rules as today) accepts or changes it; the final figure is `tolerance_percent` (+ `tolerance_decided_by/at`). Approval stays the only place it is decided.
+- **PO**: `purchase_orders.tolerance_percent` is copied from the request at goods-PO creation; never edited at PO time.
+- **Bill** (`POST /api/procurement/bills`, logic in `src/lib/procurement/price-tolerance.ts`): firm PO = old hard block. Flexible PO: cumulative invoiced total vs PO value (or received value on a short delivery) — inside the band records `variance_*` and follows the normal path; outside it sets `out_of_tolerance`, requires `tolerance_exception_reason`, is never auto-approved, and the admin must tick `acknowledge_out_of_tolerance` to approve. The low side is only judged for a single invoice on a fully received PO.
+
 ### Billing Statement Lifecycle
 
 `draft` → `finalized` → `exported` (→ `voided`)
