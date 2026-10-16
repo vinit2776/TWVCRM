@@ -9,6 +9,7 @@ import {
   statusForOutcome,
   validatePaymentReport,
   lastCheckedChip,
+  matchingRecordedPayments,
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
@@ -227,5 +228,32 @@ describe("lastCheckedChip", () => {
 
   it("never reports a negative age for a clock-skewed timestamp", () => {
     expect(lastCheckedChip(new Date(now + 86_400_000).toISOString(), now).label).toBe("checked today");
+  });
+});
+
+describe("matchingRecordedPayments", () => {
+  const pay = (id: string, amount: number, tds = 0) => ({ id, amount, tds_amount: tds });
+
+  it("finds the one recorded payment that equals the report", () => {
+    const m = matchingRecordedPayments([pay("a", 10000), pay("b", 6372)], 6372);
+    expect(m.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("counts TDS as part of the credit, as settlement does", () => {
+    const m = matchingRecordedPayments([pay("a", 9000, 1000)], 10000);
+    expect(m.map((p) => p.id)).toEqual(["a"]);
+  });
+
+  it("tolerates a rupee of rounding but no more", () => {
+    expect(matchingRecordedPayments([pay("a", 6372.6)], 6372)).toHaveLength(1);
+    expect(matchingRecordedPayments([pay("a", 6374)], 6372)).toHaveLength(0);
+  });
+
+  it("returns every candidate when several match, so a person has to choose", () => {
+    expect(matchingRecordedPayments([pay("a", 500), pay("b", 500)], 500)).toHaveLength(2);
+  });
+
+  it("returns nothing when no payment matches", () => {
+    expect(matchingRecordedPayments([pay("a", 100)], 6372)).toEqual([]);
   });
 });

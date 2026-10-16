@@ -415,9 +415,10 @@ function getClientIp(req) {
   const ip = xff ? String(xff).split(',')[0].trim() : (req.socket.remoteAddress || '');
   return ip.replace(/^::ffff:/, '');
 }
-// The branch a phone at `point` ({ lat, lng }) is at, or null (see geofence.js).
-function branchAtPoint(point) {
-  return branchAt(point, CONFIG.BRANCH_LIST, CONFIG.OFFICE_RADIUS_METERS);
+// The branch a phone at `point` ({ lat, lng }) is at, or null (see geofence.js). An
+// employee's own branch wins whenever they're within its radius.
+function branchAtPoint(point, employeeBranch) {
+  return branchAt(point, CONFIG.BRANCH_LIST, CONFIG.OFFICE_RADIUS_METERS, employeeBranch);
 }
 // The branch the biometric device is in, or null if none is marked.
 function deviceBranch() {
@@ -2349,6 +2350,9 @@ function selfPunchScript(employee, lang) {
           const d = selfPunchDistance(b, pos.coords.latitude, pos.coords.longitude);
           if (d < meters) { nearest = b; meters = d; }
         }
+        const own = selfPunchBranches.find(b => b.name === selfPunchOwnBranch);
+        const ownMeters = own ? selfPunchDistance(own, pos.coords.latitude, pos.coords.longitude) : Infinity;
+        if (ownMeters <= selfPunchRadius) { nearest = own; meters = ownMeters; }
         if (meters <= selfPunchRadius && selfPunchOwnBranch && nearest.name !== selfPunchOwnBranch) {
           hint.textContent = '⚠️ ' + ${JSON.stringify(t(lang, 'dashboard.other_branch_hint'))}.replace('{{branch}}', nearest.name).replace('{{own}}', selfPunchOwnBranch);
         } else if (meters <= selfPunchRadius) {
@@ -4448,7 +4452,7 @@ async function punchesToRecheck() {
   for (const r of rows) {
     const point = parseLatLng(r.location);
     if (!point) continue;
-    const branch = branchAtPoint(point);
+    const branch = branchAtPoint(point, r.employee_branch);
     const name = branch ? branch.name : '';
     const deviation = isBranchDeviation(r.employee_branch, name);
     const source = branch && !deviation ? 'office' : 'remote';
@@ -5140,7 +5144,7 @@ async function handleRequest(req, res) {
       if (!coords) {
         return sendJson(res, 400, { error: "Punching needs your phone's location. Allow location access and try again." });
       }
-      const branch = branchAtPoint(coords);
+      const branch = branchAtPoint(coords, employee.branch);
       punchBranch = branch ? branch.name : '';
       deviation = isBranchDeviation(employee.branch, punchBranch);
       punchSource = branch && !deviation ? 'office' : 'remote';

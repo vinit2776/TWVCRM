@@ -636,7 +636,7 @@ export async function PATCH(
           if (location && isUnifiLocation(location)) {
             const siteConfig = siteConfigFromLocation(location);
             const durationMinutes = calcVoucherMinutes(oldContract.end_date);
-            const seatedCount = oldContract.no_of_seats || 1;
+            const seatedCount = oldContract.seats || 1;
             const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
               durationMinutes,
               note: `contract_${data.contract_number}`,

@@ -12,12 +12,14 @@ import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog"
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
+import { formatRecordedOn } from "@/lib/payment-dates";
 import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   PAYMENT_REPORT_STATUS_COLORS,
   PAYMENT_REPORT_STATUS_LABELS,
   canReviewPaymentReport,
+  matchingRecordedPayments,
 } from "@/lib/queries/payment-reports";
 import type { QueryPaymentReport } from "@/lib/queries/types";
 
@@ -49,6 +51,17 @@ interface Props {
   entityAmount?: number | null;
   /** Refresh the thread after any outcome. */
   onChanged: () => void;
+}
+
+/** A payment already recorded on the statement the report points at. */
+interface RecordedPayment {
+  id: string;
+  amount: number | string;
+  tds_amount: number | string | null;
+  payment_date: string;
+  created_at?: string;
+  payment_mode: string;
+  payment_reference: string | null;
 }
 
 interface StatementOption {
@@ -85,6 +98,11 @@ export function PaymentReportCard({
     report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
   );
   const [recordOpen, setRecordOpen] = useState(false);
+  // Payments already on the chosen invoice. The usual way a report ends up
+  // double-counted is accounts recording the receipt first, then verifying the
+  // report with "Verify and record" — which would record it again. Showing
+  // what's already there lets them link it instead.
+  const [recorded, setRecorded] = useState<RecordedPayment[]>([]);
 
   const needsAllocation = entityType === "contract" && !isDeposit;
 
@@ -111,6 +129,31 @@ export function PaymentReportCard({
     })();
     return () => { cancelled = true; };
   }, [canReview, needsAllocation, entityId, report.claimed_statement_id]);
+
+  useEffect(() => {
+    if (!canReview || isDeposit || !statementId) {
+      setRecorded([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/billing-statements/${encodeURIComponent(statementId)}/payment`, { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        const json = (await res.json()) as { data?: RecordedPayment[] };
+        if (!cancelled) setRecorded(json.data ?? []);
+      } catch {
+        if (!cancelled) setRecorded([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canReview, isDeposit, statementId]);
+
+  // Recorded payments that match what was reported, to the rupee. Exactly one
+  // is the common case (the same receipt entered before anyone verified the
+  // report) and earns a one-click accept; zero or several fall back to the
+  // list below, where a person chooses.
+  const acceptable = matchingRecordedPayments(recorded, report.amount);
 
   const settle = useCallback(
     async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
@@ -226,6 +269,62 @@ export function PaymentReportCard({
                     </SelectContent>
                   </Select>
                 )}
+              </div>
+            )}
+
+            {mode === "idle" && acceptable.length === 1 && (
+              <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
+                <p className="text-[11px] font-medium text-green-900">
+                  This payment is already recorded on the invoice
+                </p>
+                <p className="text-[11px] text-green-900/80">
+                  {formatCurrency(Number(acceptable[0].amount) + Number(acceptable[0].tds_amount ?? 0))}
+                  {" · "}
+                  {STATEMENT_PAYMENT_MODE_LABELS[acceptable[0].payment_mode] ?? acceptable[0].payment_mode}
+                  {acceptable[0].payment_reference ? ` · ${acceptable[0].payment_reference}` : ""}
+                  {" · received "}
+                  {formatDate(acceptable[0].payment_date)}
+                </p>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                  disabled={busy}
+                  onClick={() => void settle("verified", acceptable[0].id)}
+                >
+                  <Check className="h-3 w-3 mr-1" /> Accept and link this payment
+                </Button>
+              </div>
+            )}
+
+            {mode === "idle" && recorded.length > 0 && (
+              <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
+                <p className="text-[11px] font-medium">Already recorded on this invoice</p>
+                <p className="text-[11px] opacity-80">
+                  If this is the same payment, link it here. &ldquo;Verify and record&rdquo; adds a second
+                  payment, and is refused if it would over-credit the invoice.
+                </p>
+                {recorded.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      <span className="font-medium tabular-nums">{formatCurrency(Number(p.amount))}</span>
+                      {" · "}
+                      {STATEMENT_PAYMENT_MODE_LABELS[p.payment_mode] ?? p.payment_mode}
+                      {p.payment_reference ? ` · ${p.payment_reference}` : ""}
+                      {" · received "}
+                      {formatDate(p.payment_date)}
+                      {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[11px] bg-background flex-none"
+                      disabled={busy}
+                      onClick={() => void settle("verified", p.id)}
+                    >
+                      Link and verify
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
 

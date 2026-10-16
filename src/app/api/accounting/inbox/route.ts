@@ -14,6 +14,7 @@ import {
   type HandoffState,
   type InboxAggregator,
   type InboxPayment,
+  type InboxReportedPayment,
   type InboxResponse,
   type InboxRow,
   type InboxSnapshot,
@@ -331,7 +332,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes, supportingDocsRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes, openQueriesRes, supportingDocsRes, reportedRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -351,7 +352,7 @@ export async function GET(req: NextRequest) {
       .maybeSingle(),
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("billing_payments")
-      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
+      .select("id, billing_statement_id, amount, payment_date, created_at, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
       .in("billing_statement_id", statementIds)
       .order("payment_date", { ascending: false }),
     // Only fetched in single-row mode with ?include=timeline.
@@ -380,7 +381,48 @@ export async function GET(req: NextRequest) {
       .from("reimbursement_supporting_documents")
       .select("id, billing_statement_id")
       .in("billing_statement_id", statementIds),
+    // Payment reports still waiting on accounts. Not filtered by statement in
+    // SQL: a report matches a statement either through its thread's entity or
+    // through the invoice the reporter named, and the open set is small.
+    noIds ? Promise.resolve({ data: null }) : supabase
+      .from("query_payment_reports")
+      .select(`
+        id, query_id, amount, paid_on, payment_mode, payment_reference, created_at, claimed_statement_id,
+        reporter:users!query_payment_reports_created_by_fkey(full_name),
+        query:queries!query_payment_reports_query_id_fkey(entity_type, entity_id, status)
+      `)
+      .eq("status", "reported"),
   ]);
+
+  const statementIdSet = new Set(statementIds);
+  const reportedByStatement = new Map<string, InboxReportedPayment[]>();
+  for (const r of (reportedRes.data || []) as unknown as Array<{
+    id: string; query_id: string; amount: number | string; paid_on: string;
+    payment_mode: string; payment_reference: string | null; created_at: string;
+    claimed_statement_id: string | null;
+    reporter: { full_name: string | null } | { full_name: string | null }[] | null;
+    query: { entity_type: string; entity_id: string; status: string } | { entity_type: string; entity_id: string; status: string }[] | null;
+  }>) {
+    const q = Array.isArray(r.query) ? r.query[0] : r.query;
+    if (!q || q.status !== "open") continue;
+    const sid = q.entity_type === "billing_statement" ? q.entity_id : r.claimed_statement_id;
+    if (!sid || !statementIdSet.has(sid)) continue;
+    const reporter = Array.isArray(r.reporter) ? r.reporter[0] : r.reporter;
+    const list = reportedByStatement.get(sid) ?? [];
+    list.push({
+      id: r.id,
+      query_id: r.query_id,
+      entity_type: q.entity_type,
+      entity_id: q.entity_id,
+      amount: Number(r.amount),
+      paid_on: r.paid_on,
+      payment_mode: r.payment_mode,
+      payment_reference: r.payment_reference,
+      reported_by_name: reporter?.full_name ?? null,
+      created_at: r.created_at,
+    });
+    reportedByStatement.set(sid, list);
+  }
 
   const supportingDocsCountByStatement = new Map<string, number>();
   for (const r of supportingDocsRes.data || []) {
@@ -489,6 +531,7 @@ export async function GET(req: NextRequest) {
       id: p.id as string,
       amount: Number(p.amount),
       payment_date: p.payment_date as string,
+      created_at: p.created_at as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
       notes: (p.notes as string | null) ?? null,
@@ -648,6 +691,7 @@ export async function GET(req: NextRequest) {
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
       open_query_count: openQueryCountByStatement.get(s.id) ?? 0,
+      reported_payments: reportedByStatement.get(s.id) ?? [],
       supporting_documents_count: supportingDocsCountByStatement.get(s.id) ?? 0,
       // New detail fields
       irn_required: customerHasGstin,

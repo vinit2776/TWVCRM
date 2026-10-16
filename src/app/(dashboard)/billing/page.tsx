@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
@@ -373,8 +373,12 @@ interface MonthlySummary {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function BillingPage() {
+function BillingPageInner() {
   const now = new Date();
+  // Read from the router, not window.location: on a client-side navigation
+  // (e.g. the contract page's Invoice customer wizard) the address bar still
+  // holds the previous URL while this first renders.
+  const searchParams = useSearchParams();
 
   // ── Month ─────────────────────────────────────────────────────────────────
   const [year, setYear]   = useState(now.getFullYear());
@@ -392,19 +396,28 @@ export default function BillingPage() {
 
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const tab = params.get("tab") ?? "rentals";
-      // Legacy redirects: "contracts" was merged into "statements" (2026),
-      // which itself later split back into "rentals" / "usage" — a link
-      // built for either era (including the ?tab=statements&type=usage
-      // deep link the billing-run email sends) still lands somewhere sane.
-      if (tab === "contracts") return "rentals";
-      if (tab === "statements") return params.get("type") === "usage" ? "usage" : "rentals";
-      return tab;
-    }
-    return "rentals";
+    const tab = searchParams.get("tab") ?? "rentals";
+    // Legacy redirects: "contracts" was merged into "statements" (2026),
+    // which itself later split back into "rentals" / "usage" — a link
+    // built for either era (including the ?tab=statements&type=usage
+    // deep link the billing-run email sends) still lands somewhere sane.
+    if (tab === "contracts") return "rentals";
+    if (tab === "statements") return searchParams.get("type") === "usage" ? "usage" : "rentals";
+    return tab;
   });
+
+  // ?search= seeds the rent and usage search boxes (the contract page's
+  // Invoice customer wizard links here with a contract number).
+  const [initialSearch] = useState(() => searchParams.get("search") ?? "");
+  // ?location_id= preselects the electricity tab's location filter.
+  const [initialLocationId] = useState(() => searchParams.get("location_id") ?? "");
+  // ?open=1 opens the dialog for the thing being invoiced (rent invoice, Capture Bill).
+  // "1" = open the one invoiceable item; any other value is a specific rent queue row id.
+  const [initialOpenParam] = useState(() => searchParams.get("open") ?? "");
+  const initialOpen = initialOpenParam === "1";
+  const initialOpenRowId = initialOpenParam && initialOpenParam !== "1" ? initialOpenParam : "";
+  // ?add_charge=<contract id> opens the Add usage charge dialog for that contract.
+  const [initialAddChargeContractId] = useState(() => searchParams.get("add_charge") ?? "");
 
   // ── Section grouping (Phase 3 finance consolidation) ─────────────────────
   // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing),
@@ -464,8 +477,8 @@ export default function BillingPage() {
   const [chargesDateFrom, setChargesDateFrom]         = useState("");
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [chargesSearchQuery, setChargesSearchQuery]   = useState("");
-  const [addChargeOpen, setAddChargeOpen]             = useState(false);
-  const [addChargeContractId, setAddChargeContractId] = useState<string | undefined>(undefined);
+  const [addChargeOpen, setAddChargeOpen]             = useState(!!initialAddChargeContractId);
+  const [addChargeContractId, setAddChargeContractId] = useState<string | undefined>(initialAddChargeContractId || undefined);
   const [editChargeOpen, setEditChargeOpen]           = useState(false);
   const [editingCharge, setEditingCharge]             = useState<UsageCharge | null>(null);
   const [viewChargeOpen, setViewChargeOpen]           = useState(false);
@@ -1419,6 +1432,7 @@ export default function BillingPage() {
 
           {chargesView === "unbilled" ? (
             <UsageBillingBoard
+              initialSearch={initialSearch}
               refreshKey={boardRefreshKey}
               canSend={["admin", "manager", "accounts"].includes(userRole ?? "")}
               canWaive={["admin", "manager"].includes(userRole ?? "")}
@@ -1590,7 +1604,7 @@ export default function BillingPage() {
 
         {/* ── Electricity Bills ─────────────────────────────────────────── */}
         <TabsContent value="electricity" className="mt-4">
-          <ElectricityBillsTab />
+          <ElectricityBillsTab initialLocationId={initialLocationId} autoCapture={initialOpen} />
         </TabsContent>
 
         {/* ── Rentals ───────────────────────────────────────────────────── */}
@@ -1599,7 +1613,7 @@ export default function BillingPage() {
               scoped to the page-level MonthPicker above (that still drives
               the other tabs on this page) — Unbilled computes its own "now",
               Billed is unscoped. */}
-          <UnbilledBilledTabs type="rent" userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
+          <UnbilledBilledTabs type="rent" initialSearch={initialSearch} autoOpen={initialOpen} autoOpenRowId={initialOpenRowId} userRole={userRole} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
         </TabsContent>
 
         {/* ── Usage ─────────────────────────────────────────────────────── */}
@@ -1769,5 +1783,13 @@ export default function BillingPage() {
         onSuccess={() => { fetchStatements(); fetchData(); }}
       />
     </div>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Suspense fallback={null}>
+      <BillingPageInner />
+    </Suspense>
   );
 }

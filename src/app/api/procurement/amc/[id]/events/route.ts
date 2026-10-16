@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { countsTowardVisits } from "@/lib/amc-lifecycle";
+import { countedVisitsByAsset, combinedVisitsUsed } from "@/lib/procurement/amc-lines";
 import { z } from "zod";
 
 const createEventSchema = z.object({
@@ -78,12 +79,17 @@ export async function POST(
   // Fetch PO to validate and get visit counts
   const { data: po } = await supabase
     .from("purchase_orders")
-    .select("id, po_type, amc_visits_covered, amc_visits_used, amc_start_date, amc_status")
+    .select("id, po_type, status, amc_visits_covered, amc_visits_used, amc_start_date, amc_status")
     .eq("id", poId)
     .single();
 
   if (!po) return NextResponse.json({ error: "PO not found" }, { status: 404 });
   if (po.po_type !== "service") return NextResponse.json({ error: "Not a service PO" }, { status: 422 });
+  // A cancelled contract is no longer being serviced under this PO. The screens hide the
+  // button already; this stops the API logging against it directly.
+  if (po.status === "cancelled") {
+    return NextResponse.json({ error: "This purchase order is cancelled, so visits can't be logged against it" }, { status: 422 });
+  }
 
   const lockedChain = await chainLockedResponse(supabase, { poId });
   if (lockedChain) return lockedChain;
@@ -101,8 +107,26 @@ export async function POST(
   // breakdown or remote call is unlimited, so it never trips the limit.
   const countsAsVisit = countsTowardVisits(parsed.data.event_type);
 
+  // A combined PO covers several assets and visits are counted per asset, so a
+  // visit on one must say which asset it was for (and it must be one of them).
+  const { data: coveredLines } = await supabase
+    .from("purchase_order_items")
+    .select("linked_asset_id")
+    .eq("po_id", poId)
+    .not("linked_asset_id", "is", null);
+  const poAssetIds = Array.from(new Set((coveredLines ?? []).map((l) => l.linked_asset_id as string)));
+  const isMultiAsset = poAssetIds.length > 1;
+  if (isMultiAsset) {
+    if (!parsed.data.asset_id) {
+      return NextResponse.json({ error: "Choose which asset this visit was for" }, { status: 422 });
+    }
+    if (!poAssetIds.includes(parsed.data.asset_id)) {
+      return NextResponse.json({ error: "That asset is not covered by this contract" }, { status: 422 });
+    }
+  }
+
   // Warn if at/over limit (but don't block — physical work may still happen)
-  const atLimit = countsAsVisit && visitsCovered !== null && visitsUsed >= visitsCovered;
+  let atLimit = countsAsVisit && visitsCovered !== null && visitsUsed >= visitsCovered;
 
   // Determine next event_number for this PO
   const { count: existingCount } = await supabase
@@ -168,8 +192,19 @@ export async function POST(
     }
   }
 
-  // Increment visits_used on the PO — counted visit types only
-  const newVisitsUsed = countsAsVisit ? visitsUsed + 1 : visitsUsed;
+  // Increment visits_used on the PO — counted visit types only. On a combined PO the
+  // figure is derived per asset instead (see combinedVisitsUsed).
+  let newVisitsUsed = countsAsVisit ? visitsUsed + 1 : visitsUsed;
+  if (isMultiAsset && countsAsVisit) {
+    const { data: allEvents } = await supabase
+      .from("amc_service_events")
+      .select("asset_id, event_type")
+      .eq("po_id", poId);
+    const perAsset = countedVisitsByAsset(allEvents ?? [], poAssetIds);
+    newVisitsUsed = combinedVisitsUsed(perAsset);
+    // The event is already inserted, so "before this visit" is one less for its asset.
+    atLimit = visitsCovered !== null && (perAsset[parsed.data.asset_id as string] ?? 0) - 1 >= visitsCovered;
+  }
   if (countsAsVisit) {
     const newAmcStatus = computeAmcStatus(
       po.amc_start_date,

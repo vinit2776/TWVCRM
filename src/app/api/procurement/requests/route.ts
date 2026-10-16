@@ -11,6 +11,8 @@ const createPrItemSchema = z.object({
   unit: z.enum(ITEM_UNITS),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
+  // AMC requests: the asset this line covers (one line per asset).
+  linked_asset_id: z.string().uuid().optional().nullable(),
 });
 
 const createPrSchema = z.object({
@@ -155,6 +157,14 @@ export async function POST(request: NextRequest) {
 
   const { items, submit, ...prData } = parsed.data;
 
+  // One line per asset — the same asset on two lines would double-count it.
+  if (prData.department === "amc") {
+    const assetIds = items.map((i) => i.linked_asset_id).filter((a): a is string => !!a);
+    if (new Set(assetIds).size !== assetIds.length) {
+      return NextResponse.json({ error: "Each asset can only appear on one line" }, { status: 400 });
+    }
+  }
+
   // Compute total estimated
   const totalEstimated = items.reduce((sum, item) => {
     if (item.estimated_price && item.quantity) {
@@ -191,6 +201,8 @@ export async function POST(request: NextRequest) {
     estimated_price: item.estimated_price || null,
     total_estimated: item.estimated_price ? item.quantity * item.estimated_price : null,
     notes: item.notes || null,
+    // Only AMC lines are tied to an asset.
+    linked_asset_id: prData.department === "amc" ? item.linked_asset_id || null : null,
   }));
 
   const { error: itemsError } = await supabase.from("purchase_request_items").insert(lineItems);

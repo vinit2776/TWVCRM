@@ -2431,6 +2431,9 @@ export interface PurchaseRequestItem {
   notes?: string;
   created_at: string;
   procurement_items?: ProcurementItem | null;
+  /** AMC requests: the asset this line covers */
+  linked_asset_id?: string | null;
+  linked_asset?: { id: string; name: string; asset_code: string | null } | null;
   // Computed by API — not DB columns
   already_ordered_qty?: number;
   remaining_qty?: number;

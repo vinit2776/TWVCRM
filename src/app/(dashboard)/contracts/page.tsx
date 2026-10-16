@@ -57,6 +57,16 @@ export default function ContractsPage() {
   const [shortfallFilter, setShortfallFilter] = useState(false);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [selectedContract, setSelectedContract] = useState<ContractWithQuotaCount | null>(null);
+  // Accepted/active contracts with no signed agreement attached. Best-effort:
+  // if it fails the list simply shows no flags.
+  const [unsignedIds, setUnsignedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch("/api/contracts/unsigned")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => setUnsignedIds(new Set<string>(json.data || [])))
+      .catch(() => {});
+  }, []);
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);
@@ -293,6 +303,14 @@ export default function ContractsPage() {
                       <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(c)]}>
                         {CONTRACT_STATUS_LABELS[contractDisplayStatus(c)]}
                       </Badge>
+                      {unsignedIds.has(c.id) && (
+                        <span
+                          title="No signed agreement attached. WiFi vouchers stay blocked until one is."
+                          className="rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                        >
+                          Unsigned
+                        </span>
+                      )}
                       {c.is_renewal && (
                         <span title={`Renewal V${c.renewal_sequence || 2}`}>
                           <RefreshCw className="h-3 w-3 text-blue-500" />

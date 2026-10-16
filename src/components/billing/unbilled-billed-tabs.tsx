@@ -12,7 +12,7 @@
  * { page, limit, total, totalPages } shape used elsewhere on this page.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Loader2, ChevronLeft, ChevronRight, ChevronDown, CalendarPlus, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -99,15 +99,21 @@ interface Props {
   userRole?: string | null;
   onFinalized?: () => void | Promise<void>;
   onViewStatement?: (id: string) => void;
+  /** Seeds the search box, e.g. a contract number from the contract page's Invoice customer wizard. */
+  initialSearch?: string;
+  /** With initialSearch set to a contract number: open that contract's invoice dialog once the queue loads (the Invoice wizard). */
+  autoOpen?: boolean;
+  /** Open exactly this queue row's invoice dialog once the queue loads (chosen in the Invoice wizard's month picker). */
+  autoOpenRowId?: string;
 }
 
 const BILLING_ROLES = ["admin", "manager", "accounts"];
 
-export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement }: Props) {
+export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatement, initialSearch, autoOpen, autoOpenRowId }: Props) {
   const [tab, setTab] = useState<"unbilled" | "billed">(type === "usage" ? "billed" : "unbilled");
   // One search box for whichever tab is open. Unbilled filters in the browser
   // (the whole queue is already loaded); Billed searches server-side.
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch ?? "");
   const [billedSearch, setBilledSearch] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setBilledSearch(search.trim()), 300);
@@ -198,6 +204,41 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
       setBackfillPreviewing(false);
     }
   };
+
+  // Invoice wizard hand-off: open the one thing that can be invoiced for this
+  // contract. With several months waiting, leave the filtered list for the user to pick.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if ((!autoOpen && !autoOpenRowId) || !initialSearch || autoOpenedRef.current || unbilledLoading || !userRole) return;
+    autoOpenedRef.current = true;
+    const mine = unbilledRows.filter((r) => r.contractNumber === initialSearch);
+    const isActionable = (r: UnbilledRow) =>
+      (r.backfillTarget && canBill) || (r.category === "current_cycle" && r.statementId && canReviewSend);
+    const openRow = (r: UnbilledRow) => {
+      if (r.backfillTarget && canBill) void openBackfillDialog(r);
+      else setReviewTarget({
+        statementId: r.statementId!,
+        status: r.statementStatus ?? "draft",
+        billingMode: r.billingMode ?? null,
+        contractNumber: r.contractNumber,
+        customerName: r.customerName,
+        periodLabel: r.periodLabel.split(" · ")[0],
+        amount: r.amount,
+      });
+    };
+    // A month picked in the wizard opens exactly that row, never a different one.
+    if (autoOpenRowId) {
+      const picked = mine.find((r) => r.id === autoOpenRowId);
+      if (picked && isActionable(picked)) openRow(picked);
+      else toast.info("That month isn't waiting to be invoiced any more. Pick one from the list.");
+      return;
+    }
+    const actionable = mine.filter(isActionable);
+    if (actionable.length === 1) openRow(actionable[0]);
+    else if (actionable.length === 0) toast.info(`Nothing to invoice for ${initialSearch} in the rent queue.`);
+    else toast.info(`${actionable.length} rent months are waiting for ${initialSearch}. Pick one below.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen, autoOpenRowId, initialSearch, unbilledLoading, unbilledRows, userRole]);
 
   const confirmBackfill = async () => {
     if (!backfillRow?.backfillTarget) return;
