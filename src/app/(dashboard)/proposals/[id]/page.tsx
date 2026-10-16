@@ -58,6 +58,7 @@ import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
@@ -1056,6 +1057,10 @@ export default function ProposalDetailPage({
           )}
         </div>
       </div>
+
+      {proposal.lead_id && (
+        <JourneyPanel leadId={proposal.lead_id} proposalId={proposal.id} />
+      )}
 
       {/* Lifecycle Timeline */}
       <Card>

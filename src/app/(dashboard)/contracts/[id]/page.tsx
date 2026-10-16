@@ -84,6 +84,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
@@ -1446,6 +1447,10 @@ export default function ContractDetailPage({
       {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
       {contract.lead_id && (
         <ContractChainStrip contractId={contract.id} leadId={contract.lead_id} />
+      )}
+
+      {contract.lead_id && (
+        <JourneyPanel leadId={contract.lead_id} contractId={contract.id} />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
