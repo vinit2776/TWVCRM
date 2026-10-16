@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 00609: price tolerance on purchase requests / orders / bills
+-- Migration 00610: price tolerance on purchase requests / orders / bills
 --
 -- A requester can ask for room (up to 10%) between the estimate and the final
 -- vendor invoice; whoever approves the request accepts or changes it; the PO

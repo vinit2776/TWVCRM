@@ -219,7 +219,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Price tolerance (goods POs)
 
-Lets the final vendor invoice drift from the PO value without a hard block (migration `00609`). Not offered for AMC/service POs (fixed cycle amounts).
+Lets the final vendor invoice drift from the PO value without a hard block (migration `00610`). Not offered for AMC/service POs (fixed cycle amounts).
 
 - **Request**: requester picks Firm / ±5% / ±10% (`purchase_requests.tolerance_requested_percent`, max `PRICE_TOLERANCE_MAX_PERCENT` = 10) with a reason.
 - **Approval**: whoever approves the request (`admin`/`manager`, same threshold rules as today) accepts or changes it; the final figure is `tolerance_percent` (+ `tolerance_decided_by/at`). Approval stays the only place it is decided.
