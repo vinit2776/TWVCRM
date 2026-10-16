@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Check, Loader2, Search, X } from "lucide-react";
+import { AlertTriangle, Check, Link2, Loader2, Search, X, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -20,6 +20,7 @@ import {
   PAYMENT_REPORT_STATUS_LABELS,
   canReviewPaymentReport,
   matchingRecordedPayments,
+  closedReportSummary,
 } from "@/lib/queries/payment-reports";
 import type { QueryPaymentReport } from "@/lib/queries/types";
 
@@ -190,6 +191,43 @@ export function PaymentReportCard({
   const modeLabel = STATEMENT_PAYMENT_MODE_LABELS[report.payment_mode] ?? report.payment_mode;
   const tone = PAYMENT_REPORT_STATUS_COLORS[report.status];
 
+  // A settled report is a record of who told accounts, not a payment. Drawn as
+  // a green card with a big amount it read as a second receipt next to the real
+  // payment, so once closed it becomes a plain note that points at the payment.
+  if (report.status !== "reported") {
+    const summary = closedReportSummary({
+      status: report.status,
+      targetKind: report.target_kind,
+      reportedAmount: report.amount,
+      reportedMode: report.payment_mode,
+      reportedOn: report.paid_on,
+      linkedPayment: report.linked_payment,
+      modeLabel: (m) => STATEMENT_PAYMENT_MODE_LABELS[m] ?? m,
+    });
+    const Icon = report.status === "rejected" ? XCircle : Link2;
+    return (
+      <div className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground flex gap-2 items-start leading-relaxed">
+        <Icon className="h-3.5 w-3.5 mt-0.5 flex-none" aria-hidden />
+        <div className="min-w-0">
+          <p>
+            <span className="font-medium text-foreground">{summary.headline}</span>
+            {report.reviewed_by && report.reviewed_at
+              ? ` · ${report.status === "verified" ? "verified" : "closed"} by ${report.reviewed_by.full_name}, ${formatDate(report.reviewed_at)}`
+              : ""}
+          </p>
+          <p>
+            Reported by {report.created_by.full_name} ({USER_ROLE_LABELS[report.created_by.role] ?? report.created_by.role}):{" "}
+            {formatCurrency(report.amount)}, {modeLabel}, {formatDate(report.paid_on)}
+          </p>
+          {summary.linkLine && <p>{summary.linkLine}</p>}
+          {report.status === "rejected" && report.resolution_note && (
+            <p className="italic">{report.resolution_note}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className={`rounded-md border p-3 space-y-2.5 ${tone}`}>
@@ -219,24 +257,14 @@ export function PaymentReportCard({
             label="Reported by"
             value={`${report.created_by.full_name} (${USER_ROLE_LABELS[report.created_by.role] ?? report.created_by.role})`}
           />
-          {report.reviewed_by && report.reviewed_at && (
-            <Row
-              label={report.status === "verified" ? "Verified by" : "Closed by"}
-              value={`${report.reviewed_by.full_name} · ${formatDate(report.reviewed_at)}`}
-            />
-          )}
         </dl>
 
-        {report.payer_differs && report.payer_name && report.status === "reported" && (
+        {report.payer_differs && report.payer_name && (
           <p className="text-[11px] flex items-start gap-1.5">
             <AlertTriangle className="h-3 w-3 mt-0.5 flex-none" />
             The bank credit will show <span className="font-medium">{report.payer_name}</span>, not the
             contracting entity.
           </p>
-        )}
-
-        {report.status !== "reported" && report.resolution_note && (
-          <p className="text-xs italic border-t pt-2 opacity-90">{report.resolution_note}</p>
         )}
 
         {canReview && (

@@ -284,3 +284,33 @@ export function matchingRecordedPayments<
     (p) => Math.abs(Number(p.amount ?? 0) + Number(p.tds_amount ?? 0) - reportedAmount) <= 1,
   );
 }
+
+/**
+ * The wording of a closed report's note. A report is a record of who told
+ * accounts about a payment, not a payment, so once settled it reads as a note
+ * that points at the real payment rather than repeating the amount as a second
+ * receipt.
+ */
+export function closedReportSummary(args: {
+  status: PaymentReportStatus;
+  targetKind: PaymentReportTargetKind;
+  reportedAmount: number;
+  reportedMode: string;
+  reportedOn: string;
+  linkedPayment: { payment_mode: string; payment_reference: string | null } | null | undefined;
+  modeLabel: (mode: string) => string;
+}): { headline: string; linkLine: string | null } {
+  if (args.status === "rejected") {
+    return { headline: "Payment report closed — no such payment", linkLine: null };
+  }
+  if (args.targetKind === "deposit") {
+    return { headline: "Payment report closed", linkLine: "Recorded against the deposit" };
+  }
+  const p = args.linkedPayment;
+  if (!p) return { headline: "Payment report closed", linkLine: "Linked to the recorded payment" };
+  const ref = p.payment_reference ? `, ref ${p.payment_reference}` : "";
+  return {
+    headline: "Payment report closed",
+    linkLine: `Linked to the payment recorded on the invoice (${args.modeLabel(p.payment_mode)}${ref})`,
+  };
+}

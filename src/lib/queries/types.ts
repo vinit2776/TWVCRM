@@ -232,6 +232,8 @@ export interface QueryPaymentReport {
   payer_name: string | null;
   payer_differs: boolean;
   billing_payment_id: string | null;
+  /** The payment a verified report is linked to, for the closed-report note. */
+  linked_payment?: { id: string; amount: number | string; payment_mode: string; payment_reference: string | null; payment_date: string } | null;
   /** The invoice the reporter was told this covers. Pre-selects allocation. */
   claimed_statement_id: string | null;
   claimed_statement: { id: string; statement_number: string | null; gst_invoice_number: string | null } | null;
