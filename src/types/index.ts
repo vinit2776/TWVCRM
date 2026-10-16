@@ -716,6 +716,8 @@ export interface Contract {
   renewal_declined_reason?: string | null;
   renewal_declined_at?: string | null;
   renewal_declined_by?: string | null;
+  /** Internal note on what was agreed in the renewal negotiation (renewals only, never in customer documents). */
+  renewal_agreed_note?: string | null;
   // Pro-rata collection for mid-month renewals
   prorata_billing_statement_id?: string | null;
   prorata_payment_status?: "not_applicable" | "pending" | "paid" | "waived";

@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { RENEWAL_NOTE_MAX_LENGTH } from "@/lib/renewal-note";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -51,6 +53,7 @@ export function ContractRenewalEditDialog({
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
   const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  const [agreedNote, setAgreedNote] = useState(contract.renewal_agreed_note ?? "");
   const [startDate, setStartDate] = useState(contract.start_date);
   const [items, setItems] = useState<EditableItem[]>(() =>
     (contract.items || []).map((item) => ({
@@ -121,6 +124,7 @@ export function ContractRenewalEditDialog({
           seats,
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
+          agreed_note: agreedNote,
           items: items.map((i) => ({
             description: i.description.trim(),
             quantity: i.quantity,
@@ -228,6 +232,22 @@ export function ContractRenewalEditDialog({
                 <p className="text-[10px] text-muted-foreground">
                   Stored for reference on the addendum text — it does not auto-recalculate the line
                   items below. Edit the amounts directly if the escalation changes the rate.
+                </p>
+              </div>
+              <div className="space-y-1 col-span-2">
+                <Label className="text-xs" htmlFor="edit-agreed-note">What was agreed (optional)</Label>
+                <Textarea
+                  id="edit-agreed-note"
+                  value={agreedNote}
+                  onChange={(e) => setAgreedNote(e.target.value)}
+                  maxLength={RENEWAL_NOTE_MAX_LENGTH}
+                  rows={2}
+                  placeholder="Held the rate in return for two more seats and a 12-month term"
+                  className="text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Internal. Shown to admins on the lead&apos;s Value tab; never on the agreement or invoices.{" "}
+                  {agreedNote.length} / {RENEWAL_NOTE_MAX_LENGTH}
                 </p>
               </div>
             </div>
