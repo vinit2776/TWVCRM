@@ -2386,7 +2386,7 @@ export default function ContractDetailPage({
           {/* Contract Lifecycle */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Agreement Journey</CardTitle>
+              <CardTitle className="text-base">Agreement history</CardTitle>
             </CardHeader>
             <CardContent>
               <ContractLifecycle contract={contract} />
