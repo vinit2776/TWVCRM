@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
 import { firstBillingAnchor } from "@/lib/billing-months";
+import { normalizeRenewalNote } from "@/lib/renewal-note";
 
 /**
  * POST /api/contracts/[id]/renew
@@ -18,7 +19,12 @@ import { firstBillingAnchor } from "@/lib/billing-months";
  *
  * Body (all optional overrides):
  *   { tenure_months?, seats?, start_date?, billing_cycle?,
- *     escalation_percentage?, notice_period_months?, lock_in_months? }
+ *     escalation_percentage?, notice_period_months?, lock_in_months?,
+ *     agreed_note? }
+ *
+ * `agreed_note` is an optional internal note (max 1000 chars) on what was
+ * agreed in the negotiation, stored on the renewal as renewal_agreed_note. It
+ * is never rendered into the agreement or any invoice.
  */
 export async function POST(
   request: NextRequest,
@@ -91,6 +97,8 @@ export async function POST(
 
   // 3. Parse optional overrides
   const body = await request.json().catch(() => ({}));
+  const noteResult = normalizeRenewalNote(body.agreed_note);
+  if (!noteResult.ok) return NextResponse.json({ error: noteResult.error }, { status: 400 });
   const tenureMonths = body.tenure_months ? Number(body.tenure_months) : Number(source.tenure_months || 12);
   const seats = body.seats ? Number(body.seats) : Number(source.seats || 1);
   const billingCycle = body.billing_cycle || source.billing_cycle || "monthly";
@@ -188,6 +196,9 @@ export async function POST(
       complimentary_items: source.complimentary_items,
       security_deposit_months: securityDepositMonths,
       escalation_percentage: escalationPct,
+      // Only written when a note was typed, so a renewal without one never
+      // touches the column (keeps renewals working until migration 00609 is applied).
+      ...(noteResult.value !== null ? { renewal_agreed_note: noteResult.value } : {}),
       notice_period_months: body.notice_period_months != null
         ? Number(body.notice_period_months)
         : source.notice_period_months,
@@ -495,6 +506,17 @@ export async function PATCH(
       }, { status: 403 });
     }
 
+    // Optional: only touched when the caller sends `agreed_note`; an empty
+    // string clears it.
+    const noteResult = body.agreed_note !== undefined ? normalizeRenewalNote(body.agreed_note) : null;
+    if (noteResult && !noteResult.ok) {
+      return NextResponse.json({ error: noteResult.error }, { status: 400 });
+    }
+    const noteChange =
+      noteResult && noteResult.ok && noteResult.value !== (contract.renewal_agreed_note ?? null)
+        ? noteResult.value
+        : undefined;
+
     type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
 
     let newItems: Item[] | null = null;
@@ -559,6 +581,7 @@ export async function PATCH(
       discount_amount: discountAmount,
       total_amount: totalAmount,
       deposit_shortfall: depositShortfall,
+      ...(noteChange !== undefined ? { renewal_agreed_note: noteChange } : {}),
     };
 
     const { error: updateErr } = await admin.from("contracts").update(updates).eq("id", id);
@@ -583,6 +606,15 @@ export async function PATCH(
         subtotal: { old: Number(contract.subtotal), new: subtotal },
         total_amount: { old: Number(contract.total_amount), new: totalAmount },
         deposit_shortfall: { old: Number(contract.deposit_shortfall || 0), new: depositShortfall },
+        // Negotiation detail stays out of the audit trail; only that it changed.
+        ...(noteChange !== undefined
+          ? {
+              renewal_agreed_note: {
+                old: contract.renewal_agreed_note ? "set" : "empty",
+                new: noteChange ? "set" : "empty",
+              },
+            }
+          : {}),
       },
     });
 

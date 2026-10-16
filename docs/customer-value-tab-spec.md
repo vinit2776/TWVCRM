@@ -99,8 +99,10 @@ creates an approval request when a non-admin reduces or waives the escalation, s
 `escalation_waived` flag or an approval record all signal a negotiation. The applied change can be
 cross-checked against the rate phases. Where parent or renewal carries no escalation value, or the
 renewal was created outside the renew route, show **"ask not recorded"** rather than guessing. There is no
-free-text record of the conversation, so add an optional **"agreed with note"** field on renewals (see
-phase 1) to capture it going forward.
+free-text record of the conversation, so renewals carry an optional internal **"what was agreed"** note
+(`contracts.renewal_agreed_note`, migration 00609, max 1000 characters). It is set in the Renew dialog and
+while a renewal draft is edited, never appears on the agreement or invoices, and is shown to admins in
+the Journey escalation table. Renewals made before it existed have no note.
 
 ### 5.2 Pillar scores
 
