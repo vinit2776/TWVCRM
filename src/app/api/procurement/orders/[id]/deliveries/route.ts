@@ -440,7 +440,10 @@ export async function DELETE(
   if (poErr || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
 
   if (!["partially_received", "received"].includes(po.status)) {
-    return NextResponse.json({ error: "Deliveries can only be rejected on partially received or received POs" }, { status: 422 });
+    const hint = ["invoice_received", "invoice_approved"].includes(po.status)
+      ? " This PO has an invoice — an admin must withdraw its bills first (un-approve them if approved)."
+      : "";
+    return NextResponse.json({ error: `Deliveries can only be rejected on partially received or received POs.${hint}` }, { status: 422 });
   }
 
   // Fetch delivery receipt + items (including the stock location/item

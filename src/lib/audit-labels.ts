@@ -185,6 +185,21 @@ function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | nu
 }
 
 function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary | null {
+  // ── Admin rollbacks (src/lib/procurement/admin-rollback.ts) ────────────
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    const label =
+      kind === "order_reversed" ? "Order reversed — back to pending"
+      : kind === "received_reversed" ? "Received status reversed"
+      : kind === "cancel_restored" ? "Cancellation reversed — PO restored"
+      : kind === "partial_cancel_restored" ? "Partial cancellation reversed — PO restored"
+      : kind === "advance_reopened" ? "Advance approval re-opened"
+      : kind === "advance_reversed" ? "Advance payment reversed"
+      : "Rolled back";
+    return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
+  }
+
   // ── Advance released by Finance (the headline for BILL-2606-069 case) ──
   if (went(c, "advance_status", "pending", "processed")) {
     const ref = (c.advance_payment_reference?.new as string | null) ?? null;

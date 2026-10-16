@@ -1,5 +1,6 @@
 "use client";
 
+import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -1000,6 +1001,15 @@ export default function PurchaseOrderDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
+          <PoCorrectMenu
+            poId={po.id}
+            poNumber={po.po_number}
+            status={po.status}
+            advanceStatus={po.advance_status ?? null}
+            advanceApprovalStatus={po.advance_approval_status ?? null}
+            isAdmin={currentUserRole === "admin"}
+            onDone={fetchPo}
+          />
           {!["cancelled", "partially_cancelled"].includes(po.status) && (
             <Button
               variant="outline"
@@ -2998,7 +3008,7 @@ export default function PurchaseOrderDetailPage() {
               </table>
             </div>
             <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-              Once closed short, this PO cannot be reissued.
+              Only an admin can reverse this afterwards (Correct → Restore partial cancellation).
             </p>
           </div>
           <DialogFooter>
