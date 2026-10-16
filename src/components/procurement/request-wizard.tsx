@@ -21,8 +21,8 @@ const PO_FROM_REQUEST_ROLES = ["admin", "manager"];
 // Administration or Maintenance request, the same route they already take. The examples
 // below are the ones the department definitions already use.
 const SERVICE_DEPARTMENTS = [
-  { key: "administration", examples: "ISP bills, machine rent" },
-  { key: "maintenance", examples: "Pest control" },
+  { key: "administration", examples: "e.g. ISP bills, machine rent" },
+  { key: "maintenance", examples: "e.g. pest control, repair visits" },
 ] as const;
 
 interface Choice {
@@ -35,7 +35,7 @@ interface Choice {
 
 const CHOICES: Choice[] = [
   { key: "goods", icon: Package, title: "Goods", description: "Physical items: stock, supplies, equipment", outcome: "Becomes a Goods PO after approval" },
-  { key: "service", icon: Wrench, title: "Service or recurring bill", description: "ISP bills, machine rent, pest control", outcome: "Ordered through a purchase order after approval" },
+  { key: "service", icon: Wrench, title: "Service or recurring bill", description: "e.g. ISP bills, machine rent, pest control", outcome: "Ordered through a purchase order after approval" },
   { key: "amc", icon: CalendarClock, title: "AMC / annual contract", description: "Yearly maintenance of HVAC, UPS, DG, RO", outcome: "Becomes a Service PO with visit tracking" },
   { key: "reimbursement", icon: ReceiptText, title: "Work for a customer", description: "Billed back to a customer contract with markup", outcome: "Reimbursement request" },
   { key: "approved", icon: ClipboardCheck, title: "Create PO from approved request", description: "The request is already approved", outcome: "Opens your approved requests" },
