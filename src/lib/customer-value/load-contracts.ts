@@ -11,7 +11,7 @@ import type { RatePhaseInput } from "@/lib/rate-phase-dates";
 const CONTRACT_COLUMNS =
   "id, contract_number, status, start_date, end_date, activated_at, terminated_at, seats, subtotal, " +
   "escalation_percentage, escalation_waived, escalation_approval_status, parent_contract_id, " +
-  "renewal_sequence, days_extended, phase_start_date, renewal_declined";
+  "renewal_sequence, days_extended, phase_start_date, renewal_declined, renewal_agreed_note";
 
 type ContractRecord = Omit<JourneyContractRow, "rate_phases">;
 type PhaseRecord = RatePhaseInput & { contract_id: string };

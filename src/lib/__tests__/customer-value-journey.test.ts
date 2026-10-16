@@ -29,6 +29,7 @@ function contract(over: Partial<JourneyContractRow> & { id: string }): JourneyCo
     days_extended: 0,
     phase_start_date: null,
     renewal_declined: false,
+    renewal_agreed_note: null,
     rate_phases: [],
     ...over,
   };
@@ -273,5 +274,28 @@ describe("buildJourney", () => {
   it("has no current contract when today falls in a gap", () => {
     const old = contract({ id: "a", status: "expired", start_date: "2025-04-01", end_date: "2026-09-30" });
     expect(buildJourney({ lead: LEAD, today: TODAY, contracts: [old] }).current).toBeNull();
+  });
+
+  it("carries the renewal's agreed note into the escalation event, trimmed", () => {
+    const a = contract({ id: "a", escalation_percentage: 10 });
+    const b = contract({
+      id: "b",
+      status: "active",
+      start_date: "2025-11-01",
+      end_date: "2026-10-31",
+      parent_contract_id: "a",
+      escalation_percentage: 5,
+      renewal_agreed_note: "  Held 5% for two extra seats.\nSigned 12 months.  ",
+    });
+    const e = buildJourney({ lead: LEAD, today: TODAY, contracts: [a, b] }).escalations[0];
+    expect(e.agreedNote).toBe("Held 5% for two extra seats.\nSigned 12 months.");
+  });
+
+  it("leaves the agreed note null when none was recorded or it is blank", () => {
+    const a = contract({ id: "a" });
+    const none = contract({ id: "b", status: "active", start_date: "2025-11-01", end_date: "2026-10-31", parent_contract_id: "a" });
+    expect(buildJourney({ lead: LEAD, today: TODAY, contracts: [a, none] }).escalations[0].agreedNote).toBeNull();
+    const blank = { ...none, renewal_agreed_note: "   " };
+    expect(buildJourney({ lead: LEAD, today: TODAY, contracts: [a, blank] }).escalations[0].agreedNote).toBeNull();
   });
 });
