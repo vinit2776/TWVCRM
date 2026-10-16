@@ -68,6 +68,27 @@ test('branch: with overlapping radii the nearest branch wins', () => {
   assert.equal(branchAt({ lat: 13.0003, lng: 80.0000 }, close, 150).name, 'A');
 });
 
+test('branch: the employee\'s own branch wins whenever they are within its radius', () => {
+  // Two branches 22 m apart in one building, as LGF and Arcade Center are: GPS put
+  // this LGF punch 1.3 m nearer Arcade Center.
+  const sameBuilding = [
+    { name: 'LGF', location: { lat: 13.061981804658464, lng: 80.24683335350925 } },
+    { name: 'Arcade Center', location: { lat: 13.061978981125167, lng: 80.24662440563422 } },
+  ];
+  const punch = { lat: 13.06182, lng: 80.24672 };
+  assert.equal(branchAt(punch, sameBuilding, 150).name, 'Arcade Center');
+  assert.equal(branchAt(punch, sameBuilding, 150, 'LGF').name, 'LGF');
+  assert.equal(branchAt(punch, sameBuilding, 150, 'Arcade Center').name, 'Arcade Center');
+});
+
+test('branch: outside their own branch\'s radius, the nearest branch still counts', () => {
+  assert.equal(branchAt({ lat: 13.06182, lng: 80.24672 }, BRANCHES, 150, 'Velachery').name, 'T. Nagar');
+  assert.equal(branchAt({ lat: 13.03921, lng: 80.24678 }, BRANCHES, 150, 'T. Nagar'), null);
+  // An own branch that isn't configured, or has no location, falls back to nearest.
+  assert.equal(branchAt({ lat: 13.06182, lng: 80.24672 }, BRANCHES, 150, 'Gone').name, 'T. Nagar');
+  assert.equal(branchAt({ lat: 13.06182, lng: 80.24672 }, [{ name: 'X' }, ...BRANCHES], 150, 'X').name, 'T. Nagar');
+});
+
 test('deviation: only a single-branch employee at another branch', () => {
   assert.equal(isBranchDeviation('T. Nagar', 'Velachery'), true);
   assert.equal(isBranchDeviation('T. Nagar', 'T. Nagar'), false);
