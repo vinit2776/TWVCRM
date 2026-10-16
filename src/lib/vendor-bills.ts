@@ -1,7 +1,15 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 
-export interface CreateVendorBillInput {
+/** Price-tolerance columns (migration 00609). Only passed for a bill whose PO is flexible and the invoice went past the PO value. */
+export interface ToleranceFacts {
+  variance_amount: number;
+  variance_percent: number;
+  out_of_tolerance: boolean;
+  tolerance_exception_reason: string | null;
+}
+
+export interface CreateVendorBillInput extends Partial<ToleranceFacts> {
   company_id: string;
   vendor_id: string;
   invoice_number?: string | null;
@@ -65,6 +73,14 @@ export async function createVendorBill(
             electricity_printed_name: input.electricity_printed_name ?? null,
           }
         : {}),
+      ...(input.variance_amount !== undefined
+        ? {
+            variance_amount: input.variance_amount,
+            variance_percent: input.variance_percent ?? null,
+            out_of_tolerance: input.out_of_tolerance ?? false,
+            tolerance_exception_reason: input.tolerance_exception_reason ?? null,
+          }
+        : {}),
       amount_paid: input.amount_paid ?? 0,
       payment_status: input.payment_status ?? "unpaid",
       approval_status: "pending",
@@ -111,6 +127,15 @@ export async function createVendorBill(
       invoice_file_uploaded: { old: null, new: !!input.invoice_file_url },
       ...(input.electricity_bill_id
         ? { electricity_bill_id: { old: null, new: input.electricity_bill_id } }
+        : {}),
+      ...(input.variance_amount !== undefined
+        ? {
+            variance_percent: { old: null, new: input.variance_percent ?? null },
+            out_of_tolerance: { old: null, new: input.out_of_tolerance ?? false },
+            ...(input.tolerance_exception_reason
+              ? { tolerance_exception_reason: { old: null, new: input.tolerance_exception_reason } }
+              : {}),
+          }
         : {}),
     },
   });

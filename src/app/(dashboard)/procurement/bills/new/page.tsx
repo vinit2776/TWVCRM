@@ -17,6 +17,7 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
+import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
@@ -51,6 +52,7 @@ function NewVendorBillForm() {
   const [invoiceDate, setInvoiceDate] = useState(today);
   const [dueDate, setDueDate] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
+  const [toleranceReason, setToleranceReason] = useState("");
   const [gstAmount, setGstAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -344,10 +346,29 @@ function NewVendorBillForm() {
   // Effective ceiling: received value if shortfall, otherwise full PO value
   const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? Number(poData.total_ordered_amount) : null);
 
-  // Inline real-time error shown below the amount field
+  // Price tolerance (goods POs): the invoice may drift past the PO value inside the band;
+  // outside it the bill is flagged for an admin, with a reason from here.
+  const tolerancePercent = poData && poData.po_type !== "service" ? clampTolerancePercent(poData.tolerance_percent) : 0;
   const amountNum = parseFloat(totalAmount);
+  const priorInvoiced = ((poData as unknown as { vendor_bills?: { id: string; total_amount: number; approval_status: string }[] } | null)?.vendor_bills ?? [])
+    .filter((b) => b.approval_status !== "rejected" && b.id !== replacesBill?.id)
+    .reduce((sum, b) => sum + Number(b.total_amount), 0);
+  const toleranceOutcome =
+    tolerancePercent > 0 && effectiveCeiling && amountNum > 0
+      ? evaluateInvoiceTolerance({
+          invoiceTotal: amountNum,
+          base: effectiveCeiling,
+          tolerancePercent,
+          priorInvoiced,
+          fullyReceived: !hasShortfall,
+        })
+      : null;
+  const needsToleranceReason = toleranceOutcome?.kind === "exception";
+
+  // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
     if (!totalAmount || isNaN(amountNum) || amountNum <= 0) return null;
+    if (tolerancePercent > 0) return null;
     if (hasShortfall && amountNum > receivedValue!) {
       return `Exceeds received value of ${formatCurrency(receivedValue!)} — only ${formatCurrency(receivedValue!)} of goods received out of PO value ${formatCurrency(poData!.total_ordered_amount)}.`;
     }
@@ -364,6 +385,7 @@ function NewVendorBillForm() {
     const amount = parseFloat(totalAmount);
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
     if (amountError) return amountError;
+    if (needsToleranceReason && !toleranceReason.trim()) return "Add a reason for the difference from the PO value";
     const gst = parseFloat(gstAmount) || 0;
     const maxGst = Math.round(amount * 0.28 * 100) / 100;
     if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
@@ -413,6 +435,7 @@ function NewVendorBillForm() {
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
         replaces_bill_id: replacesBill?.id ?? null,
+        ...(needsToleranceReason ? { tolerance_exception_reason: toleranceReason.trim() } : {}),
         ...(showElectricity
           ? {
               location_id: elec.location_id || null,
@@ -503,8 +526,8 @@ function NewVendorBillForm() {
           <div>
             <strong>Delivery shortfall detected.</strong> Only goods worth{" "}
             <strong>{formatCurrency(receivedValue!)}</strong> have been received out of the PO value of{" "}
-            <strong>{formatCurrency(poData!.total_ordered_amount)}</strong>. The invoice amount cannot exceed{" "}
-            <strong>{formatCurrency(receivedValue!)}</strong>.
+            <strong>{formatCurrency(poData!.total_ordered_amount)}</strong>. The invoice amount should not exceed{" "}
+            <strong>{formatCurrency(receivedValue!)}</strong>{tolerancePercent > 0 ? ` (± ${tolerancePercent}% allowed)` : ""}.
           </div>
         </div>
       )}
@@ -695,7 +718,8 @@ function NewVendorBillForm() {
           {/* ── Finance Intelligence hints (Day 3-5) ────────────────────────── */}
 
           {/* PO cumulative warning */}
-          {hints?.po_cumulative?.is_warning && (
+          {/* On a flexible PO the tolerance message under the amount says it better than a blanket "over budget". */}
+          {hints?.po_cumulative?.is_warning && !(tolerancePercent > 0 && hints.po_cumulative.is_over_budget) && (
             <div className={`rounded-lg border px-3 py-2.5 text-sm flex items-start gap-2.5 ${
               hints.po_cumulative.is_over_budget
                 ? "border-red-300 bg-red-50 text-red-900"
@@ -768,7 +792,7 @@ function NewVendorBillForm() {
                 id="total_amount"
                 type="number"
                 min="0.01"
-                max={effectiveCeiling ?? undefined}
+                max={tolerancePercent > 0 ? undefined : (effectiveCeiling ?? undefined)}
                 step="0.01"
                 placeholder="0.00"
                 value={totalAmount}
@@ -780,6 +804,32 @@ function NewVendorBillForm() {
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
                   {amountError}
                 </p>
+              ) : tolerancePercent > 0 && effectiveCeiling ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    PO is flexible ± {tolerancePercent}% on {formatCurrency(effectiveCeiling)} ({hasShortfall ? "received value" : "PO value"}) — accepts{" "}
+                    {formatCurrency(effectiveCeiling * (1 - tolerancePercent / 100))} to {formatCurrency(effectiveCeiling * (1 + tolerancePercent / 100))}.
+                  </p>
+                  {toleranceOutcome?.kind === "within" && (
+                    <p className="text-xs text-green-700 rounded bg-green-50 border border-green-200 px-2 py-1.5">
+                      {priorInvoiced > 0 ? "Invoiced total on this PO would be " : "This is "}{toleranceOutcome.variancePercent}% above the PO value — inside the agreed ± {tolerancePercent}%. Follows the normal approval path; the difference is recorded.
+                    </p>
+                  )}
+                  {toleranceOutcome?.kind === "exception" && (
+                    <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 space-y-1.5">
+                      <p className="text-xs text-amber-800 flex items-start gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                        {priorInvoiced > 0 ? "Invoiced total on this PO would be " : "This is "}{Math.abs(toleranceOutcome.variancePercent)}% {toleranceOutcome.direction === "above" ? "above" : "below"} the PO value — outside the agreed ± {tolerancePercent}%. This needs special approval from an admin.
+                      </p>
+                      <Input
+                        value={toleranceReason}
+                        onChange={(e) => setToleranceReason(e.target.value)}
+                        placeholder="Why is the invoice different? (required)"
+                        className="bg-white"
+                      />
+                    </div>
+                  )}
+                </div>
               ) : effectiveCeiling !== null && effectiveCeiling > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Max: {formatCurrency(effectiveCeiling)} ({hasShortfall ? "proportionate received value" : "PO value"})

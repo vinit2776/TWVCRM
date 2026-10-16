@@ -474,6 +474,11 @@ function NewPurchaseOrderFormWithPr({
               Company: <span className="font-medium">{prData.companies.brand_name}</span>
             </div>
           )}
+          {!isServiceOrder && (prData.tolerance_percent ?? 0) > 0 && (
+            <div className="mt-1 text-xs text-blue-700">
+              Price flexibility: <span className="font-medium">± {prData.tolerance_percent}%</span> on the final invoice (set when the request was approved)
+            </div>
+          )}
         </div>
       )}
 

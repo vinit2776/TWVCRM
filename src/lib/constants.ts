@@ -1851,6 +1851,18 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
   ADMIN_REQUIRED_ABOVE: 20000, // INR — PRs above this amount require admin approval
 };
 
+// Price tolerance: how far the final vendor invoice may drift from the PO value
+// without needing a special approval. Requested on the purchase request,
+// accepted or changed by the approver, inherited by the PO. Goods POs only.
+export const PRICE_TOLERANCE_OPTIONS = [0, 5, 10] as const;
+export const PRICE_TOLERANCE_MAX_PERCENT = 10;
+export const PRICE_TOLERANCE_REASONS = [
+  "Quantity not final",
+  "Market rate varies",
+  "Freight or installation extra",
+  "Scope may change on site",
+] as const;
+
 export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc", "reimbursement"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
