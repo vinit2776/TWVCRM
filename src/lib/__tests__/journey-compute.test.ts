@@ -25,6 +25,7 @@ function contract(over: Partial<ContractInput> = {}): ContractInput {
     signedDocumentId: null,
     stamped: false,
     activated: false,
+    welcomeDone: false,
     kycTotal: 3,
     kycOutstanding: 3,
     spacesAllocated: 0,
@@ -190,6 +191,7 @@ describe("computeJourney", () => {
         contract: contract({
           status: "active",
           activated: true,
+          welcomeDone: true,
           signedDocumentId: "d1",
           stamped: true,
           kycTotal: 3,
@@ -234,5 +236,46 @@ describe("actionable steps", () => {
     const actionable = j.phases.flatMap((p) => p.steps).filter((s) => s.actionable);
     expect(actionable).toHaveLength(1);
     expect(actionable[0].key).toBe(j.nextStep?.key);
+  });
+});
+
+describe("welcome step", () => {
+  const live = (over: Partial<ContractInput> = {}) =>
+    contract({ status: "active", activated: true, signedDocumentId: "d1", members: 2, vouchersActive: 2, membersWithAccess: 2, ...over });
+
+  it("is blocked until WiFi vouchers are issued", () => {
+    const j = computeJourney(input({ proposal: baseProposal, contract: live({ vouchersActive: 0 }) }));
+    expect(step(j, "welcome_done").state).toBe("blocked");
+    expect(step(j, "welcome_done").hint).toMatch(/vouchers/i);
+  });
+
+  it("is blocked until door access is enrolled", () => {
+    const j = computeJourney(input({ proposal: baseProposal, contract: live({ membersWithAccess: 1 }) }));
+    expect(step(j, "welcome_done").state).toBe("blocked");
+    expect(step(j, "welcome_done").hint).toMatch(/door access/i);
+  });
+
+  it("ignores door access when the location has no controller", () => {
+    const j = computeJourney(input({ proposal: baseProposal, contract: live({ accessDevices: 0, membersWithAccess: 0 }) }));
+    expect(step(j, "welcome_done").state).not.toBe("blocked");
+  });
+
+  it("becomes actionable and carries the button action once ready", () => {
+    const j = computeJourney(input({ proposal: baseProposal, contract: live() }));
+    const s = step(j, "welcome_done");
+    expect(s.actionable).toBe(true);
+    expect(s.action).toBe("mark_welcome_done");
+  });
+
+  it("keeps the journey open until the welcome is marked", () => {
+    const j = computeJourney(
+      input({
+        leadStatus: "won",
+        proposal: baseProposal,
+        contract: live({ stamped: true, kycOutstanding: 0, spacesAllocated: 4, rentStatementExists: true, welcomeDone: false }),
+      }),
+    );
+    expect(j.complete).toBe(false);
+    expect(j.nextStep?.key).toBe("welcome_done");
   });
 });

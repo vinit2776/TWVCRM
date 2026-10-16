@@ -27,6 +27,8 @@ export interface JourneyStep {
    * in a phase whose steps are independent of each other (onboarding, billing).
    */
   actionable: boolean;
+  /** A step done by a button in the panel itself rather than on another screen. */
+  action?: "mark_welcome_done";
 }
 
 export interface JourneyPhase {
@@ -40,6 +42,8 @@ export interface JourneyPhase {
 
 export interface Journey {
   phases: JourneyPhase[];
+  /** The contract this journey is focused on, if any (buttons act on it). */
+  contractId: string | null;
   nextStep: JourneyStep | null;
   /** True when every required step is done — the green flag. */
   complete: boolean;
@@ -79,6 +83,7 @@ export interface JourneyInput {
     signedDocumentId: string | null;
     stamped: boolean;
     activated: boolean;
+    welcomeDone: boolean;
     kycTotal: number;
     kycOutstanding: number;
     spacesAllocated: number;

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronUp, Lock, PartyPopper } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { toast } from "sonner";
 import type { Journey, JourneyOwner, JourneyStep } from "@/lib/journey/types";
 
 interface Props {
@@ -76,6 +77,26 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
     return () => window.removeEventListener("focus", onFocus);
   }, [load]);
 
+  const [busy, setBusy] = useState(false);
+
+  const markWelcomeDone = useCallback(
+    async (cid: string) => {
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/contracts/${cid}/welcome-done`, { method: "POST" });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || "Couldn't mark welcome done");
+        toast.success("Marked as welcomed");
+        await load();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't mark welcome done");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
   // A broken progress hint must never get in the way of the page it sits on.
   if (failed || !journey) return null;
 
@@ -123,7 +144,12 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
               <div className="text-sm font-medium">{next.label}</div>
               {next.hint && <div className="text-xs text-muted-foreground">{next.hint}</div>}
             </div>
-            {next.href && next.state !== "blocked" && (
+            {next.action === "mark_welcome_done" && journey.contractId && next.state !== "blocked" && (
+              <Button size="sm" disabled={busy} onClick={() => markWelcomeDone(journey.contractId!)}>
+                {busy ? "Saving…" : next.ctaLabel}
+              </Button>
+            )}
+            {!next.action && next.href && next.state !== "blocked" && (
               <Button asChild size="sm">
                 <Link href={next.href}>
                   {next.ctaLabel ?? "Open"}
@@ -168,7 +194,17 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
                     </div>
                     {s.state !== "done" && s.hint && <div className="text-xs text-muted-foreground">{s.hint}</div>}
                   </div>
-                  {s.href && s.state !== "done" && s.state !== "blocked" && (
+                  {s.action === "mark_welcome_done" && journey.contractId && s.state !== "done" && s.state !== "blocked" && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => markWelcomeDone(journey.contractId!)}
+                      className="shrink-0 text-xs text-blue-700 hover:underline disabled:opacity-50"
+                    >
+                      {s.ctaLabel}
+                    </button>
+                  )}
+                  {!s.action && s.href && s.state !== "done" && s.state !== "blocked" && (
                     <Link href={s.href} className="shrink-0 text-xs text-blue-700 hover:underline">
                       {s.ctaLabel ?? "Open"}
                     </Link>

@@ -18,6 +18,7 @@ interface Draft {
   detail?: string;
   href?: string;
   ctaLabel?: string;
+  action?: JourneyStep["action"];
 }
 
 interface PhaseDraft {
@@ -298,6 +299,27 @@ function buildDrafts(input: JourneyInput): PhaseDraft[] {
       ctaLabel: "Enrol access",
     });
   }
+  const doorApplicable = !contract || contract.accessDevices > 0;
+  const doorDone = !!contract && members > 0 && contract.membersWithAccess >= members;
+  inSteps.push({
+    key: "welcome_done",
+    label: "Customer welcomed",
+    owner: "ops",
+    done: !!contract?.welcomeDone,
+    hint: "Confirm the customer has been welcomed and has their access. Nothing is sent to the customer.",
+    blockedBy: !contract
+      ? null
+      : !activated
+        ? "Activate the contract first."
+        : !wifiDone
+          ? "WiFi vouchers must be issued first."
+          : doorApplicable && !doorDone
+            ? "Door access must be enrolled first."
+            : null,
+    href: contractHref,
+    ctaLabel: "Mark welcome done",
+    action: "mark_welcome_done",
+  });
   phases.push({ key: "onboard", title: "Get the customer in", steps: inSteps });
 
   phases.push({
@@ -355,6 +377,7 @@ export function computeJourney(input: JourneyInput): Journey {
         detail: d.detail,
         href: d.href,
         ctaLabel: d.ctaLabel,
+        action: d.action,
         actionable: state === "current" || (state === "upcoming" && PARALLEL_PHASES.has(phase.key)),
       };
       if (d.key === currentKey) nextStep = step;
@@ -383,6 +406,7 @@ export function computeJourney(input: JourneyInput): Journey {
 
   return {
     phases,
+    contractId: input.contract?.id ?? null,
     nextStep,
     complete: requiredTotal > 0 && requiredDone === requiredTotal,
     requiredDone,
