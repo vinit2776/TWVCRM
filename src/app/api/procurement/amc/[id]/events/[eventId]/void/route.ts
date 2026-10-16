@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -26,6 +27,9 @@ export async function POST(
   const gate = await requireRollbackAdmin("Only an admin can void a logged visit");
   if ("error" in gate) return gate.error;
   const { supabase, dbUser } = gate;
+
+  const lockedChain = await chainLockedResponse(supabase, { poId });
+  if (lockedChain) return lockedChain;
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {

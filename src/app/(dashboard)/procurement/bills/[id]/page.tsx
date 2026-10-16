@@ -1,5 +1,6 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -217,6 +218,7 @@ function AuditEntry({
 
 export default function VendorBillDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ billId: id });
   const router = useRouter();
   const { user } = useCurrentUser();
   const currentUserRole = user?.role ?? null;
@@ -639,8 +641,9 @@ export default function VendorBillDetailPage() {
             approvalStatus={bill.approval_status}
             payments={chain?.bill.vendor_bill_payments ?? []}
             chequeSigned={!!bill.cheque_signed_at}
+            locked={locked}
             isAdmin={currentUserRole === "admin"}
-            onDone={fetchAll}
+            onDone={() => { fetchAll(); reloadChain(); }}
           />
           {bill.approval_status === "pending" && canApprove && (
             <>
@@ -696,6 +699,8 @@ export default function VendorBillDetailPage() {
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchAll(); reloadChain(); }} />
 
       {/* Withdrawn banner */}
       {bill.approval_status === "withdrawn" && (

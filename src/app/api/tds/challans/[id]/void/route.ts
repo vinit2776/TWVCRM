@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -26,6 +27,13 @@ export async function POST(
   const gate = await requireRollbackAdmin("Only an admin can void a TDS challan");
   if ("error" in gate) return gate.error;
   const { supabase, dbUser } = gate;
+
+  // A challan can carry TDS for bills in several cycles; none may be locked.
+  const { data: onChallan } = await supabase.from("vendor_bill_tds").select("bill_id").eq("challan_id", id);
+  for (const billId of new Set((onChallan ?? []).map((t) => t.bill_id as string))) {
+    const lockedChain = await chainLockedResponse(supabase, { billId });
+    if (lockedChain) return lockedChain;
+  }
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {

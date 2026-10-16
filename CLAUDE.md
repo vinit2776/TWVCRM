@@ -271,6 +271,12 @@ Cancellation has side effects (WiFi voucher revocation, usage charge settlement)
 - No approval workflow — direct action by `admin`/`manager`/`sales_rep`, same roles as Renewal. A reason is required and logged to `audit_trail` (`action: "contract_extended"`).
 - No new billing logic — billing already prorates by day and pools contracts by `end_date`, so extension just needs the date pushed forward.
 
+### Procurement Admin Rollback & Closed-Chain Lock
+
+Every procurement step can be undone — **admin only, one step back at a time, reason required (≥10 chars), audit action `rollback`**. The menu is **Correct** on the bill, PO and visit/challan/consumption screens. Each rollback is refused while a *later* step still stands (e.g. reverse payments → un-approve → withdraw bill → un-order PO), and the error says which to undo first. Rules and helpers: `src/lib/procurement/admin-rollback.ts` (role + reason), `admin-rollback-server.ts` (route guard). Financial reversals are atomic RPCs (service role only); voids are **soft** (row kept, flagged) so history survives. Readers of payments / TDS / bills must ignore reversed/withdrawn rows — use `DEAD_BILL_STATUSES_FILTER` (`src/lib/constants.ts`) for bills.
+
+**Closed-chain lock** (`src/lib/procurement/chain-lock.ts`). A *chain* is an MR with its POs and bills (else a PO + bills, else a standalone bill). It is **complete** when the MR is fully ordered, goods are received (AMC: contract ended), every PO has a live bill, all live bills are approved and paid in full, and all TDS is on a challan. **Closed is computed, never stored.** Corrections lock **7 days after the last step** (`CHAIN_LOCK_DELAY_DAYS`); routes that correct or edit money return **423 `chain_locked`** (`chainLockedResponse`). **Cut-off:** only chains that completed on/after `app_settings.procurement_chain_lock_effective_from` (set to the migration's apply time) ever lock; older chains stay correctable, and if the setting is missing nothing locks. Only an admin can **reopen** (`POST /api/procurement/chain-reopen`: type the MR/PO/bill number + reason); that is stored in `procurement_chain_reopens`, restarts the 7-day window, and the cycle re-closes by itself once complete again. Viewing, queries and attachments are never locked. Adding a new route that corrects a bill/PO/MR? Call `chainLockedResponse` first.
+
 ## Environment Variables
 
 Required in `.env.local` (and Vercel project settings):

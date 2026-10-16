@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Settings2, Undo2 } from "lucide-react";
+import { Loader2, Lock, Settings2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -33,6 +33,8 @@ type Props = {
   payments: Payment[];
   /** The cheque for this bill has been marked signed. */
   chequeSigned?: boolean;
+  /** The procurement cycle is closed — corrections are disabled until an admin reopens it. */
+  locked?: boolean;
   isAdmin: boolean;
   onDone: () => void;
 };
@@ -45,13 +47,20 @@ const MIN_REASON = 10;
 // a bill with standing payments must have them reversed before it can be
 // un-approved. Server enforces the same rules; the disabled states here just
 // explain them up front.
-export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, chequeSigned, isAdmin, onDone }: Props) {
+export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, chequeSigned, locked, isAdmin, onDone }: Props) {
   const [mode, setMode] = useState<Mode>(null);
   const [paymentId, setPaymentId] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   if (!isAdmin) return null;
+  if (locked) {
+    return (
+      <Button size="sm" variant="outline" className="gap-1.5" disabled title="This procurement cycle is closed. Reopen it first.">
+        <Lock className="h-3.5 w-3.5" /> Correct
+      </Button>
+    );
+  }
 
   const standing = payments
     .filter((p) => !p.reversed_at)
