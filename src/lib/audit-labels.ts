@@ -53,6 +53,17 @@ function summarizeContract(c: AuditChanges, action: string): AuditSummary | null
 }
 
 function summarizeVendorBill(c: AuditChanges, action: string): AuditSummary | null {
+  // ── Admin rollbacks (src/lib/procurement/admin-rollback.ts) ────────────
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
+    const reason = (c.rollback_reason?.new as string | null) ?? "";
+    const label =
+      kind === "payment_reversed" ? `Payment of ${INR(c.amount_reversed?.new)} reversed`
+      : kind === "approval_reversed" ? "Approval reversed"
+      : "Rolled back";
+    return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
+  }
+
   // ── Approval flow ──────────────────────────────────────────────────────
   if (went(c, "approval_status", "pending", "approved")) {
     const partial =

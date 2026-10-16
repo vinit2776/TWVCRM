@@ -108,7 +108,8 @@ export async function POST(req: NextRequest) {
   const { error: updateError } = await supabase
     .from("vendor_bill_tds")
     .update({ status: "deposited", challan_id: challan.id })
-    .in("id", d.tds_entry_ids);
+    .in("id", d.tds_entry_ids)
+    .is("reversed_at", null);
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });

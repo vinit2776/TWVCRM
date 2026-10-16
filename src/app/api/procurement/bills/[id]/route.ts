@@ -7,6 +7,7 @@ import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { confirmFirstBillIfNeeded } from "@/lib/procurement/recurring-bill-rules-server";
 import { z } from "zod";
 import { checkTieInvoiceToCycle } from "@/lib/procurement/tie-invoice";
+import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
 
@@ -42,6 +43,11 @@ const patchBillSchema = z.discriminatedUnion("action", [
     partial_reason: z.string().nullish(),
     tds: tdsSchema.nullish(),
     petty_cash_book_id: z.string().uuid().nullish(),
+  }),
+  z.object({
+    /** Admin rollback: an approved, unpaid bill goes back to the approval queue. */
+    action: z.literal("unapprove"),
+    reason: rollbackReasonSchema,
   }),
   z.object({
     action: z.literal("approve"),
@@ -161,7 +167,7 @@ export async function GET(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
        purchase_orders(id, po_number, status, po_type, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
-       vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
+       vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, reversed_at, reversal_reason, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
        vendor_bill_batch_changes(id, changed_at, old_batch_type, new_batch_type, old_batch_date, new_batch_date, reason, changer:users!vendor_bill_batch_changes_changed_by_fkey(id, full_name)),
        vendor_bill_documents(id, file_url, file_name, doc_type, created_at, uploader:users!vendor_bill_documents_uploaded_by_fkey(id, full_name)),
        electricity_bill:electricity_bills!vendor_bills_electricity_bill_id_fkey(bill_month, bill_year, landlord_total_amount, landlord_gst_applicable, landlord_gst_rate, landlord_gst_amount, electricity_bill_lines(line_type, meter_label, label, units, rate, amount, sort_order))`
@@ -377,6 +383,61 @@ export async function PATCH(
         extraAuditChanges.partial_payment_reason = { old: null, new: partialReason };
         if (parsed.data.notes?.trim()) {
           extraAuditChanges.partial_payment_note = { old: null, new: parsed.data.notes.trim() };
+        }
+      }
+      break;
+    }
+
+    case "unapprove": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can reverse an approval" }, { status: 403 });
+      }
+      if (bill.approval_status !== "approved") {
+        return NextResponse.json({ error: "Only approved bills can be un-approved" }, { status: 422 });
+      }
+      // Rolling back goes one step at a time: a standing payment must be
+      // reversed first, otherwise the bill would be unapproved yet part-paid.
+      const { count: standingPayments } = await supabase
+        .from("vendor_bill_payments")
+        .select("*", { count: "exact", head: true })
+        .eq("bill_id", id)
+        .is("reversed_at", null);
+      if ((standingPayments ?? 0) > 0) {
+        return NextResponse.json(
+          { error: "This bill has payments recorded. Reverse them first, then un-approve." },
+          { status: 422 }
+        );
+      }
+
+      // Mirrors the approval block reset in update_amount_and_resubmit. GST is
+      // kept: the amount is unchanged, so the figure entered from the invoice
+      // is still right.
+      updatePayload = {
+        approval_status: "pending",
+        approved_by: null,
+        approved_at: null,
+        approval_code: null,
+        approved_amount: null,
+        approved_amount_note: null,
+        approved_amount_reason: null,
+        payment_batch_type: null,
+        payment_batch_date: null,
+        payment_batch_assigned_by: null,
+        payment_batch_assigned_at: null,
+        payment_hold_status: "none",
+      };
+      extraAuditChanges.rollback_kind = { old: null, new: "approval_reversed" };
+      extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
+
+      // Goods PO: approving moved it to invoice_approved; put it back.
+      if (bill.po_id) {
+        const { data: linkedPo } = await supabase
+          .from("purchase_orders")
+          .select("po_type, status")
+          .eq("id", bill.po_id)
+          .single();
+        if (linkedPo?.po_type !== "service" && linkedPo?.status === "invoice_approved") {
+          await supabase.from("purchase_orders").update({ status: "invoice_received" }).eq("id", bill.po_id);
         }
       }
       break;
@@ -1161,7 +1222,7 @@ export async function PATCH(
   await logAudit(supabase, {
     entityType: "vendor_bill",
     entityId: id,
-    action: "update",
+    action: parsed.data.action === "unapprove" ? "rollback" : "update",
     performedBy: dbUser.id,
     changes: {
       ...diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),

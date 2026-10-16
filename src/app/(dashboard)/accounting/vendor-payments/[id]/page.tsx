@@ -1,5 +1,6 @@
 "use client";
 
+import { BillCorrectMenu } from "@/components/procurement/bill-correct-menu";
 import { use, useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
@@ -131,6 +132,8 @@ type ChainData = {
       notes: string | null;
       partial_reason: string | null;
       petty_cash_book_id: string | null;
+      reversed_at?: string | null;
+      reversal_reason?: string | null;
       recorder: { id: string; full_name: string } | null;
     }>;
   };
@@ -940,6 +943,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               Record Payment
             </Button>
           )}
+          <BillCorrectMenu
+            billId={bill.id}
+            billNumber={bill.bill_number}
+            approvalStatus={bill.approval_status}
+            payments={chain?.bill.vendor_bill_payments ?? []}
+            isAdmin={userRole === "admin"}
+            onDone={fetchChain}
+          />
           {!isFullyPaid && canHoldPayment && !isOnHold && (
             <Button size="sm" variant="outline" onClick={() => setHoldDialog(true)} className="gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-50">
               <PauseCircle className="h-3.5 w-3.5" />
@@ -2187,10 +2198,15 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {(chain.bill.vendor_bill_payments ?? [])
                   .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
                   .map((pmt, idx) => (
-                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"} ${pmt.reversed_at ? "opacity-60" : ""}`}>
                       <td className="px-4 py-2.5 text-xs">{formatDate(pmt.payment_date)}</td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                      <td className={`px-4 py-2.5 text-right font-semibold ${pmt.reversed_at ? "text-muted-foreground line-through" : "text-green-700"}`}>
                         {formatCurrency(pmt.amount)}
+                        {pmt.reversed_at && (
+                          <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-medium">
+                            Reversed
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
                         {pmt.payment_mode.replace(/_/g, " ")}
@@ -2210,7 +2226,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                             {PARTIAL_PAYMENT_REASON_LABELS[pmt.partial_reason] ?? pmt.partial_reason}
                           </span>
                         )}
-                        {pmt.notes ?? (pmt.partial_reason ? "" : "—")}
+                        {pmt.reversed_at
+                          ? `Reversed: ${pmt.reversal_reason ?? "—"}`
+                          : (pmt.notes ?? (pmt.partial_reason ? "" : "—"))}
                       </td>
                     </tr>
                   ))}
