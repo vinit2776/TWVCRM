@@ -23,7 +23,7 @@ const {
   parseAttlogLine, parseDeviceCmdAcks, buildAttlogQuery,
 } = require('./device-sync');
 const ONBOARDING = require('./onboarding-content');
-const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranch, employeeBranchLabel, isBranchDeviation } = require('./geofence');
+const { DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, branchAt, employeeBranches, employeeBranchValue, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation } = require('./geofence');
 const {
   ACTIVITY_CATEGORIES, categoryOf, activityLabel, describeDevice, activityFilterSql, ACTIVITY_CSV_HEADERS, activityCsvRow,
 } = require('./activity-log');
@@ -6636,15 +6636,13 @@ async function handleRequest(req, res) {
       await db.prepare('UPDATE branches SET name = ? WHERE id = ?').run(`__renaming__${r.id}`, r.id);
     }
     let newId = null;
+    const renames = new Map();
     for (const [i, r] of kept.entries()) {
       const before = r.id ? existing[r.id] : null;
       if (before) {
         await db.prepare('UPDATE branches SET name = ?, location = ?, sort_order = ? WHERE id = ?').run(r.name, r.location, i, r.id);
         if (before.name !== r.name) {
-          for (const e of await db.prepare('SELECT id, branch FROM employees').all()) {
-            const renamed = renameEmployeeBranch(e.branch, before.name, r.name);
-            if (renamed !== e.branch) await db.prepare('UPDATE employees SET branch = ? WHERE id = ?').run(renamed, e.id);
-          }
+          renames.set(before.name, r.name);
           changed.push(`${before.name} renamed to ${r.name}`);
         }
         if (before.locationText !== r.location) changed.push(`${r.name} location ${r.location ? 'set' : 'cleared'}`);
@@ -6654,6 +6652,23 @@ async function handleRequest(req, res) {
         changed.push(`${r.name} added`);
       }
     }
+    // One scan and one transaction for every rename in this save, rather than a scan
+    // and a loose UPDATE per employee per branch. A branch name only lives in
+    // employees.branch as text — inside a JSON array for anyone with several — so SQL
+    // can't rewrite it in place the way a single `WHERE branch = ?` used to. Left
+    // un-batched, a lambda timing out midway leaves some employees pointing at a
+    // branch that no longer exists, and every punch they make at their own office is
+    // flagged as a deviation. All the renames are applied in one pass per employee so
+    // that swapping two branch names moves people once, not there and back.
+    if (renames.size) {
+      const updates = [];
+      for (const e of await db.prepare('SELECT id, branch FROM employees').all()) {
+        const renamed = renameEmployeeBranches(e.branch, renames);
+        if (renamed !== e.branch) updates.push({ sql: 'UPDATE employees SET branch = ? WHERE id = ?', args: [renamed, e.id] });
+      }
+      if (updates.length) await db.batch(updates);
+    }
+
     const deviceChoice = form.device_branch === 'new' ? newId : (form.device_branch ? Number(form.device_branch) : null);
     const deviceBefore = deviceBranch();
     if ((deviceBefore ? deviceBefore.id : null) !== deviceChoice) {

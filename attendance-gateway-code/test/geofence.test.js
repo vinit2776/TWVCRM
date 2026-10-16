@@ -2,7 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLatLng, distanceMeters, isWithinOffice, branchAt, isBranchDeviation, MULTI_BRANCH } = require('../geofence');
+const {
+  parseLatLng, distanceMeters, isWithinOffice, branchAt, isBranchDeviation, MULTI_BRANCH,
+  renameEmployeeBranch, renameEmployeeBranches,
+} = require('../geofence');
 
 const OFFICE = { lat: 13.06184, lng: 80.24674 };
 
@@ -138,4 +141,30 @@ test('branch: any of an employee\'s selected branches within radius wins over a 
   assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","LGF"]').name, 'LGF');
   assert.equal(branchAt(punch, sameBuilding, 150, '["Kamala Arcade","Arcade Center"]').name, 'Arcade Center');
   assert.equal(branchAt(punch, sameBuilding, 150, MULTI_BRANCH).name, 'Arcade Center');
+});
+
+test('rename: several branches renamed in one save are applied in a single pass', () => {
+  // Branch renames land as one map, not one call after another. Applying A->B and then
+  // B->A in sequence would move an employee at A to B and straight back to A; the
+  // branches table already guards the same swap with its two-pass __renaming__ step.
+  const swap = new Map([['LGF', 'Arcade Center'], ['Arcade Center', 'LGF']]);
+  assert.equal(renameEmployeeBranches('LGF', swap), 'Arcade Center');
+  assert.equal(renameEmployeeBranches('Arcade Center', swap), 'LGF');
+  assert.equal(renameEmployeeBranches('["LGF","Perungudi"]', swap), '["Arcade Center","Perungudi"]');
+
+  // Renaming two of an employee's three branches at once.
+  const two = new Map([['LGF', 'LGF Floor'], ['Perungudi', 'Perungudi Annexe']]);
+  assert.equal(
+    renameEmployeeBranches('["LGF","Arcade Center","Perungudi"]', two),
+    '["LGF Floor","Arcade Center","Perungudi Annexe"]',
+  );
+
+  // Untouched values come back as they were, so nothing needless is written.
+  const raw = '["LGF","Arcade Center"]';
+  assert.equal(renameEmployeeBranches(raw, new Map([['Perungudi', 'Elsewhere']])), raw);
+  assert.equal(renameEmployeeBranches(MULTI_BRANCH, swap), MULTI_BRANCH);
+  assert.equal(renameEmployeeBranches(null, swap), null);
+  // The single-branch helper still behaves, and drops to one name when it should.
+  assert.equal(renameEmployeeBranch('["LGF","Arcade Center"]', 'LGF', 'LGF Floor'), '["LGF Floor","Arcade Center"]');
+  assert.equal(renameEmployeeBranch('LGF', 'LGF', 'LGF Floor'), 'LGF Floor');
 });

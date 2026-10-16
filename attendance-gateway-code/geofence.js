@@ -85,9 +85,17 @@ function employeeBranchValue(names) {
 
 // employees.branch with branch `from` renamed to `to` (unchanged if it isn't there).
 function renameEmployeeBranch(raw, from, to) {
+  return renameEmployeeBranches(raw, new Map([[from, to]]));
+}
+
+// employees.branch with several branches renamed at once, `renames` being old name ->
+// new name. Every name is mapped in a single pass, which is what makes a swap work:
+// applying A->B and then B->A one after the other would walk an employee at A to B and
+// straight back to A again.
+function renameEmployeeBranches(raw, renames) {
   const { all, names } = employeeBranches(raw);
-  if (all || !names.includes(from)) return raw;
-  return employeeBranchValue(names.map(n => (n === from ? to : n)));
+  if (all || !names.some(n => renames.has(n))) return raw;
+  return employeeBranchValue(names.map(n => (renames.has(n) ? renames.get(n) : n)));
 }
 
 // How an employee's branches read on screen.
@@ -107,5 +115,5 @@ function isBranchDeviation(employeeBranch, branchName) {
 
 module.exports = {
   DEFAULT_OFFICE_RADIUS_METERS, MULTI_BRANCH, parseLatLng, distanceMeters, isWithinOffice, branchAt,
-  employeeBranches, employeeBranchValue, renameEmployeeBranch, employeeBranchLabel, isBranchDeviation,
+  employeeBranches, employeeBranchValue, renameEmployeeBranch, renameEmployeeBranches, employeeBranchLabel, isBranchDeviation,
 };
