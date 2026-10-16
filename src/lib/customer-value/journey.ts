@@ -37,6 +37,8 @@ export interface JourneyContractRow {
   days_extended: number | null;
   phase_start_date: string | null;
   renewal_declined: boolean | null;
+  /** Internal note on what was agreed when this renewal was negotiated (contracts.renewal_agreed_note). */
+  renewal_agreed_note: string | null;
   rate_phases: RatePhaseInput[];
 }
 
@@ -85,6 +87,8 @@ export interface JourneyEscalationEvent {
   /** Movement in monthly rent per seat across the renewal, in percent. */
   rentPerSeatChangePct: number | null;
   approvalStatus: string | null;
+  /** Internal note on what was agreed in the negotiation, when one was recorded. */
+  agreedNote: string | null;
 }
 
 export type JourneyBarKind = "enquiry" | "contract" | "pending";
@@ -315,6 +319,7 @@ export function buildJourney(input: JourneyInput): Journey {
       outcome: classifyEscalation(asked, agreed, waived),
       rentPerSeatChangePct,
       approvalStatus: c.escalation_approval_status,
+      agreedNote: c.renewal_agreed_note?.trim() || null,
     });
   }
 

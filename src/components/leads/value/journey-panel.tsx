@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { History } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -211,7 +211,8 @@ export function JourneyPanel({ leadId }: { leadId: string }) {
                 </thead>
                 <tbody>
                   {journey.escalations.map((e) => (
-                    <tr key={e.renewalContractId} className="border-b last:border-0">
+                    <Fragment key={e.renewalContractId}>
+                    <tr className={e.agreedNote ? "" : "border-b last:border-0"}>
                       <td className="py-2 pr-3">
                         <span className="font-medium">{e.renewalContractNumber}</span>
                         <span className="block text-xs text-muted-foreground">from {e.parentContractNumber}</span>
@@ -229,12 +230,22 @@ export function JourneyPanel({ leadId }: { leadId: string }) {
                         )}
                       </td>
                     </tr>
+                    {e.agreedNote && (
+                      <tr className="border-b last:border-0">
+                        <td colSpan={6} className="pb-2 pr-3 pt-0 text-xs">
+                          <span className="text-muted-foreground">What was agreed: </span>
+                          <span className="whitespace-pre-wrap">{e.agreedNote}</span>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
               <p className="mt-2 text-xs text-muted-foreground">
                 Asked is the previous contract&apos;s escalation clause. Agreed is the renewal&apos;s own escalation. Rent per
-                seat is the actual change in the monthly rent divided by seats.
+                seat is the actual change in the monthly rent divided by seats. The note under a renewal is what was
+                recorded when it was negotiated; renewals made before notes existed have none.
               </p>
             </div>
           )}
