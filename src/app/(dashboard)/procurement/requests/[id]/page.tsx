@@ -1,6 +1,7 @@
 "use client";
 
 import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
+import { MrCorrectMenu } from "@/components/procurement/mr-correct-menu";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -268,7 +269,7 @@ function buildDisplayAuditEvents(events: AuditEvent[]): DisplayAuditEvent[] {
 export default function PurchaseRequestDetailPage() {
   const { user } = useCurrentUser();
   const { id } = useParams<{ id: string }>();
-  const { chain: cycle, reload: reloadChain } = useChainState({ prId: id });
+  const { chain: cycle, locked: cycleLocked, reload: reloadChain } = useChainState({ prId: id });
   const router = useRouter();
 
   const userRole = user?.role ?? "";
@@ -532,6 +533,15 @@ export default function PurchaseRequestDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
+          <MrCorrectMenu
+            prId={pr.id}
+            prNumber={pr.pr_number}
+            status={pr.status}
+            pos={lifecycle?.linked_pos ?? []}
+            locked={cycleLocked}
+            isAdmin={userRole === "admin"}
+            onDone={() => { fetchPr(); reloadChain(); }}
+          />
           {["approved", "partially_ordered"].includes(pr.status) && !(pr.department === "amc" && (pr.purchase_request_items?.length ?? 0) > 1) && (
             <Button
               size="sm"
@@ -1780,7 +1790,7 @@ export default function PurchaseRequestDetailPage() {
             <DialogTitle>Cancel Material Request</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
-            Are you sure you want to cancel <strong>{pr.pr_number}</strong>? This action cannot be undone.
+            Are you sure you want to cancel <strong>{pr.pr_number}</strong>? An admin can reopen it later if needed.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialog(null)}>Keep Request</Button>

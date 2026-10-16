@@ -6,10 +6,15 @@ import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS, PROCUREMENT_DEPARTMENTS, MR_EDITABLE_STATUSES, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS, PRICE_TOLERANCE_MAX_PERCENT } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
+import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
+import { MR_APPROVED_STATUSES, mrStatusAfterReopen } from "@/lib/procurement/mr-rollback";
 
 const patchPrSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
   z.object({ action: z.literal("cancel") }),
+  // Admin rollbacks — one step back, reason required (see admin-rollback.ts).
+  z.object({ action: z.literal("revoke_approval"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("reopen_cancelled"), reason: rollbackReasonSchema }),
   z.object({
     action: z.literal("approve"),
     notes: z.string().optional(),
@@ -236,7 +241,71 @@ export async function PATCH(
       if (pr.requested_by !== dbUser.id && !["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
-      updatePayload = { status: "cancelled" };
+      // Remembered so an admin can reopen it to exactly where it was.
+      updatePayload = { status: "cancelled", status_before_cancel: pr.status };
+      break;
+    }
+
+    case "revoke_approval": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can revoke an MR's approval" }, { status: 403 });
+      }
+      if (!(MR_APPROVED_STATUSES as readonly string[]).includes(pr.status)) {
+        return NextResponse.json({ error: "Only an approved MR can have its approval revoked" }, { status: 422 });
+      }
+      // One step back at a time: the MR's purchase orders go first. Name them all
+      // so the admin knows exactly what to cancel.
+      const { data: livePos } = await supabase
+        .from("purchase_orders")
+        .select("id, po_number, status")
+        .eq("pr_id", id)
+        .neq("status", "cancelled");
+      if (livePos && livePos.length > 0) {
+        return NextResponse.json(
+          {
+            error: `This MR still has ${livePos.length} purchase order${livePos.length === 1 ? "" : "s"} (${livePos.map((p) => p.po_number).join(", ")}). Cancel ${livePos.length === 1 ? "it" : "them"} first, then revoke the approval.`,
+            blocking_pos: livePos,
+          },
+          { status: 422 }
+        );
+      }
+      // Customer invoices raised off a reimbursement MR must not be orphaned.
+      if (pr.department === "reimbursement") {
+        const { count: activeStatements } = await supabase
+          .from("billing_statements")
+          .select("*", { count: "exact", head: true })
+          .eq("source_pr_id", id)
+          .is("voided_at", null);
+        if (activeStatements && activeStatements > 0) {
+          return NextResponse.json(
+            { error: "This reimbursement MR already has invoice(s) issued to the customer. Void them first." },
+            { status: 422 }
+          );
+        }
+      }
+      // Back to the approval queue, as if never approved. The tolerance decision
+      // is part of the approval, so it is cleared too.
+      updatePayload = {
+        status: "submitted",
+        approved_by: null,
+        approved_at: null,
+        approval_code: null,
+        rejection_reason: null,
+        tolerance_percent: 0,
+        tolerance_decided_by: null,
+        tolerance_decided_at: null,
+      };
+      break;
+    }
+
+    case "reopen_cancelled": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can reopen a cancelled MR" }, { status: 403 });
+      }
+      if (pr.status !== "cancelled") {
+        return NextResponse.json({ error: "Only a cancelled MR can be reopened" }, { status: 422 });
+      }
+      updatePayload = { status: mrStatusAfterReopen(pr.status_before_cancel ?? null), status_before_cancel: null };
       break;
     }
 
@@ -587,10 +656,15 @@ export async function PATCH(
   if (action === "correct_department") {
     auditChanges["correction_reason"] = { old: null, new: parsed.data.reason };
   }
+  const isRollback = action === "revoke_approval" || action === "reopen_cancelled";
+  if (isRollback && "reason" in parsed.data) {
+    auditChanges["rollback_kind"] = { old: null, new: action === "revoke_approval" ? "approval_revoked" : "mr_reopened" };
+    auditChanges["rollback_reason"] = { old: null, new: parsed.data.reason };
+  }
   await logAudit(supabase, {
     entityType: "purchase_request",
     entityId: id,
-    action: "update",
+    action: isRollback ? "rollback" : "update",
     performedBy: dbUser.id,
     changes: auditChanges,
   });

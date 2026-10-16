@@ -244,9 +244,15 @@ function summarizePurchaseOrder(c: AuditChanges, action: string): AuditSummary |
 }
 
 function summarizePurchaseRequest(c: AuditChanges, action: string): AuditSummary | null {
-  if (action === "rollback" && c.rollback_kind?.new === "chain_reopened") {
+  if (action === "rollback") {
+    const kind = (c.rollback_kind?.new as string | null) ?? "";
     const reason = (c.rollback_reason?.new as string | null) ?? "";
-    return { label: "Closed cycle reopened", tone: "red", detail: reason ? `reason: ${reason}` : undefined };
+    const label =
+      kind === "chain_reopened" ? "Closed cycle reopened"
+      : kind === "approval_revoked" ? "Approval revoked — back to submitted"
+      : kind === "mr_reopened" ? "Cancelled MR reopened"
+      : "Rolled back";
+    return { label, tone: "red", detail: reason ? `reason: ${reason}` : undefined };
   }
   if (went(c, "status", "draft", "submitted")) return { label: "Submitted for approval", tone: "blue" };
   if (went(c, "status", "submitted", "approved")) return { label: "Material request approved", tone: "green" };
