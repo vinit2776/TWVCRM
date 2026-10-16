@@ -274,7 +274,7 @@ export const ROUTE_GUIDES: RouteEntry[] = [
       flowName: "Raising a Request",
       step: 1,
       totalSteps: 2,
-      hint: "Describe what you need, the quantity, and estimated cost. The more detail you add, the faster the approval.",
+      hint: "Pick what you are buying and the form is set up for you. Then describe what you need, the quantity, and estimated cost. The more detail you add, the faster the approval.",
       idleMs: 15_000,
     },
   },
