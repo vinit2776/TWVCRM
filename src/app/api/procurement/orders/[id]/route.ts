@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
@@ -5,11 +6,11 @@ import { z } from "zod";
 import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
-import { poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
+import { amcStatusFor, poExceedsPrQty, poStatusAfterCancelRestore, poStatusAfterUnmarkReceived } from "@/lib/procurement/po-rollback";
 
 // Admin-only corrections, one step back each. See src/lib/procurement/admin-rollback.ts.
 const ROLLBACK_ACTIONS = [
-  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance",
+  "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "reinstate_amc",
 ] as const;
 
 // restore_partially_cancelled_po raises these as the exception message (00602).
@@ -47,6 +48,7 @@ const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("restore_partial_cancel"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reopen_advance"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("reverse_advance"), reason: rollbackReasonSchema }),
+  z.object({ action: z.literal("reinstate_amc"), reason: rollbackReasonSchema }),
   z.object({ action: z.literal("approve_advance") }),
   z.object({ action: z.literal("reject_advance") }),
   z.object({
@@ -116,6 +118,10 @@ export async function PATCH(
     .single();
 
   if (fetchError || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { poId: id });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = patchPoSchema.safeParse(body);
@@ -452,6 +458,28 @@ export async function PATCH(
       break;
     }
 
+    case "reinstate_amc": {
+      if (po.po_type !== "service" || !po.amc_terminated_at) {
+        return NextResponse.json({ error: "This contract has not been terminated" }, { status: 422 });
+      }
+      if (["cancelled", "partially_cancelled"].includes(po.status)) {
+        return NextResponse.json({ error: "The purchase order is cancelled. Restore it first." }, { status: 422 });
+      }
+      updatePayload = {
+        amc_terminated_at: null,
+        amc_terminated_by: null,
+        amc_termination_reason: null,
+        amc_status: amcStatusFor({
+          start: po.amc_start_date ?? null,
+          end: po.amc_end_date ?? null,
+          visitsCovered: po.amc_visits_covered != null ? Number(po.amc_visits_covered) : null,
+          visitsUsed: Number(po.amc_visits_used ?? 0),
+          today: new Date(),
+        }),
+      };
+      break;
+    }
+
     case "approve_advance": {
       if (dbUser.role !== "admin") {
         return NextResponse.json({ error: "Only admin can approve advance payments" }, { status: 403 });
@@ -602,6 +630,7 @@ export async function PATCH(
       restore_cancelled: "cancel_restored",
       reopen_advance: "advance_reopened",
       reverse_advance: "advance_reversed",
+      reinstate_amc: "amc_reinstated",
     } as Record<string, string>)[action] ?? action };
     extraAuditChanges.rollback_reason = { old: null, new: parsed.data.reason };
   }

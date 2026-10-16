@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -31,6 +32,9 @@ export async function POST(
   if (!canRollback(dbUser.role)) {
     return NextResponse.json({ error: "Only an admin can reverse a payment" }, { status: 403 });
   }
+
+  const lockedChain = await chainLockedResponse(supabase, { billId: id });
+  if (lockedChain) return lockedChain;
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {

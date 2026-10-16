@@ -85,3 +85,27 @@ export async function poExceedsPrQty(
   }
   return null;
 }
+
+/**
+ * The status an AMC returns to when a termination is reversed. Same ordering as
+ * update_amc_details on the PO route: not started -> inactive, past its end ->
+ * expired, visits used up -> exhausted, within 60 days of the end -> expiring.
+ */
+export function amcStatusFor(i: {
+  start: string | null;
+  end: string | null;
+  visitsCovered: number | null;
+  visitsUsed: number;
+  today: Date;
+}): "inactive" | "expired" | "exhausted" | "expiring" | "active" {
+  const start = i.start ? new Date(i.start) : null;
+  const end = i.end ? new Date(i.end) : null;
+  if (!start || i.today < start) return "inactive";
+  if (end && i.today > end) return "expired";
+  if (i.visitsCovered != null && i.visitsUsed >= i.visitsCovered) return "exhausted";
+  if (end) {
+    const daysLeft = Math.floor((end.getTime() - i.today.getTime()) / 86_400_000);
+    return daysLeft <= 60 ? "expiring" : "active";
+  }
+  return "active";
+}

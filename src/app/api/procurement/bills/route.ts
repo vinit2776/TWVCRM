@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -199,6 +200,12 @@ export async function POST(request: NextRequest) {
   const parsed = createBillSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  // A new bill can't be added to a closed cycle — an admin must reopen it first.
+  if (parsed.data.po_id) {
+    const lockedChain = await chainLockedResponse(supabase, { poId: parsed.data.po_id });
+    if (lockedChain) return lockedChain;
   }
 
   // ── PO validation ──────────────────────────────────────────────────────────

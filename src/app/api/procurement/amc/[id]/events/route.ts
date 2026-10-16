@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -89,6 +90,9 @@ export async function POST(
   if (po.status === "cancelled") {
     return NextResponse.json({ error: "This purchase order is cancelled, so visits can't be logged against it" }, { status: 422 });
   }
+
+  const lockedChain = await chainLockedResponse(supabase, { poId });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = createEventSchema.safeParse(body);

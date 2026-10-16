@@ -31,6 +31,7 @@ import { formatDate } from "@/lib/utils";
 import { ConsumptionLog, BeverageLog } from "@/types";
 import { BEVERAGE_TYPE_LABELS } from "@/lib/constants";
 import { ConsumptionCorrectionDialog } from "@/components/procurement/consumption-correction-dialog";
+import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { ConsumptionLifecycleStatus } from "@/components/procurement/consumption-lifecycle-status";
 import Link from "next/link";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
@@ -42,6 +43,7 @@ interface Location {
 
 export default function ConsumptionHistoryPage() {
   const { user } = useCurrentUser();
+  const [restoreLog, setRestoreLog] = useState<ConsumptionLog | null>(null);
   const userRole = user?.role ?? "";
   const [activeTab, setActiveTab] = useState<"materials" | "beverages">("materials");
   const [locations, setLocations] = useState<Location[]>([]);
@@ -342,6 +344,18 @@ export default function ConsumptionHistoryPage() {
                                   Correct
                                 </Button>
                               )}
+                              {isVoided && user?.role === "admin" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRestoreLog(log);
+                                  }}
+                                >
+                                  Restore
+                                </Button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -462,6 +476,26 @@ export default function ConsumptionHistoryPage() {
       )}
 
       {/* Correction Dialog */}
+      {restoreLog && (
+        <RollbackDialog
+          open
+          onOpenChange={(o) => { if (!o) setRestoreLog(null); }}
+          title={`Restore consumption log — ${formatDate(restoreLog.logged_at)}`}
+          description="The log was voided by mistake. It becomes active again and its stock is taken back out."
+          impact={[
+            "Log returns to Active and the stock it used is deducted again",
+            "Refused if the stock has since been used elsewhere — it names the item",
+            "Refused if the log was replaced by a re-log (void the replacement first)",
+          ]}
+          confirmLabel="Restore log"
+          successMessage="Consumption log restored"
+          url={`/api/procurement/consumption/${restoreLog.id}`}
+          method="PATCH"
+          extraBody={{ action: "unvoid" }}
+          onDone={fetchLogs}
+        />
+      )}
+
       <ConsumptionCorrectionDialog
         log={correctionLog}
         open={correctionOpen}

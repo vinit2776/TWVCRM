@@ -55,6 +55,7 @@ export async function GET(
       checklist:amc_event_checklist_items(id, checked)
     `)
     .eq("asset_id", assetId)
+    .is("voided_at", null)
     .order("event_date", { ascending: false })
     .limit(50);
 

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeJourney } from "./compute";
+import { defaultProposal, followRevisions } from "./pick-proposal";
 import type { Journey, JourneyInput } from "./types";
 
 const ENROLLED = ["biometric_enrolled", "card_enrolled", "fully_enrolled"];
@@ -38,7 +39,7 @@ export async function loadJourney(
     admin
       .from("proposals")
       .select(
-        "id, proposal_number, status, security_deposit_months, deposit_payment_status, payment_status, deposit_waiver_verified_at, created_at",
+        "id, proposal_number, status, superseded_by, security_deposit_months, deposit_payment_status, payment_status, deposit_waiver_verified_at, created_at",
       )
       .eq("lead_id", leadId)
       .order("created_at", { ascending: false }),
@@ -59,9 +60,11 @@ export async function loadJourney(
   let contract: Row | undefined = opts.contractId
     ? contracts.find((c) => c.id === opts.contractId)
     : undefined;
-  let proposal: Row | undefined = opts.proposalId
-    ? proposals.find((p) => p.id === opts.proposalId)
-    : undefined;
+  // Asking for a superseded proposal means its latest revision.
+  let proposal = followRevisions(
+    proposals as { id: string; status: string; superseded_by?: string | null }[],
+    opts.proposalId ? proposals.find((p) => p.id === opts.proposalId) as never : undefined,
+  ) as Row | undefined;
   if (!contract && proposal) {
     contract = contracts.find((c) => c.proposal_id === proposal!.id && !DEAD_CONTRACT_STATUSES.includes(c.status as string));
   }
@@ -72,7 +75,7 @@ export async function loadJourney(
     proposal = proposals.find((p) => p.id === contract!.proposal_id);
   }
   if (!proposal && !contract) {
-    proposal = proposals.find((p) => !["rejected", "expired"].includes(p.status as string)) ?? proposals[0];
+    proposal = defaultProposal(proposals as { id: string; status: string }[]) as Row | undefined;
   }
 
   const input: JourneyInput = {

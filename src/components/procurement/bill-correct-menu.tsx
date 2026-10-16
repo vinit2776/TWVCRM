@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Settings2, Undo2 } from "lucide-react";
+import { Loader2, Lock, Settings2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -31,11 +31,15 @@ type Props = {
   billNumber: string;
   approvalStatus: string;
   payments: Payment[];
+  /** The cheque for this bill has been marked signed. */
+  chequeSigned?: boolean;
+  /** The procurement cycle is closed — corrections are disabled until an admin reopens it. */
+  locked?: boolean;
   isAdmin: boolean;
   onDone: () => void;
 };
 
-type Mode = "reverse_payment" | "unapprove" | "withdraw" | null;
+type Mode = "reverse_payment" | "unapprove" | "withdraw" | "unsign_cheque" | null;
 
 const MIN_REASON = 10;
 
@@ -43,13 +47,20 @@ const MIN_REASON = 10;
 // a bill with standing payments must have them reversed before it can be
 // un-approved. Server enforces the same rules; the disabled states here just
 // explain them up front.
-export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, isAdmin, onDone }: Props) {
+export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, chequeSigned, locked, isAdmin, onDone }: Props) {
   const [mode, setMode] = useState<Mode>(null);
   const [paymentId, setPaymentId] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   if (!isAdmin) return null;
+  if (locked) {
+    return (
+      <Button size="sm" variant="outline" className="gap-1.5" disabled title="This procurement cycle is closed. Reopen it first.">
+        <Lock className="h-3.5 w-3.5" /> Correct
+      </Button>
+    );
+  }
 
   const standing = payments
     .filter((p) => !p.reversed_at)
@@ -57,7 +68,7 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
   const canReversePayment = standing.length > 0;
   const canUnapprove = approvalStatus === "approved" && standing.length === 0;
   const canWithdraw = approvalStatus === "pending" || approvalStatus === "rejected";
-  if (!canReversePayment && !canUnapprove && !canWithdraw && approvalStatus !== "approved") return null;
+  if (!canReversePayment && !canUnapprove && !canWithdraw && !chequeSigned && approvalStatus !== "approved") return null;
 
   const selected = standing.find((p) => p.id === paymentId) ?? standing[0];
 
@@ -94,6 +105,7 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
       toast.success(
         mode === "reverse_payment" ? "Payment reversed"
         : mode === "withdraw" ? `${billNumber} withdrawn`
+        : mode === "unsign_cheque" ? "Cheque signature removed"
         : `${billNumber} returned to approval`
       );
       setMode(null);
@@ -122,6 +134,11 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
           {approvalStatus === "approved" && (
             <DropdownMenuItem disabled={!canUnapprove} onSelect={() => open("unapprove")}>
               <Undo2 className="h-3.5 w-3.5 mr-2" /> Un-approve bill…
+            </DropdownMenuItem>
+          )}
+          {chequeSigned && (
+            <DropdownMenuItem onSelect={() => open("unsign_cheque")}>
+              <Undo2 className="h-3.5 w-3.5 mr-2" /> Un-sign cheque…
             </DropdownMenuItem>
           )}
           {canWithdraw && (
@@ -203,6 +220,28 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
             </>
           )}
 
+          {mode === "unsign_cheque" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Un-sign cheque — {billNumber}</DialogTitle>
+                <DialogDescription>
+                  Use this when the cheque was marked signed by mistake.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                  <p className="font-medium mb-1">This will:</p>
+                  <ul className="list-disc pl-5 space-y-0.5 text-muted-foreground">
+                    <li>Clear the signature so the cheque shows as awaiting signature again</li>
+                    <li>Clear it on every bill that was signed together with this one (same cheque)</li>
+                    <li>Leave the payment itself as it is</li>
+                  </ul>
+                </div>
+                <ReasonField value={reason} onChange={setReason} />
+              </div>
+            </>
+          )}
+
           {mode === "withdraw" && (
             <>
               <DialogHeader>
@@ -230,7 +269,7 @@ export function BillCorrectMenu({ billId, billNumber, approvalStatus, payments, 
             <Button variant="outline" onClick={() => setMode(null)} disabled={submitting}>Cancel</Button>
             <Button variant="destructive" onClick={submit} disabled={submitting}>
               {submitting && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              {mode === "reverse_payment" ? "Reverse payment" : mode === "withdraw" ? "Withdraw bill" : "Un-approve"}
+              {mode === "reverse_payment" ? "Reverse payment" : mode === "withdraw" ? "Withdraw bill" : mode === "unsign_cheque" ? "Un-sign cheque" : "Un-approve"}
             </Button>
           </DialogFooter>
         </DialogContent>

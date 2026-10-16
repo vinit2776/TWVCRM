@@ -1,6 +1,8 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
+import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -319,6 +321,7 @@ function FileDropzone({
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ poId: id });
   const router = useRouter();
   const { user, loading: userLoading } = useCurrentUser();
   const currentUserRole = user?.role ?? null;
@@ -410,6 +413,7 @@ export default function PurchaseOrderDetailPage() {
   const [amcEvents, setAmcEvents] = useState<AmcServiceEvent[]>([]);
   const [amcEventsLoaded, setAmcEventsLoaded] = useState(false);
   const [amcEventsLoading, setAmcEventsLoading] = useState(false);
+  const [voidEvent, setVoidEvent] = useState<AmcServiceEvent | null>(null);
   const [showAmcEventDialog, setShowAmcEventDialog] = useState(false);
   // AMC contact edit mode
   const [amcEditMode, setAmcEditMode] = useState(false);
@@ -1012,8 +1016,10 @@ export default function PurchaseOrderDetailPage() {
             status={po.status}
             advanceStatus={po.advance_status ?? null}
             advanceApprovalStatus={po.advance_approval_status ?? null}
+            amcTerminated={!!po.amc_terminated_at}
+            locked={locked}
             isAdmin={currentUserRole === "admin"}
-            onDone={fetchPo}
+            onDone={() => { fetchPo(); reloadChain(); }}
           />
           {!["cancelled", "partially_cancelled"].includes(po.status) && (
             <Button
@@ -1133,6 +1139,8 @@ export default function PurchaseOrderDetailPage() {
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ poId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchPo(); reloadChain(); }} />
 
       {canConvertToService && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -1604,7 +1612,9 @@ export default function PurchaseOrderDetailPage() {
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-medium">Service Events</p>
                   {amcEventsLoaded && (
-                    <span className="text-xs text-muted-foreground">{amcEvents.length} event{amcEvents.length !== 1 ? "s" : ""} logged</span>
+                    <span className="text-xs text-muted-foreground">
+                      {amcEvents.filter((e) => !e.voided_at).length} event{amcEvents.filter((e) => !e.voided_at).length !== 1 ? "s" : ""} logged
+                    </span>
                   )}
                 </div>
 
@@ -1636,13 +1646,18 @@ export default function PurchaseOrderDetailPage() {
                         annual_service: "Annual Service",
                       };
                       return (
-                        <div key={ev.id} className="relative flex gap-3">
+                        <div key={ev.id} className={`relative flex gap-3 ${ev.voided_at ? "opacity-60" : ""}`}>
                           <div className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background ${typeColors[ev.event_type] ?? "bg-gray-400"}`} />
                           <div className="ml-1 min-w-0 flex-1">
                             <div className="flex items-start justify-between gap-2">
                               <div>
-                                <p className="text-sm font-medium leading-snug">
+                                <p className={`text-sm font-medium leading-snug ${ev.voided_at ? "line-through" : ""}`}>
                                   #{ev.event_number} · {typeLabels[ev.event_type] ?? ev.event_type}
+                                  {ev.voided_at && (
+                                    <span className="ml-2 inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-medium no-underline">
+                                      Voided
+                                    </span>
+                                  )}
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-0.5">
                                   {formatDate(ev.event_date)}
@@ -1662,6 +1677,19 @@ export default function PurchaseOrderDetailPage() {
                               )}
                             </div>
                             <p className="text-sm text-muted-foreground mt-1">{ev.issue_description}</p>
+                            {ev.voided_at ? (
+                              <p className="text-xs text-red-700 mt-0.5">Voided: {ev.void_reason ?? "—"}</p>
+                            ) : (
+                              currentUserRole === "admin" && !locked && (
+                                <button
+                                  type="button"
+                                  className="text-xs text-red-700 underline underline-offset-2 mt-0.5 hover:text-red-800"
+                                  onClick={() => setVoidEvent(ev)}
+                                >
+                                  Void visit
+                                </button>
+                              )
+                            )}
                             {ev.resolution_notes && (
                               <p className="text-xs text-muted-foreground mt-0.5 italic">{ev.resolution_notes}</p>
                             )}
@@ -1681,6 +1709,29 @@ export default function PurchaseOrderDetailPage() {
           </Card>
         );
       })()}
+
+      {voidEvent && (
+        <RollbackDialog
+          open
+          onOpenChange={(o) => { if (!o) setVoidEvent(null); }}
+          title={`Void visit #${voidEvent.event_number} — ${po.po_number}`}
+          description="Use this for a visit logged in error. It stays on the timeline, marked voided."
+          impact={[
+            "A preventive or annual visit gives its covered visit back to the contract",
+            "An Exhausted contract that is back under its limit returns to Active",
+            "Breakdown and remote-support calls don't use a covered visit, so the count stays",
+          ]}
+          confirmLabel="Void visit"
+          successMessage="Visit voided"
+          url={`/api/procurement/amc/${id}/events/${voidEvent.id}/void`}
+          onDone={async () => {
+            const res = await fetch(`/api/procurement/amc/${id}/events`);
+            const json = await res.json().catch(() => ({}));
+            setAmcEvents(json.data ?? []);
+            fetchPo();
+          }}
+        />
+      )}
 
       {/* Advance Payment */}
       {(po.advance_amount ?? 0) > 0 && (

@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -126,6 +127,11 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("sign_cheque"),
   }),
   z.object({
+    /** Admin rollback: a cheque marked signed by mistake (also clears bills signed with it). */
+    action: z.literal("unsign_cheque"),
+    reason: rollbackReasonSchema,
+  }),
+  z.object({
     /**
      * Lets a rejected bill have its (pre-GST) total_amount corrected and pushed back
      * into the approval queue. Common case: amount was entered GST-inclusive and the
@@ -228,6 +234,10 @@ export async function PATCH(
       { status: 422 }
     );
   }
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { billId: id });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
@@ -1048,6 +1058,50 @@ export async function PATCH(
       break;
     }
 
+    case "unsign_cheque": {
+      if (!canRollback(dbUser.role)) {
+        return NextResponse.json({ error: "Only an admin can un-sign a cheque" }, { status: 403 });
+      }
+      if (!bill.cheque_signed_at) {
+        return NextResponse.json({ error: "This cheque has not been signed" }, { status: 422 });
+      }
+      const signedAtWas = bill.cheque_signed_at as string;
+      const unsignReason = parsed.data.reason;
+      updatePayload = { cheque_signed_at: null, cheque_signed_by: null };
+      extraAuditChanges.rollback_kind = { old: null, new: "cheque_unsigned" };
+      extraAuditChanges.rollback_reason = { old: null, new: unsignReason };
+
+      // One physical cheque can cover several bills and signing marks them all
+      // together (same vendor, reference and signing moment) — clear them together.
+      afterBillUpdate = async () => {
+        if (!bill.payment_reference || !bill.vendor_id) return;
+        const { data: siblings } = await supabase
+          .from("vendor_bills")
+          .update({ cheque_signed_at: null, cheque_signed_by: null })
+          .eq("vendor_id", bill.vendor_id)
+          .eq("payment_reference", bill.payment_reference)
+          .eq("payment_mode", "cheque")
+          .eq("cheque_signed_at", signedAtWas)
+          .neq("id", id)
+          .select("id");
+        for (const s of siblings ?? []) {
+          logAudit(supabase, {
+            entityType: "vendor_bill",
+            entityId: s.id,
+            action: "rollback",
+            performedBy: dbUser.id,
+            changes: {
+              rollback_kind: { old: null, new: "cheque_unsigned" },
+              rollback_reason: { old: null, new: unsignReason },
+              cheque_signed_at: { old: signedAtWas, new: null },
+              note: { old: null, new: `Un-signed with bill ${id} (same cheque)` },
+            },
+          });
+        }
+      };
+      break;
+    }
+
     case "sign_cheque": {
       if (!["admin", "accounts", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
@@ -1348,7 +1402,7 @@ export async function PATCH(
   await logAudit(supabase, {
     entityType: "vendor_bill",
     entityId: id,
-    action: parsed.data.action === "unapprove" || parsed.data.action === "withdraw" ? "rollback" : "update",
+    action: ["unapprove", "withdraw", "unsign_cheque"].includes(parsed.data.action) ? "rollback" : "update",
     performedBy: dbUser.id,
     changes: {
       ...diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),

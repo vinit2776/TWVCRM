@@ -291,7 +291,7 @@ export interface Task {
 // ==========================================
 // Proposal Types
 // ==========================================
-export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired";
+export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired" | "superseded";
 
 export interface LineItem {
   description: string;
@@ -426,6 +426,13 @@ export interface Proposal {
   deposit_waiver_otp?: string;
   deposit_waiver_otp_expires?: string;
   deposit_waiver_verified_at?: string;
+  /** The proposal this one revises (PROP-0231 for PROP-0231-R2). */
+  revision_of?: string | null;
+  /** 1 for an original proposal, 2 for -R2, and so on. */
+  revision_number?: number;
+  /** Set on the old proposal once a revision replaces it. */
+  superseded_by?: string | null;
+  superseded_at?: string | null;
   deposit_waiver_verified_by?: string;
   deposit_waiver_verified_by_user?: { id: string; full_name: string } | null;
   deposit_waiver_requested_at?: string;
@@ -1148,6 +1155,7 @@ export type AuditEntityType =
   | "location"
   | "stock_transfer"
   | "consumption_log"
+  | "tds_challan"
   | "beverage_log"
   | "location_floor"
   | "space_unit"
@@ -2611,6 +2619,8 @@ export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expi
 export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
 
 export interface AmcServiceEvent {
+  voided_at?: string | null;
+  void_reason?: string | null;
   id: string;
   po_id: string;
   event_number: number;
@@ -2693,6 +2703,7 @@ export interface PurchaseOrder {
 
 export interface VendorBill {
   id: string;
+  cheque_signed_at?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
   bill_number: string;

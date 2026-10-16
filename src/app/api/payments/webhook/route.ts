@@ -194,10 +194,11 @@ export async function POST(request: NextRequest) {
 
     if (proposal && proposal.payment_status !== "paid") {
       const now = new Date().toISOString();
+      // A superseded proposal still records the money, but must not be revived.
+      const revive = proposal.status !== "superseded";
       const proposalUpdate = {
         payment_status: "paid",
-        status: "accepted",
-        accepted_at: now,
+        ...(revive ? { status: "accepted", accepted_at: now } : {}),
         payment_received_at: now,
         payment_amount: amountPaid,
         payment_reference: razorpayPaymentId || paymentLinkId,
@@ -243,7 +244,7 @@ export async function POST(request: NextRequest) {
        * happen silently is the status change; a rejected proposal that
        * receives a deposit is something a human needs to look at.
        */
-      const resurrects = depositProposal.status === "rejected" || depositProposal.status === "expired";
+      const resurrects = ["rejected", "expired", "superseded"].includes(depositProposal.status);
       if (resurrects) {
         console.warn(
           `[webhook] deposit paid on ${depositProposal.status} proposal ${depositProposal.proposal_number} — ` +

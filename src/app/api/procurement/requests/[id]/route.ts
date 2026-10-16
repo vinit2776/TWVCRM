@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
@@ -194,6 +195,10 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { prId: id });
+  if (lockedChain) return lockedChain;
 
   // Fetch the current PR + threshold in parallel
   const [{ data: pr, error: fetchError }, approvalThreshold] = await Promise.all([
@@ -620,6 +625,10 @@ export async function PUT(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { prId: id });
+  if (lockedChain) return lockedChain;
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
