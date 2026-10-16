@@ -295,7 +295,8 @@ export async function POST(request: NextRequest) {
       const { data: deliveryReceipts } = await supabase
         .from("po_delivery_receipts")
         .select("po_delivery_receipt_items(po_item_id, qty_received)")
-        .eq("po_id", parsed.data.po_id);
+        .eq("po_id", parsed.data.po_id)
+        .is("reversed_at", null);
       if (!deliveryReceipts || deliveryReceipts.length === 0) {
         return NextResponse.json({ error: "A delivery must be recorded before uploading a vendor invoice" }, { status: 422 });
       }
