@@ -948,6 +948,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             billNumber={bill.bill_number}
             approvalStatus={bill.approval_status}
             payments={chain?.bill.vendor_bill_payments ?? []}
+            chequeSigned={!!bill.cheque_signed_at}
             isAdmin={userRole === "admin"}
             onDone={fetchChain}
           />

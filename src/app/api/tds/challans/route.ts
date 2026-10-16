@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
     `)
     .order("deposit_date", { ascending: false });
 
+  // A voided challan was entered in error and its entries are pending again.
+  query = query.is("voided_at", null);
   if (year) query = query.eq("period_year", Number(year));
   if (month) query = query.eq("period_month", Number(month));
 
