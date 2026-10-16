@@ -32,6 +32,7 @@ export async function getLastReceivedMap(
       .from("po_delivery_receipts")
       .select("received_at, po_delivery_receipt_items(po_item:purchase_order_items(item_id))")
       .in("po_id", poIds)
+      .is("reversed_at", null) // a reversed receipt's goods were taken back out of stock
       .not("received_at", "is", null);
 
     for (const r of (receipts ?? []) as unknown as {

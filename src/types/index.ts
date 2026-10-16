@@ -2572,6 +2572,8 @@ export interface PoDeliveryReceiptItem {
 
 export interface PoDeliveryReceipt {
   id: string;
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
   po_id: string;
   dc_number?: string | null;
   dc_date?: string | null;

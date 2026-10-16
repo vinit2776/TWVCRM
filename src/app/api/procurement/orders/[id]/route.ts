@@ -13,6 +13,13 @@ const ROLLBACK_ACTIONS = [
   "unorder", "unmark_received", "restore_cancelled", "restore_partial_cancel", "reopen_advance", "reverse_advance", "reinstate_amc",
 ] as const;
 
+// cancel_po_reversing_receipts / restore_cancelled_po (00611) raise these as the exception message.
+const CANCEL_RPC_ERRORS: Record<string, string> = {
+  PO_NOT_CANCELLABLE: "Only pre-invoice POs can be cancelled",
+  BILLS_EXIST: "This PO has vendor bills. An admin must withdraw them before the PO can be cancelled.",
+  NOT_CANCELLED: "This PO is not cancelled",
+};
+
 // restore_partially_cancelled_po raises these as the exception message (00602).
 const RESTORE_RPC_ERRORS: Record<string, string> = {
   NOT_PARTIALLY_CANCELLED: "This PO is no longer partially cancelled",
@@ -221,12 +228,47 @@ export async function PATCH(
         const { count: deliveryCount } = await supabase
           .from("po_delivery_receipts")
           .select("id", { count: "exact", head: true })
-          .eq("po_id", id);
+          .eq("po_id", id)
+          .is("reversed_at", null);
         if (deliveryCount && deliveryCount > 0 && !parsed.data.force) {
           return NextResponse.json({
             error: "This PO has received goods. Use force cancel or reject deliveries first.",
             has_deliveries: true,
           }, { status: 422 });
+        }
+
+        // Goods were received and stocked: cancelling must take them back out of
+        // stock, or the inventory keeps goods the business no longer has. One
+        // atomic step (stock, received quantities, receipts flagged reversed,
+        // status) — see migration 00611.
+        if (deliveryCount && deliveryCount > 0) {
+          const { data: result, error: cancelRpcError } = await createAdminClient().rpc("cancel_po_reversing_receipts", {
+            p_po_id: id,
+            p_actor: dbUser.id,
+            p_reason: null,
+          });
+          if (cancelRpcError) {
+            const known = Object.entries(CANCEL_RPC_ERRORS).find(([code]) => cancelRpcError.message.includes(code));
+            if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+            console.error(`[orders/${id}] cancel with stock reversal failed:`, cancelRpcError.message);
+            return NextResponse.json({ error: "Could not cancel the purchase order" }, { status: 500 });
+          }
+          if (po.pr_id) await recalculatePrStatus(supabase, po.pr_id);
+          const shortfalls = (result?.shortfalls ?? []) as unknown[];
+          await logAudit(supabase, {
+            entityType: "purchase_order",
+            entityId: id,
+            action: "update",
+            performedBy: dbUser.id,
+            changes: {
+              status: { old: po.status, new: "cancelled" },
+              status_before_cancel: { old: null, new: po.status },
+              stock_deducted: { old: null, new: result?.stock_deducted ?? 0 },
+              receipts_reversed: { old: null, new: result?.receipts_reversed ?? 0 },
+              ...(shortfalls.length ? { stock_shortfall: { old: null, new: shortfalls } } : {}),
+            },
+          });
+          return NextResponse.json({ data: { ...po, status: "cancelled" }, stock: result });
         }
       }
 
@@ -323,7 +365,7 @@ export async function PATCH(
         return NextResponse.json({ error: "Only an ordered PO can be moved back to pending" }, { status: 422 });
       }
       const [{ count: receipts }, { count: bills }, { count: reports }] = await Promise.all([
-        supabase.from("po_delivery_receipts").select("id", { count: "exact", head: true }).eq("po_id", id),
+        supabase.from("po_delivery_receipts").select("id", { count: "exact", head: true }).eq("po_id", id).is("reversed_at", null),
         supabase.from("vendor_bills").select("id", { count: "exact", head: true }).eq("po_id", id).neq("approval_status", "withdrawn"),
         supabase.from("po_service_reports").select("id", { count: "exact", head: true }).eq("po_id", id),
       ]);
@@ -376,11 +418,35 @@ export async function PATCH(
       if (overflow) return NextResponse.json({ error: overflow }, { status: 422 });
       const { data: items } = await supabase
         .from("purchase_order_items").select("quantity_ordered, quantity_received").eq("po_id", id);
-      updatePayload = {
-        status: poStatusAfterCancelRestore(po.status_before_cancel ?? null, items ?? []),
-        status_before_cancel: null,
-      };
-      break;
+      const restoreStatus = poStatusAfterCancelRestore(po.status_before_cancel ?? null, items ?? []);
+
+      // Puts back exactly the stock the cancel took out, the received quantities
+      // and the delivery receipts, then sets the status — atomically (00611).
+      const { data: restored, error: restoreRpcError } = await createAdminClient().rpc("restore_cancelled_po", {
+        p_po_id: id,
+        p_actor: dbUser.id,
+        p_status: restoreStatus,
+      });
+      if (restoreRpcError) {
+        const known = Object.entries(CANCEL_RPC_ERRORS).find(([code]) => restoreRpcError.message.includes(code));
+        if (known) return NextResponse.json({ error: known[1] }, { status: 422 });
+        console.error(`[orders/${id}] restore cancelled PO failed:`, restoreRpcError.message);
+        return NextResponse.json({ error: "Could not restore the purchase order" }, { status: 500 });
+      }
+      if (po.pr_id) await recalculatePrStatus(supabase, po.pr_id);
+      await logAudit(supabase, {
+        entityType: "purchase_order",
+        entityId: id,
+        action: "rollback",
+        performedBy: dbUser.id,
+        changes: {
+          rollback_kind: { old: null, new: "cancel_restored" },
+          rollback_reason: { old: null, new: parsed.data.reason },
+          status: { old: "cancelled", new: restoreStatus },
+          ...(restored?.stock_restored ? { stock_restored: { old: null, new: restored.stock_restored } } : {}),
+        },
+      });
+      return NextResponse.json({ data: { ...po, status: restoreStatus }, stock: restored });
     }
 
     case "restore_partial_cancel": {

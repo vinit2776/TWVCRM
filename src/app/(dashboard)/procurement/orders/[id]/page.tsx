@@ -142,9 +142,7 @@ function buildTimeline(
       id: `dr-${dr.id}`,
       ts: dr.received_at,
       type: "delivery",
-      title: dr.dc_number
-        ? `Delivery Received — ${dr.dc_number}`
-        : "Delivery Received",
+      title: `${dr.dc_number ? `Delivery Received — ${dr.dc_number}` : "Delivery Received"}${dr.reversed_at ? " (reversed — stock taken back out)" : ""}`,
       subtitle: dr.receiver?.full_name ?? "—",
       fileUrl: dr.file_url,
       fileLabel: "View Challan",
@@ -2836,7 +2834,8 @@ export default function PurchaseOrderDetailPage() {
                       </table>
                     </div>
                     <p className="text-xs text-amber-700">
-                      Rejecting deliveries first is recommended to avoid inventory imbalance.
+                      Cancelling takes these goods back out of stock (never below zero). The delivery challans stay on
+                      record, marked reversed. To remove a single wrong delivery instead, reject that delivery.
                     </p>
                   </div>
                   <DialogFooter>
@@ -2864,10 +2863,11 @@ export default function PurchaseOrderDetailPage() {
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
                     <div className="space-y-1">
-                      <p className="text-sm font-medium text-red-800">Inventory imbalance warning</p>
+                      <p className="text-sm font-medium text-red-800">Stock will be reversed</p>
                       <p className="text-xs text-red-700">
-                        Cancelling with received goods means you have inventory that will never be billed.
-                        This creates an accounting discrepancy that must be resolved manually.
+                        The received quantities are taken back out of inventory. If some of the goods have already
+                        been used, only what is still in stock is removed. An admin can restore the PO afterwards
+                        (Correct → Restore cancelled PO), which puts the stock back.
                       </p>
                     </div>
                   </div>
