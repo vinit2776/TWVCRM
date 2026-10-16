@@ -36,6 +36,7 @@ const THREAD_SELECT = `
     payer_name, payer_differs, billing_payment_id, resolution_note,
     claimed_statement_id, reviewed_at, created_at,
     claimed_statement:billing_statements!query_payment_reports_claimed_statement_id_fkey(id, statement_number, gst_invoice_number),
+    linked_payment:billing_payments!query_payment_reports_billing_payment_id_fkey(id, amount, payment_mode, payment_reference, payment_date),
     reviewed_by:users!query_payment_reports_reviewed_by_fkey(id, full_name, role),
     created_by:users!query_payment_reports_created_by_fkey(id, full_name, role)
   )

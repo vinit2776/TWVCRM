@@ -10,6 +10,7 @@ import {
   validatePaymentReport,
   lastCheckedChip,
   matchingRecordedPayments,
+  closedReportSummary,
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
@@ -255,5 +256,48 @@ describe("matchingRecordedPayments", () => {
 
   it("returns nothing when no payment matches", () => {
     expect(matchingRecordedPayments([pay("a", 100)], 6372)).toEqual([]);
+  });
+});
+
+describe("closedReportSummary", () => {
+  const base = {
+    targetKind: "invoice" as const,
+    reportedAmount: 6372,
+    reportedMode: "bank_transfer",
+    reportedOn: "2026-10-01",
+    modeLabel: (m: string) => ({ neft: "NEFT", bank_transfer: "Bank Transfer" }[m] ?? m),
+  };
+
+  it("points a verified invoice report at the payment it was linked to", () => {
+    const r = closedReportSummary({
+      ...base, status: "verified",
+      linkedPayment: { payment_mode: "neft", payment_reference: "22317" },
+    });
+    expect(r.headline).toBe("Payment report closed");
+    expect(r.linkLine).toBe("Linked to the payment recorded on the invoice (NEFT, ref 22317)");
+  });
+
+  it("leaves the reference out when the payment has none", () => {
+    const r = closedReportSummary({
+      ...base, status: "verified",
+      linkedPayment: { payment_mode: "neft", payment_reference: null },
+    });
+    expect(r.linkLine).toBe("Linked to the payment recorded on the invoice (NEFT)");
+  });
+
+  it("still reads sensibly if the linked payment cannot be loaded", () => {
+    const r = closedReportSummary({ ...base, status: "verified", linkedPayment: null });
+    expect(r.linkLine).toBe("Linked to the recorded payment");
+  });
+
+  it("describes a deposit report as recorded against the deposit", () => {
+    const r = closedReportSummary({ ...base, targetKind: "deposit", status: "verified", linkedPayment: null });
+    expect(r.linkLine).toBe("Recorded against the deposit");
+  });
+
+  it("says no such payment for a rejected report, with no link line", () => {
+    const r = closedReportSummary({ ...base, status: "rejected", linkedPayment: null });
+    expect(r.headline).toBe("Payment report closed — no such payment");
+    expect(r.linkLine).toBeNull();
   });
 });
