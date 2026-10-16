@@ -2,6 +2,7 @@
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { JourneyPanel } from "@/components/leads/value/journey-panel";
+import { MoneyPanel } from "@/components/leads/value/money-panel";
 
 /**
  * Value tab on the lead page (admin only — the caller gates it, and every API
@@ -14,10 +15,15 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
     <Tabs defaultValue="journey" className="space-y-4">
       <TabsList>
         <TabsTrigger value="journey">Journey</TabsTrigger>
+        <TabsTrigger value="money">Money</TabsTrigger>
       </TabsList>
 
       <TabsContent value="journey" className="space-y-4">
         <JourneyPanel leadId={leadId} />
+      </TabsContent>
+
+      <TabsContent value="money" className="space-y-4">
+        <MoneyPanel leadId={leadId} />
       </TabsContent>
     </Tabs>
   );

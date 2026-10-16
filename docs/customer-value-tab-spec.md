@@ -136,7 +136,7 @@ Charts over the selected range, all driven by monthly snapshots (section 7):
 - Seats paid vs seats used.
 - Tickets per month by type (facility, billing query, support), with resolution time, overdue count, repeat issues, last feedback rating.
 - Communication: reminders sent, last staff contact, open billing queries. (Inbound customer messages are patchy; see risks.)
-- Concessions ledger: waivers, moratoriums, refunds, late fees waived.
+- Concessions ledger: approved billing moratoriums (a month skipped), approved booking waivers, processed booking refunds, and credit notes. **Rent waivers are not concessions:** a `contract_rent_waivers` row means a missed month "won't be billed through the CRM", and many were billed elsewhere before June 2026, with nothing in the data to tell them apart. They are listed as "months not billed in the CRM" with an estimated value and are kept out of the concessions total. If a genuine giveaway needs to be told apart from a bookkeeping waiver, add a type to the waiver (open decision).
 - Lifecycle timeline of key events.
 
 ### 5.4 Comparison with the rest of the center
@@ -180,7 +180,7 @@ Built up over time. Every cost line has a **source status**: *Live* (from data t
 | Variable | Electricity | hybrid split of OneGrid usage | Live |
 | Variable | Facility staff time | logged ticket hours × hourly cost | Part live (hours from `facility_issue_time_logs`, recent only) |
 | Variable | Pantry and consumables | per person-day present | Needs input |
-| Variable | Concessions | waivers, refunds spread over tenure | Live |
+| Variable | Concessions | moratoriums, booking waivers and refunds, credit notes, spread over tenure (not rent waivers, see 5.3) | Live |
 | Variable | Cost of late payment | days late × cost of capital % | Part live |
 | Variable | Acquisition cost | one-off commission ÷ tenure months | Needs input |
 | Fixed | Rent share | center lease ÷ seats × his seats | Live (`property_leases`, per center) |
@@ -287,7 +287,7 @@ Verified from migrations and types on 2026-10-16. **Production row counts were n
 | Revenue, invoices | Ready | `billing_statements` (`contract_id`, `lead_id`), usage charges, bookings (`contract_id`) |
 | Payment timing | Ready, history uncertain | `due_date` on statements was added later; older rows may lack it. `billing_payments.payment_date`, `reminder_count`, `receivable_reminder_sends` |
 | Seats paid over time | Ready | `contract_space_allocations` (start/end dates), rate phases |
-| Concessions | Ready, recent | `contract_rent_waivers` (recent), moratoriums, waiver and refund requests |
+| Concessions | Ready, recent | moratoriums, booking waiver and refund requests (via the lead's bookings), credit notes. `contract_rent_waivers` is listed but not counted: it mixes bookkeeping and giveaways. |
 | Billing queries, feedback | Ready | `billing_queries`, `booking_feedbacks`, Feedback tab |
 | Lifecycle | Ready | leads, activities, proposals, contracts, `audit_trail` |
 | Seats used | Partial | **Use `access_logs`** (timestamped IN/OUT resolved to a contract). `cosec_presence` is current state only. Only where door devices exist, from install date. |
