@@ -37,6 +37,7 @@ import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse
 import { PendingOvertimeChargesWidget } from "@/components/dashboard/widgets/pending-overtime-charges-widget";
 import { MtdBookingsWidget } from "@/components/dashboard/widgets/mtd-bookings-widget";
 import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
+import { NextStepsWidget } from "@/components/dashboard/widgets/next-steps-widget";
 import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-widget";
 import { NetworkWidget } from "@/components/network/network-widget";
 import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-review-widget";
@@ -185,6 +186,8 @@ export default function DashboardPage() {
     switch (id) {
       case "pending_actions":
         return <PendingActionsWidget key="pending_actions" />;
+      case "next_steps":
+        return <NextStepsWidget key="next_steps" />;
       case "live_enquiries":
         return <LiveEnquiriesWidget key="live_enquiries" />;
       case "kpi_stats":

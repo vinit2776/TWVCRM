@@ -26,6 +26,10 @@ interface PhaseDraft {
   steps: Draft[];
 }
 
+// Phases whose steps don't depend on each other once nothing blocks them, so
+// several owners can work in parallel (e.g. IT issues vouchers while ops adds members).
+const PARALLEL_PHASES = new Set(["onboard", "bill"]);
+
 const PROPOSAL_SENT_STATUSES = ["sent", "viewed", "accepted"];
 // Statuses from which the agreement has been accepted (or the contract has moved on).
 const CONTRACT_ACCEPTED_STATUSES = ["accepted", "active", "renewal_in_progress", "renewed", "expired"];
@@ -351,6 +355,7 @@ export function computeJourney(input: JourneyInput): Journey {
         detail: d.detail,
         href: d.href,
         ctaLabel: d.ctaLabel,
+        actionable: state === "current" || (state === "upcoming" && PARALLEL_PHASES.has(phase.key)),
       };
       if (d.key === currentKey) nextStep = step;
       return step;

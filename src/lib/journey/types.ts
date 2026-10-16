@@ -22,6 +22,11 @@ export interface JourneyStep {
   /** Where the button should take the user. */
   href?: string;
   ctaLabel?: string;
+  /**
+   * Something the owner can do right now: the current step, or any ready step
+   * in a phase whose steps are independent of each other (onboarding, billing).
+   */
+  actionable: boolean;
 }
 
 export interface JourneyPhase {

@@ -62,6 +62,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/cron/journey-nudge?send=1",
+      "schedule": "45 4 * * *"
+    },
+    {
       "path": "/api/cron/contract-expiry",
       "schedule": "30 18 * * *"
     },

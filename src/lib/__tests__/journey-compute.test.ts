@@ -208,3 +208,31 @@ describe("computeJourney", () => {
     expect(j.requiredDone).toBe(j.requiredTotal);
   });
 });
+
+describe("actionable steps", () => {
+  it("lets IT work on vouchers and door access while ops steps are still open", () => {
+    const j = computeJourney(
+      input({
+        proposal: baseProposal,
+        contract: contract({ status: "active", activated: true, members: 2, signedDocumentId: "d1", accessDevices: 1 }),
+      }),
+    );
+    expect(step(j, "wifi_vouchers").actionable).toBe(true);
+    expect(step(j, "door_access").actionable).toBe(true);
+  });
+
+  it("does not mark blocked steps actionable", () => {
+    const j = computeJourney(
+      input({ proposal: baseProposal, contract: contract({ status: "active", activated: true, members: 2, signedDocumentId: null }) }),
+    );
+    expect(step(j, "wifi_vouchers").state).toBe("blocked");
+    expect(step(j, "wifi_vouchers").actionable).toBe(false);
+  });
+
+  it("only treats the current step as actionable before activation", () => {
+    const j = computeJourney(input({ proposal: baseProposal, contract: contract() }));
+    const actionable = j.phases.flatMap((p) => p.steps).filter((s) => s.actionable);
+    expect(actionable).toHaveLength(1);
+    expect(actionable[0].key).toBe(j.nextStep?.key);
+  });
+});
