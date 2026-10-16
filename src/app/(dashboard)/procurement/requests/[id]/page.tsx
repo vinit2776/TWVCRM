@@ -1,5 +1,6 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
@@ -40,6 +41,7 @@ import { cycleFromUnit, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { canCombineLines, combinedPerCycleCost } from "@/lib/procurement/amc-lines";
 import type { PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import { QueryButton } from "@/components/queries/query-button";
 
 type ActionType = "approve" | "reject" | "cancel" | "submit" | "resubmit";
@@ -266,6 +268,7 @@ function buildDisplayAuditEvents(events: AuditEvent[]): DisplayAuditEvent[] {
 export default function PurchaseRequestDetailPage() {
   const { user } = useCurrentUser();
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, reload: reloadChain } = useChainState({ prId: id });
   const router = useRouter();
 
   const userRole = user?.role ?? "";
@@ -281,6 +284,8 @@ export default function PurchaseRequestDetailPage() {
   const [rejectionReason, setRejectionReason] = useState("");
   // Optional note when approving without a vendor quotation attached — advisory, not a gate
   const [quotationOverrideReason, setQuotationOverrideReason] = useState("");
+  // What the approver will allow; starts at what the requester asked for.
+  const [approvedTolerance, setApprovedTolerance] = useState(0);
   // Edit-prices-and-resubmit (only available on rejected MRs)
   const [editPricesOpen, setEditPricesOpen] = useState(false);
   // Bill Customer (reimbursement department only)
@@ -347,6 +352,7 @@ export default function PurchaseRequestDetailPage() {
     ["admin", "manager", "accounts"].includes(userRole);
 
   const openApproveDialog = useCallback(async () => {
+    setApprovedTolerance(pr?.tolerance_requested_percent ?? 0);
     setActionDialog("approve");
     // AMC MRs bypass budget — no need to fetch budget check
     if (!pr || !isApprover || pr.expenditure_type === "amc") return;
@@ -374,7 +380,7 @@ export default function PurchaseRequestDetailPage() {
       .finally(() => setLifecycleLoading(false));
   }, [pr, id]);
 
-  const performAction = async (action: ActionType, extra?: Record<string, string>) => {
+  const performAction = async (action: ActionType, extra?: Record<string, string | number>) => {
     setActionLoading(true);
     try {
       const res = await fetch(`/api/procurement/requests/${id}`, {
@@ -633,6 +639,9 @@ export default function PurchaseRequestDetailPage() {
         </div>
       </div>
 
+      <ChainLockBanner chain={cycle} ref={{ prId: id }} isAdmin={userRole === "admin"} onChanged={reloadChain} />
+      {cycle && cycle.state === "open" && ["approved", "partially_ordered", "po_created"].includes(pr?.status ?? "") && <ChainStatusCard chain={cycle} />}
+
       {/* Rejection reason callout */}
       {pr.status === "rejected" && pr.rejection_reason && (
         <Card className="border-red-300 bg-red-50 ring-1 ring-red-200">
@@ -676,6 +685,14 @@ export default function PurchaseRequestDetailPage() {
               {pr.approval_code && (
                 <p className="text-xs text-green-700 mt-1 font-mono font-medium">
                   Approval Ref: {pr.approval_code}
+                </p>
+              )}
+              {pr.expenditure_type !== "amc" && (
+                <p className="text-xs text-green-700 mt-1">
+                  Price tolerance: {(pr.tolerance_percent ?? 0) > 0 ? `± ${pr.tolerance_percent}% on the final invoice` : "firm price"}
+                  {(pr.tolerance_requested_percent ?? 0) !== (pr.tolerance_percent ?? 0) && (pr.tolerance_requested_percent ?? 0) > 0
+                    ? ` (requested ± ${pr.tolerance_requested_percent}%)`
+                    : ""}
                 </p>
               )}
             </div>
@@ -1552,6 +1569,30 @@ export default function PurchaseRequestDetailPage() {
               You are about to approve <strong>{pr.pr_number}</strong> for{" "}
               <strong>{formatCurrency(pr.total_estimated_amount)}</strong>.
             </p>
+            {/* Price tolerance — the requester's ask; approver accepts or changes it. Not offered for AMC. */}
+            {pr.expenditure_type !== "amc" && (
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                {(pr.tolerance_requested_percent ?? 0) > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Requester asked for <strong>± {pr.tolerance_requested_percent}%</strong>
+                    {pr.tolerance_reason ? <> — &ldquo;{pr.tolerance_reason}&rdquo;</> : null}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Requester asked for a firm price.</p>
+                )}
+                <PriceToleranceField
+                  label="Allow the final invoice to differ by"
+                  percent={approvedTolerance}
+                  onPercentChange={setApprovedTolerance}
+                  estimate={pr.total_estimated_amount}
+                />
+                {approvedTolerance !== (pr.tolerance_requested_percent ?? 0) && (
+                  <p className="text-xs text-amber-700">
+                    You&apos;re changing this from {(pr.tolerance_requested_percent ?? 0) ? `± ${pr.tolerance_requested_percent}%` : "firm price"} to {approvedTolerance ? `± ${approvedTolerance}%` : "firm price"}.
+                  </p>
+                )}
+              </div>
+            )}
             {/* Quotation warning — no vendor quotation attached; advisory only, doesn't block approval */}
             {hasNoQuotations && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
@@ -1676,12 +1717,12 @@ export default function PurchaseRequestDetailPage() {
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() =>
-                performAction(
-                  "approve",
-                  hasNoQuotations && quotationOverrideReason.trim()
+                performAction("approve", {
+                  ...(hasNoQuotations && quotationOverrideReason.trim()
                     ? { quotation_override_reason: quotationOverrideReason.trim() }
-                    : undefined
-                )
+                    : {}),
+                  ...(pr.expenditure_type !== "amc" ? { tolerance_percent: approvedTolerance } : {}),
+                })
               }
               disabled={
                 actionLoading ||

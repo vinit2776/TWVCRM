@@ -30,6 +30,7 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 
@@ -276,6 +277,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     }
   };
   const [notes, setNotes] = useState(pr?.notes ?? "");
+  const [tolerancePercent, setTolerancePercent] = useState<number>(pr?.tolerance_requested_percent ?? 0);
+  const [toleranceReason, setToleranceReason] = useState(pr?.tolerance_reason ?? "");
   const [items, setItems] = useState<LineItem[]>(() => (pr ? hydrateItems(pr) : [emptyItem()]));
   // Quotations: staged in client memory until the MR is created, then uploaded.
   // Edit mode doesn't stage any — existing quotations are managed on the detail page.
@@ -441,6 +444,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       location_id: locationId || null,
       expenditure_type: expenditureType,
       notes: notes.trim() || undefined,
+      // AMC contracts bill fixed cycle amounts, so tolerance is never offered for them.
+      tolerance_requested_percent: isAmc ? 0 : tolerancePercent,
+      tolerance_reason: !isAmc && tolerancePercent > 0 ? toleranceReason.trim() || null : null,
       ...(submit !== undefined && { submit }),
       items: payloadItems,
       // AMC-specific fields — only sent when relevant, but always included
@@ -579,6 +585,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     }
     if (department === "reimbursement" && !billableContractId) {
       return "Select which customer's contract this reimbursement work will be billed to";
+    }
+    if (tolerancePercent > 0 && !toleranceReason.trim()) {
+      return "Say why the final invoice may differ from the estimate";
     }
     if ((CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department) && !locationId) {
       return "Select which center this request is for";
@@ -963,6 +972,19 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               rows={2}
             />
           </div>
+          {department !== "amc" && (
+            <div className="space-y-1.5 sm:col-span-2 rounded-md border bg-muted/30 p-3">
+              <PriceToleranceField
+                label="Could the final bill differ from this estimate?"
+                percent={tolerancePercent}
+                onPercentChange={setTolerancePercent}
+                reason={toleranceReason}
+                onReasonChange={setToleranceReason}
+                estimate={totalEstimated}
+              />
+              <p className="text-xs text-muted-foreground">The approver can accept or change this.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 

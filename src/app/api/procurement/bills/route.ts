@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -7,7 +8,8 @@ import { queryEntityDef } from "@/lib/queries/registry";
 import { canSeeQuery } from "@/lib/queries/audience";
 import { summarizeBillsByMonth } from "@/lib/bills-monthly-summary";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
-import { createVendorBill } from "@/lib/vendor-bills";
+import { createVendorBill, type ToleranceFacts } from "@/lib/vendor-bills";
+import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import { tryAutoApproveBill } from "@/lib/procurement/recurring-bill-rules-server";
 import { tryAutoApproveAmcBill } from "@/lib/procurement/amc-bill-auto-approve";
 import { decideElectricityContext, type ElectricityBillExtra, type RememberName } from "@/lib/electricity-bill-match";
@@ -46,6 +48,8 @@ const createBillSchema = z.object({
   printed_name: z.string().max(120).nullish(),
   // The bill prints an identifier that belongs to a different location than the one chosen, and the person confirmed.
   acknowledge_mismatch: z.boolean().default(false),
+  // Required when the invoice falls outside the PO's price tolerance.
+  tolerance_exception_reason: z.string().trim().max(500).optional().nullable(),
   // Teach the connection this wording so the next bill carrying it is recognised by itself.
   remember_name: z.boolean().default(false),
 }).refine(
@@ -198,9 +202,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // A new bill can't be added to a closed cycle — an admin must reopen it first.
+  if (parsed.data.po_id) {
+    const lockedChain = await chainLockedResponse(supabase, { poId: parsed.data.po_id });
+    if (lockedChain) return lockedChain;
+  }
+
   // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
   let poAdvanceCredit = 0;
+  let toleranceFacts: ToleranceFacts | null = null;
+  // Price tolerance (goods POs only): how far past the PO value / received value
+  // the invoice may go before it needs a special approval. 0 = firm price.
+  let tolerancePercent = 0;
+  let allGoodsReceived = true;
+  let priorInvoiced = 0;
+  let toleranceBase: number | null = null;
   // Company: inherited from the PO when one is linked (cross-checked against
   // any company_id the client also sent), otherwise taken directly from the
   // request — enforced by the schema refine() above.
@@ -208,7 +225,7 @@ export async function POST(request: NextRequest) {
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
-      .select("id, company_id, po_type, total_ordered_amount, status, unit_cost_per_cycle, cycle_count, advance_status, advance_amount")
+      .select("id, company_id, po_type, total_ordered_amount, status, unit_cost_per_cycle, cycle_count, advance_status, advance_amount, tolerance_percent")
       .eq("id", parsed.data.po_id)
       .single();
 
@@ -224,6 +241,7 @@ export async function POST(request: NextRequest) {
     billCompanyId = po.company_id;
 
     poTotalAmount = Number(po.total_ordered_amount);
+    if (po.po_type !== "service") tolerancePercent = clampTolerancePercent(po.tolerance_percent);
 
     // Invoice file is mandatory when linked to a PO
     if (!parsed.data.invoice_file_url) {
@@ -302,7 +320,8 @@ export async function POST(request: NextRequest) {
 
       // If there is a shortfall, cap invoice at the received value (not the full PO value)
       if (receivedValue < (poTotalAmount ?? 0)) {
-        if (parsed.data.total_amount > receivedValue) {
+        allGoodsReceived = false;
+        if (tolerancePercent === 0 && parsed.data.total_amount > receivedValue) {
           return NextResponse.json({
             error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) exceeds the proportionate value of goods received (₹${receivedValue.toLocaleString("en-IN")}). Only goods worth ₹${receivedValue.toLocaleString("en-IN")} have been received against the PO value of ₹${(poTotalAmount ?? 0).toLocaleString("en-IN")}.`,
           }, { status: 422 });
@@ -316,7 +335,7 @@ export async function POST(request: NextRequest) {
     const ceiling = po.po_type === "service" && po.unit_cost_per_cycle
       ? Number(po.unit_cost_per_cycle)
       : poTotalAmount;
-    if (ceiling !== null && ceiling > 0 && parsed.data.total_amount > ceiling) {
+    if (tolerancePercent === 0 && ceiling !== null && ceiling > 0 && parsed.data.total_amount > ceiling) {
       return NextResponse.json({
         error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) cannot exceed the ${po.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
       }, { status: 422 });
@@ -335,11 +354,44 @@ export async function POST(request: NextRequest) {
       const invoiced = (liveBills ?? [])
         .filter((b) => b.id !== parsed.data.replaces_bill_id)
         .reduce((sum, b) => sum + Number(b.total_amount), 0);
-      if (invoiced + parsed.data.total_amount > ceiling + 0.01) {
+      priorInvoiced = invoiced;
+      toleranceBase = ceiling;
+      if (tolerancePercent === 0 && invoiced + parsed.data.total_amount > ceiling + 0.01) {
         const remaining = Math.max(0, ceiling - invoiced);
         return NextResponse.json({
           error: `This PO already has ₹${invoiced.toLocaleString("en-IN")} invoiced of ₹${ceiling.toLocaleString("en-IN")} (${(liveBills ?? []).map((b) => b.bill_number).join(", ")}). Only ₹${remaining.toLocaleString("en-IN")} is left to invoice — if this is a corrected invoice, edit the rejected one instead.`,
         }, { status: 422 });
+      }
+    }
+
+    // A flexible PO lets the invoice drift past the PO value; outside the band it is
+    // flagged (not blocked) and needs a reason now and an admin acknowledgement at approval.
+    if (tolerancePercent > 0 && toleranceBase !== null) {
+      const outcome = evaluateInvoiceTolerance({
+        invoiceTotal: parsed.data.total_amount,
+        base: toleranceBase,
+        tolerancePercent,
+        priorInvoiced,
+        fullyReceived: allGoodsReceived,
+      });
+      if (outcome.kind !== "ok") {
+        toleranceFacts = {
+          variance_amount: outcome.varianceAmount,
+          variance_percent: outcome.variancePercent,
+          out_of_tolerance: outcome.kind === "exception",
+          tolerance_exception_reason: null,
+        };
+        if (outcome.kind === "exception") {
+          const reason = parsed.data.tolerance_exception_reason?.trim();
+          if (!reason) {
+            const range = `₹${(toleranceBase * (1 - tolerancePercent / 100)).toLocaleString("en-IN")} – ₹${(toleranceBase * (1 + tolerancePercent / 100)).toLocaleString("en-IN")}`;
+            return NextResponse.json({
+              error: `Invoiced total on this PO would be ${Math.abs(outcome.variancePercent)}% ${outcome.direction === "above" ? "above" : "below"} the PO value, outside the ±${tolerancePercent}% allowance (${range}). Add a reason so an admin can review it.`,
+              code: "TOLERANCE_REASON_REQUIRED",
+            }, { status: 422 });
+          }
+          toleranceFacts.tolerance_exception_reason = reason;
+        }
       }
     }
 
@@ -437,6 +489,7 @@ export async function POST(request: NextRequest) {
       amount_paid: poAdvanceCredit,
       payment_status: initialPaymentStatus,
       created_by: dbUser.id,
+      ...(toleranceFacts ?? {}),
       ...(electricityExtra ?? {}),
     });
   } catch (err) {
@@ -446,13 +499,16 @@ export async function POST(request: NextRequest) {
 
   // If this vendor has an active recurring bill rule, see if it clears the
   // guardrails to skip manual approval entirely.
-  let autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
+  // An out-of-tolerance bill always waits for a human; no rule may wave it through.
+  const needsHumanReview = !!toleranceFacts?.out_of_tolerance;
+  let autoApproval: { autoApproved: boolean; note?: string } = { autoApproved: false };
+  if (!needsHumanReview) autoApproval = await tryAutoApproveBill(supabase, bill.id, parsed.data.vendor_id);
   let autoApprovalSource: "recurring_rule" | "amc_cycle" | null = autoApproval.autoApproved ? "recurring_rule" : null;
 
   // Otherwise, for a service PO that's an AMC contract, a later cycle's
   // invoice can skip approval once the contract's first invoice has already
   // been through one manual approval — see tryAutoApproveAmcBill for why.
-  if (!autoApproval.autoApproved && parsed.data.po_id) {
+  if (!autoApproval.autoApproved && parsed.data.po_id && !needsHumanReview) {
     autoApproval = await tryAutoApproveAmcBill(
       supabase, bill.id, parsed.data.po_id, parsed.data.amc_manual_review_requested
     );

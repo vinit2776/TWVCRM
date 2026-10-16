@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS } from "@/lib/constants";
+import { PROCUREMENT_APPROVAL_THRESHOLDS, ITEM_UNITS, CENTER_SCOPED_DEPARTMENTS, PRICE_TOLERANCE_MAX_PERCENT } from "@/lib/constants";
 
 const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
@@ -21,6 +21,10 @@ const createPrSchema = z.object({
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   expenditure_type: z.enum(["operational", "amc"]).default("operational"),
+  // Room the requester wants between this estimate and the final vendor invoice.
+  // The approver accepts or changes it (tolerance_percent is set at approval).
+  tolerance_requested_percent: z.number().int().min(0).max(PRICE_TOLERANCE_MAX_PERCENT).default(0),
+  tolerance_reason: z.string().trim().optional().nullable(),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
 
@@ -46,6 +50,9 @@ const createPrSchema = z.object({
   advance_amount: z.number().min(0).optional().nullable(),
   advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
   advance_notes: z.string().optional().nullable(),
+}).refine((data) => data.tolerance_requested_percent === 0 || !!data.tolerance_reason, {
+  message: "Say why the final invoice may differ from the estimate",
+  path: ["tolerance_reason"],
 }).refine((data) => data.department !== "reimbursement" || !!data.billable_contract_id, {
   message: "billable_contract_id is required when department is 'reimbursement'",
   path: ["billable_contract_id"],
@@ -156,6 +163,12 @@ export async function POST(request: NextRequest) {
   }
 
   const { items, submit, ...prData } = parsed.data;
+  // Service/AMC contracts bill fixed cycle amounts — tolerance never applies.
+  if (prData.department === "amc") {
+    prData.tolerance_requested_percent = 0;
+    prData.tolerance_reason = null;
+  }
+  if (prData.tolerance_requested_percent === 0) prData.tolerance_reason = null;
 
   // One line per asset — the same asset on two lines would double-count it.
   if (prData.department === "amc") {

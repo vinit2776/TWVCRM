@@ -723,6 +723,8 @@ export interface Contract {
   renewal_declined_reason?: string | null;
   renewal_declined_at?: string | null;
   renewal_declined_by?: string | null;
+  /** Internal note on what was agreed in the renewal negotiation (renewals only, never in customer documents). */
+  renewal_agreed_note?: string | null;
   // Pro-rata collection for mid-month renewals
   prorata_billing_statement_id?: string | null;
   prorata_payment_status?: "not_applicable" | "pending" | "paid" | "waived";
@@ -2458,6 +2460,11 @@ export interface PurchaseRequest {
   approved_at?: string;
   approval_code?: string;
   rejection_reason?: string;
+  /** Room the requester asked for between the estimate and the final invoice (0-10). */
+  tolerance_requested_percent?: number;
+  tolerance_reason?: string | null;
+  /** What the approver allowed (0-10); inherited by goods POs. */
+  tolerance_percent?: number;
   notes?: string;
   expenditure_type: "operational" | "amc";
   total_estimated_amount: number;
@@ -2636,6 +2643,7 @@ export interface PurchaseOrder {
   po_number: string;
   company_id: string;
   po_type: "goods" | "service";
+  tolerance_percent?: number;
   pr_id?: string;
   vendor_id: string;
   location_id?: string;
@@ -2703,6 +2711,10 @@ export interface VendorBill {
   bill_number: string;
   company_id: string;
   po_id?: string;
+  variance_amount?: number | null;
+  variance_percent?: number | null;
+  out_of_tolerance?: boolean;
+  tolerance_exception_reason?: string | null;
   vendor_id: string;
   invoice_number?: string;
   invoice_date: string;
@@ -2771,7 +2783,7 @@ export interface VendorBill {
   electricity_printed_name?: string | null;
 }[];
   } | null;
-  purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type" | "expected_delivery_date"> & {
+  purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type" | "expected_delivery_date" | "tolerance_percent"> & {
     purchase_requests?: { department: string; expenditure_type: string } | null;
   }) | null;
   approver?: { id: string; full_name?: string } | null;

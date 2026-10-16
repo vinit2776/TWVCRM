@@ -1,3 +1,4 @@
+import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -66,6 +67,8 @@ const patchBillSchema = z.discriminatedUnion("action", [
     /** Optional at approval — accounts can set later via update_gst, but it is mandatory before payment. */
     gst_amount: z.number().min(0, "GST amount must be 0 or greater").optional(),
     gst_zero_confirmed: z.boolean().optional(),
+    /** Required when the bill is outside its PO's price tolerance. */
+    acknowledge_out_of_tolerance: z.boolean().optional(),
   }),
   z.object({
     action: z.literal("override_batch"),
@@ -177,7 +180,7 @@ export async function GET(
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
-       purchase_orders(id, po_number, status, po_type, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
+       purchase_orders(id, po_number, status, po_type, tolerance_percent, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, reversed_at, reversal_reason, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
        vendor_bill_batch_changes(id, changed_at, old_batch_type, new_batch_type, old_batch_date, new_batch_date, reason, changer:users!vendor_bill_batch_changes_changed_by_fkey(id, full_name)),
@@ -231,6 +234,10 @@ export async function PATCH(
       { status: 422 }
     );
   }
+
+  // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
+  const lockedChain = await chainLockedResponse(supabase, { billId: id });
+  if (lockedChain) return lockedChain;
 
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
@@ -562,6 +569,17 @@ export async function PATCH(
         );
       }
 
+      // A bill outside its PO's price tolerance needs the admin to confirm they saw the variance.
+      if (bill.out_of_tolerance && !parsed.data.acknowledge_out_of_tolerance) {
+        return NextResponse.json(
+          {
+            error: `Invoiced total on this PO is ${Math.abs(Number(bill.variance_percent ?? 0))}% ${Number(bill.variance_amount ?? 0) >= 0 ? "above" : "below"} the PO value, outside its agreed tolerance. Confirm you've reviewed the variance to approve it.`,
+            code: "TOLERANCE_ACK_REQUIRED",
+          },
+          { status: 422 }
+        );
+      }
+
       // Due date must be on or after today (the approval date).
       // An overdue due date means accounts would inherit a bill that was
       // already past its payment deadline the moment it was approved.
@@ -661,6 +679,9 @@ export async function PATCH(
         payment_batch_assigned_by: dbUser.id,
         payment_batch_assigned_at: approveNow,
         base_amount: totalAmt,
+        ...(bill.out_of_tolerance
+          ? { tolerance_acknowledged_by: dbUser.id, tolerance_acknowledged_at: approveNow }
+          : {}),
         // Only stamp GST fields if approver actually entered a value.
         // Otherwise leave them null — accounts must set GST before recording payment.
         ...(approveGstAmount !== null

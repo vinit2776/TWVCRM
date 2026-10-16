@@ -342,6 +342,15 @@ function VendorBillsPageInner() {
                           Auto-approved
                         </Badge>
                       )}
+                      {bill.out_of_tolerance && (
+                        <Badge
+                          variant="secondary"
+                          className="text-xs bg-amber-100 text-amber-800"
+                          title="Outside the PO's agreed price tolerance — needs special approval"
+                        >
+                          Special approval · {Number(bill.variance_percent ?? 0) > 0 ? "+" : ""}{Number(bill.variance_percent ?? 0)}%
+                        </Badge>
+                      )}
                     </div>
                   </td>
                   {rejectedView ? (

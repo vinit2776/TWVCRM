@@ -1,5 +1,6 @@
 "use client";
 
+import { ChainLockBanner, ChainStatusCard, useChainState } from "@/components/procurement/chain-lock";
 import { PoCorrectMenu } from "@/components/procurement/po-correct-menu";
 import { RollbackDialog } from "@/components/procurement/rollback-dialog";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -320,6 +321,7 @@ function FileDropzone({
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { chain: cycle, locked, reload: reloadChain } = useChainState({ poId: id });
   const router = useRouter();
   const { user, loading: userLoading } = useCurrentUser();
   const currentUserRole = user?.role ?? null;
@@ -991,6 +993,11 @@ export default function PurchaseOrderDetailPage() {
               <Badge variant="secondary" className={PO_STATUS_COLORS[po.status]}>
                 {PO_STATUS_LABELS[po.status]}
               </Badge>
+              {po.po_type !== "service" && (po.tolerance_percent ?? 0) > 0 && (
+                <Badge variant="outline" title="Invoice may differ from the PO value by this much without special approval">
+                  ± {po.tolerance_percent}% flexible
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
@@ -1010,8 +1017,9 @@ export default function PurchaseOrderDetailPage() {
             advanceStatus={po.advance_status ?? null}
             advanceApprovalStatus={po.advance_approval_status ?? null}
             amcTerminated={!!po.amc_terminated_at}
+            locked={locked}
             isAdmin={currentUserRole === "admin"}
-            onDone={fetchPo}
+            onDone={() => { fetchPo(); reloadChain(); }}
           />
           {!["cancelled", "partially_cancelled"].includes(po.status) && (
             <Button
@@ -1131,6 +1139,8 @@ export default function PurchaseOrderDetailPage() {
           )}
         </div>
       </div>
+
+      <ChainLockBanner chain={cycle} ref={{ poId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchPo(); reloadChain(); }} />
 
       {canConvertToService && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -1670,7 +1680,7 @@ export default function PurchaseOrderDetailPage() {
                             {ev.voided_at ? (
                               <p className="text-xs text-red-700 mt-0.5">Voided: {ev.void_reason ?? "—"}</p>
                             ) : (
-                              currentUserRole === "admin" && (
+                              currentUserRole === "admin" && !locked && (
                                 <button
                                   type="button"
                                   className="text-xs text-red-700 underline underline-offset-2 mt-0.5 hover:text-red-800"

@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RENEWAL_NOTE_MAX_LENGTH } from "@/lib/renewal-note";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -80,6 +81,7 @@ export function ContractRenewalDialog({
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
   const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  const [agreedNote, setAgreedNote] = useState("");
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
     end.setDate(end.getDate() + 1);
@@ -144,6 +146,7 @@ export function ContractRenewalDialog({
           seats,
           billing_cycle: billingCycle,
           escalation_percentage: escalationPct,
+          agreed_note: agreedNote,
         }),
       });
 
@@ -321,6 +324,24 @@ export function ContractRenewalDialog({
                 Period: {formatDate(startDate)} → {formatDate(previewEndDate)} ({tenureMonths} months)
               </p>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor="renewal-agreed-note">
+                What was agreed (optional)
+                <FieldHelp tip="Internal note on the negotiation, for example why the increase was reduced or what the customer gave in return. Shown to admins on the lead's Value tab. Never appears on the agreement or invoices." />
+              </Label>
+              <Textarea
+                id="renewal-agreed-note"
+                value={agreedNote}
+                onChange={(e) => setAgreedNote(e.target.value)}
+                maxLength={RENEWAL_NOTE_MAX_LENGTH}
+                rows={2}
+                placeholder="Held the rate in return for two more seats and a 12-month term"
+                className="text-sm"
+              />
+              <p className="text-right text-[10px] text-muted-foreground">
+                {agreedNote.length} / {RENEWAL_NOTE_MAX_LENGTH}
+              </p>
+            </div>
           </div>
 
           {/* Gap Warning */}
