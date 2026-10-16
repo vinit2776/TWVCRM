@@ -5,6 +5,7 @@ import type { UserRole } from "@/types";
 export type WidgetId =
   // Existing
   | "pending_actions"
+  | "next_steps"
   | "live_enquiries"
   | "kpi_stats"
   | "followups"
@@ -52,6 +53,7 @@ export interface WidgetMeta {
 
 export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   pending_actions:        { id: "pending_actions",        title: "Pending Actions" },
+  next_steps:             { id: "next_steps",             title: "My next steps" },
   live_enquiries:         { id: "live_enquiries",         title: "Live Enquiries" },
   kpi_stats:              { id: "kpi_stats",              title: "Key Metrics" },
   followups:              { id: "followups",              title: "Follow-ups" },
@@ -104,6 +106,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   manager: [
     "pending_actions",
+    "next_steps",
     "live_enquiries",
     "quick_charge",
     "kpi_stats",
@@ -123,6 +126,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   sales_rep: [
     "live_enquiries",
+    "next_steps",
     "quick_charge",
     "schedule",
     "lead_funnel",
@@ -134,6 +138,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   floor_manager: [
     "quick_charge",
     "live_enquiries",
+    "next_steps",
     "schedule",
     "booking_summary",
     "mtd_bookings",
@@ -162,6 +167,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   // Office Administrator
   office_admin: [
     "schedule",
+    "next_steps",
     "mtd_bookings",
     "procurement_spend",
     "sla_risk",
@@ -171,12 +177,14 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   // IT Manager
   it_manager: [
+    "next_steps",
     "network",
     "sla_risk",
   ],
 
   // IT Technician
   it_technician: [
+    "next_steps",
     "network",
     "sla_risk",
   ],

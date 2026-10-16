@@ -1,6 +1,7 @@
 import { CheckCircle2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import type { InboxPayment } from "@/lib/tally-handoff";
+import { formatRecordedOn } from "@/lib/payment-dates";
 
 /** Human label for a payment_mode value. Shared so every "how was this paid"
  *  surface (Tally Inbox, the invoice payment popover, …) reads identically. */
@@ -38,6 +39,9 @@ export function StatementPaymentPanel({
 }) {
   const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
   const isFullyPaid = Math.abs(totalPaid - totalAmount) < 0.5;
+  // More credited than the invoice is worth is not "partial" — say so, because
+  // that is the state that means a payment was entered twice.
+  const isOverpaid = totalPaid - totalAmount >= 0.5;
 
   return (
     <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-xs">
@@ -47,11 +51,17 @@ export function StatementPaymentPanel({
           Payment collected
         </span>
         <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-          isFullyPaid
-            ? "bg-green-100 text-green-800 border-green-300"
-            : "bg-amber-100 text-amber-800 border-amber-200"
+          isOverpaid
+            ? "bg-red-100 text-red-800 border-red-300"
+            : isFullyPaid
+              ? "bg-green-100 text-green-800 border-green-300"
+              : "bg-amber-100 text-amber-800 border-amber-200"
         }`}>
-          {isFullyPaid ? "Fully paid" : `Partial · ${formatCurrency(totalPaid)} of ${formatCurrency(totalAmount)}`}
+          {isOverpaid
+            ? `Overpaid · ${formatCurrency(totalPaid)} against ${formatCurrency(totalAmount)}`
+            : isFullyPaid
+              ? "Fully paid"
+              : `Partial · ${formatCurrency(totalPaid)} of ${formatCurrency(totalAmount)}`}
         </span>
       </div>
       <div className="space-y-2">
@@ -99,8 +109,10 @@ export function StatementPaymentPanel({
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
-                  <span className="text-muted-foreground">Date recorded</span>
+                  <span className="text-muted-foreground">Received in bank</span>
                   <span>{txnDate}</span>
+                  <span className="text-muted-foreground">Recorded in CRM</span>
+                  <span>{formatRecordedOn(p.created_at)}</span>
                   {p.payment_reference && (
                     <>
                       <span className="text-muted-foreground">Reference</span>

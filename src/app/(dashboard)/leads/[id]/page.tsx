@@ -22,7 +22,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { useLead } from "@/hooks/use-leads";
@@ -63,7 +62,7 @@ const LeadDepositSummary = dynamic(
   { ssr: false }
 );
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
-import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
 import { LeadEnquiriesCard } from "@/components/leads/lead-enquiries-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
@@ -97,7 +96,7 @@ export default function LeadDetailPage({
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);
     // Logging an activity can auto-advance lead status (e.g. tour_scheduled
-    // -> tour_completed) — refetch so the status pill and Lead Journey
+    // -> tour_completed) — refetch so the status pill and Customer journey panel
     // reflect it without a manual page reload.
     refetchLead();
   }, [refetchLead]);
@@ -241,6 +240,8 @@ export default function LeadDetailPage({
           )}
         </div>
       </div>
+
+      <JourneyPanel leadId={lead.id} />
 
       <Tabs defaultValue={initialTab}>
         <TabsList>
@@ -587,15 +588,17 @@ export default function LeadDetailPage({
 
             {/* Sidebar */}
             <div className="space-y-4">
-              {/* Lead Journey — visual lifecycle stepper */}
+              {/* Progress lives in the Customer journey panel at the top of the page. */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Lead Journey</CardTitle>
+                  <CardTitle className="text-base">Lead record</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <LeadLifecycle lead={lead} />
-                  <Separator className="my-3" />
                   <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Enquiry received</span>
+                      <span>{formatDate(lead.created_at)}</span>
+                    </div>
                     <div className="flex justify-between">
                       <span>Last updated</span>
                       <span>{formatDate(lead.updated_at)}</span>

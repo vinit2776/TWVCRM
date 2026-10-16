@@ -18,7 +18,13 @@ const bodySchema = z.object({
  * a fresh agreement from scratch. The client overlays the stamp image onto
  * the existing PDF (pdf-lib) and posts the result here to store; the
  * original document is kept (via parent_document_id) rather than replaced.
+ *
+ * Stamping a customer-signed copy is the last signing step, so a contract
+ * still in draft/sent/viewed is also moved to `accepted` here (same fields
+ * the PATCH route sets). The route is admin-only, so this widens no permission.
  */
+const AUTO_ACCEPT_FROM = ["draft", "sent", "viewed"];
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -54,7 +60,7 @@ export async function POST(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, contract_number, signed_document_id, stamp_reference")
+    .select("id, contract_number, status, signed_document_id, stamp_reference")
     .eq("id", contractId)
     .single();
 
@@ -133,9 +139,15 @@ export async function POST(
     );
   }
 
+  const autoAccept = AUTO_ACCEPT_FROM.includes(contract.status);
+  const now = new Date().toISOString();
   const { data: updated, error: updateErr } = await supabase
     .from("contracts")
-    .update({ signed_document_id: docRecord.id, stamp_reference: stampRef })
+    .update({
+      signed_document_id: docRecord.id,
+      stamp_reference: stampRef,
+      ...(autoAccept ? { status: "accepted", accepted_at: now, accepted_by: dbUser.id } : {}),
+    })
     .eq("id", contractId)
     .select("*")
     .single();
@@ -153,6 +165,7 @@ export async function POST(
       action: { old: null, new: "sign_seal_stamp_existing_document" },
       signed_document_id: { old: originalDoc.id, new: docRecord.id },
       stamp_reference: { old: null, new: stampRef },
+      ...(autoAccept ? { status: { old: contract.status, new: "accepted" } } : {}),
     },
   });
 

@@ -12,12 +12,14 @@ import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog"
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
+import { formatRecordedOn } from "@/lib/payment-dates";
 import { STATEMENT_PAYMENT_MODE_LABELS, USER_ROLE_LABELS } from "@/lib/constants";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   PAYMENT_REPORT_STATUS_COLORS,
   PAYMENT_REPORT_STATUS_LABELS,
   canReviewPaymentReport,
+  matchingRecordedPayments,
 } from "@/lib/queries/payment-reports";
 import type { QueryPaymentReport } from "@/lib/queries/types";
 
@@ -57,6 +59,7 @@ interface RecordedPayment {
   amount: number | string;
   tds_amount: number | string | null;
   payment_date: string;
+  created_at?: string;
   payment_mode: string;
   payment_reference: string | null;
 }
@@ -145,6 +148,12 @@ export function PaymentReportCard({
     })();
     return () => { cancelled = true; };
   }, [canReview, isDeposit, statementId]);
+
+  // Recorded payments that match what was reported, to the rupee. Exactly one
+  // is the common case (the same receipt entered before anyone verified the
+  // report) and earns a one-click accept; zero or several fall back to the
+  // list below, where a person chooses.
+  const acceptable = matchingRecordedPayments(recorded, report.amount);
 
   const settle = useCallback(
     async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
@@ -263,6 +272,30 @@ export function PaymentReportCard({
               </div>
             )}
 
+            {mode === "idle" && acceptable.length === 1 && (
+              <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
+                <p className="text-[11px] font-medium text-green-900">
+                  This payment is already recorded on the invoice
+                </p>
+                <p className="text-[11px] text-green-900/80">
+                  {formatCurrency(Number(acceptable[0].amount) + Number(acceptable[0].tds_amount ?? 0))}
+                  {" · "}
+                  {STATEMENT_PAYMENT_MODE_LABELS[acceptable[0].payment_mode] ?? acceptable[0].payment_mode}
+                  {acceptable[0].payment_reference ? ` · ${acceptable[0].payment_reference}` : ""}
+                  {" · received "}
+                  {formatDate(acceptable[0].payment_date)}
+                </p>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                  disabled={busy}
+                  onClick={() => void settle("verified", acceptable[0].id)}
+                >
+                  <Check className="h-3 w-3 mr-1" /> Accept and link this payment
+                </Button>
+              </div>
+            )}
+
             {mode === "idle" && recorded.length > 0 && (
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
@@ -277,8 +310,9 @@ export function PaymentReportCard({
                       {" · "}
                       {STATEMENT_PAYMENT_MODE_LABELS[p.payment_mode] ?? p.payment_mode}
                       {p.payment_reference ? ` · ${p.payment_reference}` : ""}
-                      {" · "}
+                      {" · received "}
                       {formatDate(p.payment_date)}
+                      {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
                     </span>
                     <Button
                       size="sm"

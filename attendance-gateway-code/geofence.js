@@ -34,10 +34,15 @@ function isWithinOffice(point, office, radiusMeters) {
   return distanceMeters(point, office) <= radiusMeters;
 }
 
-// The branch a punch at `point` was made at: the nearest one whose radius it's inside,
-// so two branches with overlapping radii can't both claim it. Branches without a
-// location are skipped. null means it wasn't at any branch.
-function branchAt(point, branches, radiusMeters) {
+// The branch a punch at `point` was made at. If it's inside the radius of the
+// employee's own branch (`ownBranch`, a name), that's the one: branches can sit a few
+// metres apart in the same building, closer than indoor GPS can tell apart, and the
+// nearest one would otherwise be a coin toss. Otherwise it's the nearest branch whose
+// radius it's inside, so two overlapping branches can't both claim it. Branches without
+// a location are skipped. null means it wasn't at any branch.
+function branchAt(point, branches, radiusMeters, ownBranch = null) {
+  const own = ownBranch && branches.find(b => b.name === ownBranch);
+  if (own && own.location && isWithinOffice(point, own.location, radiusMeters)) return own;
   let best = null, bestDistance = Infinity;
   for (const b of branches) {
     if (!b.location || !isWithinOffice(point, b.location, radiusMeters)) continue;

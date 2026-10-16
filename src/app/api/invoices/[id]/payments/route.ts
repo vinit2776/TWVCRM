@@ -36,7 +36,7 @@ export async function GET(
 
   const { data: paymentRows, error } = await supabase
     .from("billing_payments")
-    .select("id, amount, payment_date, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
+    .select("id, amount, payment_date, created_at, payment_mode, payment_reference, notes, razorpay_payment_id, recorder:users!billing_payments_recorded_by_fkey(full_name)")
     .eq("billing_statement_id", statement.id)
     .order("payment_date", { ascending: false });
 
@@ -70,6 +70,7 @@ export async function GET(
       id: p.id as string,
       amount: Number(p.amount),
       payment_date: p.payment_date as string,
+      created_at: p.created_at as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
       notes: (p.notes as string | null) ?? null,

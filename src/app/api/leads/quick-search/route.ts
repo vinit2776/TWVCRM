@@ -5,10 +5,11 @@ import { createClient } from "@/lib/supabase/server";
 // overdue-follow-up scan and wide `*` + embed selects — far too heavy for type-ahead.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  // getClaims verifies the JWT locally (no Auth round-trip) when the project signs with
+  // asymmetric keys, and falls back to a server check otherwise. Either way PostgREST
+  // re-verifies the token and RLS applies to the query below.
+  const { data: claims } = await supabase.auth.getClaims();
+  if (!claims?.claims?.sub) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

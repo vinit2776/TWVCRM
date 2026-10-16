@@ -265,10 +265,33 @@ export function voBillParty(source: {
   return null;
 }
 
+/**
+ * A payment someone reported against this statement that accounts have not
+ * settled yet (query_payment_reports.status = 'reported', thread still open).
+ * Drives the "Payment reported" flag on the inbox row.
+ */
+export interface InboxReportedPayment {
+  /** query_payment_reports.id */
+  id: string;
+  /** The thread to open to verify or reject it. */
+  query_id: string;
+  entity_type: string;
+  entity_id: string;
+  amount: number;
+  paid_on: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  reported_by_name: string | null;
+  created_at: string;
+}
+
 export interface InboxPayment {
   id: string;
   amount: number;
+  /** When the money reached the bank. */
   payment_date: string;
+  /** When the payment was entered into the CRM. */
+  created_at: string;
   payment_mode: string;
   payment_reference: string | null;
   notes: string | null;
@@ -403,6 +426,8 @@ export interface InboxRow {
   /** Open query thread count for this statement — drives the "Query" button
    *  badge in the Tally Inbox. See src/lib/queries/registry.ts. */
   open_query_count: number;
+  /** Payment reports on this statement still waiting for accounts. */
+  reported_payments: InboxReportedPayment[];
   /** Reimbursement receipts/vendor bills attached at Bill Customer time —
    *  merged into the GST invoice PDF automatically at upload. See
    *  src/lib/reimbursement-supporting-docs.ts. Always 0 for non-reimbursement

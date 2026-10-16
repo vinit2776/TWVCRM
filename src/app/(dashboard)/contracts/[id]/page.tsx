@@ -84,6 +84,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
   ContractRenewalDialog,
   DeclineRenewalDialog,
@@ -93,6 +94,7 @@ import {
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
+import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
@@ -1381,7 +1383,7 @@ export default function ContractDetailPage({
               </div>
             );
           })()}
-          {contract.status === "active" && ["admin", "manager", "accounts"].includes(userRole ?? "") && (
+          {canUseInvoiceWizard(contractDisplayStatus(contract), userRole) && (
             <Button onClick={() => setInvoiceWizardOpen(true)}>
               <Receipt className="mr-2 h-4 w-4" />
               Invoice wizard
@@ -1445,6 +1447,10 @@ export default function ContractDetailPage({
       {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
       {contract.lead_id && (
         <ContractChainStrip contractId={contract.id} leadId={contract.lead_id} />
+      )}
+
+      {contract.lead_id && (
+        <JourneyPanel leadId={contract.lead_id} contractId={contract.id} />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -2380,7 +2386,7 @@ export default function ContractDetailPage({
           {/* Contract Lifecycle */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Agreement Journey</CardTitle>
+              <CardTitle className="text-base">Agreement history</CardTitle>
             </CardHeader>
             <CardContent>
               <ContractLifecycle contract={contract} />
@@ -3165,6 +3171,8 @@ export default function ContractDetailPage({
         contractNumber={contract.contract_number}
         leadId={contract.lead_id}
         userRole={userRole}
+        contractStatus={contractDisplayStatus(contract)}
+        depositShortfall={contract.deposit_shortfall}
         locationId={contract.location_id}
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
         onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}

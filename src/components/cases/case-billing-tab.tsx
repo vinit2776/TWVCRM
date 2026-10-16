@@ -179,6 +179,7 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
             id: String(p.id),
             amount: Number(p.amount ?? 0),
             payment_date: String(p.payment_date ?? ""),
+            created_at: String(p.created_at ?? ""),
             payment_mode: String(p.payment_mode ?? ""),
             payment_reference: (p.payment_reference as string | null) ?? null,
             notes: (p.notes as string | null) ?? null,

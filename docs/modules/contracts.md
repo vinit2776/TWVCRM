@@ -38,7 +38,7 @@ Both `/contracts` and `/contracts/[id]` are `"use client"` components.
 
 ### Core Components (`src/components/contracts/`)
 - `create-contract-dialog.tsx` — modal to create contract from an accepted proposal
-- `contract-lifecycle.tsx` — visual journey stepper (Agreement Journey sidebar card)
+- `contract-lifecycle.tsx` — history timeline of dates, actors and reasons (Agreement history sidebar card). What to do next lives in the Customer journey panel (`src/components/journey/`)
 - `contract-chain-strip.tsx` — horizontal strip showing parent/child renewal chain
 - `contract-renewal-dialog.tsx` — renewal creation dialog + `DeclineRenewalDialog` + `EscalationWaiverSection`
 - `contract-space-manager.tsx` — seat/unit allocation UI + `validateSpaceAllocation()` helper

@@ -11,6 +11,10 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { InvoiceForm } from "@/components/invoices/invoice-form";
+import { useInvoiceWizardChecks, type CheckKey, type CheckTone } from "@/components/contracts/use-invoice-wizard-checks";
+import { wizardChoices } from "@/lib/invoice-wizard-availability";
+import { actionableRentRows, rentRowLabel } from "@/lib/invoice-wizard-checks";
+import { cn, formatCurrency } from "@/lib/utils";
 import {
   ADHOC_ATTRIBUTION_PURPOSE_LABELS,
   type AccountingHead,
@@ -26,10 +30,19 @@ interface Props {
   customerName?: string | null;
   locationId?: string | null;
   userRole: string | null;
+  /** Display status (withdrawn counts separately from terminated). */
+  contractStatus: string;
+  depositShortfall?: number | null;
   /** Open the Add-on / Collect-deposit dialogs that live on the contract page. */
   onOpenAddon: () => void;
   onOpenDeposit: () => void;
 }
+
+const CHECK_TONE_CLASS: Record<CheckTone, string> = {
+  ok: "text-green-700",
+  warn: "text-amber-700",
+  info: "text-muted-foreground",
+};
 
 type ChoiceKey = "rent" | "usage" | "electricity" | "deposit" | "addon" | "other";
 
@@ -50,9 +63,8 @@ const CHOICES: Choice[] = [
   { key: "other", icon: Receipt, title: "Something else", description: "One-off: first invoice, late fee, damages", outcome: "Raises an invoice attached to this contract" },
 ];
 
-// Who can create an ad-hoc invoice (mirrors POST /api/invoices) and who can
-// attach one to a contract (mirrors POST /api/invoices/[id]/attribution).
-const CREATE_INVOICE_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
+// Who can attach an ad-hoc invoice to a contract (mirrors POST /api/invoices/[id]/attribution).
+// Who may create one is decided in invoice-wizard-availability.ts.
 const ATTRIBUTE_INVOICE_ROLES = ["admin", "accounts"];
 
 interface OneOffPurpose {
@@ -75,15 +87,19 @@ const ONE_OFF_PURPOSES: OneOffPurpose[] = [
 
 // The wizard only chooses a destination — every screen it opens already exists.
 export function InvoiceCustomerWizard({
-  open, onOpenChange, contractId, contractNumber, leadId, customerName, locationId, userRole, onOpenAddon, onOpenDeposit,
+  open, onOpenChange, contractId, contractNumber, leadId, customerName, locationId, userRole, contractStatus, depositShortfall, onOpenAddon, onOpenDeposit,
 }: Props) {
   const router = useRouter();
   const search = encodeURIComponent(contractNumber);
-  const [step, setStep] = useState<"why" | "other">("why");
+  const [step, setStep] = useState<"why" | "rent" | "other">("why");
   const [invoicePurpose, setInvoicePurpose] = useState<OneOffPurpose | null>(null);
 
-  const canCreateInvoice = !!userRole && CREATE_INVOICE_ROLES.includes(userRole);
-  const choices = CHOICES.filter((c) => c.key !== "other" || canCreateInvoice);
+  const { checks, loading: checksLoading, rentRows } = useInvoiceWizardChecks({ open: open && step === "why", contractId, depositShortfall });
+
+  const allowed = wizardChoices(contractStatus, userRole);
+  const choices = CHOICES.filter((c) => allowed.includes(c.key));
+  const rentChoices = rentRows ? actionableRentRows(rentRows) : undefined;
+  const rentNothingToOpen = !!checks.rent?.nothingToOpen;
 
   function handleOpenChange(next: boolean) {
     onOpenChange(next);
@@ -102,7 +118,12 @@ export function InvoiceCustomerWizard({
   }
 
   function pick(key: ChoiceKey) {
-    if (key === "rent") router.push(`/billing?tab=rentals&search=${search}&open=1`);
+    if (key === "rent") {
+      if (!rentChoices) router.push(`/billing?tab=rentals&search=${search}&open=1`); // rows not loaded: let the list decide
+      else if (rentChoices.length === 0) router.push(`/billing?tab=rentals&search=${search}`);
+      else if (rentChoices.length === 1) router.push(`/billing?tab=rentals&search=${search}&open=${encodeURIComponent(rentChoices[0].id ?? "1")}`);
+      else setStep("rent");
+    }
     else if (key === "usage") router.push(`/billing?tab=usage-charges&search=${search}&add_charge=${contractId}`);
     else if (key === "electricity") router.push(`/billing?tab=electricity&open=1${locationId ? `&location_id=${locationId}` : ""}`);
     else if (key === "deposit") openOnPage("section-deposit-topups", onOpenDeposit);
@@ -158,14 +179,61 @@ export function InvoiceCustomerWizard({
                     key={key}
                     type="button"
                     onClick={() => pick(key)}
-                    className="rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className={cn(
+                      "flex flex-col items-start justify-start rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      key === "rent" && rentNothingToOpen && "opacity-60",
+                    )}
                   >
                     <Icon className="h-5 w-5 text-blue-600" aria-hidden />
                     <p className="mt-2 text-sm font-medium">{title}</p>
                     <p className="text-sm text-muted-foreground">{description}</p>
-                    <p className="mt-2 text-xs text-muted-foreground">{outcome}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {key === "rent" && rentNothingToOpen ? "Shows this contract's rent queue" : outcome}
+                    </p>
+                    {key !== "other" && (() => {
+                      const check = checks[key as CheckKey];
+                      if (check) return <p className={cn("mt-1 text-xs font-medium", CHECK_TONE_CLASS[check.tone])}>{check.text}</p>;
+                      return checksLoading ? <p className="mt-1 text-xs text-muted-foreground">Checking…</p> : null;
+                    })()}
                   </button>
                 ))}
+              </div>
+            </>
+          ) : step === "rent" ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Invoice wizard · Rent</DialogTitle>
+                <DialogDescription>
+                  {contractNumber} has {rentChoices?.length ?? 0} rent months waiting. Which one are you invoicing?
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(rentChoices ?? [])
+                  .slice()
+                  .sort((a, b) => (a.gapMonth ?? "9999").localeCompare(b.gapMonth ?? "9999"))
+                  .map((r) => {
+                    const amount = r.amount ?? r.estimate?.total ?? null;
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => router.push(`/billing?tab=rentals&search=${search}&open=${encodeURIComponent(r.id ?? "1")}`)}
+                        className="flex flex-col items-start justify-start rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <p className="text-sm font-medium">{rentRowLabel(r)}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {r.category === "current_cycle" ? "Draft ready to review and send" : "Not invoiced yet"}
+                        </p>
+                        {amount != null && <p className="mt-1 text-xs text-muted-foreground">{r.category === "rent_gap" ? "About " : ""}{formatCurrency(amount)}</p>}
+                      </button>
+                    );
+                  })}
+              </div>
+              <div>
+                <Button variant="ghost" size="sm" onClick={() => setStep("why")}>
+                  <ChevronLeft className="mr-1 h-4 w-4" />
+                  Back
+                </Button>
               </div>
             </>
           ) : (
@@ -182,7 +250,7 @@ export function InvoiceCustomerWizard({
                     key={p.key}
                     type="button"
                     onClick={() => pickOneOff(p)}
-                    className="rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex flex-col items-start justify-start rounded-xl border bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <p.icon className="h-5 w-5 text-blue-600" aria-hidden />
                     <p className="mt-2 text-sm font-medium">{p.title}</p>
@@ -192,7 +260,7 @@ export function InvoiceCustomerWizard({
                 <button
                   type="button"
                   onClick={() => openOnPage("section-deposit-topups", onOpenDeposit)}
-                  className="rounded-xl border border-dashed bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex flex-col items-start justify-start rounded-xl border border-dashed bg-card p-4 text-left transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ShieldCheck className="h-5 w-5 text-blue-600" aria-hidden />
                   <p className="mt-2 text-sm font-medium">Security deposit</p>

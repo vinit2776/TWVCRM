@@ -270,3 +270,17 @@ export function lastCheckedChip(
   if (days === 1) return { label: "checked yesterday", tone: "fresh" };
   return { label: `checked ${days} days ago`, tone: "stale" };
 }
+
+/**
+ * Which payments already recorded on an invoice are plausibly the one a report
+ * is about: those whose credit (cash plus TDS) equals the reported amount to
+ * within a rupee. Exactly one match earns the one-click "Accept and link";
+ * none or several leave the choice to a person.
+ */
+export function matchingRecordedPayments<
+  T extends { amount: number | string | null; tds_amount?: number | string | null },
+>(payments: T[], reportedAmount: number): T[] {
+  return payments.filter(
+    (p) => Math.abs(Number(p.amount ?? 0) + Number(p.tds_amount ?? 0) - reportedAmount) <= 1,
+  );
+}

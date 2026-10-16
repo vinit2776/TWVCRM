@@ -60,6 +60,7 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
@@ -1066,6 +1067,10 @@ export default function ProposalDetailPage({
         </div>
       </div>
 
+      {proposal.lead_id && (
+        <JourneyPanel leadId={proposal.lead_id} proposalId={proposal.id} />
+      )}
+
       {/* Version notices. A sent proposal's terms are locked; changes go through a revision. */}
       {proposal.status === "superseded" && proposal.superseded_by && (
         <Card className="border-slate-300 bg-slate-50">
@@ -1095,10 +1100,10 @@ export default function ProposalDetailPage({
         </Card>
       )}
 
-      {/* Lifecycle Timeline */}
+      {/* History: dates, references and reasons. What to do next is in the Customer journey panel above. */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Lifecycle</CardTitle>
+          <CardTitle className="text-base">Proposal history</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <ProposalLifecycle proposal={proposal} />
