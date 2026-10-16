@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Package, CalendarClock, ReceiptText, ClipboardCheck, type LucideIcon } from "lucide-react";
+import { ChevronLeft, Package, Wrench, CalendarClock, ReceiptText, ClipboardCheck, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -17,6 +17,14 @@ const newRequestHref = (department: string) => `/procurement/requests/new?depart
 // Matches who can create a PO today (orders/new is admin/manager).
 const PO_FROM_REQUEST_ROLES = ["admin", "manager"];
 
+// One-off services and bills have no PO type of their own: they are ordered through an
+// Administration or Maintenance request, the same route they already take. The examples
+// below are the ones the department definitions already use.
+const SERVICE_DEPARTMENTS = [
+  { key: "administration", examples: "ISP bills, machine rent" },
+  { key: "maintenance", examples: "Pest control" },
+] as const;
+
 interface Choice {
   key: string;
   icon: LucideIcon;
@@ -27,6 +35,7 @@ interface Choice {
 
 const CHOICES: Choice[] = [
   { key: "goods", icon: Package, title: "Goods", description: "Physical items: stock, supplies, equipment", outcome: "Becomes a Goods PO after approval" },
+  { key: "service", icon: Wrench, title: "Service or recurring bill", description: "ISP bills, machine rent, pest control", outcome: "Ordered through a purchase order after approval" },
   { key: "amc", icon: CalendarClock, title: "AMC / annual contract", description: "Yearly maintenance of HVAC, UPS, DG, RO", outcome: "Becomes a Service PO with visit tracking" },
   { key: "reimbursement", icon: ReceiptText, title: "Work for a customer", description: "Billed back to a customer contract with markup", outcome: "Reimbursement request" },
   { key: "approved", icon: ClipboardCheck, title: "Create PO from approved request", description: "The request is already approved", outcome: "Opens your approved requests" },
@@ -52,13 +61,14 @@ function OptionCard({ icon: Icon, title, description, outcome, onClick }: {
 export function RequestWizard() {
   const router = useRouter();
   const { user } = useCurrentUser();
-  const [step, setStep] = useState<"intent" | "goods">("intent");
+  const [step, setStep] = useState<"intent" | "goods" | "service">("intent");
 
   const canCreatePo = !!user?.role && PO_FROM_REQUEST_ROLES.includes(user.role);
   const choices = CHOICES.filter((c) => c.key !== "approved" || canCreatePo);
 
   function pick(key: string) {
     if (key === "goods") setStep("goods");
+    else if (key === "service") setStep("service");
     else if (key === "amc") router.push(newRequestHref("amc"));
     else if (key === "reimbursement") router.push(newRequestHref("reimbursement"));
     else router.push("/procurement/requests?status=approved");
@@ -66,7 +76,31 @@ export function RequestWizard() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      {step === "goods" ? (
+      {step === "service" ? (
+        <>
+          <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setStep("intent")}>
+            <ChevronLeft className="mr-1 h-4 w-4" /> Back
+          </Button>
+          <div>
+            <h1 className="text-xl font-semibold">What kind of service?</h1>
+            <p className="text-sm text-muted-foreground">This decides which budget the spend counts against.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {SERVICE_DEPARTMENTS.map((d) => (
+              <OptionCard
+                key={d.key}
+                icon={Wrench}
+                title={PROCUREMENT_DEPARTMENT_LABELS[d.key]}
+                description={d.examples}
+                onClick={() => router.push(newRequestHref(d.key))}
+              />
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Maintenance of a specific asset on a yearly contract is an AMC, so pick that on the previous screen.
+          </p>
+        </>
+      ) : step === "goods" ? (
         <>
           <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setStep("intent")}>
             <ChevronLeft className="mr-1 h-4 w-4" /> Back

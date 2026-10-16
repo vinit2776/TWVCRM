@@ -511,16 +511,18 @@ function NewPurchaseOrderFormWithPr({
                   {selectedVendor?.is_service_provider
                     ? <><strong>{selectedVendor.name}</strong> is a service provider.</>
                     : <>This is an AMC request.</>}{" "}
-                  Services (internet, AMC, etc.) can&apos;t be ordered on a goods PO — they need a service
-                  PO so each cycle gets a service report and one invoice.{" "}
-                  <Link
-                    href={prData?.department === "amc" && prId
-                      ? `/procurement/orders/new-service?from_mr=${prId}`
-                      : "/procurement/orders/new-service"}
-                    className="font-medium underline"
-                  >
-                    Create a service PO instead
-                  </Link>
+                  Services can&apos;t be ordered on a goods PO — they need a service PO so each cycle gets a
+                  service report and one invoice.{" "}
+                  {prData?.department === "amc" && prId ? (
+                    <Link href={`/procurement/orders/new-service?from_mr=${prId}`} className="font-medium underline">
+                      Create a service PO instead
+                    </Link>
+                  ) : (
+                    <>
+                      A service PO for services that aren&apos;t AMCs isn&apos;t available yet. Pick a different vendor,
+                      or raise an AMC request if this is a maintenance contract on an asset.
+                    </>
+                  )}
                 </p>
               </div>
             )}
