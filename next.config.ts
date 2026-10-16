@@ -2,18 +2,18 @@ import type { NextConfig } from "next";
 import path from "path";
 import { execSync } from "child_process";
 
-// Source of truth for the app version — bump with `npm version patch|minor|major`.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { version: pkgVersion } = require("./package.json") as { version: string };
-
-function computeAppVersion(): string {
-  return `v${pkgVersion}`;
-}
-
 /**
- * Short git SHA for the current HEAD. On Vercel, `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA`
- * is also auto-injected — the sidebar prefers that one. This fallback gives the
- * local dev server a SHA too so the footer doesn't look half-empty.
+ * Short git SHA for the current HEAD — what the sidebar badge shows, and the only
+ * thing that actually identifies a deploy. On Vercel,
+ * `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` is auto-injected and the sidebar prefers it;
+ * this fallback gives the local dev server a SHA too.
+ *
+ * There used to be a semver here as well, read from package.json and bumped by a
+ * workflow on every push to main. That workflow's PR could never satisfy the
+ * Mainprotect ruleset — GitHub holds CI runs for Actions-bot PRs pending approval,
+ * so the required check never reported — and the number silently froze at 1.0.98.471
+ * on 2026-09-08 while the app kept shipping. A badge that reads as precise and is
+ * five weeks stale is worse than no badge, and nothing else ever read the version.
  */
 function computeShortSha(): string {
   try {
@@ -52,8 +52,6 @@ const nextConfig: NextConfig = {
       year: "numeric",
       timeZone: "Asia/Kolkata",
     }),
-    // Auto-bumped semver — increments on every commit to main.
-    NEXT_PUBLIC_APP_VERSION: computeAppVersion(),
     // Local-build fallback for the short SHA. On Vercel,
     // NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA is auto-injected and is preferred.
     NEXT_PUBLIC_GIT_SHA: computeShortSha(),

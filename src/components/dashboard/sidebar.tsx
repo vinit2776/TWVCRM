@@ -576,19 +576,23 @@ export function Sidebar() {
 
         {/* Help — pinned at bottom, always visible */}
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
-          {/* Version badge — semver driven by package.json, sha + date in tooltip. */}
+          {/* Build badge — the commit SHA, with the build date in the tooltip. This was
+              a semver from package.json until the workflow that bumped it turned out
+              not to be able to merge its own PR, leaving the badge five weeks stale
+              while reading as exact. The SHA is baked at build time, can't drift, and
+              is what you'd actually search for to check whether a fix is live. */}
           {(() => {
-            const version = process.env.NEXT_PUBLIC_APP_VERSION;
             const sha =
               process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
-              process.env.NEXT_PUBLIC_GIT_SHA ||
-              undefined;
+              process.env.NEXT_PUBLIC_GIT_SHA;
             const date = process.env.NEXT_PUBLIC_BUILD_DATE;
-            if (!version) return null;
-            const tooltip = [sha && `commit ${sha}`, date && `built ${date}`].filter(Boolean).join(" · ");
+            if (!sha) return null;
             return (
-              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={tooltip || undefined}>
-                {version}
+              <p
+                className="px-3 pb-2 font-mono text-[10px] text-sidebar-foreground/35 select-none"
+                title={date ? `built ${date}` : undefined}
+              >
+                {sha}
               </p>
             );
           })()}
