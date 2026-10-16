@@ -61,6 +61,11 @@ const LeadDepositSummary = dynamic(
   () => import("@/components/leads/lead-deposit-summary").then((m) => m.LeadDepositSummary),
   { ssr: false }
 );
+// Admin-only Value tab: loaded on demand so other roles never download it.
+const LeadValueTab = dynamic(
+  () => import("@/components/leads/value/lead-value-tab").then((m) => m.LeadValueTab),
+  { ssr: false }
+);
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
@@ -76,7 +81,10 @@ export default function LeadDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") ?? "overview";
+  // The Value tab is admin-only and loads its own data, so it is never a
+  // deep-link target: a link to it falls back to Overview.
+  const requestedTab = searchParams.get("tab") ?? "overview";
+  const initialTab = requestedTab === "value" ? "overview" : requestedTab;
   const highlightActivityId = searchParams.get("highlight") ?? undefined;
   const { data: lead, loading, refetch: refetchLead } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -251,6 +259,7 @@ export default function LeadDetailPage({
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
+          {userRole === "admin" && <TabsTrigger value="value">Value</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -761,6 +770,12 @@ export default function LeadDetailPage({
         <TabsContent value="feedback" className="mt-4">
           <LeadFeedbacksTab leadId={id} />
         </TabsContent>
+
+        {userRole === "admin" && (
+          <TabsContent value="value" className="mt-4">
+            <LeadValueTab leadId={id} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Activity Form — kept outside tabs so Quick Log buttons on the
