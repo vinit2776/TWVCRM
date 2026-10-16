@@ -1,7 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 
-/** Price-tolerance columns (migration 00609). Only passed for a bill whose PO is flexible and the invoice went past the PO value. */
+/** Price-tolerance columns (migration 00610). Only passed for a bill whose PO is flexible and the invoice went past the PO value. */
 export interface ToleranceFacts {
   variance_amount: number;
   variance_percent: number;
