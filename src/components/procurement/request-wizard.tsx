@@ -1,18 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Package, Wrench, CalendarClock, ReceiptText, ClipboardCheck, type LucideIcon } from "lucide-react";
+import { ArrowRight, ChevronLeft, Package, Wrench, CalendarClock, ReceiptText, ClipboardCheck, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   ITEM_CATALOG_DEPARTMENTS,
+  PROCUREMENT_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_EXAMPLES,
 } from "@/lib/constants";
 
 // The wizard only chooses a destination — every route it opens already exists.
 const newRequestHref = (department: string) => `/procurement/requests/new?department=${department}`;
+
+// Remembered per browser so a repeat buyer can skip straight to the same kind of request.
+const LAST_DEPARTMENT_KEY = "twv.procurement.lastRequestDepartment";
 
 // Matches who can create a PO today (orders/new is admin/manager).
 const PO_FROM_REQUEST_ROLES = ["admin", "manager"];
@@ -37,7 +41,7 @@ const CHOICES: Choice[] = [
   { key: "goods", icon: Package, title: "Goods", description: "Physical items: stock, supplies, equipment", outcome: "Becomes a Goods PO after approval" },
   { key: "service", icon: Wrench, title: "Service or recurring bill", description: "e.g. ISP bills, machine rent, pest control", outcome: "Ordered through a purchase order after approval" },
   { key: "amc", icon: CalendarClock, title: "AMC / annual contract", description: "Yearly maintenance of HVAC, UPS, DG, RO", outcome: "Becomes a Service PO with visit tracking" },
-  { key: "reimbursement", icon: ReceiptText, title: "Work for a customer", description: "Billed back to a customer contract with markup", outcome: "Reimbursement request" },
+  { key: "reimbursement", icon: ReceiptText, title: "Work for a customer", description: "Reimbursement: billed back to a customer contract with markup", outcome: "Reimbursement request" },
   { key: "approved", icon: ClipboardCheck, title: "Create PO from approved request", description: "The request is already approved", outcome: "Opens your approved requests" },
 ];
 
@@ -62,6 +66,25 @@ export function RequestWizard() {
   const router = useRouter();
   const { user } = useCurrentUser();
   const [step, setStep] = useState<"intent" | "goods" | "service">("intent");
+  const [lastDepartment, setLastDepartment] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(LAST_DEPARTMENT_KEY);
+      if (saved && (PROCUREMENT_DEPARTMENTS as readonly string[]).includes(saved)) setLastDepartment(saved);
+    } catch {
+      // Storage can be unavailable (private window, blocked site data) — the shortcut is optional.
+    }
+  }, []);
+
+  function openRequest(department: string) {
+    try {
+      window.localStorage.setItem(LAST_DEPARTMENT_KEY, department);
+    } catch {
+      // Not remembering the choice is fine.
+    }
+    router.push(newRequestHref(department));
+  }
 
   const canCreatePo = !!user?.role && PO_FROM_REQUEST_ROLES.includes(user.role);
   const choices = CHOICES.filter((c) => c.key !== "approved" || canCreatePo);
@@ -69,8 +92,8 @@ export function RequestWizard() {
   function pick(key: string) {
     if (key === "goods") setStep("goods");
     else if (key === "service") setStep("service");
-    else if (key === "amc") router.push(newRequestHref("amc"));
-    else if (key === "reimbursement") router.push(newRequestHref("reimbursement"));
+    else if (key === "amc") openRequest("amc");
+    else if (key === "reimbursement") openRequest("reimbursement");
     else router.push("/procurement/requests?status=approved");
   }
 
@@ -92,7 +115,7 @@ export function RequestWizard() {
                 icon={Wrench}
                 title={PROCUREMENT_DEPARTMENT_LABELS[d.key]}
                 description={d.examples}
-                onClick={() => router.push(newRequestHref(d.key))}
+                onClick={() => openRequest(d.key)}
               />
             ))}
           </div>
@@ -116,7 +139,7 @@ export function RequestWizard() {
                 icon={Package}
                 title={PROCUREMENT_DEPARTMENT_LABELS[d]}
                 description={PROCUREMENT_DEPARTMENT_EXAMPLES[d]}
-                onClick={() => router.push(newRequestHref(d))}
+                onClick={() => openRequest(d)}
               />
             ))}
           </div>
@@ -130,6 +153,19 @@ export function RequestWizard() {
             <h1 className="text-xl font-semibold">What do you want to buy?</h1>
             <p className="text-sm text-muted-foreground">Your answer sets up the right form for you.</p>
           </div>
+          {lastDepartment && (
+            <button
+              type="button"
+              onClick={() => openRequest(lastDepartment)}
+              className="flex w-full items-center justify-between rounded-xl border border-dashed bg-muted/30 px-4 py-3 text-left text-sm transition-colors hover:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span>
+                <span className="font-medium">Same as last time</span>
+                <span className="text-muted-foreground"> · start a {PROCUREMENT_DEPARTMENT_LABELS[lastDepartment]} request</span>
+              </span>
+              <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden />
+            </button>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             {choices.map((c) => (
               <OptionCard key={c.key} icon={c.icon} title={c.title} description={c.description} outcome={c.outcome} onClick={() => pick(c.key)} />
