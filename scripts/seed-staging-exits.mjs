@@ -66,6 +66,18 @@ const SCENARIOS = [
   { key: "H", company: "Exit H - pooled deposit", deposit: 50000, endIn: 90, invoices: [], usage: 0, sibling: true,
     exit: { noticeAgo: 4, lastIn: 15, charges: [["breakage", "Chair", 2000]] },
     note: "Customer's other live contract still needs its deposit: nothing refundable from the pool" },
+  { key: "I", company: "Exit I - ready to clear, refund", deposit: 100000, endIn: 60, invoices: [], usage: 0,
+    exit: { noticeAgo: 40, lastIn: -3, completed: true, inspectionDone: true, charges: [["breakage", "Chairs", 7000], ["painting", "Cabin walls", 8000], ["missing_item", "Key cards", 1700]] },
+    note: "Completed, inspected, clean: send for approval, refund 83,300" },
+  { key: "J", company: "Exit J - ready to clear, owes", deposit: 30000, endIn: 60, invoices: [], usage: 0,
+    exit: { noticeAgo: 40, lastIn: -3, completed: true, inspectionDone: true, charges: [["breakage", "Partition", 25000], ["painting", "Whole floor", 15000]] },
+    note: "Completed, inspected, clean: deposit covers 30,000 of 40,000, customer owes 10,000" },
+  { key: "K", company: "Exit K - ready to clear, no charges", deposit: 20000, endIn: 60, invoices: [], usage: 0,
+    exit: { noticeAgo: 40, lastIn: -3, completed: true, inspectionDone: true, charges: [] },
+    note: "Completed, inspected, no charges: full 20,000 refund" },
+  { key: "L", company: "Exit L - blocked by invoice", deposit: 50000, endIn: 60, invoices: [5900], usage: 0,
+    exit: { noticeAgo: 40, lastIn: -3, completed: true, inspectionDone: true, charges: [["other", "Clean", 1000]] },
+    note: "Completed and inspected but an unpaid invoice blocks clearing" },
   { key: "G", company: "Exit G - completed", deposit: 40000, endIn: 60, invoices: [], usage: 0,
     exit: { noticeAgo: 40, lastIn: -2, completed: true, charges: [["painting", "Wall", 6000]] },
     note: "Contract terminated, exit completed; charges can still be added" },
@@ -75,6 +87,7 @@ async function wipe() {
   const contracts = await must(supa.from("contracts").select("id").like("title", `${TAG}%`), "find seeded contracts");
   const ids = contracts.map((c) => c.id);
   if (ids.length === 0) return;
+  await supa.from("exit_settlements").delete().in("contract_id", ids);
   await supa.from("contract_exits").delete().in("contract_id", ids);
   await supa.from("usage_charges").delete().in("contract_id", ids);
   await supa.from("billing_statements").delete().in("contract_id", ids);
@@ -148,6 +161,7 @@ for (const s of SCENARIOS) {
       notice_received_on: offset(-s.exit.noticeAgo), last_day: last, reason: "Relocating to own office (seed)",
       is_early_exit: last < offset(s.endIn), started_by: admin.id,
       ...(s.exit.completed ? { completed_at: new Date().toISOString(), completed_by: admin.id } : {}),
+      ...(s.exit.inspectionDone ? { inspection_done_at: new Date().toISOString(), inspection_done_by: admin.id } : {}),
     }).select("id").single(), "exit");
     for (const [type, desc, amt] of s.exit.charges) {
       await must(supa.from("contract_exit_charges").insert({ exit_id: row.id, charge_type: type, description: desc, amount: amt, added_by: admin.id }), "charge");
