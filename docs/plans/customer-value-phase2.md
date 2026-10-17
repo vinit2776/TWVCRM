@@ -1,6 +1,6 @@
 # Customer Value tab — Phase 2 plan (snapshots, pillar scores, tier, story)
 
-Status: **plan agreed 2026-10-16, decisions D1 to D4 settled, nothing built.** Written 2026-10-16, after phase 1 went live (Journey, Money,
+Status: **plan agreed 2026-10-16, decisions D1 to D4 settled. PR 0 (#933) and PR A (#934) are open; nothing else built.** Written 2026-10-16, after phase 1 went live (Journey, Money,
 renewal note: PRs #911, #914, #918, #924). Parent spec: [customer-value-tab-spec.md](../customer-value-tab-spec.md).
 Format follows [center-analytics-data-source.md](center-analytics-data-source.md).
 
@@ -75,6 +75,12 @@ pillars, otherwise "Not enough data".
 **Trend.** Overall now minus overall 90 days ago: up arrow at +5 or more, down arrow at −5 or less,
 flat between. Shown as "from A-" style context (previous tier).
 
+**Optional weak-pillar cap (added with PR A, off by default).** Payment is one pillar in four, so
+without a floor a customer who is always very late can still grade A (always 10 days late with
+everything else strong scores about 81). A setting `weakPillarCap: { below, maxTier }` limits the tier
+when any pillar that counts toward it scores below the floor, and records which pillar did it.
+Recommendation: switch it on, for example `{ below: 35, maxTier: "B" }`, before the tier is shown. See D6.
+
 **Replay rule (correctness).** Backfilled history must use only what was known at each month end: an
 invoice paid in October was *unpaid* in September's snapshot. Scores are computed by the same pure
 functions with an `asOf` date, and tests pin this.
@@ -100,10 +106,13 @@ Two new tables, both **RLS on, SELECT for admin only**, writes by the service ro
 to be picked against every branch with `check-migration-numbers.mjs` (highest taken was 00610).
 
 `customer_value_monthly` (one row per lead per month, unique on `(lead_id, month)`):
-`lead_id`, `month` (first of month), `revenue_ex_gst`, `invoiced_count`, `paid_count`, `avg_days_late`,
-`on_time_count`, `measured_count`, `overdue_amount`, `reminders`, `concessions_counted`, `seats_paid`,
-`seats_used_avg` (nullable), `tickets_linked`, `tickets_unlinked`, `tickets_sla_breached`,
-`tickets_reopened`, `satisfaction_avg` (nullable), `bookings`, `data_flags` (jsonb), `computed_at`.
+`lead_id`, `month` (first of month), `revenue_ex_gst`, `invoiced_count`, `avg_days_late` (nullable),
+`measured_count`, `on_time_count`, `overdue_amount`, `max_days_overdue`, `reminders`,
+`concessions_counted`, `seats_paid` (nullable), `seats_used_avg` (nullable), `rent_per_seat` (nullable),
+`tickets_linked`, `tickets_unlinked`, `tickets_sla_breached`, `tickets_reopened`, `satisfaction_avg`
+(nullable), `satisfaction_count`, `bookings`, `billing_queries` (nullable), `data_flags` (jsonb),
+`computed_at`. The first block of fields is exactly the `MonthlyMetrics` shape the scoring library
+(PR A, `src/lib/customer-value/scoring-pillars.ts`) reads.
 
 `customer_value_scores` (one row per lead per as-of date, unique on `(lead_id, as_of)`):
 `lead_id`, `as_of`, `payment`, `friction`, `engagement`, `profitability` (each nullable),
@@ -151,8 +160,8 @@ if daily. Daily is kept because the 90-days-ago comparison then needs no interpo
 
 | PR | Content | Needs prod migration |
 |---|---|---|
-| 0 | Rent waiver type: one column on `contract_rent_waivers` (giveaway or billed elsewhere), a choice in the waive dialog, existing rows default to "unknown", and Money counts a waiver as a concession only when it is a giveaway. | **yes** |
-| A | Scoring library: windows, percentile/fixed scales, pillar and tier maths, trend, `asOf` replay, story rules, with unit tests. No database, no UI. | no |
+| 0 | (PR #933) Rent waiver type: one column on `contract_rent_waivers` (giveaway or billed elsewhere), a choice in the waive dialog, existing rows default to "unknown", and Money counts a waiver as a concession only when it is a giveaway. | **yes** |
+| A | (PR #934, 112 tests) Scoring library: windows, percentile/fixed scales, pillar and tier maths, trend, `asOf` replay, story rules, with unit tests. No database, no UI. | no |
 | B | Migration for the two tables, monthly-metrics builder, ticket linking, backfill script (run on staging) | **yes** |
 | C | Score computation, nightly cron enabled, Recompute endpoint | no (needs B live) |
 | D | Header, Summary sub-tab | no |
@@ -186,6 +195,8 @@ production by me after merge, as before.
 - **D4. Coverage query first:** Vinit runs `docs/customer-value-phase0-coverage.sql` on production and
   sends the output. Work that needs no data (the scoring library) proceeds meanwhile; the database
   work (PR B) waits for the results.
+- **D6. Weak-pillar cap (open):** turn it on before the tier is shown, and at what floor and tier?
+  Recommended `{ below: 35, maxTier: "B" }`. Off by default in PR A, so this is a settings choice.
 - **D5. Beta label (not asked, default assumed):** the tier carries a "beta" label and a review of the
   best and worst customers for the first two weeks. Say so if you would rather show it as final.
 
