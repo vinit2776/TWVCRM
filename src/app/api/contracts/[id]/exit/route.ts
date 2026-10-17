@@ -6,6 +6,7 @@ import {
   EXIT_COMPLETE_ROLES, EXIT_CHARGE_ROLES, EXIT_START_ROLES, isEarlyExit, validateExitDates,
 } from "@/lib/contract-exit";
 import { getLiveExit, loadExitView, notifyAllUsers } from "@/lib/contract-exit-server";
+import { getLatestSettlement, getLiveSettlement } from "@/lib/exit-settlement-server";
 
 const VIEW_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts"];
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date");
@@ -39,8 +40,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const me = await actor();
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!VIEW_ROLES.includes(me.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  const view = await loadExitView(createAdminClient(), id);
-  return NextResponse.json({ data: view });
+  const admin = createAdminClient();
+  const view = await loadExitView(admin, id);
+  if (!view) return NextResponse.json({ data: null });
+  const settlement = await getLatestSettlement(admin, view.exit.id);
+  return NextResponse.json({ data: { ...view, settlementRecord: settlement } });
 }
 
 /**
@@ -155,6 +159,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (body.inspection_done !== undefined) {
       if (!(EXIT_CHARGE_ROLES as readonly string[]).includes(me.role)) {
         return NextResponse.json({ error: "You can't mark the inspection done." }, { status: 403 });
+      }
+      if (await getLiveSettlement(admin, exit.id)) {
+        return NextResponse.json({ error: "This exit has been sent for admin approval, so the inspection is locked." }, { status: 409 });
       }
       update.inspection_done_at = body.inspection_done ? new Date().toISOString() : null;
       update.inspection_done_by = body.inspection_done ? me.id : null;

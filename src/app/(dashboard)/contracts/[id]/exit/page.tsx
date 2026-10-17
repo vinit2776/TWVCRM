@@ -15,6 +15,7 @@ import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useExit } from "@/components/contracts/exit/use-exit";
 import { ChargeDialog } from "@/components/contracts/exit/charge-dialog";
+import { SettlementCard } from "@/components/contracts/exit/settlement-card";
 import {
   EXIT_CHARGE_ROLES, EXIT_CHARGE_TYPE_LABELS, EXIT_COMPLETE_ROLES, EXIT_START_ROLES, canCompleteOn, daysBetween, type ExitChargeType,
 } from "@/lib/contract-exit";
@@ -92,7 +93,10 @@ export default function ExitPage({ params }: { params: Promise<{ id: string }> }
 
   const { exit, charges, settlement } = view;
   const inNotice = exit.status === "in_notice";
-  const canEditCharges = (EXIT_CHARGE_ROLES as readonly string[]).includes(role);
+  const record = (view as { settlementRecord?: { status: string } | null }).settlementRecord ?? null;
+  // Once sent for approval the charges are locked (the server refuses changes too).
+  const chargesLocked = !!record && record.status !== "returned";
+  const canEditCharges = (EXIT_CHARGE_ROLES as readonly string[]).includes(role) && !chargesLocked;
   const canStart = (EXIT_START_ROLES as readonly string[]).includes(role);
   const canComplete = (EXIT_COMPLETE_ROLES as readonly string[]).includes(role);
   const lastDayArrived = canCompleteOn(exit.last_day, new Date());
@@ -140,7 +144,7 @@ export default function ExitPage({ params }: { params: Promise<{ id: string }> }
         <Step n={1} label="Notice" state="done" />
         <Step n={2} label="Inspection" state={exit.inspection_done_at ? "done" : "current"} />
         <Step n={3} label="Settlement" state={stage === 3 ? "current" : "later"} />
-        <div className="rounded-md bg-muted px-3 py-1 text-xs text-muted-foreground">4 Approval and refund (coming next)</div>
+        <Step n={4} label="Approval and refund" state={(view as { settlementRecord?: { status: string } | null }).settlementRecord ? ((view as { settlementRecord?: { status: string } | null }).settlementRecord?.status === "paid" || (view as { settlementRecord?: { status: string } | null }).settlementRecord?.status === "closed" ? "done" : "current") : "later"} />
       </div>
 
       <Card>
@@ -224,36 +228,7 @@ export default function ExitPage({ params }: { params: Promise<{ id: string }> }
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            Settlement preview
-            <Badge variant="secondary" className="bg-gray-100 text-gray-700">Preview only</Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1.5 text-sm">
-          <div className="flex justify-between"><span className="text-muted-foreground">Security deposit held</span><span>{formatCurrency(settlement.depositAvailable)}</span></div>
-          {view.reservedForOthers > 0 && (
-            <p className="text-xs text-amber-700">
-              The customer&apos;s pooled deposit is {formatCurrency(view.depositPool)}. {formatCurrency(view.reservedForOthers)} is kept back because the customer&apos;s other live contracts rely on it.
-            </p>
-          )}
-          <div className="flex justify-between"><span className="text-muted-foreground">Inspection charges ({charges.length})</span><span>− {formatCurrency(settlement.charges)}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Unpaid invoices ({view.unpaidInvoices.length})</span><span>− {formatCurrency(settlement.unpaidInvoices)}</span></div>
-          {view.unpaidInvoices.map((i) => (
-            <div key={i.id} className="flex justify-between pl-4 text-xs text-muted-foreground"><span>{i.reference ?? "Invoice"}{i.due_date ? ` · due ${formatDate(i.due_date)}` : ""}</span><span>{formatCurrency(i.balance_due)}</span></div>
-          ))}
-          <div className="flex justify-between"><span className="text-muted-foreground">Unbilled usage (before GST)</span><span>− {formatCurrency(settlement.unbilledUsage)}</span></div>
-          <div className="mt-2 flex justify-between border-t pt-2 font-medium">
-            {settlement.customerOwes > 0
-              ? <><span>Customer owes</span><span>{formatCurrency(settlement.customerOwes)}</span></>
-              : <><span>Refund due to customer</span><span>{formatCurrency(settlement.refund)}</span></>}
-          </div>
-          <p className="pt-1 text-xs text-muted-foreground">
-            This is a preview and moves no money. Approval, bank details and the refund come in the next release. Invoices and usage refresh each time the page opens.
-          </p>
-        </CardContent>
-      </Card>
+      <SettlementCard contractId={id} view={view as never} role={role} onChanged={refresh} />
 
       <ChargeDialog contractId={id} charge={editing} open={chargeOpen} onOpenChange={setChargeOpen} onSaved={refresh} />
 
