@@ -51,3 +51,33 @@ describe("computeSettlement", () => {
     expect(s.refund).toBe(99.7);
   });
 });
+
+import { exitDepositAvailable, ownDepositRemaining, reservedForContract } from "../contract-exit";
+
+const dep = (o: Partial<{ amt: number | null; status: string | null; paid: number | null; refunded: number | null; pool: number | null }> = {}) => ({
+  security_deposit_amount: o.amt ?? 0,
+  deposit_payment_status: o.status ?? "paid",
+  deposit_payment_amount: o.paid ?? null,
+  deposit_refunded_amount: o.refunded ?? null,
+  deposit_pool_applied_amount: o.pool ?? null,
+});
+
+describe("pooled deposit protection", () => {
+  it("counts only a paid deposit, less what was already refunded", () => {
+    expect(ownDepositRemaining(dep({ amt: 50000 }))).toBe(50000);
+    expect(ownDepositRemaining(dep({ amt: 50000, status: "pending" }))).toBe(0);
+    expect(ownDepositRemaining(dep({ amt: 50000, paid: 40000, refunded: 10000 }))).toBe(30000);
+  });
+  it("reserves what another live contract still needs from the pool", () => {
+    expect(reservedForContract(dep({ amt: 50000 }))).toBe(0); // paid its own
+    expect(reservedForContract(dep({ amt: 50000, status: "pending" }))).toBe(50000);
+    expect(reservedForContract(dep({ amt: 50000, status: "pending", pool: 20000 }))).toBe(50000);
+    expect(reservedForContract(dep({ amt: 0, status: "not_required", pool: 20000 }))).toBe(20000);
+  });
+  it("never lets an exit settle more than the contract holds or the pool leaves free", () => {
+    expect(exitDepositAvailable(100000, 50000, 0)).toBe(50000); // two paid deposits: only its own
+    expect(exitDepositAvailable(50000, 50000, 50000)).toBe(0);  // other contract relies on it all
+    expect(exitDepositAvailable(80000, 50000, 50000)).toBe(30000);
+    expect(exitDepositAvailable(0, 50000, 0)).toBe(0);
+  });
+});

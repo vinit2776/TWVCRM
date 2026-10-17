@@ -81,3 +81,36 @@ export function computeSettlement(i: SettlementInput): Settlement {
     customerOwes: net < 0 ? round2(-net) : 0,
   };
 }
+
+export interface DepositContractRow {
+  security_deposit_amount: number | null;
+  deposit_payment_status: string | null;
+  deposit_payment_amount: number | null;
+  deposit_refunded_amount: number | null;
+  deposit_pool_applied_amount: number | null;
+}
+
+/** What this contract itself collected and has not yet had refunded or retained. */
+export function ownDepositRemaining(c: DepositContractRow): number {
+  const gross = c.deposit_payment_status === "paid" ? Number(c.deposit_payment_amount ?? c.security_deposit_amount ?? 0) : 0;
+  return Math.max(0, round2(gross - Number(c.deposit_refunded_amount ?? 0)));
+}
+
+/**
+ * Deposit still needed to back another live contract of the same customer.
+ * Deposits are pooled per customer, so money collected on one contract can be
+ * what covers another; that part must stay with the customer's remaining contracts.
+ */
+export function reservedForContract(c: DepositContractRow): number {
+  const required = Number(c.security_deposit_amount ?? 0);
+  const shortfall = Math.max(0, required - ownDepositRemaining(c));
+  return round2(Math.max(shortfall, Number(c.deposit_pool_applied_amount ?? 0)));
+}
+
+/**
+ * The deposit an exit may settle: the customer's pool, less what other live
+ * contracts rely on, and never more than this contract itself holds.
+ */
+export function exitDepositAvailable(poolAvailable: number, ownRemaining: number, reservedForOthers: number): number {
+  return Math.max(0, round2(Math.min(poolAvailable - reservedForOthers, ownRemaining)));
+}

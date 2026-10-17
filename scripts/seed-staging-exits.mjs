@@ -63,6 +63,9 @@ const SCENARIOS = [
     exit: { noticeAgo: 32, lastIn: 25, charges: [] }, note: "Last day equals contract end: not an early exit" },
   { key: "F", company: "Exit F - last day today", deposit: 50000, endIn: 90, invoices: [3540], usage: 500,
     exit: { noticeAgo: 30, lastIn: 0, charges: [["extra_use", "Printing", 900]] }, note: "Last day is today: Complete exit enabled" },
+  { key: "H", company: "Exit H - pooled deposit", deposit: 50000, endIn: 90, invoices: [], usage: 0, sibling: true,
+    exit: { noticeAgo: 4, lastIn: 15, charges: [["breakage", "Chair", 2000]] },
+    note: "Customer's other live contract still needs its deposit: nothing refundable from the pool" },
   { key: "G", company: "Exit G - completed", deposit: 40000, endIn: 60, invoices: [], usage: 0,
     exit: { noticeAgo: 40, lastIn: -2, completed: true, charges: [["painting", "Wall", 6000]] },
     note: "Contract terminated, exit completed; charges can still be added" },
@@ -124,6 +127,18 @@ for (const s of SCENARIOS) {
       contract_id: contract.id, lead_id: lead.id, description: "Printing (seed)", quantity: 1, unit_price: s.usage, total: s.usage,
       charge_date: offset(-3), status: "pending",
     }), "usage");
+  }
+
+  if (s.sibling) {
+    // A second live contract of the same customer whose own deposit is still unpaid,
+    // so it relies on the pool the exiting contract contributed to.
+    await must(supa.from("contracts").insert({
+      lead_id: lead.id, proposal_id: proposal.id, location_id: location.id, title: `${TAG} ${s.key}2 ${s.company} (sibling)`, status: "active",
+      billing_cycle: "monthly", tenure_months: 12, start_date: offset(-30), end_date: offset(330), seats: 1,
+      subtotal: 10000, total_amount: 11800, tax_percentage: 18, created_by: admin.id,
+      security_deposit_months: 2, security_deposit_amount: 50000, deposit_payment_status: "pending",
+      activated_at: new Date(Date.now() - 30 * 86400e3).toISOString(),
+    }), "sibling contract");
   }
 
   if (s.exit) {

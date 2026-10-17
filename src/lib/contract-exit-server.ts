@@ -3,7 +3,7 @@ import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 import { sendPushToUsers } from "@/lib/push";
 import { balanceDue, paymentCredit } from "@/lib/settlement";
 import { fetchUnbilledCharges } from "@/lib/usage-billing";
-import { computeSettlement, type Settlement } from "@/lib/contract-exit";
+import { computeSettlement, exitDepositAvailable, ownDepositRemaining, reservedForContract, type DepositContractRow, type Settlement } from "@/lib/contract-exit";
 
 /**
  * Server-side loaders for the exit workflow. Reads use the admin client; every
@@ -55,7 +55,12 @@ export interface ExitView {
   exit: ExitRow;
   charges: ExitChargeRow[];
   unpaidInvoices: UnpaidInvoice[];
+  /** What this exit may settle (pool, less other contracts' needs, capped at this contract's own deposit). */
   depositAvailable: number;
+  /** The customer's whole pooled balance. */
+  depositPool: number;
+  /** Held back for the customer's other live contracts. */
+  reservedForOthers: number;
   depositCollected: number;
   /** Ex-GST total of billable (not held) unbilled usage. */
   unbilledUsage: number;
@@ -88,6 +93,13 @@ export async function getLiveExit(admin: SupabaseClient, contractId: string): Pr
 export async function loadExitView(admin: SupabaseClient, contractId: string): Promise<ExitView | null> {
   const exit = await getLiveExit(admin, contractId);
   if (!exit) return null;
+
+  const DEPOSIT_COLS = "security_deposit_amount, deposit_payment_status, deposit_payment_amount, deposit_refunded_amount, deposit_pool_applied_amount";
+  const { data: thisContract } = await admin.from("contracts").select(`lead_id, ${DEPOSIT_COLS}`).eq("id", contractId).single();
+  const { data: otherLive } = thisContract
+    ? await admin.from("contracts").select(DEPOSIT_COLS).eq("lead_id", (thisContract as { lead_id: string }).lead_id)
+        .in("status", ["active", "renewal_in_progress"]).neq("id", contractId)
+    : { data: [] };
 
   const [chargesRes, balanceRes, statementsRes, unbilled] = await Promise.all([
     admin
@@ -136,7 +148,10 @@ export async function loadExitView(admin: SupabaseClient, contractId: string): P
   })).filter((i) => i.balance_due > 0);
 
   const bal = (balanceRes.data as Array<{ available: number; deposit_collected: number }> | null)?.[0];
-  const depositAvailable = Number(bal?.available ?? 0);
+  const depositPool = Number(bal?.available ?? 0);
+  const reservedForOthers = ((otherLive ?? []) as unknown as DepositContractRow[]).reduce((n, c) => n + reservedForContract(c), 0);
+  const ownRemaining = thisContract ? ownDepositRemaining(thisContract as unknown as DepositContractRow) : 0;
+  const depositAvailable = exitDepositAvailable(depositPool, ownRemaining, reservedForOthers);
   const unbilledUsage = Math.round(unbilled.filter((u) => !u.held).reduce((n, u) => n + u.amount, 0) * 100) / 100;
 
   const settlement = computeSettlement({
@@ -147,7 +162,7 @@ export async function loadExitView(admin: SupabaseClient, contractId: string): P
   });
 
   return {
-    exit, charges, unpaidInvoices, depositAvailable,
+    exit, charges, unpaidInvoices, depositAvailable, depositPool, reservedForOthers,
     depositCollected: Number(bal?.deposit_collected ?? 0),
     unbilledUsage, settlement,
   };

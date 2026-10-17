@@ -233,6 +233,11 @@ export default function ExitPage({ params }: { params: Promise<{ id: string }> }
         </CardHeader>
         <CardContent className="space-y-1.5 text-sm">
           <div className="flex justify-between"><span className="text-muted-foreground">Security deposit held</span><span>{formatCurrency(settlement.depositAvailable)}</span></div>
+          {view.reservedForOthers > 0 && (
+            <p className="text-xs text-amber-700">
+              The customer&apos;s pooled deposit is {formatCurrency(view.depositPool)}. {formatCurrency(view.reservedForOthers)} is kept back because the customer&apos;s other live contracts rely on it.
+            </p>
+          )}
           <div className="flex justify-between"><span className="text-muted-foreground">Inspection charges ({charges.length})</span><span>− {formatCurrency(settlement.charges)}</span></div>
           <div className="flex justify-between"><span className="text-muted-foreground">Unpaid invoices ({view.unpaidInvoices.length})</span><span>− {formatCurrency(settlement.unpaidInvoices)}</span></div>
           {view.unpaidInvoices.map((i) => (
