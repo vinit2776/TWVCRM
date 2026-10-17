@@ -65,11 +65,10 @@ export function drawCompanyStampInBox(
   refText?: string
 ): void {
   const pad = 2;
-  // The caller (autoTable) draws its cell text — e.g. "Signature: ____" —
-  // pinned to the top of the cell regardless of cell height. Leave clearance
-  // for that line so the stamp sits below it instead of overlapping it.
-  const topClearance = 9;
-  const availH = box.height - topClearance - pad;
+  // The caller (autoTable) bottom-aligns its cell text — "Signature: ____" —
+  // so leave clearance at the bottom and sit the stamp directly above that line.
+  const bottomClearance = 9;
+  const availH = box.height - bottomClearance - pad;
   const sigH = Math.max(6, Math.min(14, availH));
   let sigW = sigH;
   try {
@@ -79,7 +78,7 @@ export function drawCompanyStampInBox(
     /* keep square fallback */
   }
   const sigX = box.x + pad;
-  const sigY = box.y + topClearance;
+  const sigY = box.y + box.height - bottomClearance - sigH;
   try {
     doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sigX, sigY, sigW, sigH, undefined, "FAST");
   } catch {
@@ -104,7 +103,7 @@ export function drawCompanyStampInBox(
     doc.setTextColor(150, 150, 150);
     const refX = sealFits ? sealCx + sealR + 2 : sigX + sigW + 3;
     if (refX < box.x + box.width - pad) {
-      doc.text(`Ref: ${refText}`, refX, box.y + box.height - pad);
+      doc.text(`Ref: ${refText}`, refX, sigY + sigH);
     }
   }
 }
