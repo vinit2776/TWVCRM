@@ -49,7 +49,14 @@ export interface MoneyPaymentRow {
 }
 
 export interface MoneyConcessionInput {
-  rentWaivers: Array<{ contract_id: string; waived_month: string; reason: string | null; revoked_at: string | null }>;
+  rentWaivers: Array<{
+    contract_id: string;
+    waived_month: string;
+    reason: string | null;
+    revoked_at: string | null;
+    /** giveaway | billed_elsewhere | unknown (contract_rent_waivers.waiver_kind, migration 00615). */
+    waiver_kind: string | null;
+  }>;
   moratoriums: Array<{
     contract_id: string;
     moratorium_month: string;
@@ -162,10 +169,11 @@ export interface Money {
   concessions: {
     entries: MoneyConcession[];
     /**
-     * Counted concessions by kind, and their sum. Months not billed through the
-     * CRM (`rent_waiver`) are never counted here: some were billed elsewhere,
-     * and nothing in the data says which, so they are priced separately in
-     * `unbilledRent`.
+     * Counted concessions by kind, and their sum. A rent waiver counts only when
+     * it was marked as given to the customer. One marked "billed outside the
+     * CRM" gave nothing away and is listed without a price. One not yet
+     * classified (made before waiver_kind existed) might be either, so it stays
+     * out of the sum and is priced separately in `unbilledRent`.
      */
     totals: Record<ConcessionKind, number> & { all: number; unbilledRent: number };
   };
@@ -298,19 +306,45 @@ export function buildMoney(input: MoneyInput): Money {
 
   for (const w of c.rentWaivers) {
     if (w.revoked_at) continue;
-    const amount = rentInMonth(input.rentSteps, w.contract_id, w.waived_month);
-    entries.push({
-      kind: "rent_waiver",
-      date: w.waived_month,
-      label: `Not billed in the CRM: ${monthLabel(w.waived_month)}`,
-      detail: [c.contractNumbers[w.contract_id], w.reason].filter(Boolean).join(" · ") || null,
-      amount,
-      counted: false,
-      note:
-        amount === null
-          ? "Rent for that month could not be determined"
-          : "May have been billed elsewhere, so not counted",
-    });
+    const waiverKind =
+      w.waiver_kind === "giveaway" || w.waiver_kind === "billed_elsewhere" ? w.waiver_kind : "unknown";
+    const rent = rentInMonth(input.rentSteps, w.contract_id, w.waived_month);
+    const detail = [c.contractNumbers[w.contract_id], w.reason].filter(Boolean).join(" · ") || null;
+
+    if (waiverKind === "giveaway") {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Rent waived for ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: rent,
+        counted: true,
+        note: rent === null ? "Rent for that month could not be determined" : null,
+      });
+    } else if (waiverKind === "billed_elsewhere") {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Billed outside the CRM: ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: null,
+        counted: false,
+        note: "Billed outside the CRM, so no rent was given away",
+      });
+    } else {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Not billed in the CRM: ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: rent,
+        counted: false,
+        note:
+          rent === null
+            ? "Rent for that month could not be determined"
+            : "Not classified: may have been billed elsewhere, so not counted",
+      });
+    }
   }
   for (const m of c.moratoriums) {
     if (m.status === "rejected") continue;
@@ -370,7 +404,9 @@ export function buildMoney(input: MoneyInput): Money {
   const totals = { ...EMPTY_KIND_TOTALS, all: 0, unbilledRent: 0 };
   for (const e of entries) {
     if (e.amount === null) continue;
-    if (e.kind === "rent_waiver") {
+    // A rent waiver that is not counted is an unclassified one: price it, but
+    // keep it out of the concession total.
+    if (e.kind === "rent_waiver" && !e.counted) {
       totals.unbilledRent += e.amount;
       continue;
     }

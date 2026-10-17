@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
+import type { RentWaiverKind } from "@/lib/constants";
 
 /**
  * Rent waivers (migration 00575) — an admin records that a missed rent month
@@ -12,9 +13,9 @@ export type WaiveResult =
 
 export async function createRentWaiver(
   admin: SupabaseClient,
-  opts: { contractId: string; waivedMonth: string; reason: string; userId: string },
+  opts: { contractId: string; waivedMonth: string; reason: string; kind: RentWaiverKind; userId: string },
 ): Promise<WaiveResult> {
-  const { contractId, waivedMonth, reason, userId } = opts;
+  const { contractId, waivedMonth, reason, kind, userId } = opts;
 
   const { data: contract } = await admin
     .from("contracts").select("id, start_date").eq("id", contractId).maybeSingle();
@@ -45,7 +46,7 @@ export async function createRentWaiver(
 
   const { data: waiver, error } = await admin
     .from("contract_rent_waivers")
-    .insert({ contract_id: contractId, waived_month: waivedMonth, reason, waived_by: userId })
+    .insert({ contract_id: contractId, waived_month: waivedMonth, reason, waiver_kind: kind, waived_by: userId })
     .select("id, waived_month, reason, waived_at")
     .single();
 
@@ -60,7 +61,11 @@ export async function createRentWaiver(
     entityId: contractId,
     action: "rent_month_waived",
     performedBy: userId,
-    changes: { waived_month: { old: null, new: waivedMonth }, reason: { old: null, new: reason } },
+    changes: {
+      waived_month: { old: null, new: waivedMonth },
+      reason: { old: null, new: reason },
+      waiver_kind: { old: null, new: kind },
+    },
   });
 
   return { ok: true, waiver };

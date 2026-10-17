@@ -262,20 +262,56 @@ describe("buildMoney: lifetime and timing", () => {
 });
 
 describe("buildMoney: concessions", () => {
-  it("lists a rent waiver as an unbilled month, priced but never counted as a concession", () => {
+  it("counts a rent waiver marked as given to the customer, priced at that month's rent", () => {
     const m = buildMoney(
       input({
         concessions: {
           ...NO_CONCESSIONS,
           contractNumbers: { c1: "TWV-C-1" },
-          rentWaivers: [{ contract_id: "c1", waived_month: "2026-08-01", reason: "AC outage", revoked_at: null }],
+          rentWaivers: [
+            { contract_id: "c1", waived_month: "2026-08-01", reason: "AC outage", revoked_at: null, waiver_kind: "giveaway" },
+          ],
         },
       })
     );
-    expect(m.concessions.entries[0]).toMatchObject({ kind: "rent_waiver", amount: 50000, counted: false });
-    expect(m.concessions.totals.rent_waiver).toBe(0);
-    expect(m.concessions.totals.unbilledRent).toBe(50000);
+    expect(m.concessions.entries[0]).toMatchObject({ kind: "rent_waiver", amount: 50000, counted: true });
+    expect(m.concessions.totals.rent_waiver).toBe(50000);
+    expect(m.concessions.totals.all).toBe(50000);
+    expect(m.concessions.totals.unbilledRent).toBe(0);
+  });
+
+  it("lists a waiver marked billed outside the CRM without a price and never counts it", () => {
+    const m = buildMoney(
+      input({
+        concessions: {
+          ...NO_CONCESSIONS,
+          rentWaivers: [
+            { contract_id: "c1", waived_month: "2026-02-01", reason: "Billed before June", revoked_at: null, waiver_kind: "billed_elsewhere" },
+          ],
+        },
+      })
+    );
+    expect(m.concessions.entries[0]).toMatchObject({ kind: "rent_waiver", amount: null, counted: false });
+    expect(m.concessions.entries[0].label).toContain("Billed outside the CRM");
     expect(m.concessions.totals.all).toBe(0);
+    expect(m.concessions.totals.unbilledRent).toBe(0);
+  });
+
+  it("keeps an unclassified waiver (unknown, or null from an older row) out of the sum but prices it", () => {
+    const m = buildMoney(
+      input({
+        concessions: {
+          ...NO_CONCESSIONS,
+          rentWaivers: [
+            { contract_id: "c1", waived_month: "2026-08-01", reason: null, revoked_at: null, waiver_kind: "unknown" },
+            { contract_id: "c1", waived_month: "2026-07-01", reason: null, revoked_at: null, waiver_kind: null },
+          ],
+        },
+      })
+    );
+    expect(m.concessions.entries.every((e) => !e.counted)).toBe(true);
+    expect(m.concessions.totals.all).toBe(0);
+    expect(m.concessions.totals.unbilledRent).toBe(100000);
   });
 
   it("skips revoked waivers entirely", () => {
@@ -283,7 +319,9 @@ describe("buildMoney: concessions", () => {
       input({
         concessions: {
           ...NO_CONCESSIONS,
-          rentWaivers: [{ contract_id: "c1", waived_month: "2026-08-01", reason: null, revoked_at: "2026-09-01T00:00:00Z" }],
+          rentWaivers: [
+            { contract_id: "c1", waived_month: "2026-08-01", reason: null, revoked_at: "2026-09-01T00:00:00Z", waiver_kind: "giveaway" },
+          ],
         },
       })
     );
@@ -339,21 +377,20 @@ describe("buildMoney: concessions", () => {
     expect(m.concessions.entries).toHaveLength(5);
   });
 
-  it("lists entries newest first and leaves unpriced ones out of the total", () => {
+  it("lists entries newest first and leaves ones that cannot be priced out of the total", () => {
     const m = buildMoney(
       input({
         concessions: {
           ...NO_CONCESSIONS,
           rentWaivers: [
-            { contract_id: "c1", waived_month: "2026-02-01", reason: null, revoked_at: null },
-            { contract_id: "zzz", waived_month: "2026-09-01", reason: null, revoked_at: null },
+            { contract_id: "c1", waived_month: "2026-02-01", reason: null, revoked_at: null, waiver_kind: "giveaway" },
+            { contract_id: "zzz", waived_month: "2026-09-01", reason: null, revoked_at: null, waiver_kind: "giveaway" },
           ],
         },
       })
     );
     expect(m.concessions.entries.map((e) => e.date)).toEqual(["2026-09-01", "2026-02-01"]);
     expect(m.concessions.entries[0].amount).toBeNull();
-    expect(m.concessions.totals.unbilledRent).toBe(50000);
-    expect(m.concessions.totals.all).toBe(0);
+    expect(m.concessions.totals.all).toBe(50000);
   });
 });

@@ -19,7 +19,7 @@ const STATEMENT_TYPE_LABELS: Record<string, string> = {
 };
 
 const CONCESSION_KIND_LABELS: Record<ConcessionKind, string> = {
-  rent_waiver: "Months not billed in the CRM",
+  rent_waiver: "Rent waived (given)",
   moratorium: "Skipped months",
   booking_waiver: "Booking waivers",
   refund: "Refunds",
@@ -171,7 +171,7 @@ export function MoneyPanel({ leadId }: { leadId: string }) {
           value={formatCurrency(concessions.totals.all)}
           hint={
             concessions.totals.unbilledRent > 0
-              ? `excludes ${formatCurrency(concessions.totals.unbilledRent)} of months not billed in the CRM`
+              ? `excludes ${formatCurrency(concessions.totals.unbilledRent)} of waived months not yet classified`
               : concessions.entries.length === 0
                 ? "None recorded"
                 : "estimated, see the ledger below"
@@ -323,12 +323,13 @@ export function MoneyPanel({ leadId }: { leadId: string }) {
               </div>
               {concessions.totals.unbilledRent > 0 && (
                 <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  About {formatCurrency(concessions.totals.unbilledRent)} of rent was not billed through the CRM. Some of
-                  those months may have been billed elsewhere, so they are listed but not counted as concessions.
+                  About {formatCurrency(concessions.totals.unbilledRent)} of waived rent has not been marked as given to the
+                  customer or billed outside the CRM. Some of those months may have been billed elsewhere, so they are
+                  listed but not counted as concessions until they are classified.
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
-                Skipped months and unbilled months are priced at the contract&apos;s rent for that month, so they are
+                Waived and skipped months are priced at the contract&apos;s rent for that month, so they are
                 estimates. Pending and reversed items are listed but not counted.
               </p>
             </>
