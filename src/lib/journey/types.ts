@@ -27,6 +27,8 @@ export interface JourneyStep {
    * in a phase whose steps are independent of each other (onboarding, billing).
    */
   actionable: boolean;
+  /** YYYY-MM-DD (IST) an open onboarding step is due: activation + 2 days. */
+  due?: string;
   /** A step done by a button in the panel itself rather than on another screen. */
   action?: "mark_welcome_done";
 }
@@ -83,6 +85,8 @@ export interface JourneyInput {
     signedDocumentId: string | null;
     stamped: boolean;
     activated: boolean;
+    /** ISO activation time; drives the onboarding due dates. */
+    activatedAt?: string | null;
     welcomeDone: boolean;
     kycTotal: number;
     kycOutstanding: number;
