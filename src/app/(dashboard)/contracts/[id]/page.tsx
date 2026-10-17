@@ -92,6 +92,10 @@ import {
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
+import { StartExitDialog } from "@/components/contracts/exit/start-exit-dialog";
+import { ExitCard } from "@/components/contracts/exit/exit-card";
+import { useExit } from "@/components/contracts/exit/use-exit";
+import { EXIT_START_ROLES } from "@/lib/contract-exit";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
 import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
@@ -123,6 +127,8 @@ export default function ContractDetailPage({
   const [savingPoNumber, setSavingPoNumber] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
+  const [startExitOpen, setStartExitOpen] = useState(false);
+  const { view: exitView, reload: reloadExit } = useExit(id);
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
@@ -1389,11 +1395,22 @@ export default function ContractDetailPage({
               Invoice wizard
             </Button>
           )}
-          {contract.status === "active" && ["admin", "manager"].includes(userRole ?? "") && (
-            <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
-              <XCircle className="mr-2 h-4 w-4" />
-              Terminate
-            </Button>
+          {/* Exit replaces one-click Terminate for live contracts: notice, inspection
+              and settlement happen on the exit page, and completing it terminates. */}
+          {["active", "renewal_in_progress"].includes(contract.status) && (EXIT_START_ROLES as readonly string[]).includes(userRole ?? "") && (
+            exitView ? (
+              <Button asChild variant="outline">
+                <Link href={`/contracts/${contract.id}/exit`}>
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Open exit
+                </Link>
+              </Button>
+            ) : (
+              <Button variant="destructive" onClick={() => setStartExitOpen(true)}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Start exit
+              </Button>
+            )
           )}
           {canWithdrawContract(contract, userRole) && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setTerminateOpen(true)}>
@@ -2272,6 +2289,8 @@ export default function ContractDetailPage({
             </Card>
           )}
 
+          <ExitCard contractId={contract.id} view={exitView} />
+
           {/* Contract Details Card */}
           <Card>
             <CardHeader>
@@ -2858,6 +2877,17 @@ export default function ContractDetailPage({
       </Dialog>
 
       {/* Terminate Dialog */}
+      <StartExitDialog
+        contractId={contract.id}
+        contractNumber={contract.contract_number}
+        endDate={contract.end_date ?? null}
+        lockInMonths={contract.lock_in_months}
+        noticePeriodMonths={contract.notice_period_months}
+        open={startExitOpen}
+        onOpenChange={setStartExitOpen}
+        onStarted={() => { reloadExit(); fetchContract(false); }}
+      />
+
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
         <DialogContent>
           <DialogHeader>
