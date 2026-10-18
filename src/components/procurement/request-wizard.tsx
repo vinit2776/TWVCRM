@@ -161,7 +161,7 @@ export function RequestWizard() {
             >
               <span>
                 <span className="font-medium">Same as last time</span>
-                <span className="text-muted-foreground"> · start a {PROCUREMENT_DEPARTMENT_LABELS[lastDepartment]} request</span>
+                <span className="text-muted-foreground"> · {PROCUREMENT_DEPARTMENT_LABELS[lastDepartment]} request</span>
               </span>
               <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden />
             </button>
