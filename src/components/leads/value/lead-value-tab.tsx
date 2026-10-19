@@ -8,6 +8,7 @@ import { JourneyPanel } from "@/components/leads/value/journey-panel";
 import { MoneyPanel } from "@/components/leads/value/money-panel";
 import { PerformancePanel } from "@/components/leads/value/performance-panel";
 import { SummaryPanel, type SummaryData } from "@/components/leads/value/summary-panel";
+import { WifiPanel } from "@/components/leads/value/wifi-panel";
 import { ValueHeader } from "@/components/leads/value/value-header";
 
 /**
@@ -59,6 +60,7 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="compare">Compare</TabsTrigger>
           <TabsTrigger value="electricity">Electricity</TabsTrigger>
+          <TabsTrigger value="wifi">Wi-Fi</TabsTrigger>
           <TabsTrigger value="journey">Journey</TabsTrigger>
           <TabsTrigger value="money">Money</TabsTrigger>
         </TabsList>
@@ -77,6 +79,10 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
 
         <TabsContent value="electricity" className="space-y-4">
           <ElectricityPanel leadId={leadId} />
+        </TabsContent>
+
+        <TabsContent value="wifi" className="space-y-4">
+          <WifiPanel leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="journey" className="space-y-4">
