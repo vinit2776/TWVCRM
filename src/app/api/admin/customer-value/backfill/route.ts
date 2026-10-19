@@ -13,15 +13,15 @@
  *    dispatching endpoint.
  *  - Admin only. Idempotent: re-running just recomputes the same rows.
  *
- * Body: { lead_id?, limit? (1-100, default 25), after?, dry_run? (default true) }
+ * Body: { lead_id?, limit? (1-100, default 25), after?, scores? (none|latest|history, default none),
+ *         dry_run? (default true) }
  * Response includes `next_after`: pass it back as `after` to continue.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { backfillBodySchema } from "@/lib/customer-value/snapshot-backfill-schema";
-import { refreshMonthlyRows } from "@/lib/customer-value/snapshot-refresh";
-import { fetchAllPages } from "@/lib/customer-value/query-helpers";
+import { listCustomerIds, refreshScores } from "@/lib/customer-value/scores-refresh";
 import { todayYmdIst } from "@/lib/customer-value/journey";
 
 export const maxDuration = 60;
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  const { lead_id, limit, after, dry_run } = parsed.data;
+  const { lead_id, limit, after, scores, dry_run } = parsed.data;
 
   try {
     // Which customers: the one asked for, or the next page of everyone with a contract.
@@ -61,22 +61,21 @@ export async function POST(request: NextRequest) {
     if (lead_id) {
       leadIds = [lead_id];
     } else {
-      const rows = await fetchAllPages<{ id: string; lead_id: string }>("contracts", (from, to) => {
-        let q = admin.from("contracts").select("id, lead_id").order("id");
-        if (after) q = q.gt("lead_id", after);
-        return q.range(from, to).returns<Array<{ id: string; lead_id: string }>>();
-      });
-      const all = [...new Set(rows.map((r) => r.lead_id))].sort();
+      const all = (await listCustomerIds(admin)).filter((id) => !after || id > after);
       leadIds = all.slice(0, limit);
       nextAfter = all.length > limit ? leadIds[leadIds.length - 1] : null;
     }
 
-    const result = await refreshMonthlyRows(admin, leadIds, todayYmdIst(), { write: !dry_run });
+    const result = await refreshScores(admin, todayYmdIst(), { write: !dry_run, scores, writeLeadIds: leadIds });
     return NextResponse.json({
       dry_run,
       wrote: result.wrote,
       requested: leadIds.length,
-      total_months: result.totalMonths,
+      scores,
+      total_months: result.monthlyRows,
+      score_rows: result.scoreRows,
+      settings_version: result.settingsVersion,
+      warnings: result.warnings,
       next_after: nextAfter,
       customers: result.summaries.map((s) => ({
         lead_id: s.leadId,

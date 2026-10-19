@@ -5,7 +5,7 @@ const UUID = "6377f789-da38-4354-9ee5-1bb2842a4558";
 
 describe("backfill body: fails safe", () => {
   it("treats an empty body as a dry run", () => {
-    expect(backfillBodySchema.parse({})).toEqual({ limit: 25, dry_run: true });
+    expect(backfillBodySchema.parse({})).toEqual({ limit: 25, scores: "none", dry_run: true });
   });
 
   it("stays a dry run when the body only chooses customers", () => {
@@ -51,5 +51,16 @@ describe("backfill body: other fields", () => {
     expect(backfillBodySchema.safeParse({ lead_id: "not-a-uuid" }).success).toBe(false);
     expect(backfillBodySchema.safeParse({ after: "123" }).success).toBe(false);
     expect(backfillBodySchema.safeParse({ lead_id: UUID }).success).toBe(true);
+  });
+});
+
+describe("backfill body: scores option", () => {
+  it("defaults to no scores and accepts only the three modes", () => {
+    expect(backfillBodySchema.parse({}).scores).toBe("none");
+    for (const m of ["none", "latest", "history"]) expect(backfillBodySchema.parse({ scores: m }).scores).toBe(m);
+    for (const bad of ["all", "HISTORY", true, 1, null]) expect(backfillBodySchema.safeParse({ scores: bad }).success).toBe(false);
+  });
+  it("never writes just because scores were asked for", () => {
+    expect(backfillBodySchema.parse({ scores: "history" }).dry_run).toBe(true);
   });
 });

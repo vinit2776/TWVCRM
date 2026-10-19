@@ -20,6 +20,8 @@ export const backfillBodySchema = z
     limit: z.number().int().min(1).max(100).default(25),
     /** Resume after this customer id (the `next_after` of the previous response). */
     after: z.string().uuid().optional(),
+    /** none = monthly figures only; latest = also today's score; history = also every month end. */
+    scores: z.enum(["none", "latest", "history"]).default("none"),
     dry_run: z.boolean().default(true),
   })
   .strict();
