@@ -23,14 +23,21 @@ describe("parseClientRows", () => {
     expect(rows[0].tx_bytes).toBe(0);
   });
 
-  it("merges a device reported twice in one hour into one row", () => {
+  it("merges a device reported twice for the same bucket into one row", () => {
     const rows = parseClientRows(LOC, [
       { user: "aa:bb:cc:dd:ee:01", time: T0, rx_bytes: 100, tx_bytes: 10 },
-      { user: "AA:BB:CC:DD:EE:01", time: T0 + 1000, rx_bytes: 50, tx_bytes: 5 },
+      { user: "AA:BB:CC:DD:EE:01", time: T0, rx_bytes: 50, tx_bytes: 5 },
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0].rx_bytes).toBe(150);
     expect(rows[0].tx_bytes).toBe(15);
+  });
+
+  it("keeps the bucket's real start time: the console's hours begin at :30 UTC (IST hours)", () => {
+    const real = Date.UTC(2026, 9, 19, 5, 30, 0); // 11:00 IST
+    const rows = parseClientRows(LOC, [{ user: "aa:bb:cc:dd:ee:01", time: real, rx_bytes: 9, tx_bytes: 1 }]);
+    expect(rows[0].hour_start).toBe("2026-10-19T05:30:00.000Z");
+    expect(parseSiteRows(LOC, [{ time: real, wlan_bytes: 9, num_sta: 1 }])[0].hour_start).toBe("2026-10-19T05:30:00.000Z");
   });
 
   it("returns nothing for a response that is not a list", () => {
