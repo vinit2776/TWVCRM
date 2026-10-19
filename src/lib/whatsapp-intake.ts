@@ -6,7 +6,8 @@ import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
-import { classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
+import { CUSTOMER_BOOKING_WINDOW_DAYS, classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
+import { COUNTED_BOOKING_STATUSES } from "@/lib/enquiry-progress";
 import { classifyWithAi } from "@/lib/whatsapp-triage-ai";
 
 const MAX_STORED_MESSAGES = 20;
@@ -111,12 +112,14 @@ export async function ingestInboundWhatsAppEnquiry(
   // What we already know about this sender.
   let leadStatus: string | null = null;
   let hasActiveContract = false;
+  let hasRecentBooking = false;
   let latest: LatestRow | null = null;
   let lastTouchAt: string | null = null;
   let displayName = input.profileName ?? "WhatsApp contact";
   if (input.matchedLeadId) {
     const id = input.matchedLeadId;
-    const [{ data: lead }, { count: activeCount }, { data: latestRow }] = await Promise.all([
+    const bookingSince = new Date(Date.now() - CUSTOMER_BOOKING_WINDOW_DAYS * 86_400_000).toISOString();
+    const [{ data: lead }, { count: activeCount }, { data: latestRow }, { count: bookingCount }] = await Promise.all([
       supabase.from("leads").select("status, first_name, last_name").eq("id", id).maybeSingle(),
       supabase.from("contracts").select("id", { count: "exact", head: true }).eq("lead_id", id).eq("status", "active"),
       supabase
@@ -127,7 +130,14 @@ export async function ingestInboundWhatsAppEnquiry(
         .order("received_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("bookings")
+        .select("id", { count: "exact", head: true })
+        .eq("lead_id", id)
+        .in("status", COUNTED_BOOKING_STATUSES)
+        .gte("created_at", bookingSince),
     ]);
+    hasRecentBooking = (bookingCount ?? 0) > 0;
     leadStatus = (lead?.status as string | undefined) ?? null;
     hasActiveContract = (activeCount ?? 0) > 0;
     latest = (latestRow as LatestRow | null) ?? null;
@@ -163,6 +173,7 @@ export async function ingestInboundWhatsAppEnquiry(
   const hasOpenEnquiry = !!latest && !latest.resolved_at && grouping === "join";
 
   const ctx: TriageContext = {
+    isCustomer: hasActiveContract || hasRecentBooking,
     hasActiveContract,
     leadStatus,
     hasReferral: !!input.referral,
