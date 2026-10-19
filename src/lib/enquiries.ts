@@ -66,6 +66,9 @@ export interface EnquiryItem {
   /** How far it has got, read from the lead's proposals and contracts. Absent on live
    *  notification items, which don't carry it. */
   stage?: { key: string; label: string } | null;
+  /** Set when the message could not be classified with confidence and a person should confirm
+   *  it is a real enquiry (or mark it as spam). Cleared once reviewed. */
+  needsReview?: { reason: string } | null;
 }
 
 export type RawEnquiryRow = {
@@ -79,6 +82,7 @@ export type RawEnquiryRow = {
     mobile?: string;
     description?: string;
     messages?: { at?: string; text?: string }[];
+    triage?: { kind?: string; reason?: string; source?: string; reviewed?: unknown } | null;
   } | null;
   received_at: string;
   claimed_by: string | null;
@@ -133,6 +137,10 @@ export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
     followUpAt: row.follow_up_at ?? null,
     message: row.payload?.messages?.[0]?.text?.trim() || row.payload?.description?.trim() || null,
     stage: row.stage ?? null,
+    needsReview:
+      row.payload?.triage?.kind === "unsure" && !row.payload.triage.reviewed
+        ? { reason: row.payload.triage.reason ?? "unclear message" }
+        : null,
   };
 }
 

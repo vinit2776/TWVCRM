@@ -6,9 +6,9 @@ import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
+import { classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
+import { classifyWithAi } from "@/lib/whatsapp-triage-ai";
 
-/** One open WhatsApp enquiry per number per window; later messages join it. */
-export const WHATSAPP_ENQUIRY_WINDOW_HOURS = 24;
 const MAX_STORED_MESSAGES = 20;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
 
@@ -69,13 +69,35 @@ export interface InboundWhatsAppEnquiry {
 }
 
 export interface IntakeResult {
-  leadId: string;
+  /** The lead the message belongs to; null when a message was dropped from the enquiry flow. */
+  leadId: string | null;
   reference: string | null;
-  outcome: "new_lead" | "re_enquiry" | "joined_open_enquiry";
+  kind: TriageKind;
+  outcome: "new_lead" | "re_enquiry" | "joined_open_enquiry" | "logged_only" | "spam_stashed";
 }
 
 interface StoredMessage { at: string; text: string }
 
+type LatestRow = {
+  id: string;
+  reference: string;
+  payload: { messages?: StoredMessage[] } | null;
+  received_at: string;
+  resolved_at: string | null;
+  resolution_outcome: string | null;
+  claimed_by: string | null;
+  next_step: string | null;
+};
+
+async function appendMessage(supabase: SupabaseClient, row: Pick<LatestRow, "id" | "payload">, message: StoredMessage) {
+  const payload = row.payload ?? {};
+  const messages = [...(payload.messages ?? []), message].slice(-MAX_STORED_MESSAGES);
+  await supabase.from("lead_enquiries").update({ payload: { ...payload, messages } }).eq("id", row.id);
+}
+
+/** Decides what an inbound WhatsApp message is (enquiry, customer, complaint, spam, ack, unclear)
+ *  and acts on it: a new enquiry, joining the live conversation, a log entry only, or a quiet
+ *  trip to the Spam section. Nothing is ever deleted: spam is a restorable enquiry. */
 export async function ingestInboundWhatsAppEnquiry(
   supabase: SupabaseClient,
   input: InboundWhatsAppEnquiry
@@ -83,69 +105,125 @@ export async function ingestInboundWhatsAppEnquiry(
   const num = normaliseWhatsAppNumber(input.senderNumber);
   if (!num) return null;
 
-  const now = new Date().toISOString();
-  const message: StoredMessage = { at: now, text: input.messageBody.slice(0, 1000) };
+  const now = new Date();
+  const message: StoredMessage = { at: now.toISOString(), text: input.messageBody.slice(0, 1000) };
 
-  if (input.matchedLeadId) {
-    const since = new Date(Date.now() - WHATSAPP_ENQUIRY_WINDOW_HOURS * 3_600_000).toISOString();
-    const { data: open } = await supabase
-      .from("lead_enquiries")
-      .select("id, reference, payload")
-      .eq("lead_id", input.matchedLeadId)
-      .eq("source", "whatsapp")
-      .is("resolved_at", null)
-      .gte("received_at", since)
-      .order("received_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (open) {
-      const payload = (open.payload ?? {}) as { messages?: StoredMessage[] };
-      const messages = [...(payload.messages ?? []), message].slice(-MAX_STORED_MESSAGES);
-      await supabase.from("lead_enquiries").update({ payload: { ...payload, messages } }).eq("id", open.id);
-      return { leadId: input.matchedLeadId, reference: open.reference as string, outcome: "joined_open_enquiry" };
-    }
-  }
-
-  let leadId = input.matchedLeadId;
+  // What we already know about this sender.
+  let leadStatus: string | null = null;
+  let hasActiveContract = false;
+  let latest: LatestRow | null = null;
+  let lastTouchAt: string | null = null;
   let displayName = input.profileName ?? "WhatsApp contact";
-  if (leadId) {
-    const { data: known } = await supabase.from("leads").select("first_name, last_name").eq("id", leadId).maybeSingle();
-    const full = `${known?.first_name ?? ""} ${known?.last_name === "-" ? "" : known?.last_name ?? ""}`.trim();
+  if (input.matchedLeadId) {
+    const id = input.matchedLeadId;
+    const [{ data: lead }, { count: activeCount }, { data: latestRow }] = await Promise.all([
+      supabase.from("leads").select("status, first_name, last_name").eq("id", id).maybeSingle(),
+      supabase.from("contracts").select("id", { count: "exact", head: true }).eq("lead_id", id).eq("status", "active"),
+      supabase
+        .from("lead_enquiries")
+        .select("id, reference, payload, received_at, resolved_at, resolution_outcome, claimed_by, next_step")
+        .eq("lead_id", id)
+        .eq("source", "whatsapp")
+        .order("received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    leadStatus = (lead?.status as string | undefined) ?? null;
+    hasActiveContract = (activeCount ?? 0) > 0;
+    latest = (latestRow as LatestRow | null) ?? null;
+    const full = `${lead?.first_name ?? ""} ${lead?.last_name === "-" ? "" : lead?.last_name ?? ""}`.trim();
     if (full) displayName = full;
+    if (latest) {
+      const { data: upd } = await supabase
+        .from("enquiry_updates")
+        .select("created_at")
+        .eq("enquiry_id", latest.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const times = [latest.received_at, ...(latest.payload?.messages ?? []).map((m) => m.at), upd?.created_at as string | undefined]
+        .filter((t): t is string => !!t)
+        .sort();
+      lastTouchAt = times.at(-1) ?? latest.received_at;
+    }
   }
 
-  if (!leadId) {
-    const { first, last } = splitName(input.profileName);
-    const { data: lead, error } = await supabase
-      .from("leads")
-      .insert({
-        first_name: first,
-        last_name: last,
-        mobile: num.mobile,
-        description: input.messageBody.slice(0, 1000) || null,
-        source: "whatsapp",
-        status: "new",
-        rating: "none",
-        score: 0,
-        tags: ["whatsapp-form"],
-      })
-      .select("id")
-      .single();
-    if (error || !lead) {
-      console.error("[whatsapp-intake] could not create lead:", error?.message);
-      return null;
-    }
-    leadId = lead.id as string;
-    void logAudit(supabase, {
-      entityType: "lead",
-      entityId: leadId,
-      action: "create",
-      performedBy: "system:whatsapp-inbound",
-    });
+  const grouping = decideGrouping(
+    latest && lastTouchAt
+      ? {
+          resolved_at: latest.resolved_at,
+          resolution_outcome: latest.resolution_outcome,
+          claimed: !!latest.claimed_by,
+          hasNextStep: !!latest.next_step,
+          last_touch_at: lastTouchAt,
+        }
+      : null,
+    now
+  );
+  const hasOpenEnquiry = !!latest && !latest.resolved_at && grouping === "join";
+
+  const ctx: TriageContext = {
+    hasActiveContract,
+    leadStatus,
+    hasReferral: !!input.referral,
+    knownSender: !!input.matchedLeadId,
+    hasOpenEnquiry,
+  };
+  let triage = classifyByRules(input.messageBody, input.messageType, ctx);
+  if (triage.kind === "unsure") triage = (await classifyWithAi(supabase, input.messageBody, ctx)) ?? triage;
+  // Never turn a real lead into junk on a wording guess: ask a person instead.
+  if (triage.kind === "spam" && input.matchedLeadId && leadStatus !== "junk" && leadStatus !== "new") {
+    triage = { kind: "unsure", reason: "looks like spam but the number belongs to a known lead", source: triage.source };
   }
+  const kind = triage.kind;
+
+  // Customers, complaints and bare acknowledgements are not enquiries.
+  if (kind === "customer" || kind === "complaint" || kind === "low_signal") {
+    if (kind === "low_signal" && hasOpenEnquiry && latest) {
+      await appendMessage(supabase, latest, message);
+      return { leadId: input.matchedLeadId, reference: latest.reference, kind, outcome: "joined_open_enquiry" };
+    }
+    if (kind === "complaint" && input.matchedLeadId) await flagComplaint(supabase, input.matchedLeadId, displayName);
+    return { leadId: input.matchedLeadId, reference: null, kind, outcome: "logged_only" };
+  }
+
+  // Spam is stashed, not discarded: a resolved "spam" enquiry the team can restore.
+  if (kind === "spam") {
+    if (latest?.resolution_outcome === "spam") {
+      await appendMessage(supabase, latest, message);
+      return { leadId: input.matchedLeadId, reference: latest.reference, kind, outcome: "spam_stashed" };
+    }
+    const leadId = input.matchedLeadId ?? (await createLead(supabase, input, num.mobile, "junk"));
+    if (!leadId) return null;
+    const { data: stashed } = await supabase
+      .from("lead_enquiries")
+      .insert({
+        lead_id: leadId,
+        source: "whatsapp",
+        is_re_enquiry: !!input.matchedLeadId,
+        resolved_at: now.toISOString(),
+        resolution_outcome: "spam",
+        payload: { name: displayName, mobile: num.mobile, messages: [message], triage: { kind, reason: triage.reason, source: triage.source } },
+      })
+      .select("reference")
+      .single();
+    return { leadId, reference: (stashed?.reference as string | undefined) ?? null, kind, outcome: "spam_stashed" };
+  }
+
+  // A real (or possibly real) enquiry: same conversation, or a new one?
+  if (grouping === "join" && latest) {
+    await appendMessage(supabase, latest, message);
+    return { leadId: input.matchedLeadId, reference: latest.reference, kind, outcome: "joined_open_enquiry" };
+  }
+  if (grouping === "customer_message") {
+    return { leadId: input.matchedLeadId, reference: null, kind, outcome: "logged_only" };
+  }
+
+  const leadId = input.matchedLeadId ?? (await createLead(supabase, input, num.mobile, "new"));
+  if (!leadId) return null;
 
   const isReEnquiry = !!input.matchedLeadId;
+  const needsReview = kind === "unsure";
   const payload: Record<string, unknown> = {
     name: displayName,
     mobile: num.mobile,
@@ -153,6 +231,7 @@ export async function ingestInboundWhatsAppEnquiry(
     message_type: input.messageType,
   };
   if (input.referral) payload.referral = input.referral;
+  if (needsReview) payload.triage = { kind, reason: triage.reason, source: triage.source };
 
   const { data: enquiry, error: enqErr } = await supabase
     .from("lead_enquiries")
@@ -163,19 +242,76 @@ export async function ingestInboundWhatsAppEnquiry(
   if (enqErr) console.error("[whatsapp-intake] could not record enquiry:", enqErr.message);
   const reference = (enquiry?.reference as string | undefined) ?? null;
 
-  await alertStaff(supabase, { leadId, reference, displayName, isReEnquiry, mobile: num.mobile, body: input.messageBody, referral: input.referral });
+  await alertStaff(supabase, {
+    leadId, reference, displayName, isReEnquiry, needsReview,
+    mobile: num.mobile, body: input.messageBody, referral: input.referral,
+  });
 
-  return { leadId, reference, outcome: isReEnquiry ? "re_enquiry" : "new_lead" };
+  return { leadId, reference, kind, outcome: isReEnquiry ? "re_enquiry" : "new_lead" };
+}
+
+async function createLead(
+  supabase: SupabaseClient,
+  input: InboundWhatsAppEnquiry,
+  mobile: string,
+  status: "new" | "junk"
+): Promise<string | null> {
+  const { first, last } = splitName(input.profileName);
+  const { data: lead, error } = await supabase
+    .from("leads")
+    .insert({
+      first_name: first,
+      last_name: last,
+      mobile,
+      description: input.messageBody.slice(0, 1000) || null,
+      source: "whatsapp",
+      status,
+      rating: "none",
+      score: 0,
+      tags: ["whatsapp-form"],
+    })
+    .select("id")
+    .single();
+  if (error || !lead) {
+    console.error("[whatsapp-intake] could not create lead:", error?.message);
+    return null;
+  }
+  void logAudit(supabase, {
+    entityType: "lead",
+    entityId: lead.id as string,
+    action: "create",
+    performedBy: "system:whatsapp-inbound",
+  });
+  return lead.id as string;
+}
+
+/** A customer with an active contract wrote something that sounds like a problem: no enquiry,
+ *  but the lead's timeline and the team's notifications should show it. */
+async function flagComplaint(supabase: SupabaseClient, leadId: string, name: string) {
+  await Promise.allSettled([
+    supabase.from("activities").insert({
+      lead_id: leadId,
+      type: "note",
+      subject: "WhatsApp: possible complaint or support request",
+      description: "Flagged automatically: an active customer wrote something that sounds like a problem. See the WhatsApp reply note.",
+    }),
+    sendPushToAll({
+      title: `Customer message: ${name}`,
+      body: "Possible complaint or support request on WhatsApp",
+      url: `${APP_URL}/leads/${leadId}`,
+      tag: `wa-complaint-${leadId}`,
+    }),
+  ]);
 }
 
 async function alertStaff(
   supabase: SupabaseClient,
   a: {
-    leadId: string; reference: string | null; displayName: string; isReEnquiry: boolean;
+    leadId: string; reference: string | null; displayName: string; isReEnquiry: boolean; needsReview?: boolean;
     mobile: string; body: string; referral?: InboundWhatsAppEnquiry["referral"];
   }
 ) {
-  const title = `${a.isReEnquiry ? "🔁 Re-Enquiry" : "🔔 New Enquiry"}${a.reference ? ` ${a.reference}` : ""} — ${a.displayName} via WhatsApp`;
+  const title = `${a.needsReview ? "❓ Please review" : a.isReEnquiry ? "🔁 Re-Enquiry" : "🔔 New Enquiry"}${a.reference ? ` ${a.reference}` : ""} — ${a.displayName} via WhatsApp`;
   const url = `${APP_URL}/leads/${a.leadId}`;
 
   const [{ data: staffRows }, { data: salesRows }] = await Promise.all([
