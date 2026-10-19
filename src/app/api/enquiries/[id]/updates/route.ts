@@ -38,7 +38,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { data: enquiry } = await supabase
     .from("lead_enquiries")
     .select(
-      "reference, source, lead_id, received_at, claimed_at, resolved_at, resolved_by, resolution_outcome, " +
+      "reference, source, lead_id, payload, received_at, claimed_at, resolved_at, resolved_by, resolution_outcome, " +
         "claimer:users!lead_enquiries_claimed_by_fkey(full_name), resolver:users!lead_enquiries_resolved_by_fkey(full_name)"
     )
     .eq("id", id)
@@ -53,6 +53,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
   // The long selects defeat supabase-js's type parsing, so give the rows their shape.
   const e = enquiry as unknown as {
+    payload: { triage?: { kind?: string; reason?: string; source?: string; reviewed?: { at?: string; decision?: string } } } | null;
     lead_id: string | null; received_at: string; claimed_at: string | null; resolved_at: string | null;
     resolved_by: string | null; resolution_outcome: EnquiryOutcome | null;
     claimer: { full_name: string } | null; resolver: { full_name: string } | null;
@@ -60,6 +61,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const events: { at: string; text: string; by: string | null; auto: boolean; nextStep?: string | null; followUpAt?: string | null }[] = [
     { at: e.received_at, text: "Enquiry received", by: null, auto: true },
   ];
+  const triage = e.payload?.triage;
+  if (triage?.kind === "spam") {
+    events.push({ at: e.received_at, text: `Flagged as spam automatically: ${triage.reason ?? "unclear"}`, by: null, auto: true });
+  } else if (triage?.kind === "unsure") {
+    events.push({ at: e.received_at, text: `Flagged for review: ${triage.reason ?? "unclear"}`, by: null, auto: true });
+    if (triage.reviewed?.at) events.push({ at: triage.reviewed.at, text: "Confirmed as an enquiry", by: null, auto: false });
+  }
   if (e.claimed_at) events.push({ at: e.claimed_at, text: "Taken on", by: e.claimer?.full_name ?? null, auto: false });
   for (const u of (updates ?? []) as unknown as Array<{
     kind: keyof typeof ENQUIRY_UPDATE_LABEL; note: string | null; next_step: string | null;

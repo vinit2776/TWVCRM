@@ -94,6 +94,8 @@ interface Props {
   claimedAt: string | null;
   claimerName: string | null;
   resolvedAt: string | null;
+  /** Set when automatic triage wasn't sure this is an enquiry; shows the two review buttons. */
+  needsReview?: { reason: string } | null;
   /** True when the enquiry is stashed as spam: shows Restore instead of the working actions. */
   isSpam?: boolean;
   nextStep: string | null;
@@ -104,7 +106,7 @@ interface Props {
 
 /** Claim / next step / resolve for one enquiry. Claim and resolve go through the shared
  *  notifications context so the header bell and the Leads tracker stay in step. */
-export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, isSpam = false, nextStep, followUpAt, onChanged }: Props) {
+export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, isSpam = false, needsReview = null, nextStep, followUpAt, onChanged }: Props) {
   const { claim, unclaim, resolve } = useEnquiryNotifications();
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<EnquiryUpdateKind | null>(null);
@@ -157,6 +159,17 @@ export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, 
     toast.success("Update saved");
     setOpen(false);
     if (showHistory) void loadHistory();
+    onChanged();
+  }
+
+  async function confirmEnquiry() {
+    const res = await fetch(`/api/enquiries/${enquiryId}/triage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "enquiry" }),
+    });
+    if (!res.ok) { toast.error("Could not confirm the enquiry"); return; }
+    toast.success("Confirmed as an enquiry");
     onChanged();
   }
 
@@ -242,6 +255,17 @@ export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, 
 
   return (
     <div>
+    {needsReview && (
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1">
+        <span className="text-[11px] text-amber-900" title={needsReview.reason}>Needs review: {needsReview.reason}</span>
+        <button onClick={confirmEnquiry} className="rounded-md border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100">
+          It&apos;s an enquiry
+        </button>
+        <button onClick={() => setSpam(true)} className="rounded-md border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100">
+          Not an enquiry
+        </button>
+      </div>
+    )}
     <div className="flex flex-wrap items-center gap-1.5">
       {claimedAt ? (
         <button

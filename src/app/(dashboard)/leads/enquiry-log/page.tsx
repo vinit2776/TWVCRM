@@ -266,6 +266,7 @@ export default function EnquiryLogPage() {
                             claimerName={row.claimerName}
                             resolvedAt={row.resolvedAt}
                             isSpam={row.resolutionOutcome === "spam"}
+                            needsReview={row.needsReview}
                             nextStep={row.nextStep}
                             followUpAt={row.followUpAt}
                             onChanged={load}
