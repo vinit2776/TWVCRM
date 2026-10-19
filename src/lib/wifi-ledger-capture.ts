@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { siteConfigFromLocation, unifiRequest, type SiteConfig } from "@/lib/unifi";
 
-// Scheduled capture of the UniFi console's hourly Wi-Fi usage into our own
-// ledger (wifi_client_hourly, wifi_site_hourly; migration 00625). The console
-// keeps hourly figures for about 7 days, so we copy them before they age out.
+// Scheduled capture of the UniFi console's Wi-Fi usage into our own ledger:
+// hourly (wifi_client_hourly, wifi_site_hourly; migration 00625; the console keeps
+// about 7 days) and daily (wifi_client_daily, wifi_site_daily; 00627; about 90
+// days), copied before they age out.
 //
 // Idempotent and self-healing: each run asks for everything since a little
 // before the last stored hour and upserts it, so a missed run is simply caught
@@ -13,6 +14,10 @@ import { siteConfigFromLocation, unifiRequest, type SiteConfig } from "@/lib/uni
 
 /** How far back the console keeps hourly figures; asking for more returns nothing extra. */
 export const CONSOLE_HOURLY_RETENTION_DAYS = 7;
+/** How far back the console keeps daily figures (about 90 days); a little over, so nothing near the edge is missed. */
+export const CONSOLE_DAILY_RETENTION_DAYS = 95;
+/** Re-read this many days before the last stored day, so the day that was in progress is completed. */
+const DAILY_OVERLAP_DAYS = 2;
 /** Re-read this far before the last stored hour, so the hour that was in progress is completed. */
 const OVERLAP_HOURS = 3;
 const HOUR_MS = 3_600_000;
@@ -93,9 +98,42 @@ export function captureWindowStart(lastStoredHour: string | null, now: Date): nu
   return Math.max(floor, new Date(lastStoredHour).getTime() - OVERLAP_HOURS * HOUR_MS);
 }
 
+export interface ClientDayRow {
+  location_id: string;
+  mac: string;
+  day_start: string;
+  rx_bytes: number;
+  tx_bytes: number;
+}
+
+export interface SiteDayRow {
+  location_id: string;
+  day_start: string;
+  wlan_bytes: number;
+  num_sta: number | null;
+}
+
+/** The daily report has the same shape as the hourly one; only the bucket is a day (it starts at IST midnight). */
+export function parseClientDayRows(locationId: string, raw: unknown): ClientDayRow[] {
+  return parseClientRows(locationId, raw).map(({ hour_start, ...r }) => ({ ...r, day_start: hour_start }));
+}
+
+export function parseSiteDayRows(locationId: string, raw: unknown): SiteDayRow[] {
+  return parseSiteRows(locationId, raw).map(({ hour_start, ...r }) => ({ ...r, day_start: hour_start }));
+}
+
+/** Where to start asking for daily figures: a couple of days before the last stored day, never before the console's own limit. */
+export function dailyWindowStart(lastStoredDay: string | null, now: Date): number {
+  const floor = now.getTime() - CONSOLE_DAILY_RETENTION_DAYS * DAY_MS;
+  if (!lastStoredDay) return floor;
+  return Math.max(floor, new Date(lastStoredDay).getTime() - DAILY_OVERLAP_DAYS * DAY_MS);
+}
+
 export interface LocationWifiCapture {
   clientRows: number;
   siteRows: number;
+  clientDayRows: number;
+  siteDayRows: number;
   /** Newest hour now stored for the site, or null when nothing came back. */
   through: string | null;
 }
@@ -133,8 +171,28 @@ export async function captureLocationWifi(
   await upsertChunks(supabase, "wifi_client_hourly", clients, "location_id,mac,hour_start");
   await upsertChunks(supabase, "wifi_site_hourly", site, "location_id,hour_start");
 
+  // Daily figures go second: if the console refuses them, the hourly rows above are already safe.
+  const { data: lastDay, error: lastDayErr } = await supabase
+    .from("wifi_site_daily")
+    .select("day_start")
+    .eq("location_id", locationId)
+    .order("day_start", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lastDayErr) throw new Error(`ledger read failed: ${lastDayErr.message}`);
+  const dayStart = dailyWindowStart((lastDay?.day_start as string | undefined) ?? null, now);
+  const dayBody = (attrs: string[]) => JSON.stringify({ attrs, start: dayStart, end: now.getTime() });
+  const [clientDayRaw, siteDayRaw] = await Promise.all([
+    unifiRequest<unknown>("/stat/report/daily.user", { method: "POST", body: dayBody(["rx_bytes", "tx_bytes", "time"]) }, cfg),
+    unifiRequest<unknown>("/stat/report/daily.site", { method: "POST", body: dayBody(["wlan_bytes", "num_sta", "time"]) }, cfg),
+  ]);
+  const clientDays = parseClientDayRows(locationId, clientDayRaw);
+  const siteDays = parseSiteDayRows(locationId, siteDayRaw);
+  await upsertChunks(supabase, "wifi_client_daily", clientDays, "location_id,mac,day_start");
+  await upsertChunks(supabase, "wifi_site_daily", siteDays, "location_id,day_start");
+
   const through = site.reduce<string | null>((m, r) => (m === null || r.hour_start > m ? r.hour_start : m), null);
-  return { clientRows: clients.length, siteRows: site.length, through };
+  return { clientRows: clients.length, siteRows: site.length, clientDayRows: clientDays.length, siteDayRows: siteDays.length, through };
 }
 
 export interface LocationWifiSummary {
@@ -142,6 +200,8 @@ export interface LocationWifiSummary {
   status: "ok" | "error";
   client_rows: number;
   site_rows: number;
+  client_day_rows: number;
+  site_day_rows: number;
   /** Plain classification only: never the console's own text, which can carry its internal addresses. */
   error_kind?: "console" | "write" | "internal";
 }
@@ -173,7 +233,7 @@ export async function captureAllWifi(
     if (Date.now() - started > budgetMs) { skipped++; continue; }
     try {
       const r = await captureLocationWifi(supabase, { locationId: loc.id, cfg: siteConfigFromLocation(loc), now });
-      locations.push({ location_id: loc.id, status: "ok", client_rows: r.clientRows, site_rows: r.siteRows });
+      locations.push({ location_id: loc.id, status: "ok", client_rows: r.clientRows, site_rows: r.siteRows, client_day_rows: r.clientDayRows, site_day_rows: r.siteDayRows });
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       locations.push({
@@ -181,6 +241,8 @@ export async function captureAllWifi(
         status: "error",
         client_rows: 0,
         site_rows: 0,
+        client_day_rows: 0,
+        site_day_rows: 0,
         error_kind: message.startsWith("[unifi]") ? "console" : message.includes("write failed") ? "write" : "internal",
       });
     }
