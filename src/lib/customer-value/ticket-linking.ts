@@ -7,6 +7,8 @@
  * customer is left unlinked and shows up in the coverage figure, instead of
  * being guessed onto someone and counted against them.
  *
+ *   0. Explicitly: whoever logged the ticket chose the customer's contract
+ *      (facility_issues.contract_id). The strongest evidence there is.
  *   1. By space: the ticket names a space unit that exactly one customer held
  *      on the day it was reported.
  *   2. By reporter: the reporter's email or phone belongs to a member of exactly
@@ -22,18 +24,22 @@ export interface LinkableTicket {
   /** ISO timestamp. */
   reported_at: string;
   space_unit_id: string | null;
+  /** The contract chosen when the ticket was logged, if any. */
+  contract_id?: string | null;
   reporter_email: string | null;
   reporter_phone: string | null;
 }
 
 export interface TicketDirectory {
+  /** Contract to customer, so an explicit choice can be resolved. */
+  contracts?: Array<{ id: string; lead_id: string }>;
   /** Customers' dated claims on space units. `end_date` null means still held. */
   allocations: Array<{ lead_id: string; space_unit_id: string; start_date: string; end_date: string | null }>;
   /** People enrolled under each customer's contracts. */
   members: Array<{ lead_id: string; email: string | null; phone: string | null }>;
 }
 
-export type TicketLinkVia = "allocation" | "reporter";
+export type TicketLinkVia = "contract" | "allocation" | "reporter";
 
 export interface TicketLink {
   leadId: string | null;
@@ -85,8 +91,15 @@ export function linkTickets(tickets: LinkableTicket[], dir: TicketDirectory): Ma
     allocationsByUnit.set(a.space_unit_id, list);
   }
 
+  const leadOfContract = new Map((dir.contracts ?? []).map((c) => [c.id, c.lead_id]));
+
   const result = new Map<string, TicketLink>();
   for (const t of tickets) {
+    const chosen = t.contract_id ? leadOfContract.get(t.contract_id) : undefined;
+    if (chosen) {
+      result.set(t.id, { leadId: chosen, via: "contract" });
+      continue;
+    }
     const reportedOn = istDate(t.reported_at);
 
     let holders: Set<string> | null = null;

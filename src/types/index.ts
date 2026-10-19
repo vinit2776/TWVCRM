@@ -1119,6 +1119,7 @@ export interface BillingStatement {
 // ==========================================
 export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "rollback";
 export type AuditEntityType =
+  | "value_cost_parameter"
   | "lead"
   | "activity"
   | "task"
@@ -3576,6 +3577,8 @@ export interface FacilityIssue {
   reporter_name?: string | null;
   reporter_email?: string | null;
   reporter_phone?: string | null;
+  /** The customer's contract this ticket is about, when one was chosen (migration 00621). */
+  contract_id?: string | null;
   reported_via: FacilityReportedVia;
   linked_feedback_id?: string | null;
   task_type: FacilityTaskType;

@@ -27,6 +27,8 @@ const CRON_THRESHOLDS: Record<string, number> = {
   "cron/messaging-health":        3,
   // hourly at :07 — 3h tolerates one missed run plus a OneGrid blip
   "cron/energy-ledger-capture":   3 * HOUR,
+  // hourly at :17 — the console keeps hourly Wi-Fi figures ~7 days, so 3h is far inside what can be lost
+  "cron/wifi-ledger-capture":     3 * HOUR,
   "cron/comp-request-expiry":     3 * HOUR,
   // every 6h
   "cron/facility-sla-check":      8,
