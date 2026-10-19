@@ -187,6 +187,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
+| Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |

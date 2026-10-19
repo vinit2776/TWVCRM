@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import { loadLeadFacts } from "@/lib/enquiry-progress-load";
 import { ENQUIRY_UPDATE_KINDS, ENQUIRY_UPDATE_LABEL, enquiryOutcomeLabel, type EnquiryOutcome } from "@/lib/enquiries";
 
 const bodySchema = z.object({
@@ -37,7 +38,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { data: enquiry } = await supabase
     .from("lead_enquiries")
     .select(
-      "reference, source, received_at, claimed_at, resolved_at, resolution_outcome, " +
+      "reference, source, lead_id, received_at, claimed_at, resolved_at, resolved_by, resolution_outcome, " +
         "claimer:users!lead_enquiries_claimed_by_fkey(full_name), resolver:users!lead_enquiries_resolved_by_fkey(full_name)"
     )
     .eq("id", id)
@@ -52,8 +53,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
   // The long selects defeat supabase-js's type parsing, so give the rows their shape.
   const e = enquiry as unknown as {
-    received_at: string; claimed_at: string | null; resolved_at: string | null;
-    resolution_outcome: EnquiryOutcome | null;
+    lead_id: string | null; received_at: string; claimed_at: string | null; resolved_at: string | null;
+    resolved_by: string | null; resolution_outcome: EnquiryOutcome | null;
     claimer: { full_name: string } | null; resolver: { full_name: string } | null;
   };
   const events: { at: string; text: string; by: string | null; auto: boolean; nextStep?: string | null; followUpAt?: string | null }[] = [
@@ -73,12 +74,27 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       followUpAt: u.follow_up_at,
     });
   }
+  // Proposals and contracts that belong to this enquiry, read from their own records.
+  if (e.lead_id) {
+    try {
+      const facts = (await loadLeadFacts(await createAdminClient(), [e.lead_id])).get(e.lead_id);
+      const milestones = facts?.progress.get(id)?.milestones ?? [];
+      for (const m of milestones) {
+        events.push({ at: m.at, text: `${m.label}${m.ref ? ` (${m.ref})` : ""}`, by: null, auto: true });
+      }
+    } catch (err) {
+      console.error("[enquiry timeline] progress lookup failed:", err instanceof Error ? err.message : "unknown");
+    }
+  }
   if (e.resolved_at && e.resolution_outcome) {
+    // No resolver means the system resolved it (a contract went active, the lead was lost, or
+    // it went quiet), as does the 00584 backfill's "superseded".
+    const bySystem = !e.resolved_by;
     events.push({
       at: e.resolved_at,
-      text: `Resolved: ${enquiryOutcomeLabel(e.resolution_outcome)}`,
-      by: e.resolution_outcome === "superseded" ? null : (e.resolver?.full_name ?? null),
-      auto: e.resolution_outcome === "superseded",
+      text: `Resolved: ${enquiryOutcomeLabel(e.resolution_outcome)}${bySystem && e.resolution_outcome !== "superseded" ? " (automatically)" : ""}`,
+      by: bySystem ? null : (e.resolver?.full_name ?? null),
+      auto: bySystem,
     });
   }
   events.sort((a, b) => a.at.localeCompare(b.at));

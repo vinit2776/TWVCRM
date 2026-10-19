@@ -40,6 +40,30 @@ const OUTCOMES: { value: ResolutionOutcome; label: string; dot: string }[] = [
   { value: "no_response", label: "Followed up — no response", dot: "bg-amber-500" },
 ];
 
+const STAGE_TONE: Record<string, string> = {
+  new: "bg-slate-100 text-slate-700",
+  contacted: "bg-blue-100 text-blue-800",
+  proposal_sent: "bg-indigo-100 text-indigo-800",
+  deposit_paid: "bg-violet-100 text-violet-800",
+  contract_sent: "bg-amber-100 text-amber-800",
+  contract_signed: "bg-teal-100 text-teal-800",
+  active: "bg-emerald-100 text-emerald-800",
+};
+
+/** How far the enquiry has got, read from the lead's proposals and contracts (nobody types
+ *  this). Renders nothing when the stage isn't known. */
+export function StageChip({ stage }: { stage?: { key: string; label: string } | null }) {
+  if (!stage) return null;
+  return (
+    <span
+      title="Worked out from this lead's proposals and contracts"
+      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${STAGE_TONE[stage.key] ?? STAGE_TONE.new}`}
+    >
+      {stage.label}
+    </span>
+  );
+}
+
 /** What happens next on an enquiry, and when. Renders nothing when neither is set. */
 export function NextStepLine({ nextStep, followUpAt }: { nextStep: string | null; followUpAt: string | null }) {
   if (!nextStep) return null;

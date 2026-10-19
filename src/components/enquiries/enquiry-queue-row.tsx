@@ -11,7 +11,7 @@ import {
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryOutcome } from "@/lib/enquiries";
-import { NextStepLine } from "@/components/enquiries/enquiry-actions";
+import { NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
 
 const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
@@ -145,8 +145,9 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         </p>
       )}
 
-      {!isResolved && item.nextStep && (
-        <div className="mt-1.5">
+      {!isResolved && (item.nextStep || (item.stage && item.stage.key !== "new" && item.stage.key !== "contacted")) && (
+        <div className="mt-1.5 space-y-1">
+          {item.stage && item.stage.key !== "new" && item.stage.key !== "contacted" && <StageChip stage={item.stage} />}
           <NextStepLine nextStep={item.nextStep} followUpAt={item.followUpAt} />
         </div>
       )}
