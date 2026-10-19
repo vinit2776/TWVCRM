@@ -148,3 +148,42 @@ describe("ticketLinkCoverage", () => {
     expect(ticketLinkCoverage(new Map())).toBeNull();
   });
 });
+
+describe("linkTickets: explicit customer", () => {
+  const withContracts: TicketDirectory = {
+    ...DIR,
+    contracts: [
+      { id: "c-acme", lead_id: "acme" },
+      { id: "c-bolt", lead_id: "bolt" },
+    ],
+  };
+
+  it("uses the contract chosen when the ticket was logged", () => {
+    expect(via(ticket("t", { contract_id: "c-bolt" }), withContracts)).toEqual({ leadId: "bolt", via: "contract" });
+  });
+
+  it("outranks the space and the reporter when they disagree", () => {
+    // The unit belongs to acme and the reporter is bolt's member, but the logger chose acme's contract.
+    const t = ticket("t", { contract_id: "c-acme", space_unit_id: "unit-3", reporter_email: "dev@bolt.example" });
+    expect(via(t, withContracts)).toEqual({ leadId: "acme", via: "contract" });
+  });
+
+  it("settles a unit two customers share, which was otherwise unlinked", () => {
+    expect(via(ticket("t", { space_unit_id: "unit-3" }), withContracts)).toEqual({ leadId: null, via: null });
+    expect(via(ticket("t", { space_unit_id: "unit-3", contract_id: "c-bolt" }), withContracts)).toEqual({ leadId: "bolt", via: "contract" });
+  });
+
+  it("falls back to the other rules when the contract is not in the directory", () => {
+    expect(via(ticket("t", { contract_id: "unknown", space_unit_id: "unit-1" }), withContracts)).toEqual({ leadId: "acme", via: "allocation" });
+  });
+
+  it("ignores a contract id when the directory has no contracts at all", () => {
+    expect(via(ticket("t", { contract_id: "c-acme" }))).toEqual({ leadId: null, via: null });
+  });
+
+  it("counts explicitly chosen tickets in the coverage figure", () => {
+    const links = linkTickets([ticket("a", { contract_id: "c-acme" }), ticket("b")], withContracts);
+    expect(ticketLinkCoverage(links)).toBe(0.5);
+  });
+});
+

@@ -130,6 +130,9 @@ export function assembleCustomers(data: FetchedSnapshotData, leadIds: string[]):
       data.directoryContracts.filter((c) => c.location_id === locationId).map((c) => c.id)
     );
     const directory: TicketDirectory = {
+      contracts: data.directoryContracts
+        .filter((c) => contractIds.has(c.id))
+        .map((c) => ({ id: c.id, lead_id: c.lead_id })),
       allocations: data.allocations
         .filter((a) => contractIds.has(a.contract_id) && contractLead.has(a.contract_id))
         .map((a) => ({

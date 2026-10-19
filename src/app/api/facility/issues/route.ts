@@ -11,6 +11,7 @@ import {
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import { classify } from "@/lib/facility-classifier";
+import { checkTicketContract } from "@/lib/facility/ticket-customer";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia, FacilityTaskType } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -119,6 +120,7 @@ export async function POST(request: NextRequest) {
     scope,
     category_id,
     location_id, floor_id, space_unit_id, asset_id,
+    contract_id,           // optional: the customer (contract) this ticket is about
     title, description,
     priority = "medium",
     reported_via = "walk_in",
@@ -148,6 +150,26 @@ export async function POST(request: NextRequest) {
   }
   if (manualTatHours != null && manualTatHours !== "" && (!isFinite(Number(manualTatHours)) || Number(manualTatHours) <= 0)) {
     return NextResponse.json({ error: "tat_hours must be a positive number" }, { status: 400 });
+  }
+
+  // Optional customer link. Only for reported problems (a delegated task is
+  // internal work), and only a live contract at this ticket's own center.
+  let ticketContractId: string | null = null;
+  if (contract_id !== undefined && contract_id !== null && contract_id !== "") {
+    if (task_type !== "reported_problem") {
+      return NextResponse.json({ error: "A customer can only be set on a reported problem" }, { status: 400 });
+    }
+    if (typeof contract_id !== "string" || !/^[0-9a-f-]{36}$/i.test(contract_id)) {
+      return NextResponse.json({ error: "Invalid customer" }, { status: 400 });
+    }
+    const { data: linked } = await supabase
+      .from("contracts")
+      .select("id, status, location_id")
+      .eq("id", contract_id)
+      .maybeSingle();
+    const check = checkTicketContract(linked, location_id);
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: 400 });
+    ticketContractId = contract_id;
   }
 
   // Delegated tasks: required assignee + TAT, validated before any DB writes.
@@ -315,6 +337,10 @@ export async function POST(request: NextRequest) {
       floor_id: floor_id || null,
       space_unit_id: space_unit_id || null,
       asset_id: asset_id || null,
+      // Only written when a customer was chosen, so a ticket without one never
+      // touches the column (keeps ticket creation working if this deploys before
+      // migration 00621 is applied).
+      ...(ticketContractId ? { contract_id: ticketContractId } : {}),
       title: title.trim(),
       description: description || null,
       priority,
