@@ -1,3 +1,5 @@
+import { isPlaceholderName } from "@/lib/whatsapp-names";
+
 // Shared shape of a public-form enquiry (a `lead_enquiries` row joined to its lead and the
 // people who claimed / resolved it). Used by the live-notification hook, the Enquiry Log API
 // and the Leads-page tracker so they all read the same fields.
@@ -69,6 +71,10 @@ export interface EnquiryItem {
   /** Set when the message could not be classified with confidence and a person should confirm
    *  it is a real enquiry (or mark it as spam). Cleared once reviewed. */
   needsReview?: { reason: string } | null;
+  /** True while the lead is still called "WhatsApp contact". */
+  namePlaceholder?: boolean;
+  /** A name the customer gave in their own message, offered for one-tap use. */
+  suggestedName?: string | null;
 }
 
 export type RawEnquiryRow = {
@@ -82,6 +88,7 @@ export type RawEnquiryRow = {
     mobile?: string;
     description?: string;
     messages?: { at?: string; text?: string }[];
+    suggested_name?: string;
     triage?: { kind?: string; reason?: string; source?: string; reviewed?: unknown } | null;
   } | null;
   received_at: string;
@@ -137,6 +144,8 @@ export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
     followUpAt: row.follow_up_at ?? null,
     message: row.payload?.messages?.[0]?.text?.trim() || row.payload?.description?.trim() || null,
     stage: row.stage ?? null,
+    namePlaceholder: isPlaceholderName(row.lead?.first_name),
+    suggestedName: row.payload?.suggested_name ?? null,
     needsReview:
       row.payload?.triage?.kind === "unsure" && !row.payload.triage.reviewed
         ? { reason: row.payload.triage.reason ?? "unclear message" }

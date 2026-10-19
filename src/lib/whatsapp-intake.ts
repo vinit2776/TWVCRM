@@ -9,6 +9,7 @@ import { logAudit } from "@/lib/audit";
 import { classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
 import { classifyWithAi } from "@/lib/whatsapp-triage-ai";
 import { appendToOpenComplaint, recordComplaint } from "@/lib/complaints-server";
+import { PLACEHOLDER_NAME, extractNameFromMessage, isPlaceholderName } from "@/lib/whatsapp-names";
 
 const MAX_STORED_MESSAGES = 20;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
@@ -21,17 +22,6 @@ export function normaliseWhatsAppNumber(raw: string): { mobile: string; last10: 
   const last10 = digits.slice(-10);
   const indian = digits.length === 10 || (digits.length === 12 && digits.startsWith("91"));
   return { mobile: indian ? last10 : digits, last10 };
-}
-
-/** MSG91 may carry the WhatsApp profile name under one of several keys depending on the
- *  webhook template; none is guaranteed. Returns null when absent. */
-export function pickProfileName(event: Record<string, unknown>): string | null {
-  const keys = ["profileName", "profile_name", "customerName", "contactName", "senderName"];
-  for (const k of keys) {
-    const v = event[k];
-    if (typeof v === "string" && v.trim() && v.trim() !== "[object Object]") return v.trim().slice(0, 80);
-  }
-  return null;
 }
 
 const OUTBOUND_DIRECTION = /^(out|outbound|outgoing|sent)$/i;
@@ -55,7 +45,7 @@ export function isInboundEvent(
 }
 
 export function splitName(name: string | null): { first: string; last: string } {
-  if (!name) return { first: "WhatsApp contact", last: "-" };
+  if (!name) return { first: PLACEHOLDER_NAME, last: "-" };
   const parts = name.split(/\s+/);
   return { first: parts[0], last: parts.length > 1 ? parts.slice(1).join(" ") : "-" };
 }
@@ -66,6 +56,8 @@ export interface InboundWhatsAppEnquiry {
   messageBody: string;
   messageType: string;
   profileName: string | null;
+  /** Name of the matched additional contact, when the number belongs to one rather than the lead. */
+  matchedContactName?: string | null;
   referral?: { sourceType?: string; sourceUrl?: string; headline?: string };
 }
 
@@ -82,7 +74,7 @@ interface StoredMessage { at: string; text: string }
 type LatestRow = {
   id: string;
   reference: string;
-  payload: { messages?: StoredMessage[] } | null;
+  payload: { messages?: StoredMessage[]; suggested_name?: string } | null;
   received_at: string;
   resolved_at: string | null;
   resolution_outcome: string | null;
@@ -90,10 +82,15 @@ type LatestRow = {
   next_step: string | null;
 };
 
-async function appendMessage(supabase: SupabaseClient, row: Pick<LatestRow, "id" | "payload">, message: StoredMessage) {
+async function appendMessage(
+  supabase: SupabaseClient,
+  row: Pick<LatestRow, "id" | "payload">,
+  message: StoredMessage,
+  extra: Record<string, unknown> = {}
+) {
   const payload = row.payload ?? {};
   const messages = [...(payload.messages ?? []), message].slice(-MAX_STORED_MESSAGES);
-  await supabase.from("lead_enquiries").update({ payload: { ...payload, messages } }).eq("id", row.id);
+  await supabase.from("lead_enquiries").update({ payload: { ...payload, ...extra, messages } }).eq("id", row.id);
 }
 
 /** Decides what an inbound WhatsApp message is (enquiry, customer, complaint, spam, ack, unclear)
@@ -114,7 +111,8 @@ export async function ingestInboundWhatsAppEnquiry(
   let hasActiveContract = false;
   let latest: LatestRow | null = null;
   let lastTouchAt: string | null = null;
-  let displayName = input.profileName ?? "WhatsApp contact";
+  let displayName = input.profileName ?? input.matchedContactName ?? PLACEHOLDER_NAME;
+  let leadNeedsName = false;
   if (input.matchedLeadId) {
     const id = input.matchedLeadId;
     const [{ data: lead }, { count: activeCount }, { data: latestRow }] = await Promise.all([
@@ -133,7 +131,14 @@ export async function ingestInboundWhatsAppEnquiry(
     hasActiveContract = (activeCount ?? 0) > 0;
     latest = (latestRow as LatestRow | null) ?? null;
     const full = `${lead?.first_name ?? ""} ${lead?.last_name === "-" ? "" : lead?.last_name ?? ""}`.trim();
-    if (full) displayName = full;
+    leadNeedsName = isPlaceholderName(lead?.first_name as string | undefined);
+    // WhatsApp now tells us who they are and the lead is still "WhatsApp contact": fill it in.
+    if (leadNeedsName && input.profileName) {
+      const { first, last } = splitName(input.profileName);
+      await supabase.from("leads").update({ first_name: first, last_name: last }).eq("id", id);
+      leadNeedsName = false;
+      displayName = input.profileName;
+    } else if (full && !leadNeedsName) displayName = full;
     if (latest) {
       const { data: upd } = await supabase
         .from("enquiry_updates")
@@ -223,7 +228,11 @@ export async function ingestInboundWhatsAppEnquiry(
 
   // A real (or possibly real) enquiry: same conversation, or a new one?
   if (grouping === "join" && latest) {
-    await appendMessage(supabase, latest, message);
+    // They may introduce themselves in a later message ("by the way, I'm Rahul").
+    const name = leadNeedsName && !input.profileName && !(latest.payload as { suggested_name?: string } | null)?.suggested_name
+      ? extractNameFromMessage(input.messageBody)
+      : null;
+    await appendMessage(supabase, latest, message, name ? { suggested_name: name } : {});
     return { leadId: input.matchedLeadId, reference: latest.reference, kind, outcome: "joined_open_enquiry" };
   }
   if (grouping === "customer_message") {
@@ -235,12 +244,16 @@ export async function ingestInboundWhatsAppEnquiry(
 
   const isReEnquiry = !!input.matchedLeadId;
   const needsReview = kind === "unsure";
+  // A name the customer gave in their own words, offered as a one-tap suggestion for a lead that
+  // is still unnamed. Never applied on its own.
+  const suggestedName = !input.profileName && (!input.matchedLeadId || leadNeedsName) ? extractNameFromMessage(input.messageBody) : null;
   const payload: Record<string, unknown> = {
     name: displayName,
     mobile: num.mobile,
     messages: [message],
     message_type: input.messageType,
   };
+  if (suggestedName) payload.suggested_name = suggestedName;
   if (input.referral) payload.referral = input.referral;
   if (needsReview) payload.triage = { kind, reason: triage.reason, source: triage.source };
 

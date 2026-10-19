@@ -15,6 +15,7 @@ import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
+import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -220,6 +221,17 @@ export default function EnquiryLogPage() {
                         <Link href={`/leads/${row.leadId}`} className="font-medium hover:underline">
                           {row.name}
                         </Link>
+                      )}
+                      {!readOnly && (
+                        <span className="ml-1.5 align-middle">
+                          <EnquiryNameControl
+                            enquiryId={row.enquiryId}
+                            name={row.name}
+                            placeholder={row.namePlaceholder}
+                            suggestedName={row.suggestedName}
+                            onChanged={load}
+                          />
+                        </span>
                       )}
                       {row.isReEnquiry && (
                         <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
