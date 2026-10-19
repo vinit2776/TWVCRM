@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ComplaintReplyBox, type ComplaintReply } from "@/components/facility/complaint-reply-box";
 import { SCOPE_LABEL, STATUS_STYLES, timeAgo } from "@/lib/facility-ui";
 import {
   COMPLAINT_OUTCOME_LABEL,
@@ -38,7 +39,10 @@ export interface Complaint {
   contract: { id: string; contract_number: string; location_id: string | null; location: { id: string; name: string } | null } | null;
   issue: { id: string; issue_number: string; status: FacilityIssueStatus; assignee: { full_name: string } | null } | null;
   assessor: { full_name: string } | null;
+  replies?: ComplaintReply[];
 }
+
+export type TemplateStatus = { received: boolean; update: boolean; resolved: boolean };
 
 const SELECT_CLASS = "h-9 w-full rounded-md border bg-background px-2 text-sm";
 const STATUS_TONE: Record<ComplaintStatus, string> = {
@@ -52,13 +56,18 @@ const STATUS_TONE: Record<ComplaintStatus, string> = {
 export function ComplaintsQueue({ onChanged }: { onChanged?: () => void }) {
   const [view, setView] = useState<"open" | "done">("open");
   const [rows, setRows] = useState<Complaint[]>([]);
+  const [templates, setTemplates] = useState<TemplateStatus>({ received: false, update: false, resolved: false });
   const [loading, setLoading] = useState(true);
   const [assessing, setAssessing] = useState<Complaint | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/complaints?view=${view}`);
-    if (res.ok) setRows(((await res.json()).data ?? []) as Complaint[]);
+    if (res.ok) {
+      const json = await res.json();
+      setRows((json.data ?? []) as Complaint[]);
+      if (json.templates) setTemplates(json.templates as TemplateStatus);
+    }
     setLoading(false);
   }, [view]);
 
@@ -91,7 +100,7 @@ export function ComplaintsQueue({ onChanged }: { onChanged?: () => void }) {
       ) : (
         <div className="grid gap-2">
           {rows.map((c) => (
-            <ComplaintCard key={c.id} c={c} onAssess={() => setAssessing(c)} />
+            <ComplaintCard key={c.id} c={c} templates={templates} onAssess={() => setAssessing(c)} onChanged={() => void load()} />
           ))}
         </div>
       )}
@@ -99,6 +108,7 @@ export function ComplaintsQueue({ onChanged }: { onChanged?: () => void }) {
       {assessing && (
         <AssessDialog
           complaint={assessing}
+          templates={templates}
           onClose={() => setAssessing(null)}
           onDone={() => {
             setAssessing(null);
@@ -111,7 +121,7 @@ export function ComplaintsQueue({ onChanged }: { onChanged?: () => void }) {
   );
 }
 
-function ComplaintCard({ c, onAssess }: { c: Complaint; onAssess: () => void }) {
+function ComplaintCard({ c, templates, onAssess, onChanged }: { c: Complaint; templates: TemplateStatus; onAssess: () => void; onChanged: () => void }) {
   const canAssess = c.status === "new" || c.status === "needs_info";
   return (
     <div className="rounded-lg border bg-background px-3 py-2.5">
@@ -160,6 +170,15 @@ function ComplaintCard({ c, onAssess }: { c: Complaint; onAssess: () => void }) 
           </Button>
         )}
       </div>
+      {(c.status === "needs_info" || c.status === "qualified" || (c.replies?.length ?? 0) > 0) && (
+        <ComplaintReplyBox
+          complaintId={c.id}
+          replies={c.replies ?? []}
+          canSend={c.status === "needs_info" || c.status === "qualified"}
+          updateTemplateReady={templates.update}
+          onSent={onChanged}
+        />
+      )}
     </div>
   );
 }
@@ -167,7 +186,7 @@ function ComplaintCard({ c, onAssess }: { c: Complaint; onAssess: () => void }) 
 interface Location { id: string; name: string }
 interface Assignee { id: string; full_name: string }
 
-function AssessDialog({ complaint, onClose, onDone }: { complaint: Complaint; onClose: () => void; onDone: () => void }) {
+function AssessDialog({ complaint, templates, onClose, onDone }: { complaint: Complaint; templates: TemplateStatus; onClose: () => void; onDone: () => void }) {
   const [decision, setDecision] = useState<"qualify" | "needs_info" | "not_a_complaint">("qualify");
   const [outcome, setOutcome] = useState<ComplaintOutcome>("work_order");
   const [scope, setScope] = useState<string>(complaint.suggested_scope ?? "");
@@ -176,6 +195,8 @@ function AssessDialog({ complaint, onClose, onDone }: { complaint: Complaint; on
   const [assignedTo, setAssignedTo] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [title, setTitle] = useState("");
+  const [replyText, setReplyText] = useState("");
+  const [notify, setNotify] = useState(true);
   const [locations, setLocations] = useState<Location[]>([]);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [saving, setSaving] = useState(false);
@@ -196,12 +217,19 @@ function AssessDialog({ complaint, onClose, onDone }: { complaint: Complaint; on
       setError("A task needs someone to do it and a due date");
       return;
     }
+    const needsReply = decision === "needs_info" || (decision === "qualify" && outcome === "reply_only");
+    if (needsReply && !replyText.trim()) {
+      setError(decision === "needs_info" ? "Write the question to ask the customer" : "Write the reply to send the customer");
+      return;
+    }
     setSaving(true);
     const res = await fetch(`/api/complaints/${complaint.id}/assess`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         decision,
+        ...(needsReply ? { reply_text: replyText.trim() } : {}),
+        ...(makesIssue ? { notify_customer: notify } : {}),
         ...(decision === "qualify"
           ? {
               outcome,
@@ -215,6 +243,14 @@ function AssessDialog({ complaint, onClose, onDone }: { complaint: Complaint; on
     const json = await res.json().catch(() => null);
     if (!res.ok) { setError(json?.error ?? "Could not save the assessment"); return; }
     toast.success(json?.issue_number ? `Work order ${json.issue_number} created` : "Saved");
+    // The decision is saved either way; say plainly if the customer was not messaged.
+    if (json?.reply && json.reply.status !== "sent") {
+      toast.warning(
+        json.reply.detail === "template not configured"
+          ? "The WhatsApp template isn't approved yet, so the customer was not messaged. Reply from WhatsApp."
+          : `The customer was not messaged (${json.reply.detail ?? json.reply.status}).`
+      );
+    }
     onDone();
   }
 
@@ -301,8 +337,23 @@ function AssessDialog({ complaint, onClose, onDone }: { complaint: Complaint; on
             </div>
           )}
 
-          {decision === "needs_info" && (
-            <Textarea disabled rows={2} value="Replying to the customer from here comes next. For now the complaint stays open as Needs info." />
+          {(decision === "needs_info" || (decision === "qualify" && outcome === "reply_only")) && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                {decision === "needs_info" ? "Question to ask the customer (sent on WhatsApp)" : "Reply to the customer (sent on WhatsApp)"}
+              </label>
+              <Textarea value={replyText} maxLength={300} rows={2} onChange={(e) => setReplyText(e.target.value)} />
+              {!templates.update && (
+                <p className="text-xs text-amber-700">The update template isn&apos;t approved yet. This will be saved but not sent; reply from WhatsApp.</p>
+              )}
+            </div>
+          )}
+          {makesIssue && (
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+              Send the customer an acknowledgement on WhatsApp
+              {!templates.received && <span className="text-amber-700">(template not approved yet, will be skipped)</span>}
+            </label>
           )}
           {error && <p className="text-xs text-red-600">{error}</p>}
           <div className="flex justify-end gap-2">

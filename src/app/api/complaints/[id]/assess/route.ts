@@ -7,6 +7,7 @@ import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 // routing, collaborators, notifications and the audit trail behave exactly as for any ticket.
 import { POST as createFacilityIssue } from "@/app/api/facility/issues/route";
 import { COMPLAINT_OUTCOMES, buildWorkOrderDescription, buildWorkOrderTitle } from "@/lib/complaints";
+import { sendComplaintReply, type ReplyOutcome } from "@/lib/complaint-messages";
 
 const SCOPES = ["it", "hvac", "plumbing", "electrical", "housekeeping", "security", "other", "facility"] as const;
 
@@ -19,6 +20,10 @@ const bodySchema = z.object({
   assigned_to: z.string().uuid().optional(),
   due_date: z.string().optional(),
   title: z.string().trim().max(120).optional(),
+  // The question (needs_info) or the reply (reply only) sent to the customer.
+  reply_text: z.string().trim().max(600).optional(),
+  // Send the "we have logged your request" acknowledgement when a work order or task is raised.
+  notify_customer: z.boolean().optional(),
 });
 
 // POST /api/complaints/[id]/assess
@@ -67,12 +72,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let issueNumber: string | null = null;
 
   if (b.decision === "needs_info") {
+    if (!b.reply_text) return NextResponse.json({ error: "Write the question to ask the customer" }, { status: 400 });
     update = { ...base, status: "needs_info" };
   } else if (b.decision === "not_a_complaint") {
     update = { ...base, status: "not_a_complaint" };
   } else {
     if (!b.outcome) return NextResponse.json({ error: "Choose what to do: work order, task or reply only" }, { status: 400 });
     if (b.outcome === "reply_only") {
+      if (!b.reply_text) return NextResponse.json({ error: "Write the reply to send the customer" }, { status: 400 });
       update = { ...base, status: "closed", outcome: "reply_only" };
     } else {
       const scope = b.scope ?? complaint.suggested_scope;
@@ -149,5 +156,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
   }
 
-  return NextResponse.json({ success: true, issue_number: issueNumber });
+  // Tell the customer, after the decision is safely saved. A message that can't be sent never
+  // undoes the assessment: the outcome is returned so the assessor knows to reply by hand.
+  let reply: ReplyOutcome | null = null;
+  if (b.decision === "needs_info" || (b.decision === "qualify" && b.outcome === "reply_only")) {
+    reply = await sendComplaintReply(admin, { complaintId: id, kind: "update", text: b.reply_text, sentBy: dbUser.id });
+  } else if (b.decision === "qualify" && issueNumber && b.notify_customer !== false) {
+    reply = await sendComplaintReply(admin, { complaintId: id, kind: "received", sentBy: dbUser.id });
+  }
+
+  return NextResponse.json({ success: true, issue_number: issueNumber, reply });
 }
