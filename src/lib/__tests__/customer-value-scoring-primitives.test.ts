@@ -188,6 +188,20 @@ describe("scoreMetric", () => {
     const m = scoreMetric({ ...base, value: 0, cohort });
     expect(m).toMatchObject({ status: "ok", method: "percentile", cohortSize: 8, score: 100 });
   });
+  it("scores 100 for meeting the scale's best even when every peer ties with it", () => {
+    // Nobody has any days late: a rank among peers would be 50, but 0 days late is simply perfect.
+    const m = scoreMetric({ ...base, value: 0, cohort: [0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    expect(m).toMatchObject({ method: "percentile", score: 100 });
+  });
+  it("still ranks a tie as the middle when the tied value is not the best", () => {
+    const m = scoreMetric({ ...base, value: 5, cohort: [5, 5, 5, 5, 5, 5, 5, 5] });
+    expect(m.score).toBe(50);
+  });
+  it("applies the same rule to metrics where higher is better", () => {
+    const hi = { key: "on_time_share" as const, weight: 30, higherIsBetter: true, scale: { best: 1, worst: 0.4 }, cohortMin: 8 };
+    expect(scoreMetric({ ...hi, value: 1, cohort: Array(8).fill(1) }).score).toBe(100);
+    expect(scoreMetric({ ...hi, value: 0.9, cohort: Array(8).fill(0.9) }).score).toBe(50);
+  });
   it("is missing, not guessed, when the cohort is small and there is no scale", () => {
     expect(scoreMetric({ ...base, scale: undefined, value: 3, cohort: [] }).status).toBe("missing");
   });

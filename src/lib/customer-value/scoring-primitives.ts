@@ -173,8 +173,14 @@ export function scoreMetric(opts: ScoreMetricOptions): MetricResult {
 
   const usable = (cohort ?? []).filter((v) => Number.isFinite(v));
   if (usable.length >= cohortMin) {
-    const score = percentileScore(value, usable, higherIsBetter);
-    if (score !== null) return { key, weight, status: "ok", value, score, method: "percentile", cohortSize: usable.length };
+    const ranked = percentileScore(value, usable, higherIsBetter);
+    if (ranked !== null) {
+      // A rank among peers says nothing about being objectively perfect: when
+      // every peer also has no tickets, the tie would read as "median" and mark
+      // a flawless customer down to 50. Meeting the scale's best is always 100.
+      const atBest = scale !== undefined && (scale.best >= scale.worst ? value >= scale.best : value <= scale.best);
+      return { key, weight, status: "ok", value, score: atBest ? 100 : ranked, method: "percentile", cohortSize: usable.length };
+    }
   }
   if (!scale) return missingMetric(key, weight);
   return { key, weight, status: "ok", value, score: linearScale(value, scale), method: "fixed", cohortSize: usable.length };
