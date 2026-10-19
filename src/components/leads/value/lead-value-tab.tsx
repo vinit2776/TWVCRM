@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ComparePanel } from "@/components/leads/value/compare-panel";
+import { ElectricityPanel } from "@/components/leads/value/electricity-panel";
 import { JourneyPanel } from "@/components/leads/value/journey-panel";
 import { MoneyPanel } from "@/components/leads/value/money-panel";
 import { PerformancePanel } from "@/components/leads/value/performance-panel";
@@ -24,7 +26,8 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(`/api/leads/${leadId}/value/summary`);
+      // no-store: after Recompute the page must show the new score, not the 60-second browser copy.
+      const res = await fetch(`/api/leads/${leadId}/value/summary`, { cache: "no-store" });
       if (!res.ok) throw new Error(res.status === 403 ? "Admins only" : "Could not load the summary");
       setSummary((await res.json()) as SummaryData);
     } catch (err) {
@@ -38,9 +41,12 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
     load();
   }, [load]);
 
+  // Recompute changes what Performance would show too, so remount it on the next visit.
+  const [performanceKey, setPerformanceKey] = useState(0);
   const reload = useCallback(async () => {
     setLoading(true);
     await load();
+    setPerformanceKey((k) => k + 1);
   }, [load]);
 
   return (
@@ -51,6 +57,8 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
         <TabsList>
           <TabsTrigger value="summary">Summary</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="compare">Compare</TabsTrigger>
+          <TabsTrigger value="electricity">Electricity</TabsTrigger>
           <TabsTrigger value="journey">Journey</TabsTrigger>
           <TabsTrigger value="money">Money</TabsTrigger>
         </TabsList>
@@ -60,7 +68,15 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
         </TabsContent>
 
         <TabsContent value="performance" className="space-y-4">
-          <PerformancePanel leadId={leadId} />
+          <PerformancePanel key={performanceKey} leadId={leadId} />
+        </TabsContent>
+
+        <TabsContent value="compare" className="space-y-4">
+          <ComparePanel key={performanceKey} leadId={leadId} />
+        </TabsContent>
+
+        <TabsContent value="electricity" className="space-y-4">
+          <ElectricityPanel leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="journey" className="space-y-4">

@@ -44,6 +44,12 @@ export function isMissingTableError(err: unknown): boolean {
   );
 }
 
+/** True when the error means a column does not exist yet (a migration not applied in this database). */
+export function isMissingColumnError(err: unknown): boolean {
+  if (!(err instanceof SnapshotQueryError)) return false;
+  return err.code === "42703" || /column .* does not exist/i.test(err.message);
+}
+
 /** Reads every page of a query. `build` gets an inclusive row range and returns that page. */
 export async function fetchAllPages<T>(
   label: string,
