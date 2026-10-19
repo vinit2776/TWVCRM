@@ -24,7 +24,8 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(`/api/leads/${leadId}/value/summary`);
+      // no-store: after Recompute the page must show the new score, not the 60-second browser copy.
+      const res = await fetch(`/api/leads/${leadId}/value/summary`, { cache: "no-store" });
       if (!res.ok) throw new Error(res.status === 403 ? "Admins only" : "Could not load the summary");
       setSummary((await res.json()) as SummaryData);
     } catch (err) {
@@ -38,9 +39,12 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
     load();
   }, [load]);
 
+  // Recompute changes what Performance would show too, so remount it on the next visit.
+  const [performanceKey, setPerformanceKey] = useState(0);
   const reload = useCallback(async () => {
     setLoading(true);
     await load();
+    setPerformanceKey((k) => k + 1);
   }, [load]);
 
   return (
@@ -60,7 +64,7 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
         </TabsContent>
 
         <TabsContent value="performance" className="space-y-4">
-          <PerformancePanel leadId={leadId} />
+          <PerformancePanel key={performanceKey} leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="journey" className="space-y-4">
