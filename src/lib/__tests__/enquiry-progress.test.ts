@@ -57,12 +57,50 @@ describe("deriveProgress", () => {
   });
 });
 
+describe("bookings", () => {
+  const booking = (over: Partial<{ status: string; created_at: string }> = {}) => ({
+    id: "b1", booking_number: "BK-0012", status: "confirmed", created_at: "2026-10-22T00:00:00Z", ...over,
+  });
+  it("a standing booking is progress and shows as Booked", () => {
+    const p = deriveProgress([enq("e1", "2026-10-19T00:00:00Z")], [], [], [booking()]).get("e1")!;
+    expect(p.stage.key).toBe("booked");
+    expect(p.milestones).toEqual([{ key: "booked", label: "Booking made", at: "2026-10-22T00:00:00Z", ref: "BK-0012" }]);
+  });
+  it("a cancelled booking or a no-show is not progress", () => {
+    for (const status of ["cancelled", "no_show"]) {
+      expect(deriveProgress([enq("e1", "2026-10-19T00:00:00Z")], [], [], [booking({ status })]).get("e1")!.milestones).toHaveLength(0);
+    }
+  });
+  it("only the first booking is a milestone, and it lands on the enquiry before it", () => {
+    const m = deriveProgress(
+      [enq("old", "2026-09-01T00:00:00Z"), enq("new", "2026-10-20T00:00:00Z")],
+      [], [],
+      [booking({ created_at: "2026-10-22T00:00:00Z" }), { ...booking({ created_at: "2026-10-25T00:00:00Z" }), id: "b2", booking_number: "BK-0013" }]
+    );
+    expect(m.get("new")!.milestones).toHaveLength(1);
+    expect(m.get("new")!.milestones[0].ref).toBe("BK-0012");
+    expect(m.get("old")!.milestones).toHaveLength(0);
+  });
+  it("further along the contract path wins the stage", () => {
+    const p = deriveProgress(
+      [enq("e1", "2026-10-19T00:00:00Z")],
+      [{ id: "p1", sent_at: "2026-10-21T00:00:00Z", viewed_at: null, paid_at: null }], [], [booking()]
+    ).get("e1")!;
+    expect(p.stage.key).toBe("proposal_sent");
+  });
+});
+
 describe("autoResolutions", () => {
   const CUT = "2026-10-15T00:00:00Z";
   it("converts when a contract is active", () => {
     const e = enq("e1", "2026-10-19T00:00:00Z");
     const pr = deriveProgress([e], [], [{ id: "c", proposal_id: null, is_renewal: false, sent_at: "2026-10-20T00:00:00Z", signed_at: null, activated_at: "2026-10-28T00:00:00Z" }]);
     expect(autoResolutions([e], pr, "won", NOW, CUT)).toEqual([{ enquiryId: "e1", outcome: "converted", reason: "contract activated" }]);
+  });
+  it("converts when a booking was made, so a meeting-room customer is not closed as no response", () => {
+    const e = enq("e1", "2026-10-19T00:00:00Z");
+    const pr = deriveProgress([e], [], [], [{ id: "b", status: "confirmed", created_at: "2026-10-20T00:00:00Z" }]);
+    expect(autoResolutions([e], pr, "new", NOW, CUT)).toEqual([{ enquiryId: "e1", outcome: "converted", reason: "booking made" }]);
   });
   it("resolves as not interested when the lead is lost", () => {
     const e = enq("e1", "2026-11-25T00:00:00Z");

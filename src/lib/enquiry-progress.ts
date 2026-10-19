@@ -16,6 +16,7 @@ const DAY_MS = 86_400_000;
 export const STAGES = [
   { key: "new", label: "New" },
   { key: "contacted", label: "Contacted" },
+  { key: "booked", label: "Booked" },
   { key: "proposal_sent", label: "Proposal sent" },
   { key: "deposit_paid", label: "Deposit paid" },
   { key: "contract_sent", label: "Contract sent" },
@@ -53,6 +54,17 @@ export type ProgressContract = {
   contract_number?: string | null;
 };
 
+/** A room or day-pass booking. Only ones that stand (not cancelled or a no-show) count. */
+export type ProgressBooking = {
+  id: string;
+  booking_number?: string | null;
+  status: string;
+  created_at: string;
+};
+
+/** Booking statuses that mean the customer really booked. */
+export const COUNTED_BOOKING_STATUSES = ["confirmed", "checked_in", "checked_out"];
+
 export type Milestone = { key: StageKey; label: string; at: string; ref?: string | null };
 
 export type EnquiryProgress = { stage: EnquiryStage; milestones: Milestone[] };
@@ -74,7 +86,8 @@ const rank = (key: StageKey) => STAGES.findIndex((s) => s.key === key);
 export function deriveProgress(
   enquiries: ProgressEnquiry[],
   proposals: ProgressProposal[],
-  contracts: ProgressContract[]
+  contracts: ProgressContract[],
+  bookings: ProgressBooking[] = []
 ): Map<string, EnquiryProgress> {
   const out = new Map<string, Milestone[]>(enquiries.map((e) => [e.id, []]));
   const proposalOwner = new Map<string, string>();
@@ -100,6 +113,17 @@ export function deriveProgress(
     if (c.sent_at) m.push({ key: "contract_sent", label: "Contract sent", at: c.sent_at, ref });
     if (c.signed_at) m.push({ key: "contract_signed", label: "Contract signed", at: c.signed_at, ref });
     if (c.activated_at) m.push({ key: "active", label: "Contract activated", at: c.activated_at, ref });
+  }
+
+  // Meeting rooms and day passes convert through a booking, not a contract. Each booking belongs
+  // to the newest enquiry received before it was made; one milestone per enquiry (the first).
+  const bookedOn = new Set<string>();
+  for (const b of [...bookings].sort((x, y) => x.created_at.localeCompare(y.created_at))) {
+    if (!COUNTED_BOOKING_STATUSES.includes(b.status)) continue;
+    const owner = attachTo(enquiries, b.created_at);
+    if (!owner || bookedOn.has(owner)) continue;
+    bookedOn.add(owner);
+    out.get(owner)!.push({ key: "booked", label: "Booking made", at: b.created_at, ref: b.booking_number ?? null });
   }
 
   const result = new Map<string, EnquiryProgress>();
@@ -129,8 +153,12 @@ export function autoResolutions(
   for (const e of enquiries) {
     if (e.resolved_at || Date.parse(e.received_at) < cutoff) continue;
     const p = progress.get(e.id);
-    if (p?.milestones.some((m) => m.key === "active")) {
-      res.push({ enquiryId: e.id, outcome: "converted", reason: "contract activated" });
+    if (p?.milestones.some((m) => m.key === "active" || m.key === "booked")) {
+      res.push({
+        enquiryId: e.id,
+        outcome: "converted",
+        reason: p.milestones.some((m) => m.key === "active") ? "contract activated" : "booking made",
+      });
       continue;
     }
     if (leadStatus === "lost") {
