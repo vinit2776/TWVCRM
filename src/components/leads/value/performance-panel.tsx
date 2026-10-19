@@ -47,7 +47,8 @@ export function PerformancePanel({ leadId }: { leadId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/leads/${leadId}/value/performance`);
+      // no-store so a Recompute is reflected straight away instead of from the 60-second browser copy.
+      const res = await fetch(`/api/leads/${leadId}/value/performance`, { cache: "no-store" });
       if (!res.ok) throw new Error(res.status === 403 ? "Admins only" : "Could not load performance");
       setData((await res.json()) as PerformanceData);
     } catch (err) {
