@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ComparePanel } from "@/components/leads/value/compare-panel";
+import { CostsPanel } from "@/components/leads/value/costs-panel";
 import { ElectricityPanel } from "@/components/leads/value/electricity-panel";
 import { JourneyPanel } from "@/components/leads/value/journey-panel";
 import { MoneyPanel } from "@/components/leads/value/money-panel";
@@ -59,6 +60,7 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
           <TabsTrigger value="summary">Summary</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="compare">Compare</TabsTrigger>
+          <TabsTrigger value="costs">Costs</TabsTrigger>
           <TabsTrigger value="electricity">Electricity</TabsTrigger>
           <TabsTrigger value="wifi">Wi-Fi</TabsTrigger>
           <TabsTrigger value="journey">Journey</TabsTrigger>
@@ -75,6 +77,10 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
 
         <TabsContent value="compare" className="space-y-4">
           <ComparePanel key={performanceKey} leadId={leadId} />
+        </TabsContent>
+
+        <TabsContent value="costs" className="space-y-4">
+          <CostsPanel key={performanceKey} leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="electricity" className="space-y-4">
