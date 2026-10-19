@@ -1,6 +1,6 @@
 # Customer Value tab — Phase 5 plan (cost simulator and real margin)
 
-Status: **plan only, 2026-10-19. Nothing built. Waiting on decisions D1 to D5.**
+Status: **decisions D1 to D5 settled on the recommendations, 2026-10-19. PR A (the maths) open; B to E not started.**
 Spec: `docs/customer-value-tab-spec.md` section 5.6. Builds on phase 2 (scores), 4 (electricity share) and 4b (Wi-Fi).
 
 ## 1. Goal
