@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyByRules, decideGrouping, type TriageContext } from "../whatsapp-triage";
 
-const NEW_NUMBER: TriageContext = { hasActiveContract: false, leadStatus: null, hasReferral: false, knownSender: false, hasOpenEnquiry: false };
+const NEW_NUMBER: TriageContext = { isCustomer: false, hasActiveContract: false, leadStatus: null, hasReferral: false, knownSender: false, hasOpenEnquiry: false };
 const k = (text: string, ctx: Partial<TriageContext> = {}, type = "text") => classifyByRules(text, type, { ...NEW_NUMBER, ...ctx }).kind;
 
 describe("classifyByRules", () => {
@@ -18,12 +18,19 @@ describe("classifyByRules", () => {
     expect(k("You won a prize http://bit.ly/x", { hasReferral: true })).toBe("enquiry");
   });
   it("a customer with an active contract is never an enquiry for ordinary messages", () => {
-    expect(k("AC not working in cabin 4", { hasActiveContract: true, knownSender: true })).toBe("complaint");
-    expect(k("Can you resend the invoice", { hasActiveContract: true, knownSender: true })).toBe("complaint");
-    expect(k("Thanks, will pay tomorrow", { hasActiveContract: true, knownSender: true })).toBe("customer");
+    expect(k("AC not working in cabin 4", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("complaint");
+    expect(k("Can you resend the invoice", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("complaint");
+    expect(k("Thanks, will pay tomorrow", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("customer");
   });
   it("sends a customer asking about more space to review, not auto", () => {
-    expect(k("We need 3 more seats, what is the price", { hasActiveContract: true, knownSender: true })).toBe("unsure");
+    expect(k("We need 3 more seats, what is the price", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("unsure");
+  });
+  it("a customer with only a recent booking is handled more cautiously than a contract holder", () => {
+    const booking = { isCustomer: true, hasActiveContract: false, knownSender: true };
+    expect(k("The wifi is not working in the meeting room", booking)).toBe("complaint");
+    expect(k("Is wifi included in the meeting room?", booking)).toBe("unsure");
+    expect(k("Do you have private cabins available", booking)).toBe("unsure");
+    expect(k("Thanks for the booking confirmation", booking)).toBe("customer");
   });
   it("a bare acknowledgement is low signal for a known sender, unclear from a new number", () => {
     expect(k("ok thanks", { knownSender: true, hasOpenEnquiry: true })).toBe("low_signal");

@@ -55,7 +55,7 @@ export async function classifyWithAi(admin: SupabaseClient, text: string, ctx: T
     if (data?.value !== "true") return null;
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const flags = `known sender: ${ctx.knownSender}; open enquiry: ${ctx.hasOpenEnquiry}; replied to an ad: ${ctx.hasReferral}; active customer: ${ctx.hasActiveContract}`;
+    const flags = `known sender: ${ctx.knownSender}; open enquiry: ${ctx.hasOpenEnquiry}; replied to an ad: ${ctx.hasReferral}; customer: ${ctx.isCustomer}`;
     const message = await anthropic.messages.create(
       {
         model: MODEL,
