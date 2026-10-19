@@ -19,6 +19,11 @@ describe("effectiveComplaintStatus", () => {
     expect(effectiveComplaintStatus("qualified", "resolved")).toBe("closed");
     expect(effectiveComplaintStatus("qualified", "closed")).toBe("closed");
   });
+  it("a request closes when its task is done", () => {
+    expect(effectiveComplaintStatus("qualified", null, "todo")).toBe("qualified");
+    expect(effectiveComplaintStatus("qualified", null, "in_progress")).toBe("qualified");
+    expect(effectiveComplaintStatus("qualified", null, "done")).toBe("closed");
+  });
   it("other statuses are unaffected by an issue", () => {
     expect(effectiveComplaintStatus("new", "resolved")).toBe("new");
     expect(effectiveComplaintStatus("needs_info", null)).toBe("needs_info");

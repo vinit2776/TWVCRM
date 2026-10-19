@@ -31,7 +31,7 @@ const URL_RE = /(https?:\/\/|www\.|bit\.ly|tinyurl|t\.me\/|wa\.me\/)/gi;
 const SPAM_RE =
   /\b(lottery|lucky draw|you(?:'ve| have)? won|prize|winner|crypto|bitcoin|forex|trading signals?|investment (?:plan|offer)|earn (?:rs|₹|\$|money)|work from home|loan (?:offer|approved)|casino|betting|click (?:the )?link|join (?:our )?(?:telegram|whatsapp) group|guaranteed returns?|18\+|adult)\b/gi;
 const COMPLAINT_RE =
-  /\b(not working|isn'?t working|stopped working|broken|complain\w*|leak\w*|a\/?c\b|aircon|wi-?fi|internet|network down|dirty|noise|noisy|refund|overcharg\w*|wrong (?:bill|invoice|amount)|power cut|lift|elevator|parking|pest|cockroach|toilet|washroom|water supply|invoice|payment (?:not|failed)|not received|issue|problem)\b/i;
+  /\b(not working|isn'?t working|stopped working|broken|complain\w*|leak\w*|a\/?c\b|aircon|wi-?fi|internet|network down|dirty|noise|noisy|refund|overcharg\w*|wrong (?:bill|invoice|amount)|power cut|lift|elevator|parking|pest|cockroach|toilet|washroom|water supply|payment (?:not|failed)|not received|issue|problem)\b/i;
 const ENQUIRY_RE =
   /\b(seats?|desks?|cabins?|private office|office space|meeting rooms?|conference|co-?working|work ?space|virtual office|day pass|hot desk|dedicated|pric\w*|rates?|rent|cost|budget|per month|monthly|availab\w*|visit|tour|brochure|gst|registration|business address|looking for|interested|enquir\w*|inquir\w*|quot\w*)\b/i;
 const STRONG_ENQUIRY_RE = /\b(seats?|cabins?|private office|meeting rooms?|conference|availab\w*|quot\w*|pric\w*)\b/i;

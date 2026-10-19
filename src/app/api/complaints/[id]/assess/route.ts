@@ -48,7 +48,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { data: c } = await admin
     .from("customer_complaints")
     .select(
-      "id, reference, status, lead_id, customer_name, customer_phone, messages, suggested_scope, suggested_priority, " +
+      "id, reference, kind, status, lead_id, customer_name, customer_phone, messages, suggested_scope, suggested_priority, " +
         "contract:contracts!customer_complaints_contract_id_fkey(id, contract_number, location_id), " +
         "lead:leads!customer_complaints_lead_id_fkey(location_id)"
     )
@@ -56,12 +56,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .single();
   if (!c) return NextResponse.json({ error: "Complaint not found" }, { status: 404 });
   const complaint = c as unknown as {
-    id: string; reference: string; status: string; lead_id: string | null; customer_name: string | null;
+    id: string; reference: string; kind: string; status: string; lead_id: string | null; customer_name: string | null;
     customer_phone: string | null; messages: { at?: string; text?: string }[]; suggested_scope: string | null;
     suggested_priority: string | null;
     contract: { id: string; contract_number: string; location_id: string | null } | null;
     lead: { location_id: string | null } | null;
   };
+  if (complaint.kind === "request") return NextResponse.json({ error: "This is a request: handle it instead" }, { status: 400 });
+  if (b.outcome === "enquiry") return NextResponse.json({ error: "A complaint can't be converted to an enquiry" }, { status: 400 });
   if (complaint.status !== "new" && complaint.status !== "needs_info") {
     return NextResponse.json({ error: "This complaint has already been assessed" }, { status: 409 });
   }

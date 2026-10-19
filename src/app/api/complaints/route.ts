@@ -19,16 +19,19 @@ export async function GET(request: NextRequest) {
 
   const sp = request.nextUrl.searchParams;
   const view = sp.get("view") ?? "open";
+  const kind = sp.get("kind"); // complaint | request
   const issueId = sp.get("issue_id");
 
   let query = supabase
     .from("customer_complaints")
     .select(
-      "id, reference, status, outcome, customer_name, customer_phone, messages, suggested_scope, suggested_priority, " +
+      "id, reference, kind, request_type, owner_role, due_at, status, outcome, customer_name, customer_phone, messages, suggested_scope, suggested_priority, " +
         "repeat_count, created_at, assessed_at, " +
         "lead:leads!customer_complaints_lead_id_fkey(id), " +
         "contract:contracts!customer_complaints_contract_id_fkey(id, contract_number, location_id, location:locations!contracts_location_id_fkey(id, name)), " +
         "issue:facility_issues!customer_complaints_issue_id_fkey(id, issue_number, status, assignee:users!facility_issues_assigned_to_fkey(full_name)), " +
+        "task:tasks!customer_complaints_task_id_fkey(id, status, due_date, assignee:users!tasks_assigned_to_fkey(full_name)), " +
+        "enquiry:lead_enquiries!customer_complaints_enquiry_id_fkey(id, reference), " +
         "assessor:users!customer_complaints_assessed_by_fkey(full_name), " +
         "replies:complaint_replies(id, kind, message, status, detail, created_at)"
     )
@@ -39,12 +42,22 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  type Row = { status: ComplaintStatus; issue: { status: string } | null } & Record<string, unknown>;
-  const all = ((data ?? []) as unknown as Row[]).map((r) => ({ ...r, status: effectiveComplaintStatus(r.status, r.issue?.status ?? null) }));
+  type Row = {
+    status: ComplaintStatus;
+    kind: string;
+    issue: { status: string } | null;
+    task: { status: string } | null;
+  } & Record<string, unknown>;
+  const all = ((data ?? []) as unknown as Row[]).map((r) => ({
+    ...r,
+    status: effectiveComplaintStatus(r.status, r.issue?.status ?? null, r.task?.status ?? null),
+  }));
   const openCount = all.filter((r) => isOpenComplaint(r.status)).length;
+  const openRequests = all.filter((r) => r.kind === "request" && isOpenComplaint(r.status)).length;
+  const byKind = kind === "complaint" || kind === "request" ? all.filter((r) => r.kind === kind) : all;
   const rows = issueId
     ? all
-    : all.filter((r) => (view === "all" ? true : view === "done" ? !isOpenComplaint(r.status) : isOpenComplaint(r.status)));
+    : byKind.filter((r) => (view === "all" ? true : view === "done" ? !isOpenComplaint(r.status) : isOpenComplaint(r.status)));
 
-  return NextResponse.json({ data: rows, openCount, templates: complaintTemplateStatus() });
+  return NextResponse.json({ data: rows, openCount, openRequests, templates: complaintTemplateStatus() });
 }

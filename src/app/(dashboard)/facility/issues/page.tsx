@@ -246,7 +246,7 @@ function FacilityIssuesPageInner() {
         <PageBreadcrumb resetTo={{ label: "Issues" }} />
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
-          <p className="text-xs md:text-sm text-muted-foreground">Customer complaints from WhatsApp, to assess and act on</p>
+          <p className="text-xs md:text-sm text-muted-foreground">Customer complaints and requests from WhatsApp, to assess and act on</p>
         </div>
         <FacilityViewTabs active="complaints" refreshKey={complaintsRefresh} />
         <ComplaintsQueue onChanged={() => setComplaintsRefresh((n) => n + 1)} />

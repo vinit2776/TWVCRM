@@ -9,6 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendWhatsApp } from "@/lib/whatsapp";
 import { MAX_REPLY_CHARS } from "@/lib/complaint-messages-shared";
+import { REQUEST_DONE_TEXT, type RequestType } from "@/lib/requests";
 
 export type ReplyKind = "received" | "update" | "resolved";
 export type ReplyStatus = "sent" | "failed" | "skipped";
@@ -119,4 +120,24 @@ export async function notifyComplaintResolved(admin: SupabaseClient, issueId: st
   const { data: complaint } = await admin.from("customer_complaints").select("id").eq("issue_id", issueId).maybeSingle();
   if (!complaint) return;
   await sendComplaintReply(admin, { complaintId: complaint.id as string, kind: "resolved", ratingLink: ratingUrl(satisfactionToken) });
+}
+
+/** The task behind a customer request was marked done: tell the customer, once. Safe to call for
+ *  any task: does nothing unless a request is linked to it. */
+export async function notifyRequestTaskDone(admin: SupabaseClient, taskId: string) {
+  const { data: c } = await admin.from("customer_complaints").select("id, kind, request_type").eq("task_id", taskId).maybeSingle();
+  if (!c || c.kind !== "request" || !c.request_type) return;
+  const text = REQUEST_DONE_TEXT[c.request_type as RequestType];
+  if (!text) return;
+  const { data: already } = await admin
+    .from("complaint_replies")
+    .select("id")
+    .eq("complaint_id", c.id)
+    .eq("kind", "update")
+    .eq("message", text)
+    .eq("status", "sent")
+    .limit(1)
+    .maybeSingle();
+  if (already) return;
+  await sendComplaintReply(admin, { complaintId: c.id as string, kind: "update", text });
 }
