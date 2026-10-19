@@ -16,8 +16,8 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { todayYmdIst } from "@/lib/customer-value/journey";
 import { buildComparison, type CompareMonthRow } from "@/lib/customer-value/compare-view";
-import { fetchInChunks, type PageResult } from "@/lib/customer-value/query-helpers";
-import { primaryLocation } from "@/lib/customer-value/scoring-run";
+import { loadCenterCohort } from "@/lib/customer-value/center-cohort";
+import { fetchInChunks } from "@/lib/customer-value/query-helpers";
 
 export const maxDuration = 30;
 
@@ -25,12 +25,6 @@ const paramsSchema = z.object({ id: z.string().uuid() });
 
 /** Twelve months of history: the window being compared plus the trend line. */
 const HISTORY_DAYS = 400;
-
-interface ContractLocation {
-  id: string;
-  lead_id: string;
-  location_id: string | null;
-}
 
 function daysBefore(ymd: string, days: number): string {
   return new Date(Date.parse(`${ymd}T00:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
@@ -51,37 +45,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const today = todayYmdIst();
 
   try {
-    const { data: mine, error: mineError } = await supabase
-      .from("contracts")
-      .select("id, lead_id, location_id")
-      .eq("lead_id", leadId)
-      .returns<ContractLocation[]>();
-    if (mineError) throw new Error(mineError.message);
-
-    const center = primaryLocation({ locationIds: (mine ?? []).map((c) => c.location_id).filter((l): l is string => Boolean(l)) });
-    if (!center) {
+    const cohort = await loadCenterCohort(supabase, leadId);
+    if (!cohort) {
       return NextResponse.json({ today, center: null, comparison: null }, { headers: { "Cache-Control": "private, max-age=60" } });
     }
-
-    const [{ data: location }, atCenter] = await Promise.all([
-      supabase.from("locations").select("name").eq("id", center).single(),
-      fetchInChunks<ContractLocation>("center contracts", [center], (batch, from, to): PromiseLike<PageResult<ContractLocation>> =>
-        supabase.from("contracts").select("id, lead_id, location_id").in("location_id", batch).order("id").range(from, to)
-      ),
-    ]);
-
-    // A customer is ranked at their first location, so a lead whose other contracts
-    // sit elsewhere may belong to a different center than this contract suggests.
-    const candidateLeads = [...new Set(atCenter.map((c) => c.lead_id))];
-    const allContracts = await fetchInChunks<ContractLocation>("candidate contracts", candidateLeads, (batch, from, to) =>
-      supabase.from("contracts").select("id, lead_id, location_id").in("lead_id", batch).order("id").range(from, to)
-    );
-    const locationsByLead = new Map<string, string[]>();
-    for (const c of allContracts) {
-      if (c.location_id) locationsByLead.set(c.lead_id, [...(locationsByLead.get(c.lead_id) ?? []), c.location_id]);
-    }
-    const cohortLeads = candidateLeads.filter((id) => primaryLocation({ locationIds: locationsByLead.get(id) ?? [] }) === center);
-    if (!cohortLeads.includes(leadId)) cohortLeads.push(leadId);
+    const cohortLeads = cohort.leadIds;
 
     const since = daysBefore(today, HISTORY_DAYS);
     const rows = await fetchInChunks<CompareMonthRow>("monthly rows", cohortLeads, (batch, from, to) =>
@@ -103,7 +71,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     }));
 
     return NextResponse.json(
-      { today, center: { id: center, name: location?.name ?? "this center" }, comparison: buildComparison(leadId, clean, today) },
+      { today, center: { id: cohort.centerId, name: cohort.centerName }, comparison: buildComparison(leadId, clean, today) },
       { headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=120" } }
     );
   } catch (err) {
