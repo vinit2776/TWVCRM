@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONSOLE_HOURLY_RETENTION_DAYS, captureWindowStart, parseClientRows, parseSiteRows } from "@/lib/wifi-ledger-capture";
+import { CONSOLE_DAILY_RETENTION_DAYS, CONSOLE_HOURLY_RETENTION_DAYS, captureWindowStart, dailyWindowStart, parseClientDayRows, parseClientRows, parseSiteDayRows, parseSiteRows } from "@/lib/wifi-ledger-capture";
 
 const LOC = "loc-1";
 const H = 3_600_000;
@@ -74,5 +74,27 @@ describe("captureWindowStart", () => {
   it("never asks for more than the console still holds after a long outage", () => {
     const old = new Date(T0 - 30 * 24 * H).toISOString();
     expect(captureWindowStart(old, now)).toBe(now.getTime() - CONSOLE_HOURLY_RETENTION_DAYS * 24 * H);
+  });
+});
+
+describe("daily rows", () => {
+  const ISTMIDNIGHT = Date.UTC(2026, 9, 18, 18, 30, 0); // 00:00 IST on 19 Oct
+
+  it("keeps the day bucket's real start (IST midnight) under day_start", () => {
+    const c = parseClientDayRows(LOC, [{ user: "AA:BB:CC:DD:EE:01", time: ISTMIDNIGHT, rx_bytes: 9, tx_bytes: 1 }]);
+    expect(c).toEqual([{ location_id: LOC, mac: "aa:bb:cc:dd:ee:01", day_start: "2026-10-18T18:30:00.000Z", rx_bytes: 9, tx_bytes: 1 }]);
+    const s = parseSiteDayRows(LOC, [{ time: ISTMIDNIGHT, wlan_bytes: 5, num_sta: 2 }]);
+    expect(s).toEqual([{ location_id: LOC, day_start: "2026-10-18T18:30:00.000Z", wlan_bytes: 5, num_sta: 2 }]);
+  });
+
+  it("starts at the console's daily retention limit when nothing is stored", () => {
+    const now = new Date(T0);
+    expect(dailyWindowStart(null, now)).toBe(now.getTime() - CONSOLE_DAILY_RETENTION_DAYS * 24 * H);
+  });
+
+  it("resumes two days before the last stored day, and never before the retention limit", () => {
+    const now = new Date(T0);
+    expect(dailyWindowStart(new Date(T0 - 24 * H).toISOString(), now)).toBe(T0 - 3 * 24 * H);
+    expect(dailyWindowStart(new Date(T0 - 300 * 24 * H).toISOString(), now)).toBe(now.getTime() - CONSOLE_DAILY_RETENTION_DAYS * 24 * H);
   });
 });
