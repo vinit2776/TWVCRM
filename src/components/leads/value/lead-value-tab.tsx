@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { JourneyPanel } from "@/components/leads/value/journey-panel";
 import { MoneyPanel } from "@/components/leads/value/money-panel";
+import { PerformancePanel } from "@/components/leads/value/performance-panel";
 import { SummaryPanel, type SummaryData } from "@/components/leads/value/summary-panel";
 import { ValueHeader } from "@/components/leads/value/value-header";
 
@@ -49,12 +50,17 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
       <Tabs value={sub} onValueChange={setSub} className="space-y-4">
         <TabsList>
           <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="journey">Journey</TabsTrigger>
           <TabsTrigger value="money">Money</TabsTrigger>
         </TabsList>
 
         <TabsContent value="summary" className="space-y-4">
           <SummaryPanel data={summary} loading={loading} error={error} onRetry={reload} onOpenMoney={() => setSub("money")} />
+        </TabsContent>
+
+        <TabsContent value="performance" className="space-y-4">
+          <PerformancePanel leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="journey" className="space-y-4">
