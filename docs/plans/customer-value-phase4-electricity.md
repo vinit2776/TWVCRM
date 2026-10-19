@@ -1,6 +1,6 @@
 # Customer Value tab — Phase 4 plan (electricity share and cost recovery)
 
-Status: **plan only, 2026-10-19. Nothing built. Waiting on decisions D1 to D4 and the coverage query.**
+Status: **PR A and B built 2026-10-19 on the recommendations (D2 space-unit capacity with a Vacant line, D3 landlord-bill tariff, kWh only without a bill). D1 handled without a migration: one mapped meter is used; several mapped meters show "can't tell which is the total" rather than a guess. PR C (presence/hybrid) not started.**
 Spec: `docs/customer-value-tab-spec.md` section 5.5. Builds on phase 2 (monthly rows) and phase 3 (Compare).
 
 ## 1. Goal
