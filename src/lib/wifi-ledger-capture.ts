@@ -36,9 +36,14 @@ export interface SiteHourRow {
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** Start of the hour (UTC) for an epoch-ms time; the console already reports on the hour, this keeps it so. */
-function hourIso(ms: number): string {
-  return new Date(Math.floor(ms / HOUR_MS) * HOUR_MS).toISOString();
+/**
+ * The console's hourly buckets start at :30 past the UTC hour (they are aligned to
+ * the site's IST hour), so the bucket's own start time is kept exactly as
+ * reported. Rounding it to a UTC hour would shift every row 30 minutes early and
+ * put usage in the wrong IST hour.
+ */
+function bucketIso(ms: number): string {
+  return new Date(ms).toISOString();
 }
 
 /** Keeps only well-formed rows, so one odd row from the console can't fail the whole write. */
@@ -51,7 +56,7 @@ export function parseClientRows(locationId: string, raw: unknown): ClientHourRow
     const tx = isNum(r.tx_bytes) && r.tx_bytes > 0 ? Math.round(r.tx_bytes) : 0;
     if (rx === 0 && tx === 0) continue;
     const mac = r.user.toLowerCase();
-    const hour = hourIso(r.time);
+    const hour = bucketIso(r.time);
     // A device reported twice in one hour (it moved between access points) is one row.
     const key = `${mac}|${hour}`;
     const prev = byKey.get(key);
@@ -70,7 +75,7 @@ export function parseSiteRows(locationId: string, raw: unknown): SiteHourRow[] {
   const byHour = new Map<string, SiteHourRow>();
   for (const r of raw as Array<Record<string, unknown>>) {
     if (!isNum(r?.time)) continue;
-    const hour = hourIso(r.time);
+    const hour = bucketIso(r.time);
     byHour.set(hour, {
       location_id: locationId,
       hour_start: hour,
