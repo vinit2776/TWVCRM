@@ -33,6 +33,26 @@ export function pickProfileName(event: Record<string, unknown>): string | null {
   return null;
 }
 
+const OUTBOUND_DIRECTION = /^(out|outbound|outgoing|sent)$/i;
+
+/** Tells an inbound customer message from an outbound delivery report.
+ *  Older MSG91 inbound payloads had no status at all. Since the inbound webhook was
+ *  re-registered they carry `eventName`/`status: "submitted"` plus a `direction` field,
+ *  so "no status" alone no longer identifies them. A genuine delivery report always has
+ *  a requestId (it is how we match it to the message we sent); a customer message has
+ *  none, so a status-bearing event is inbound only without a requestId and with a
+ *  direction that is not outbound. */
+export function isInboundEvent(
+  event: Record<string, unknown>,
+  rawStatus: string | undefined,
+  requestId: string | undefined
+): boolean {
+  if (!rawStatus) return true;
+  if (requestId) return false;
+  const dir = typeof event.direction === "string" ? event.direction.trim() : "";
+  return dir !== "" && !OUTBOUND_DIRECTION.test(dir);
+}
+
 export function splitName(name: string | null): { first: string; last: string } {
   if (!name) return { first: "WhatsApp contact", last: "-" };
   const parts = name.split(/\s+/);
