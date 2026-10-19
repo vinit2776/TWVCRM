@@ -125,6 +125,15 @@ describe("assembleCustomers: tickets", () => {
     expect(multi?.raw.ticketsUnlinkedByMonth?.["2026-09-01"]).toBe(2);
   });
 
+  it("ties a ticket to the customer the logger chose, even at a shared unit", () => {
+    const data = world();
+    data.tickets.push(ticket("t-chosen", "loc1", { contract_id: "b1" }));
+    const out2 = assembleCustomers(data, ["acme", "bolt"]);
+    expect(out2.get("bolt")?.raw.tickets.map((t) => t.id).sort()).toEqual(["t-chosen", "t-reporter"]);
+    expect(out2.get("acme")?.raw.tickets.map((t) => t.id)).toEqual(["t-space"]);
+    expect(out2.get("acme")?.ticketLinkCoverage).toBe(0.6); // 3 of 5 at the center
+  });
+
   it("carries the fields the builder needs through to each ticket", () => {
     const data = world();
     data.tickets[0] = ticket("t-space", "loc1", { space_unit_id: "unit-1", sla_breached: true, reopen_count: 2, satisfaction_rating: 3 });

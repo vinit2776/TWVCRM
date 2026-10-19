@@ -3576,6 +3576,8 @@ export interface FacilityIssue {
   reporter_name?: string | null;
   reporter_email?: string | null;
   reporter_phone?: string | null;
+  /** The customer's contract this ticket is about, when one was chosen (migration 00621). */
+  contract_id?: string | null;
   reported_via: FacilityReportedVia;
   linked_feedback_id?: string | null;
   task_type: FacilityTaskType;
