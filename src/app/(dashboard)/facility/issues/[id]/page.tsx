@@ -46,6 +46,7 @@ import {
 } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
+import { ComplaintLinkCard } from "@/components/facility/complaint-link-card";
 import { MentionTextarea, type MentionUser } from "@/components/facility/mention-textarea";
 import type {
   FacilityIssue, FacilityIssueStatus, FacilityRootCause, FacilityTatReason, FacilityIssueTatExtension,
@@ -802,6 +803,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       </section>
+
+      {issue.reported_via === "whatsapp" && <ComplaintLinkCard issueId={issue.id} />}
 
       {/* ───── Claim countdown banner (unowned tickets only) ─────────────── */}
       {isUnowned && claimCountdownMs !== null && (
