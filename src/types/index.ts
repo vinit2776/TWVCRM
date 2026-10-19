@@ -103,6 +103,7 @@ export type LeadSource =
   | "meta_ads"
   | "google_ads"
   | "direct_walkin"
+  | "whatsapp"
   | "referral"
   | "cold_call"
   | "aggregator";

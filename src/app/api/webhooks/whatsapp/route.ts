@@ -38,6 +38,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { ingestInboundWhatsAppEnquiry, pickProfileName } from "@/lib/whatsapp-intake";
 
 const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
 
@@ -130,6 +131,12 @@ export function parseInboundMessage(event: Record<string, unknown>): {
   }
 
   return { body: `[${messageType}]`, messageType };
+}
+
+/** The business's own WhatsApp number must never become a lead. */
+function isOwnNumber(digits: string): boolean {
+  const own = (process.env.MSG91_WHATSAPP_SENDER ?? "").replace(/\D/g, "").slice(-10);
+  return own.length === 10 && digits.slice(-10) === own;
 }
 
 /** Constant-time compare so a wrong token can't be recovered by timing. */
@@ -341,6 +348,26 @@ export async function POST(request: NextRequest) {
         matchedLeadId = leads?.[0]?.id ?? null;
       }
 
+      // A WhatsApp message from a new number is a new lead; from a known one, a re-enquiry.
+      // Never lets a failure here break delivery-report handling or the 200 back to MSG91.
+      let intakeLeadId: string | null = null;
+      if (inboundChannel === "whatsapp" && !isOwnNumber(digits)) {
+        try {
+          const intake = await ingestInboundWhatsAppEnquiry(supabase, {
+            senderNumber,
+            matchedLeadId,
+            messageBody,
+            messageType,
+            profileName: pickProfileName(event),
+            referral,
+          });
+          intakeLeadId = intake?.leadId ?? null;
+        } catch (err) {
+          console.error("[webhook] whatsapp enquiry intake failed:", err instanceof Error ? err.message : "unknown");
+        }
+      }
+      const messageLeadId = matchedLeadId ?? intakeLeadId;
+
       // Insert inbound message record
       await supabase.from("whatsapp_messages").insert({
         direction:    "inbound",
@@ -349,8 +376,8 @@ export async function POST(request: NextRequest) {
         message_body: messageBody,
         template_name: messageType === "text" ? null : messageType,
         status:       "delivered",
-        entity_type:  matchedLeadId ? "lead" : null,
-        entity_id:    matchedLeadId ?? null,
+        entity_type:  messageLeadId ? "lead" : null,
+        entity_id:    messageLeadId ?? null,
       });
 
       // An ad reply is a fresh inbound lead — surface where it came from, since

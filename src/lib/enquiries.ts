@@ -13,6 +13,7 @@ export const ENQUIRY_SOURCE_LABEL: Record<string, string> = {
   google_ads: "Google Ads",
   meta_ads: "Meta Ads",
   direct_walkin: "Walk-in",
+  whatsapp: "WhatsApp",
 };
 
 export interface EnquiryItem {
@@ -23,7 +24,7 @@ export interface EnquiryItem {
   mobile: string | null;
   /** Display label, e.g. "Google Ads". */
   source: string;
-  /** Raw source key: google_ads | meta_ads | direct_walkin. */
+  /** Raw source key: google_ads | meta_ads | direct_walkin | whatsapp. */
   sourceTag: string;
   /** When this enquiry was received. */
   attentionResetAt: string;
