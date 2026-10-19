@@ -145,6 +145,7 @@ export default function EnquiryLogPage() {
                 <SelectItem value="google_ads">Google Ads</SelectItem>
                 <SelectItem value="meta_ads">Meta Ads</SelectItem>
                 <SelectItem value="direct_walkin">Walk-in</SelectItem>
+                <SelectItem value="whatsapp">WhatsApp</SelectItem>
               </SelectContent>
             </Select>
           </div>

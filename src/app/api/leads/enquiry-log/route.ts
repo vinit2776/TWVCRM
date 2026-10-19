@@ -4,7 +4,7 @@ import { ENQUIRY_SELECT, type RawEnquiryRow } from "@/lib/enquiries";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 
 // GET /api/leads/enquiry-log — one row per public-form enquiry (lead_enquiries).
-//   ?source=google_ads|meta_ads|direct_walkin
+//   ?source=google_ads|meta_ads|direct_walkin|whatsapp
 //   &outcome=unresolved|converted|not_interested|no_response|superseded
 //   &from=ISO-date   — an enquiry matches if it was received, or resolved, on/after this
 //   &include_unresolved=true — also return every unresolved enquiry regardless of age
