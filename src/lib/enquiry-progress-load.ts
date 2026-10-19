@@ -7,6 +7,7 @@ import {
   autoResolutions,
   deriveProgress,
   type EnquiryProgress,
+  type ProgressBooking,
   type ProgressContract,
   type ProgressEnquiry,
   type ProgressProposal,
@@ -28,7 +29,7 @@ export async function loadLeadFacts(admin: SupabaseClient, leadIds: string[]): P
   const out = new Map<string, LeadFacts>();
   if (leadIds.length === 0) return out;
 
-  const [{ data: enqRows }, { data: propRows }, { data: contractRows }, { data: leadRows }] = await Promise.all([
+  const [{ data: enqRows }, { data: propRows }, { data: contractRows }, { data: leadRows }, { data: bookingRows }] = await Promise.all([
     admin.from("lead_enquiries").select("id, lead_id, received_at, claimed_at, resolved_at, payload").in("lead_id", leadIds),
     admin
       .from("proposals")
@@ -39,6 +40,7 @@ export async function loadLeadFacts(admin: SupabaseClient, leadIds: string[]): P
       .select("id, lead_id, contract_number, proposal_id, is_renewal, sent_at, signed_at, accepted_at, activated_at")
       .in("lead_id", leadIds),
     admin.from("leads").select("id, status").in("id", leadIds),
+    admin.from("bookings").select("id, lead_id, booking_number, status, created_at").in("lead_id", leadIds),
   ]);
 
   const enquiryIds = (enqRows ?? []).map((e) => e.id as string);
@@ -89,7 +91,15 @@ export async function loadLeadFacts(admin: SupabaseClient, leadIds: string[]): P
         signed_at: ((c.signed_at ?? c.accepted_at) as string | null) ?? null,
         activated_at: (c.activated_at as string | null) ?? null,
       }));
-    out.set(leadId, { leadId, enquiries, progress: deriveProgress(enquiries, proposals, contracts), leadStatus: status.get(leadId) ?? null });
+    const bookings: ProgressBooking[] = (bookingRows ?? [])
+      .filter((b) => b.lead_id === leadId)
+      .map((b) => ({
+        id: b.id as string,
+        booking_number: b.booking_number as string | null,
+        status: b.status as string,
+        created_at: b.created_at as string,
+      }));
+    out.set(leadId, { leadId, enquiries, progress: deriveProgress(enquiries, proposals, contracts, bookings), leadStatus: status.get(leadId) ?? null });
   }
   return out;
 }
