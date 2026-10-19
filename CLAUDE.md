@@ -356,7 +356,9 @@ and nothing you are about to click is safe.
    `.env.local`, so the seeder can never be pointed at production by picking up
    the wrong env. It also refuses to run if the target project ref matches
    production's. `scripts/seed-facility-demo.mjs` and
-   `scripts/seed-staging-queries.mjs` add module-specific fixtures.
+   `scripts/seed-staging-queries.mjs` add module-specific fixtures. `scripts/seed-staging-enquiry-flow.mjs`
+   seeds the WhatsApp enquiry, complaint and request screens; everything it creates is marked as test
+   data and removed with `--clear`.
 
 Seed data uses reserved-fake addresses (`@example.com`) and obviously fake phone
 numbers, so even a bug that triggers a live send against it reaches nobody real.
