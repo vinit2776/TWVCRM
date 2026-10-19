@@ -14,7 +14,7 @@ import {
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
-import { EnquiryActions, NextStepLine } from "@/components/enquiries/enquiry-actions";
+import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -249,6 +249,11 @@ export default function EnquiryLogPage() {
                         >
                           {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
                         </span>
+                      )}
+                      {!readOnly && row.stage && (
+                        <div className="mt-1">
+                          <StageChip stage={row.stage} />
+                        </div>
                       )}
                     </td>
                     {!readOnly && (

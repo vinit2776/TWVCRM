@@ -63,6 +63,9 @@ export interface EnquiryItem {
   followUpAt: string | null;
   /** What the customer wrote, when the form or chat carried free text. */
   message: string | null;
+  /** How far it has got, read from the lead's proposals and contracts. Absent on live
+   *  notification items, which don't carry it. */
+  stage?: { key: string; label: string } | null;
 }
 
 export type RawEnquiryRow = {
@@ -86,6 +89,7 @@ export type RawEnquiryRow = {
   follow_up_at?: string | null;
   next_step_at?: string | null;
   next_step_by?: string | null;
+  stage?: { key: string; label: string } | null;
   claimer?: { id: string; full_name: string } | null;
   resolver?: { id: string; full_name: string } | null;
   lead?: {
@@ -128,6 +132,7 @@ export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
     nextStep: row.next_step ?? null,
     followUpAt: row.follow_up_at ?? null,
     message: row.payload?.messages?.[0]?.text?.trim() || row.payload?.description?.trim() || null,
+    stage: row.stage ?? null,
   };
 }
 
