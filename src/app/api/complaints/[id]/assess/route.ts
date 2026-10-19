@@ -84,7 +84,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     } else {
       const scope = b.scope ?? complaint.suggested_scope;
       if (!scope) return NextResponse.json({ error: "Choose the department (scope)" }, { status: 400 });
-      const locationId = b.location_id ?? complaint.contract?.location_id ?? complaint.lead?.location_id ?? null;
+      let locationId = b.location_id ?? complaint.contract?.location_id ?? complaint.lead?.location_id ?? null;
+      // A customer who only books rooms has no contract: use where they last booked.
+      if (!locationId && complaint.lead_id) {
+        const { data: lastBooking } = await admin
+          .from("bookings")
+          .select("location_id")
+          .eq("lead_id", complaint.lead_id)
+          .not("location_id", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        locationId = (lastBooking?.location_id as string | undefined) ?? null;
+      }
       if (!locationId) return NextResponse.json({ error: "Choose the location" }, { status: 400 });
       const task = b.outcome === "task";
       if (task && (!b.assigned_to || !b.due_date)) {
