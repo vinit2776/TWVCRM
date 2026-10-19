@@ -6,7 +6,11 @@
 export type TriageKind = "enquiry" | "customer" | "complaint" | "spam" | "low_signal" | "unsure";
 
 export type TriageContext = {
-  /** The sender is a lead with an active contract: a customer, not a prospect. */
+  /** The sender is a customer, not a prospect: a lead with an active contract, or one with a
+   *  standing booking in the last CUSTOMER_BOOKING_WINDOW_DAYS days (meeting rooms, day passes). */
+  isCustomer: boolean;
+  /** ...and specifically an active contract holder (a booking-only customer is treated more
+   *  cautiously: they are often still prospects). */
   hasActiveContract: boolean;
   /** Status of the lead this number belongs to, or null for an unknown number. */
   leadStatus: string | null;
@@ -17,6 +21,9 @@ export type TriageContext = {
   /** The lead has a WhatsApp enquiry that is still open. */
   hasOpenEnquiry: boolean;
 };
+
+/** A booking in the last this-many days makes the sender a customer for triage. */
+export const CUSTOMER_BOOKING_WINDOW_DAYS = 90;
 
 export type TriageResult = { kind: TriageKind; reason: string; source: "rules" | "ai" };
 
@@ -31,6 +38,10 @@ const STRONG_ENQUIRY_RE = /\b(seats?|cabins?|private office|meeting rooms?|confe
 const ACK_WORD = "(?:ok|okay|k|kk|thanks?|thank you|thankyou|thx|ty|yes|no|hi+|hello|hey|good (?:morning|evening|afternoon)|noted|sure|fine|done|please|👍|🙏|🙂|\\.+)";
 // One or more acknowledgement words only ("ok thanks", "okay, noted"): no request in it.
 const ACK_RE = new RegExp(`^(?:${ACK_WORD}[\\s,!.]*)+$`, "i");
+// A complaint from a booking-only customer needs a negative cue as well ("is wifi included?" is a
+// question, "wifi not working" is a complaint).
+const NEGATIVE_CUE_RE =
+  /\b(not|n't|broken|problem|issue|complain\w*|leak\w*|dirty|noise|noisy|refund|wrong|stopped|down|failed|damag\w*|bad|worst|poor|overcharg\w*)\b/i;
 const NON_TEXT_TYPES = new Set(["sticker", "reaction"]);
 
 const count = (re: RegExp, s: string) => (s.match(re) ?? []).length;
@@ -44,10 +55,16 @@ export function classifyByRules(text: string, messageType: string, ctx: TriageCo
   const enquiry = ENQUIRY_RE.test(t);
   const result = (kind: TriageKind, reason: string): TriageResult => ({ kind, reason, source: "rules" });
 
-  if (ctx.hasActiveContract) {
-    if (complaint) return result("complaint", "customer with an active contract describing a problem");
-    if (STRONG_ENQUIRY_RE.test(t)) return result("unsure", "customer asking about space or price: expansion or a question?");
-    return result("customer", "message from a customer with an active contract");
+  if (ctx.isCustomer) {
+    if (ctx.hasActiveContract) {
+      if (complaint) return result("complaint", "customer with an active contract describing a problem");
+      if (STRONG_ENQUIRY_RE.test(t)) return result("unsure", "customer asking about space or price: expansion or a question?");
+      return result("customer", "message from a customer with an active contract");
+    }
+    // Booked before but no contract: may still be a prospect, so any enquiry wording goes to review.
+    if (complaint && NEGATIVE_CUE_RE.test(t)) return result("complaint", "customer with a recent booking describing a problem");
+    if (enquiry || complaint) return result("unsure", "customer with a recent booking: a question, a problem or a new enquiry?");
+    return result("customer", "message from a customer with a recent booking");
   }
   if (looksSpam && !ctx.hasReferral) return result("spam", "promotional or scam wording");
   if (ctx.leadStatus === "junk" && !ctx.hasReferral) {
