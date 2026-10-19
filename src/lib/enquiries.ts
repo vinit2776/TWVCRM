@@ -2,12 +2,34 @@
 // people who claimed / resolved it). Used by the live-notification hook, the Enquiry Log API
 // and the Leads-page tracker so they all read the same fields.
 
+/** What a person can log against an enquiry. `note` covers anything else. */
+export const ENQUIRY_UPDATE_KINDS = [
+  "call_no_answer",
+  "spoke_interested",
+  "visit_booked",
+  "visit_done",
+  "details_sent",
+  "waiting_customer",
+  "note",
+] as const;
+export type EnquiryUpdateKind = (typeof ENQUIRY_UPDATE_KINDS)[number];
+
+export const ENQUIRY_UPDATE_LABEL: Record<EnquiryUpdateKind, string> = {
+  call_no_answer: "Called, no answer",
+  spoke_interested: "Spoke, interested",
+  visit_booked: "Visit booked",
+  visit_done: "Visit done",
+  details_sent: "Sent details on WhatsApp",
+  waiting_customer: "Waiting on customer",
+  note: "Note",
+};
+
 /** Outcomes a person can record when resolving an enquiry. */
 export type ResolutionOutcome = "converted" | "not_interested" | "no_response";
 
 /** Everything stored in resolution_outcome. `superseded` is written only by the 00584
  *  backfill (an older enquiry whose real outcome was lost) and is excluded from stats. */
-export type EnquiryOutcome = ResolutionOutcome | "superseded";
+export type EnquiryOutcome = ResolutionOutcome | "superseded" | "spam";
 
 export const ENQUIRY_SOURCE_LABEL: Record<string, string> = {
   google_ads: "Google Ads",
@@ -132,6 +154,7 @@ const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   not_interested: "Not interested",
   no_response: "No response",
   superseded: "Superseded",
+  spam: "Spam",
 };
 
 export function enquiryOutcomeLabel(outcome: EnquiryOutcome): string {

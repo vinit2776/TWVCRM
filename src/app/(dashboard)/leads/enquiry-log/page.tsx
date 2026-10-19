@@ -32,6 +32,7 @@ type Summary = {
   notInterested: number;
   noResponse: number;
   superseded: number;
+  spam?: number;
 };
 
 const OUTCOME_CLASS: Record<string, string> = {
@@ -39,6 +40,7 @@ const OUTCOME_CLASS: Record<string, string> = {
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
   superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
+  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
 };
 
 function defaultFromDate(): string {
@@ -161,6 +163,7 @@ export default function EnquiryLogPage() {
                 <SelectItem value="not_interested">Not interested</SelectItem>
                 <SelectItem value="no_response">No response</SelectItem>
                 <SelectItem value="superseded">Superseded</SelectItem>
+                <SelectItem value="spam">Spam{summary?.spam ? ` (${summary.spam})` : ""}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -257,6 +260,7 @@ export default function EnquiryLogPage() {
                             claimedAt={row.claimedAt}
                             claimerName={row.claimerName}
                             resolvedAt={row.resolvedAt}
+                            isSpam={row.resolutionOutcome === "spam"}
                             nextStep={row.nextStep}
                             followUpAt={row.followUpAt}
                             onChanged={load}

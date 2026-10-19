@@ -5,7 +5,8 @@ import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 
 // GET /api/leads/enquiry-log — one row per public-form enquiry (lead_enquiries).
 //   ?source=google_ads|meta_ads|direct_walkin|whatsapp
-//   &outcome=unresolved|converted|not_interested|no_response|superseded
+//   &outcome=unresolved|converted|not_interested|no_response|superseded|spam
+//   (spam enquiries are hidden unless outcome=spam is asked for)
 //   &from=ISO-date   — an enquiry matches if it was received, or resolved, on/after this
 //   &include_unresolved=true — also return every unresolved enquiry regardless of age
 //   &to=ISO-date     — received on/before this
@@ -49,9 +50,21 @@ export async function GET(request: NextRequest) {
 
   if (outcome === "unresolved") query = query.is("resolved_at", null);
   else if (outcome) query = query.eq("resolution_outcome", outcome);
+  // A plain `neq` would also drop rows whose outcome is NULL, i.e. every open enquiry.
+  if (outcome !== "spam") query = query.or("resolution_outcome.is.null,resolution_outcome.neq.spam");
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // How many are stashed as spam (same source / date window), so the page can say so.
+  let spamQuery = supabase
+    .from("lead_enquiries")
+    .select("id", { count: "exact", head: true })
+    .eq("resolution_outcome", "spam");
+  if (source) spamQuery = spamQuery.eq("source", source);
+  if (from) spamQuery = spamQuery.gte("received_at", from);
+  if (to) spamQuery = spamQuery.lte("received_at", to);
+  const { count: spamCount } = await spamQuery;
 
   // Roll up counts in the same response so the page can show summary tiles without a second
   // round trip. `superseded` is history with no recorded outcome, so it stays out of the
@@ -79,8 +92,8 @@ export async function GET(request: NextRequest) {
       payload: row.payload?.name ? { name: row.payload.name } : null,
       lead: row.lead ? { ...row.lead, mobile: null } : row.lead,
     }));
-    return NextResponse.json({ data: masked, summary });
+    return NextResponse.json({ data: masked, summary: { ...summary, spam: spamCount ?? 0 } });
   }
 
-  return NextResponse.json({ data, summary });
+  return NextResponse.json({ data, summary: { ...summary, spam: spamCount ?? 0 } });
 }

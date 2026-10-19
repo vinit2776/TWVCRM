@@ -18,6 +18,7 @@ const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   not_interested: "Not interested / no fit",
   no_response: "Followed up — no response",
   superseded: "Superseded by a later enquiry",
+  spam: "Spam",
 };
 
 const OUTCOME_BG: Record<EnquiryOutcome, string> = {
@@ -25,6 +26,7 @@ const OUTCOME_BG: Record<EnquiryOutcome, string> = {
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
   superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
+  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
 };
 
 function timeAgo(iso: string): string {

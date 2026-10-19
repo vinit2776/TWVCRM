@@ -93,6 +93,7 @@ export function LeadEnquiriesCard({ leadId }: { leadId: string }) {
                   claimedAt={r.claimed_at}
                   claimerName={r.claimer?.full_name ?? null}
                   resolvedAt={r.resolved_at}
+                  isSpam={r.resolution_outcome === "spam"}
                   nextStep={r.next_step}
                   followUpAt={r.follow_up_at}
                   onChanged={load}
