@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
+import { complaintTemplateStatus } from "@/lib/complaint-messages";
 import { effectiveComplaintStatus, isOpenComplaint, type ComplaintStatus } from "@/lib/complaints";
 
 // GET /api/complaints
@@ -28,7 +29,8 @@ export async function GET(request: NextRequest) {
         "lead:leads!customer_complaints_lead_id_fkey(id), " +
         "contract:contracts!customer_complaints_contract_id_fkey(id, contract_number, location_id, location:locations!contracts_location_id_fkey(id, name)), " +
         "issue:facility_issues!customer_complaints_issue_id_fkey(id, issue_number, status, assignee:users!facility_issues_assigned_to_fkey(full_name)), " +
-        "assessor:users!customer_complaints_assessed_by_fkey(full_name)"
+        "assessor:users!customer_complaints_assessed_by_fkey(full_name), " +
+        "replies:complaint_replies(id, kind, message, status, detail, created_at)"
     )
     .order("created_at", { ascending: false })
     .limit(300);
@@ -44,5 +46,5 @@ export async function GET(request: NextRequest) {
     ? all
     : all.filter((r) => (view === "all" ? true : view === "done" ? !isOpenComplaint(r.status) : isOpenComplaint(r.status)));
 
-  return NextResponse.json({ data: rows, openCount });
+  return NextResponse.json({ data: rows, openCount, templates: complaintTemplateStatus() });
 }
