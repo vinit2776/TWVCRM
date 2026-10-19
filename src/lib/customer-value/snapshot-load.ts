@@ -18,6 +18,7 @@ import type { MoneyPaymentRow } from "@/lib/customer-value/money";
 import type { RatePhaseInput } from "@/lib/rate-phase-dates";
 import {
   fetchInChunks,
+  isMissingColumnError,
   isMissingTableError,
   type PageResult,
 } from "@/lib/customer-value/query-helpers";
@@ -74,6 +75,23 @@ async function loadContractsForLeads(supabase: SupabaseClient, leadIds: string[]
     byContract.set(p.contract_id, list);
   }
   return records.map((c) => ({ ...c, rate_phases: byContract.get(c.id) ?? [] }));
+}
+
+const TICKET_COLUMNS =
+  "id, location_id, reported_at, space_unit_id, reporter_email, reporter_phone, sla_breached, reopen_count, satisfaction_rating";
+
+/**
+ * Tickets at these centers. Reads the explicit customer (`contract_id`, migration
+ * 00621) when the column exists; in a database without it, falls back to the
+ * older columns so the nightly run never fails over a missing migration.
+ */
+async function loadTickets(supabase: SupabaseClient, locationIds: string[]): Promise<FetchedTicket[]> {
+  try {
+    return await fetchInChunks<FetchedTicket>("tickets", locationIds, inQuery(supabase, "facility_issues", `${TICKET_COLUMNS}, contract_id`, "location_id"));
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    return fetchInChunks<FetchedTicket>("tickets", locationIds, inQuery(supabase, "facility_issues", TICKET_COLUMNS, "location_id"));
+  }
 }
 
 /** Reads everything the snapshot builder needs for these customers. */
@@ -165,16 +183,7 @@ export async function fetchSnapshotData(supabase: SupabaseClient, leadIds: strin
       locationIds,
       inQuery(supabase, "contracts", "id, lead_id, location_id", "location_id")
     ),
-    fetchInChunks<FetchedTicket>(
-      "tickets",
-      locationIds,
-      inQuery(
-        supabase,
-        "facility_issues",
-        "id, location_id, reported_at, space_unit_id, reporter_email, reporter_phone, sla_breached, reopen_count, satisfaction_rating",
-        "location_id"
-      )
-    ),
+    loadTickets(supabase, locationIds),
   ]);
 
   // Round 3: the center's allocations and members, for ticket linking.
