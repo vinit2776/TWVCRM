@@ -36,6 +36,11 @@ export interface EnquiryItem {
   resolverName: string | null;
   resolvedAt: string | null;
   resolutionOutcome: EnquiryOutcome | null;
+  /** What happens next, and the calendar day (IST) it's due. */
+  nextStep: string | null;
+  followUpAt: string | null;
+  /** What the customer wrote, when the form or chat carried free text. */
+  message: string | null;
 }
 
 export type RawEnquiryRow = {
@@ -44,12 +49,21 @@ export type RawEnquiryRow = {
   lead_id: string | null;
   source: string;
   is_re_enquiry: boolean;
-  payload: { name?: string; mobile?: string } | null;
+  payload: {
+    name?: string;
+    mobile?: string;
+    description?: string;
+    messages?: { at?: string; text?: string }[];
+  } | null;
   received_at: string;
   claimed_by: string | null;
   claimed_at: string | null;
   resolved_at: string | null;
   resolution_outcome: EnquiryOutcome | null;
+  next_step?: string | null;
+  follow_up_at?: string | null;
+  next_step_at?: string | null;
+  next_step_by?: string | null;
   claimer?: { id: string; full_name: string } | null;
   resolver?: { id: string; full_name: string } | null;
   lead?: {
@@ -63,6 +77,7 @@ export type RawEnquiryRow = {
 export const ENQUIRY_SELECT =
   "id, reference, lead_id, source, is_re_enquiry, payload, received_at, " +
   "claimed_by, claimed_at, resolved_at, resolution_outcome, " +
+  "next_step, follow_up_at, next_step_at, next_step_by, " +
   "claimer:users!lead_enquiries_claimed_by_fkey(id, full_name), " +
   "resolver:users!lead_enquiries_resolved_by_fkey(id, full_name), " +
   "lead:leads!lead_enquiries_lead_id_fkey(first_name, last_name, mobile, location_id)";
@@ -88,7 +103,28 @@ export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
     resolverName: row.resolver?.full_name ?? null,
     resolvedAt: row.resolved_at,
     resolutionOutcome: row.resolution_outcome,
+    nextStep: row.next_step ?? null,
+    followUpAt: row.follow_up_at ?? null,
+    message: row.payload?.messages?.[0]?.text?.trim() || row.payload?.description?.trim() || null,
   };
+}
+
+/** Today as a YYYY-MM-DD calendar day in IST, the zone follow-up dates are entered in. */
+function istDay(d: Date): string {
+  return new Date(d.getTime() + 5.5 * 3_600_000).toISOString().slice(0, 10);
+}
+
+/** Where a follow-up date stands today. Null when there is none. */
+export function followUpState(followUpAt: string | null, now: Date = new Date()): "overdue" | "today" | "upcoming" | null {
+  if (!followUpAt) return null;
+  const due = istDay(new Date(followUpAt));
+  const today = istDay(now);
+  return due < today ? "overdue" : due === today ? "today" : "upcoming";
+}
+
+/** YYYY-MM-DD for an <input type="date"> from a stored follow-up timestamp. */
+export function followUpInputValue(followUpAt: string | null): string {
+  return followUpAt ? istDay(new Date(followUpAt)) : "";
 }
 
 const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {

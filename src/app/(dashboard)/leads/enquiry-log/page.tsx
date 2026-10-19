@@ -14,6 +14,7 @@ import {
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { EnquiryActions, NextStepLine } from "@/components/enquiries/enquiry-actions";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -50,7 +51,7 @@ export default function EnquiryLogPage() {
   const { user } = useCurrentUser();
   // Read-only role: names aren't links into the lead record and there's no mobile column.
   const readOnly = user?.role === ENQUIRY_VIEWER_ROLE;
-  const columnCount = readOnly ? 7 : 8;
+  const columnCount = readOnly ? 7 : 9;
   const [rows, setRows] = useState<EnquiryItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,6 +191,7 @@ export default function EnquiryLogPage() {
                 {!readOnly && <th className="px-3 py-2 text-left">Mobile</th>}
                 <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-left">Status</th>
+                {!readOnly && <th className="px-3 py-2 text-left">Next step</th>}
                 <th className="px-3 py-2 text-left">Resolved by</th>
                 <th className="px-3 py-2 text-left">Resolved at</th>
               </tr>
@@ -221,6 +223,11 @@ export default function EnquiryLogPage() {
                           Re-enquiry
                         </span>
                       )}
+                      {!readOnly && row.message && (
+                        <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={row.message}>
+                          “{row.message}”
+                        </p>
+                      )}
                     </td>
                     {!readOnly && (
                       <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
@@ -241,6 +248,22 @@ export default function EnquiryLogPage() {
                         </span>
                       )}
                     </td>
+                    {!readOnly && (
+                      <td className="px-3 py-2">
+                        <div className="space-y-1.5">
+                          <NextStepLine nextStep={row.nextStep} followUpAt={row.followUpAt} />
+                          <EnquiryActions
+                            enquiryId={row.enquiryId}
+                            claimedAt={row.claimedAt}
+                            claimerName={row.claimerName}
+                            resolvedAt={row.resolvedAt}
+                            nextStep={row.nextStep}
+                            followUpAt={row.followUpAt}
+                            onChanged={load}
+                          />
+                        </div>
+                      </td>
+                    )}
                     <td className="px-3 py-2 text-xs">
                       {row.resolutionOutcome === "superseded" ? "—" : (row.resolverName ?? "—")}
                     </td>

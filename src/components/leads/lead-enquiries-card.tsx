@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/utils";
 import { enquiryStateLabel, type EnquiryOutcome } from "@/lib/enquiries";
+import { EnquiryActions, NextStepLine } from "@/components/enquiries/enquiry-actions";
 import { describeAttribution, sanitiseAttribution } from "@/lib/public-forms/attribution";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -25,6 +26,8 @@ interface LeadEnquiry {
   claimer: { full_name: string } | null;
   resolver: { full_name: string } | null;
   attribution?: unknown;
+  next_step: string | null;
+  follow_up_at: string | null;
 }
 
 const stateTone = (e: LeadEnquiry) =>
@@ -41,12 +44,16 @@ const stateTone = (e: LeadEnquiry) =>
 export function LeadEnquiriesCard({ leadId }: { leadId: string }) {
   const [rows, setRows] = useState<LeadEnquiry[]>([]);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch(`/api/leads/${leadId}/enquiries`)
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setRows((json?.data as LeadEnquiry[] | undefined) ?? []))
       .catch(() => {});
   }, [leadId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   if (rows.length === 0) return null;
 
@@ -79,6 +86,18 @@ export function LeadEnquiriesCard({ leadId }: { leadId: string }) {
                 </span>
               </div>
               {campaign && <p className="mt-0.5 text-xs text-muted-foreground">Campaign: {campaign}</p>}
+              <div className="mt-1.5 space-y-1.5">
+                <NextStepLine nextStep={r.next_step} followUpAt={r.follow_up_at} />
+                <EnquiryActions
+                  enquiryId={r.id}
+                  claimedAt={r.claimed_at}
+                  claimerName={r.claimer?.full_name ?? null}
+                  resolvedAt={r.resolved_at}
+                  nextStep={r.next_step}
+                  followUpAt={r.follow_up_at}
+                  onChanged={load}
+                />
+              </div>
             </div>
           );
         })}

@@ -11,6 +11,7 @@ import {
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryOutcome } from "@/lib/enquiries";
+import { NextStepLine } from "@/components/enquiries/enquiry-actions";
 
 const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
@@ -140,6 +141,12 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
           {item.claimerName && item.resolverName && " · "}
           {item.resolverName && <>Resolved by {item.resolverName}</>}
         </p>
+      )}
+
+      {!isResolved && item.nextStep && (
+        <div className="mt-1.5">
+          <NextStepLine nextStep={item.nextStep} followUpAt={item.followUpAt} />
+        </div>
       )}
 
       {!isResolved && (
