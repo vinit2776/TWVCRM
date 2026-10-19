@@ -38,7 +38,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { ingestInboundWhatsAppEnquiry, isInboundEvent, pickProfileName } from "@/lib/whatsapp-intake";
+import { ingestInboundWhatsAppEnquiry, isInboundEvent } from "@/lib/whatsapp-intake";
+import { pickProfileName } from "@/lib/whatsapp-names";
 
 const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
 
@@ -339,13 +340,23 @@ export async function POST(request: NextRequest) {
 
       // Find a matching lead by phone or mobile (suffix match on last 10 digits)
       let matchedLeadId: string | null = null;
+      let matchedContactName: string | null = null;
       if (last10.length === 10) {
-        const { data: leads } = await supabase
-          .from("leads")
-          .select("id, phone, mobile")
-          .or(`phone.ilike.%${last10},mobile.ilike.%${last10}`)
-          .limit(1);
-        matchedLeadId = leads?.[0]?.id ?? null;
+        // Digits-only match across the lead's numbers and its additional contacts, preferring a
+        // customer with an active contract (migration 00623). If the function is not there yet
+        // (code deployed before the migration) fall back to the old suffix match.
+        const { data: hit, error: rpcError } = await supabase.rpc("find_lead_by_phone", { p_last10: last10 });
+        if (!rpcError) {
+          matchedLeadId = (hit as { lead_id: string; contact_name: string | null }[] | null)?.[0]?.lead_id ?? null;
+          matchedContactName = (hit as { lead_id: string; contact_name: string | null }[] | null)?.[0]?.contact_name ?? null;
+        } else {
+          const { data: leads } = await supabase
+            .from("leads")
+            .select("id, phone, mobile")
+            .or(`phone.ilike.%${last10},mobile.ilike.%${last10}`)
+            .limit(1);
+          matchedLeadId = leads?.[0]?.id ?? null;
+        }
       }
 
       // A WhatsApp message from a new number is a new lead; from a known one, a re-enquiry.
@@ -359,6 +370,7 @@ export async function POST(request: NextRequest) {
             messageBody,
             messageType,
             profileName: pickProfileName(event),
+            matchedContactName,
             referral,
           });
           intakeLeadId = intake?.leadId ?? null;

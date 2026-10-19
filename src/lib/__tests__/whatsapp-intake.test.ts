@@ -6,7 +6,7 @@ vi.mock("@/lib/push", () => ({ sendPushToAll: vi.fn() }));
 vi.mock("@/lib/whatsapp", () => ({ messaging: {} }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 
-import { isInboundEvent, normaliseWhatsAppNumber, pickProfileName, splitName } from "../whatsapp-intake";
+import { isInboundEvent, normaliseWhatsAppNumber, splitName } from "../whatsapp-intake";
 
 describe("normaliseWhatsAppNumber", () => {
   it("strips the 91 country code to the 10 digits the forms store", () => {
@@ -17,14 +17,6 @@ describe("normaliseWhatsAppNumber", () => {
   });
   it("rejects too-short input", () => {
     expect(normaliseWhatsAppNumber("12345")).toBeNull();
-  });
-});
-
-describe("pickProfileName", () => {
-  it("reads a known key and ignores the [object Object] placeholder", () => {
-    expect(pickProfileName({ profileName: " Rahul Sharma " })).toBe("Rahul Sharma");
-    expect(pickProfileName({ customerName: "[object Object]" })).toBeNull();
-    expect(pickProfileName({})).toBeNull();
   });
 });
 
