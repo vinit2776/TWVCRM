@@ -9,6 +9,7 @@ import { logAudit } from "@/lib/audit";
 import { CUSTOMER_BOOKING_WINDOW_DAYS, classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
 import { COUNTED_BOOKING_STATUSES } from "@/lib/enquiry-progress";
 import { classifyWithAi } from "@/lib/whatsapp-triage-ai";
+import { appendToOpenComplaint, recordComplaint } from "@/lib/complaints-server";
 
 const MAX_STORED_MESSAGES = 20;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
@@ -194,7 +195,17 @@ export async function ingestInboundWhatsAppEnquiry(
       await appendMessage(supabase, latest, message);
       return { leadId: input.matchedLeadId, reference: latest.reference, kind, outcome: "joined_open_enquiry" };
     }
-    if (kind === "complaint" && input.matchedLeadId) await flagComplaint(supabase, input.matchedLeadId, displayName);
+    if (kind === "customer" && input.matchedLeadId) {
+      // Part of a complaint they already raised? Then it goes on that complaint.
+      try {
+        await appendToOpenComplaint(supabase, input.matchedLeadId, input.messageBody);
+      } catch (err) {
+        console.error("[whatsapp-intake] complaint follow-up failed:", err instanceof Error ? err.message : "unknown");
+      }
+    }
+    if (kind === "complaint" && input.matchedLeadId) {
+      await flagComplaint(supabase, input.matchedLeadId, displayName, num.mobile, input.messageBody);
+    }
     return { leadId: input.matchedLeadId, reference: null, kind, outcome: "logged_only" };
   }
 
@@ -296,22 +307,31 @@ async function createLead(
   return lead.id as string;
 }
 
-/** A customer with an active contract wrote something that sounds like a problem: no enquiry,
- *  but the lead's timeline and the team's notifications should show it. */
-async function flagComplaint(supabase: SupabaseClient, leadId: string, name: string) {
+/** A customer with an active contract wrote something that sounds like a problem: no enquiry.
+ *  It becomes (or joins) a complaint for a person to assess, and the team is told. */
+async function flagComplaint(supabase: SupabaseClient, leadId: string, name: string, phone: string, text: string) {
+  let recorded: Awaited<ReturnType<typeof recordComplaint>> = null;
+  try {
+    recorded = await recordComplaint(supabase, { leadId, customerName: name, customerPhone: phone, text });
+  } catch (err) {
+    console.error("[whatsapp-intake] complaint record failed:", err instanceof Error ? err.message : "unknown");
+  }
   await Promise.allSettled([
     supabase.from("activities").insert({
       lead_id: leadId,
       type: "note",
-      subject: "WhatsApp: possible complaint or support request",
+      subject: `WhatsApp: possible complaint${recorded ? ` (${recorded.reference})` : ""}`,
       description: "Flagged automatically: an active customer wrote something that sounds like a problem. See the WhatsApp reply note.",
     }),
-    sendPushToAll({
-      title: `Customer message: ${name}`,
-      body: "Possible complaint or support request on WhatsApp",
-      url: `${APP_URL}/leads/${leadId}`,
-      tag: `wa-complaint-${leadId}`,
-    }),
+    // A message added to a complaint someone is already assessing does not need another alert.
+    recorded?.appended
+      ? Promise.resolve()
+      : sendPushToAll({
+          title: `Customer complaint${recorded ? ` ${recorded.reference}` : ""}: ${name}`,
+          body: "Possible complaint or support request on WhatsApp",
+          url: `${APP_URL}/facility/issues?view=complaints`,
+          tag: `wa-complaint-${leadId}`,
+        }),
   ]);
 }
 
