@@ -6,7 +6,7 @@ vi.mock("@/lib/push", () => ({ sendPushToAll: vi.fn() }));
 vi.mock("@/lib/whatsapp", () => ({ messaging: {} }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 
-import { normaliseWhatsAppNumber, pickProfileName, splitName } from "../whatsapp-intake";
+import { isInboundEvent, normaliseWhatsAppNumber, pickProfileName, splitName } from "../whatsapp-intake";
 
 describe("normaliseWhatsAppNumber", () => {
   it("strips the 91 country code to the 10 digits the forms store", () => {
@@ -33,5 +33,21 @@ describe("splitName", () => {
     expect(splitName(null)).toEqual({ first: "WhatsApp contact", last: "-" });
     expect(splitName("Asha")).toEqual({ first: "Asha", last: "-" });
     expect(splitName("Asha Nair Iyer")).toEqual({ first: "Asha", last: "Nair Iyer" });
+  });
+});
+
+describe("isInboundEvent", () => {
+  it("treats a status-less event as inbound (original MSG91 shape)", () => {
+    expect(isInboundEvent({ from: "91900", text: "hi" }, undefined, undefined)).toBe(true);
+  });
+  it("treats the re-registered shape (status submitted, direction inbound, no requestId) as inbound", () => {
+    expect(isInboundEvent({ eventName: "submitted", direction: "inbound" }, "submitted", undefined)).toBe(true);
+  });
+  it("never treats an event carrying a requestId as inbound, so delivery reports stay reports", () => {
+    expect(isInboundEvent({ direction: "inbound" }, "sent", "abc123")).toBe(false);
+  });
+  it("rejects a status event with an outbound or missing direction", () => {
+    expect(isInboundEvent({ direction: "outbound" }, "submitted", undefined)).toBe(false);
+    expect(isInboundEvent({}, "submitted", undefined)).toBe(false);
   });
 });

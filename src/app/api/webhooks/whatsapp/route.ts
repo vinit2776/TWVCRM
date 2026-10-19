@@ -38,7 +38,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { ingestInboundWhatsAppEnquiry, pickProfileName } from "@/lib/whatsapp-intake";
+import { ingestInboundWhatsAppEnquiry, isInboundEvent, pickProfileName } from "@/lib/whatsapp-intake";
 
 const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN?.trim() || undefined;
 
@@ -315,7 +315,7 @@ export async function POST(request: NextRequest) {
           }).then(({ error }) => { if (error) console.error("[webhook] activity insert failed:", error.message); });
         }
       }
-    } else if (senderNumber && !rawStatus) {
+    } else if (senderNumber && isInboundEvent(event, rawStatus, requestId)) {
       // Inbound message — link to lead if phone matches, log activity, alert dashboard.
       //
       // Not keyed on `text`: most inbound events carry an empty `text` and hold
@@ -411,6 +411,8 @@ export async function POST(request: NextRequest) {
         "[messaging webhook] Unhandled event shape. Top-level keys:",
         Object.keys(event).join(","),
         "| status:", rawStatus ?? "-",
+        // Non-PII routing fields only, so a new payload shape can be diagnosed from logs.
+        "| direction:", typeof event.direction === "string" ? event.direction.slice(0, 20) : "-",
         "| hasRequestId:", !!requestId
       );
     }
