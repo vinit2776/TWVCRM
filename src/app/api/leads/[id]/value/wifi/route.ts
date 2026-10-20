@@ -66,7 +66,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const empty = (status: Status, center: { id: string; name: string } | null = null) => ({ status, center });
 
   try {
-    const cohort = await loadCenterCohort(supabase, leadId);
+    const cohort = await loadCenterCohort(supabase, leadId, "live");
     if (!cohort) return NextResponse.json(empty("no_center"), { headers: cache });
     const center = { id: cohort.centerId, name: cohort.centerName };
 
