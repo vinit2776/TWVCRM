@@ -8,16 +8,16 @@
  * `customer_value_margin`. Scoring is untouched. Dry-run is the default; it reads
  * CRM records, writes only that table, and sends nothing to anyone.
  *
- * A customer's center is the one scoring uses (their first location), so the
- * electricity split matches the Electricity tab.
+ * A customer's center is where they are served now (`chooseServiceCenter`), so the
+ * electricity split matches the Electricity and Costs tabs.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { chooseServiceCenter, type ContractLocation } from "@/lib/customer-value/center-cohort";
 import { resolveParams, type CostParameterRow } from "@/lib/customer-value/cost-parameters";
 import { electricityMonth } from "@/lib/customer-value/electricity-share";
 import { loadCenterEnergy, type CenterEnergy } from "@/lib/customer-value/electricity-load";
 import { fetchAllPages, fetchInChunks } from "@/lib/customer-value/query-helpers";
-import { primaryLocation } from "@/lib/customer-value/scoring-run";
 import { shadowMargin, tenureAt, type ShadowMargin } from "@/lib/customer-value/shadow-margin";
 import { upsertInChunks } from "@/lib/customer-value/snapshot-refresh";
 
@@ -80,25 +80,25 @@ export async function refreshShadowMargins(
         .range(from, to)
         .returns<MonthlyRow[]>()
     ),
-    fetchAllPages<{ id: string; lead_id: string; location_id: string | null; start_date: string | null }>("contracts", (from, to) =>
-      supabase.from("contracts").select("id, lead_id, location_id, start_date").order("id").range(from, to).returns<Array<{ id: string; lead_id: string; location_id: string | null; start_date: string | null }>>()
+    fetchAllPages<ContractLocation>("contracts", (from, to) =>
+      supabase.from("contracts").select("id, lead_id, location_id, start_date, status, seats, activated_at").order("id").range(from, to).returns<ContractLocation[]>()
     ),
     fetchAllPages<CostParameterRow>("cost parameters", (from, to) =>
       supabase.from("value_cost_parameters").select("id, scope, location_id, lead_id, key, value, effective_from, created_at").order("id").range(from, to).returns<CostParameterRow[]>()
     ),
   ]);
 
-  // Each customer's center and first contract start.
-  const locationsByLead = new Map<string, string[]>();
+  // Each customer's center (where they are served now, the same rule as the Electricity and Costs tabs) and first contract start.
+  const contractsByLead = new Map<string, ContractLocation[]>();
   const startByLead = new Map<string, string>();
   const leadByContract = new Map<string, string>();
   for (const c of contracts) {
     leadByContract.set(c.id, c.lead_id);
-    if (c.location_id) locationsByLead.set(c.lead_id, [...(locationsByLead.get(c.lead_id) ?? []), c.location_id]);
+    contractsByLead.set(c.lead_id, [...(contractsByLead.get(c.lead_id) ?? []), c]);
     if (c.start_date && (!startByLead.has(c.lead_id) || c.start_date < (startByLead.get(c.lead_id) as string))) startByLead.set(c.lead_id, c.start_date);
   }
   const centerByLead = new Map<string, string | null>();
-  for (const [lead, locs] of locationsByLead) centerByLead.set(lead, primaryLocation({ locationIds: locs }));
+  for (const [lead, list] of contractsByLead) centerByLead.set(lead, chooseServiceCenter(list));
 
   // Seats of everyone at each center, by month: the electricity split's denominator.
   const contractedByCenterMonth = new Map<string, number>();
