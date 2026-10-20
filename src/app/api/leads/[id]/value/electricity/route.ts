@@ -33,7 +33,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (dbUser?.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
-    const cohort = await loadCenterCohort(supabase, leadId);
+    const cohort = await loadCenterCohort(supabase, leadId, "live");
     const body = await loadElectricity(supabase, leadId, cohort, istToday());
     return NextResponse.json(body, { headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=120" } });
   } catch (err) {
