@@ -63,7 +63,7 @@ export function change90(now: number | null, then: number | null): number | null
 const TIER_RANK: Record<PortfolioTier, number> = { D: 0, C: 1, B: 2, A: 3 };
 
 /** Rows that lack the sort's figure always go last, so a sort never opens with blanks. */
-function by<T>(value: (r: PortfolioRow) => number | null, direction: 1 | -1, tie: (a: PortfolioRow, b: PortfolioRow) => number) {
+function by(value: (r: PortfolioRow) => number | null, direction: 1 | -1, tie: (a: PortfolioRow, b: PortfolioRow) => number) {
   return (a: PortfolioRow, b: PortfolioRow): number => {
     const x = value(a);
     const y = value(b);
