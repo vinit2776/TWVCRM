@@ -23,6 +23,15 @@ export const PILLAR_HELP: Record<PillarKey, string> = {
   profitability: "Revenue side only for now: concessions given, rent against the center, escalation outcomes. Real margin needs cost data.",
 };
 
+/** Revenue health's help once margin after variable costs is counted in it. */
+export const PROFITABILITY_HELP_WITH_MARGIN =
+  "Concessions given, rent against the center, escalation outcomes, and margin after variable costs, an estimate that rests on the cost rates entered.";
+
+/** Whether this stored pillar counted a margin (margin scoring on and a usable margin found). */
+export function marginCounted(method: StoredPillarMethod | undefined): boolean {
+  return method?.metrics.some((m) => m.key === "margin_after_variable_pct" && m.status === "ok") ?? false;
+}
+
 export const METRIC_LABELS: Record<string, string> = {
   avg_days_late: "days late",
   on_time_share: "on-time share",
@@ -40,6 +49,7 @@ export const METRIC_LABELS: Record<string, string> = {
   concessions_pct: "concessions",
   rent_vs_center: "rent against the center",
   escalation_outcomes: "escalation outcomes",
+  margin_after_variable_pct: "margin after variable costs",
 };
 
 export interface StoredMetric {
@@ -108,11 +118,16 @@ export function monthlySeries(rows: StoredScoreRow[], today: string, months = 12
 
 export type ConfidenceChip = { label: string; tone: "good" | "warn" | "bad" };
 
-/** How much to trust a pillar, in words. Revenue health is always partial until cost data exists. */
-export function confidenceChip(pillar: PillarKey, score: number | null, confidence: number | undefined): ConfidenceChip {
+/** How much to trust a pillar, in words. Revenue health is partial unless a margin was counted in it. */
+export function confidenceChip(
+  pillar: PillarKey,
+  score: number | null,
+  confidence: number | undefined,
+  withMargin = false
+): ConfidenceChip {
   if (score === null) return { label: "No data", tone: "bad" };
   if (confidence !== undefined && confidence < 0.5) return { label: "Low confidence", tone: "bad" };
-  if (pillar === "profitability") return { label: "Partial", tone: "warn" };
+  if (pillar === "profitability" && !withMargin) return { label: "Partial", tone: "warn" };
   if (confidence !== undefined && confidence < 0.9) return { label: "Some gaps", tone: "warn" };
   return { label: "Full data", tone: "good" };
 }
