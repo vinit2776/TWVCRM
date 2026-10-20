@@ -411,15 +411,18 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (stmtFull?.case_id && stmtFull.statement_type === "vo_renewal") {
-          void handleRenewalPayment({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          adminSupabase: supabase as unknown as any,
-            caseId: stmtFull.case_id,
-            statementId: billingStatement.id,
-            amountPaid,
-            razorpayPaymentId: razorpayPaymentId || "",
-            razorpayLinkId: paymentLinkId,
-          }).catch((err) => console.error("[webhook] VO renewal completion failed:", err));
+          // Awaited: a fire-and-forget promise can be cut off when the
+          // function returns, leaving a paid renewal unrenewed.
+          try {
+            await handleRenewalPayment({
+              adminSupabase: supabase,
+              statementId: billingStatement.id,
+              razorpayPaymentId: razorpayPaymentId || "",
+              razorpayLinkId: paymentLinkId,
+            });
+          } catch (err) {
+            console.error("[webhook] VO renewal completion failed:", err);
+          }
         }
       }
 

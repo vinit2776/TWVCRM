@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 import { computeSettlement, type SettlementPaymentStatus } from "@/lib/settlement";
 import { advanceCaseStage } from "@/lib/case-status-events";
+import { completeVoRenewal } from "@/lib/vo-renewal-completion";
 
 /**
  * Shared tail of "a payment landed on a statement": recompute settlement
@@ -57,6 +58,16 @@ export async function finalizeBillingPayment(
       .maybeSingle();
     if (stmt?.case_id && stmt.statement_type === "vo_case") {
       await advanceCaseStage(supabase, stmt.case_id as string, "paid");
+    }
+    if (stmt?.case_id && stmt.statement_type === "vo_renewal") {
+      // A renewal paid any way other than its Razorpay link (bank transfer
+      // recorded by accounts, or a verified Report paid) renews the case
+      // here. Never fails the payment that was just recorded.
+      try {
+        await completeVoRenewal(supabase, { statementId, performedBy, source: "recorded_payment" });
+      } catch (err) {
+        console.error("[billing-payment-settlement] VO renewal completion failed:", err);
+      }
     }
 
     const v2Enabled = await isHandoffV2Enabled(supabase);

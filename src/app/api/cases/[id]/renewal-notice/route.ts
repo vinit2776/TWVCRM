@@ -10,6 +10,7 @@ import {
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { nextRenewalTerm } from "@/lib/vo-renewal-term";
 
 const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "accounts"];
 
@@ -126,10 +127,7 @@ export async function POST(
 
   // Same sequence the cron runs, so a manual notice is indistinguishable from
   // an automated one to the recipient — and settles through the same link.
-  const periodStart = caseRow.end_date;
-  const periodEndDate = new Date(caseRow.end_date);
-  periodEndDate.setMonth(periodEndDate.getMonth() + (caseRow.tenure_months ?? 12));
-  const periodEnd = periodEndDate.toISOString().slice(0, 10);
+  const { start: periodStart, end: periodEnd } = nextRenewalTerm(caseRow.end_date, caseRow.tenure_months ?? 12);
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 7);
   const dueDateStr = dueDate.toISOString().slice(0, 10);

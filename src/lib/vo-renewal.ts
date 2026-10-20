@@ -8,7 +8,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
-import { logAudit } from "@/lib/audit";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -21,6 +20,7 @@ import {
 } from "@/lib/pdf-utils";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { renewalRecipients, type RenewalRecipient } from "@/lib/renewal-recipients";
+import { completeVoRenewal } from "@/lib/vo-renewal-completion";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -611,68 +611,27 @@ export async function logRenewalReminder(params: {
 // Handle a successful renewal payment (called from webhook)
 // ---------------------------------------------------------------------------
 
+/**
+ * Stamps the Razorpay reference on the statement, then hands off to the same
+ * completion every other payment route uses (completeVoRenewal), so a link
+ * payment and a recorded bank transfer renew a case identically and only once.
+ */
 export async function handleRenewalPayment(params: {
   adminSupabase: SupabaseClient;
-  caseId: string;
   statementId: string;
-  amountPaid: number;
   razorpayPaymentId: string;
   razorpayLinkId: string;
 }): Promise<void> {
-  const { adminSupabase, caseId, statementId, amountPaid, razorpayPaymentId, razorpayLinkId } = params;
+  const { adminSupabase, statementId, razorpayPaymentId, razorpayLinkId } = params;
 
-  // Fetch current case to know tenure_months and end_date
-  const { data: caseData } = await adminSupabase
-    .from("cases")
-    .select("end_date, tenure_months, start_date, renewal_reminder_count")
-    .eq("id", caseId)
-    .single();
-
-  if (!caseData) throw new Error("Case not found for renewal payment");
-
-  // Mark billing statement paid
   await adminSupabase
     .from("billing_statements")
     .update({
-      payment_status: "paid",
       payment_received_at: new Date().toISOString(),
       payment_reference: razorpayPaymentId,
       razorpay_payment_link_id: razorpayLinkId,
     })
     .eq("id", statementId);
 
-  // Advance the end_date by tenure_months
-  const currentEnd = new Date(caseData.end_date);
-  const tenureMonths = caseData.tenure_months || 12;
-  const newStart = new Date(currentEnd);
-  newStart.setDate(newStart.getDate() + 1);
-  const newEnd = new Date(currentEnd);
-  newEnd.setMonth(newEnd.getMonth() + tenureMonths);
-
-  // Update case: back to active for the new term, clear renewal tracking
-  await adminSupabase
-    .from("cases")
-    .update({
-      status: "active",
-      start_date: newStart.toISOString().split("T")[0],
-      end_date: newEnd.toISOString().split("T")[0],
-      renewal_billing_statement_id: null,
-      renewal_razorpay_link_id: null,
-      renewal_razorpay_link_url: null,
-      renewal_grace_ends_at: null,
-      renewal_reminder_count: 0,
-    })
-    .eq("id", caseId);
-
-  logAudit(adminSupabase, {
-    entityType: "case",
-    entityId: caseId,
-    action: "update",
-    performedBy: "system",
-    changes: {
-      action: { old: null, new: "renewal_payment_received" },
-      amount: { old: null, new: amountPaid },
-      new_end_date: { old: caseData.end_date, new: newEnd.toISOString().split("T")[0] },
-    },
-  });
+  await completeVoRenewal(adminSupabase, { statementId, source: "razorpay_link" });
 }
