@@ -165,6 +165,10 @@
     {
       "path": "/api/cron/customer-value",
       "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/customer-value-margin",
+      "schedule": "45 21 * * *"
     }
   ],
   "headers": [

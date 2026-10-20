@@ -40,18 +40,28 @@ export interface ElectricityResult {
 const n = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 const monthStart = (ym: string) => `${ym}-01`;
 
-export async function loadElectricity(supabase: SupabaseClient, leadId: string, cohort: CenterCohort | null, today: string): Promise<ElectricityResult> {
-  const empty = (status: ElectricityStatus, center: ElectricityResult["center"] = null, capacity: number | null = null): ElectricityResult => ({
-    today, status, center, capacity, months: [], summary: null,
-  });
-  if (!cohort) return empty("no_center");
-  const center = { id: cohort.centerId, name: cohort.centerName };
+export interface CenterEnergy {
+  status: Exclude<ElectricityStatus, "no_center">;
+  capacity: number | null;
+  /** The center meter's kWh per month, oldest first (empty unless status is ok). */
+  energy: ReturnType<typeof trend>;
+  /** Rupees per kWh for each month that has a priceable landlord bill. */
+  tariffByMonth: Map<string, number | null>;
+}
+
+/**
+ * The center-level half: which meter, how many seats, the meter's monthly kWh and
+ * each month's tariff. Needs no customer, so the nightly margin job can read it
+ * once per center and share it across every customer there.
+ */
+export async function loadCenterEnergy(supabase: SupabaseClient, centerId: string, today: string, months: number = MONTHS): Promise<CenterEnergy> {
+  const none = (status: CenterEnergy["status"], capacity: number | null = null): CenterEnergy => ({ status, capacity, energy: [], tariffByMonth: new Map() });
 
   const [connRes, cfgRes, unitRes] = await Promise.all([
-    supabase.from("location_electricity_connections").select("onegrid_device_id").eq("location_id", center.id).eq("is_active", true).not("onegrid_device_id", "is", null),
+    supabase.from("location_electricity_connections").select("onegrid_device_id").eq("location_id", centerId).eq("is_active", true).not("onegrid_device_id", "is", null),
     // Never the API key: only whether OneGrid is on and which device is the default.
-    supabase.from("location_electricity_config").select("onegrid_enabled, onegrid_default_device_id").eq("location_id", center.id).maybeSingle(),
-    supabase.from("space_units").select("capacity").eq("location_id", center.id).eq("is_active", true),
+    supabase.from("location_electricity_config").select("onegrid_enabled, onegrid_default_device_id").eq("location_id", centerId).maybeSingle(),
+    supabase.from("space_units").select("capacity").eq("location_id", centerId).eq("is_active", true),
   ]);
   if (connRes.error) throw new Error(connRes.error.message);
   if (cfgRes.error) throw new Error(cfgRes.error.message);
@@ -62,49 +72,70 @@ export async function loadElectricity(supabase: SupabaseClient, leadId: string, 
     (connRes.data ?? []).map((c) => c.onegrid_device_id as string | null),
     cfgRes.data ? { enabled: Boolean(cfgRes.data.onegrid_enabled), defaultDeviceId: (cfgRes.data.onegrid_default_device_id as string | null) ?? null } : null
   );
-  if (meter.status !== "ok") return empty(meter.status, center);
+  if (meter.status !== "ok") return none(meter.status);
   const devices = [meter.deviceId];
 
   const capacity = (unitRes.data ?? []).reduce((sum, u) => sum + (Number(u.capacity) || 0), 0);
-  if (capacity <= 0) return empty("no_capacity", center);
+  if (capacity <= 0) return none("no_capacity");
 
   const thisMonth = today.slice(0, 7);
-  const firstMonth = shiftMonth(thisMonth, -(MONTHS - 1));
-  const readings = await loadMidnightReadings(supabase, { locationId: center.id, deviceId: devices[0], from: monthStart(firstMonth), to: today });
+  const firstMonth = shiftMonth(thisMonth, -(months - 1));
+  const readings = await loadMidnightReadings(supabase, { locationId: centerId, deviceId: devices[0], from: monthStart(firstMonth), to: today });
   const { data: latestRow, error: latestError } = await supabase
     .from("location_energy_readings")
     .select("ts, cumulative_wh")
-    .eq("location_id", center.id)
+    .eq("location_id", centerId)
     .eq("device_id", devices[0])
     .not("cumulative_wh", "is", null)
     .order("ts", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (latestError) throw new Error(latestError.message);
-  const latest = latestRow
-    ? { date: istDateOf(latestRow.ts as string), cumulative_wh: Number(latestRow.cumulative_wh) }
-    : null;
-  const energy = trend(thisMonth, MONTHS, readings, latest, today);
-  if (energy.every((e) => e.kwh === null)) return empty("no_readings", center, capacity);
+  const latest = latestRow ? { date: istDateOf(latestRow.ts as string), cumulative_wh: Number(latestRow.cumulative_wh) } : null;
+  const energy = trend(thisMonth, months, readings, latest, today);
+  if (energy.every((e) => e.kwh === null)) return none("no_readings", capacity);
 
+  const billRes = await supabase
+    .from("electricity_bills")
+    .select("bill_month, bill_year, landlord_total_amount, electricity_bill_lines(line_type, units)")
+    .eq("location_id", centerId)
+    .eq("bill_side", "landlord")
+    .neq("status", "revised")
+    .gte("bill_year", Number(firstMonth.slice(0, 4)))
+    .limit(200);
+  if (billRes.error) throw new Error(billRes.error.message);
+  const billsByMonth = new Map<string, BillForTariff[]>();
+  for (const b of (billRes.data ?? []) as unknown as Array<{ bill_month: number; bill_year: number; landlord_total_amount: number | string | null; electricity_bill_lines: Array<{ line_type: string; units: number | string | null }> | null }>) {
+    const ym = `${b.bill_year}-${String(b.bill_month).padStart(2, "0")}`;
+    billsByMonth.set(ym, [...(billsByMonth.get(ym) ?? []), { landlord_total_amount: b.landlord_total_amount, lines: b.electricity_bill_lines ?? [] }]);
+  }
+  const tariffByMonth = new Map<string, number | null>();
+  for (const e of energy) tariffByMonth.set(e.month, blendedTariff(billsByMonth.get(e.month) ?? []));
+
+  return { status: "ok", capacity, energy, tariffByMonth };
+}
+
+export async function loadElectricity(supabase: SupabaseClient, leadId: string, cohort: CenterCohort | null, today: string): Promise<ElectricityResult> {
+  const empty = (status: ElectricityStatus, center: ElectricityResult["center"] = null, capacity: number | null = null): ElectricityResult => ({
+    today, status, center, capacity, months: [], summary: null,
+  });
+  if (!cohort) return empty("no_center");
+  const center = { id: cohort.centerId, name: cohort.centerName };
+
+  const ce = await loadCenterEnergy(supabase, center.id, today);
+  if (ce.status !== "ok" || ce.capacity === null) return empty(ce.status, center, ce.capacity);
+  const { capacity, energy } = ce;
+
+  const firstMonth = shiftMonth(today.slice(0, 7), -(MONTHS - 1));
   const hisContracts = cohort.contracts.filter((c) => c.location_id === center.id).map((c) => c.id);
-  const [monthlyRows, billRows, statementRows] = await Promise.all([
+  const [monthlyRows, statementRows] = await Promise.all([
     fetchInChunks<{ lead_id: string; month: string; seats_paid: number | string | null }>("seats", cohort.leadIds, (batch, from, to) =>
       supabase.from("customer_value_monthly").select("lead_id, month, seats_paid").in("lead_id", batch).gte("month", monthStart(firstMonth)).order("lead_id").order("month").range(from, to)
     ),
-    supabase
-      .from("electricity_bills")
-      .select("bill_month, bill_year, landlord_total_amount, electricity_bill_lines(line_type, units)")
-      .eq("location_id", center.id)
-      .eq("bill_side", "landlord")
-      .neq("status", "revised")
-      .gte("bill_year", Number(firstMonth.slice(0, 4)))
-      .limit(200),
     fetchInChunks<{ id: string; period_start: string; subtotal: number | string | null }>("electricity statements", hisContracts, (batch, from, to) =>
       supabase.from("billing_statements").select("id, period_start, subtotal").in("contract_id", batch).eq("statement_type", "electricity").in("status", ["finalized", "exported"]).gte("period_start", monthStart(firstMonth)).order("id").range(from, to)
     ),
   ]);
-  if (billRows.error) throw new Error(billRows.error.message);
 
   const seatsByMonth = new Map<string, { mine: number | null; all: number }>();
   for (const r of monthlyRows) {
@@ -114,12 +145,6 @@ export async function loadElectricity(supabase: SupabaseClient, leadId: string, 
     cur.all += seats;
     if (r.lead_id === leadId) cur.mine = seats;
     seatsByMonth.set(ym, cur);
-  }
-
-  const billsByMonth = new Map<string, BillForTariff[]>();
-  for (const b of (billRows.data ?? []) as unknown as Array<{ bill_month: number; bill_year: number; landlord_total_amount: number | string | null; electricity_bill_lines: Array<{ line_type: string; units: number | string | null }> | null }>) {
-    const ym = `${b.bill_year}-${String(b.bill_month).padStart(2, "0")}`;
-    billsByMonth.set(ym, [...(billsByMonth.get(ym) ?? []), { landlord_total_amount: b.landlord_total_amount, lines: b.electricity_bill_lines ?? [] }]);
   }
 
   const billedByMonth = new Map<string, number>();
@@ -135,11 +160,10 @@ export async function loadElectricity(supabase: SupabaseClient, leadId: string, 
     return [electricityMonth({
       month: e.month, centerKwh: e.kwh, partial: e.partial, unknownDays: e.unknownDays,
       seats: seats.mine, contractedSeats: seats.all,
-      tariff: blendedTariff(billsByMonth.get(e.month) ?? []),
+      tariff: ce.tariffByMonth.get(e.month) ?? null,
       billed: billedByMonth.has(e.month) ? (billedByMonth.get(e.month) as number) : null,
     }, capacity)];
   });
-
 
   return { today, status: "ok", center, capacity, months, summary: summarise(months) };
 }
