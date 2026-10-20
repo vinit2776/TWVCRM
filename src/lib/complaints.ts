@@ -5,7 +5,7 @@ import type { FacilityIssuePriority } from "@/types";
 export const COMPLAINT_STATUSES = ["new", "needs_info", "qualified", "not_a_complaint", "closed"] as const;
 export type ComplaintStatus = (typeof COMPLAINT_STATUSES)[number];
 
-export const COMPLAINT_OUTCOMES = ["work_order", "task", "reply_only"] as const;
+export const COMPLAINT_OUTCOMES = ["work_order", "task", "reply_only", "enquiry"] as const;
 export type ComplaintOutcome = (typeof COMPLAINT_OUTCOMES)[number];
 
 export const COMPLAINT_STATUS_LABEL: Record<ComplaintStatus, string> = {
@@ -16,10 +16,20 @@ export const COMPLAINT_STATUS_LABEL: Record<ComplaintStatus, string> = {
   closed: "Closed",
 };
 
+/** The same statuses read differently for a request. */
+export const REQUEST_STATUS_LABEL: Record<ComplaintStatus, string> = {
+  new: "New",
+  needs_info: "Needs info",
+  qualified: "Task raised",
+  not_a_complaint: "Not a request",
+  closed: "Done",
+};
+
 export const COMPLAINT_OUTCOME_LABEL: Record<ComplaintOutcome, string> = {
   work_order: "Work order",
   task: "Task (internal follow-up)",
   reply_only: "Reply only, no action",
+  enquiry: "Converted to an enquiry",
 };
 
 /** Complaints from the same customer within this many days count as repeats. */
@@ -39,8 +49,14 @@ export function suggestComplaintPriority(repeatCount: number, floor?: FacilityIs
 
 /** Whether a complaint still needs someone's attention. A qualified complaint is open until
  *  its work order is resolved or closed, so there is no second status to keep in step. */
-export function effectiveComplaintStatus(status: ComplaintStatus, issueStatus: string | null): ComplaintStatus {
+export function effectiveComplaintStatus(
+  status: ComplaintStatus,
+  issueStatus: string | null,
+  taskStatus: string | null = null
+): ComplaintStatus {
   if (status === "qualified" && (issueStatus === "resolved" || issueStatus === "closed")) return "closed";
+  // A request handled by a task closes when the task is done.
+  if (status === "qualified" && taskStatus === "done") return "closed";
   return status;
 }
 
