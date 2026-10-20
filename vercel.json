@@ -159,6 +159,10 @@
       "schedule": "7 * * * *"
     },
     {
+      "path": "/api/cron/wifi-ledger-capture",
+      "schedule": "17 * * * *"
+    },
+    {
       "path": "/api/cron/customer-value",
       "schedule": "30 21 * * *"
     }

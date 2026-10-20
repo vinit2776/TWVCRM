@@ -4,6 +4,7 @@ import {
   SnapshotQueryError,
   fetchAllPages,
   fetchInChunks,
+  isMissingColumnError,
   isMissingTableError,
   type PageResult,
 } from "@/lib/customer-value/query-helpers";
@@ -95,3 +96,16 @@ describe("isMissingTableError", () => {
     expect(isMissingTableError(new Error("does not exist"))).toBe(false);
   });
 });
+
+describe("isMissingColumnError", () => {
+  it("recognises a column that does not exist yet, by code or message", () => {
+    expect(isMissingColumnError(new SnapshotQueryError("q", { message: "x", code: "42703" }))).toBe(true);
+    expect(isMissingColumnError(new SnapshotQueryError("q", { message: "column facility_issues.contract_id does not exist" }))).toBe(true);
+  });
+  it("does not mistake other failures for it", () => {
+    expect(isMissingColumnError(new SnapshotQueryError("q", { message: "permission denied", code: "42501" }))).toBe(false);
+    expect(isMissingColumnError(new SnapshotQueryError("q", { message: 'relation "x" does not exist', code: "42P01" }))).toBe(false);
+    expect(isMissingColumnError(new Error("column x does not exist"))).toBe(false);
+  });
+});
+
