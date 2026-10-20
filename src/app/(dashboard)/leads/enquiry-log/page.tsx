@@ -16,6 +16,7 @@ import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
 import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
+import { EnquiryContent } from "@/components/enquiries/enquiry-content";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -56,6 +57,13 @@ export default function EnquiryLogPage() {
   const readOnly = user?.role === ENQUIRY_VIEWER_ROLE;
   const columnCount = readOnly ? 7 : 9;
   const [rows, setRows] = useState<EnquiryItem[]>([]);
+  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
+  const toggleThread = (id: string) =>
+    setOpenThreads((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -239,9 +247,27 @@ export default function EnquiryLogPage() {
                         </span>
                       )}
                       {!readOnly && row.message && (
-                        <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={row.message}>
-                          “{row.message}”
-                        </p>
+                        <div className="mt-0.5 max-w-sm">
+                          {openThreads.has(row.enquiryId) ? (
+                            <EnquiryContent messages={row.messages ?? []} details={row.details ?? []} visible={20} />
+                          ) : (
+                            <p className="line-clamp-2 text-xs text-muted-foreground" title={row.message}>
+                              “{row.message}”
+                            </p>
+                          )}
+                          {((row.messageCount ?? 0) > 1 || (row.details?.length ?? 0) > 0) && (
+                            <button
+                              onClick={() => toggleThread(row.enquiryId)}
+                              className="mt-0.5 text-[11px] font-medium text-primary hover:underline"
+                            >
+                              {openThreads.has(row.enquiryId)
+                                ? "Hide"
+                                : (row.messageCount ?? 0) > 1
+                                  ? `Show all ${row.messageCount} messages`
+                                  : "Show what they asked for"}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                     {!readOnly && (

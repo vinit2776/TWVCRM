@@ -1,4 +1,5 @@
 import { isPlaceholderName } from "@/lib/whatsapp-names";
+import { WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 
 // Shared shape of a public-form enquiry (a `lead_enquiries` row joined to its lead and the
 // people who claimed / resolved it). Used by the live-notification hook, the Enquiry Log API
@@ -63,8 +64,13 @@ export interface EnquiryItem {
   /** What happens next, and the calendar day (IST) it's due. */
   nextStep: string | null;
   followUpAt: string | null;
-  /** What the customer wrote, when the form or chat carried free text. */
+  /** The latest thing the customer wrote (the last WhatsApp message, or the form's free text). */
   message: string | null;
+  /** Every message in the thread, oldest first (a form enquiry has just its free text). */
+  messages?: EnquiryMessage[];
+  messageCount?: number;
+  /** What a form asked for: space type, seats, budget, location, start date. */
+  details?: EnquiryDetail[];
   /** How far it has got, read from the lead's proposals and contracts. Absent on live
    *  notification items, which don't carry it. */
   stage?: { key: string; label: string } | null;
@@ -87,6 +93,14 @@ export type RawEnquiryRow = {
     name?: string;
     mobile?: string;
     description?: string;
+    company?: string;
+    workspace_type?: string;
+    seat_capacity?: string | number;
+    budget_per_seat?: string | number;
+    preferred_location?: string;
+    working_hours?: string;
+    start_date?: string;
+    conference_room_location?: string;
     messages?: { at?: string; text?: string }[];
     suggested_name?: string;
     triage?: { kind?: string; reason?: string; source?: string; reviewed?: unknown } | null;
@@ -119,6 +133,41 @@ export const ENQUIRY_SELECT =
   "resolver:users!lead_enquiries_resolved_by_fkey(id, full_name), " +
   "lead:leads!lead_enquiries_lead_id_fkey(first_name, last_name, mobile, location_id)";
 
+export type EnquiryMessage = { at?: string; text: string };
+export type EnquiryDetail = { label: string; value: string };
+
+type EnquiryPayload = RawEnquiryRow["payload"];
+
+/** What the customer wrote, oldest first: the WhatsApp thread, or a form's free text. */
+export function enquiryMessages(payload: EnquiryPayload | undefined): EnquiryMessage[] {
+  const thread = (payload?.messages ?? [])
+    .map((m) => ({ at: m.at, text: (m.text ?? "").trim() }))
+    .filter((m) => m.text);
+  if (thread.length > 0) return thread;
+  const text = payload?.description?.trim();
+  return text ? [{ text }] : [];
+}
+
+/** What a form asked for, as label / value pairs. Name, mobile and email are left out: they are
+ *  already on the lead. Empty for a WhatsApp enquiry, whose request is in its messages. */
+export function enquiryDetails(payload: EnquiryPayload | undefined): EnquiryDetail[] {
+  if (!payload) return [];
+  const out: EnquiryDetail[] = [];
+  const add = (label: string, value: unknown) => {
+    const v = value == null ? "" : String(value).trim();
+    if (v) out.push({ label, value: v });
+  };
+  add("Looking for", payload.workspace_type ? (WORKSPACE_TYPE_LABELS[payload.workspace_type] ?? payload.workspace_type.replace(/_/g, " ")) : "");
+  add("Seats", payload.seat_capacity);
+  add("Budget per seat", payload.budget_per_seat ? `₹${payload.budget_per_seat}` : "");
+  add("Preferred location", payload.preferred_location);
+  add("Conference room", payload.conference_room_location);
+  add("Start date", payload.start_date);
+  add("Working hours", payload.working_hours);
+  add("Company", payload.company);
+  return out;
+}
+
 /** Null for an enquiry whose lead was deleted — there's nothing to open or act on. */
 export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
   if (!row.lead_id) return null;
@@ -142,7 +191,10 @@ export function toEnquiryItem(row: RawEnquiryRow): EnquiryItem | null {
     resolutionOutcome: row.resolution_outcome,
     nextStep: row.next_step ?? null,
     followUpAt: row.follow_up_at ?? null,
-    message: row.payload?.messages?.[0]?.text?.trim() || row.payload?.description?.trim() || null,
+    message: enquiryMessages(row.payload).at(-1)?.text ?? null,
+    messages: enquiryMessages(row.payload),
+    messageCount: enquiryMessages(row.payload).length,
+    details: enquiryDetails(row.payload),
     stage: row.stage ?? null,
     namePlaceholder: isPlaceholderName(row.lead?.first_name),
     suggestedName: row.payload?.suggested_name ?? null,

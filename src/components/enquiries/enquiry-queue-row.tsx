@@ -109,6 +109,14 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
             {" · "}
             <span className="font-mono">{item.reference}</span>
           </p>
+          {item.message && (
+            <p className="mt-0.5 line-clamp-2 text-xs text-foreground/80" title={item.message}>
+              “{item.message}”
+              {(item.messageCount ?? 0) > 1 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">+{(item.messageCount ?? 1) - 1} earlier</span>
+              )}
+            </p>
+          )}
         </button>
 
         <div className="shrink-0 flex flex-col items-end gap-0.5 text-right">
