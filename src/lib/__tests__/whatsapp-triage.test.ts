@@ -19,7 +19,9 @@ describe("classifyByRules", () => {
   });
   it("a customer with an active contract is never an enquiry for ordinary messages", () => {
     expect(k("AC not working in cabin 4", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("complaint");
-    expect(k("Can you resend the invoice", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("complaint");
+    expect(k("There is a wrong amount on my invoice", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("complaint");
+    // Asking for a copy is a request, not a complaint: it is classified further downstream.
+    expect(k("Can you resend the invoice", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("customer");
     expect(k("Thanks, will pay tomorrow", { isCustomer: true, hasActiveContract: true, knownSender: true })).toBe("customer");
   });
   it("sends a customer asking about more space to review, not auto", () => {

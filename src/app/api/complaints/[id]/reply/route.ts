@@ -27,12 +27,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const admin = await createAdminClient();
   const { data: c } = await admin
     .from("customer_complaints")
-    .select("status, issue:facility_issues!customer_complaints_issue_id_fkey(status)")
+    .select("status, issue:facility_issues!customer_complaints_issue_id_fkey(status), task:tasks!customer_complaints_task_id_fkey(status)")
     .eq("id", id)
     .single();
   if (!c) return NextResponse.json({ error: "Complaint not found" }, { status: 404 });
   // A complaint closes when its work order is resolved, so judge it by the derived status.
-  const effective = effectiveComplaintStatus(c.status as ComplaintStatus, (c.issue as unknown as { status: string } | null)?.status ?? null);
+  const effective = effectiveComplaintStatus(c.status as ComplaintStatus, (c.issue as unknown as { status: string } | null)?.status ?? null, (c.task as unknown as { status: string } | null)?.status ?? null);
   if (!isOpenComplaint(effective)) {
     return NextResponse.json({ error: "This complaint is closed" }, { status: 409 });
   }

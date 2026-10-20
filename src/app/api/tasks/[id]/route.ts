@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { notifyRequestTaskDone } from "@/lib/complaint-messages";
 import { updateTaskSchema } from "@/lib/validations";
 import { logAudit, diffChanges } from "@/lib/audit";
 
@@ -55,6 +56,15 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // A task behind a customer request is done: tell the customer. Best effort, never blocks the update.
+  if (result.data.status === "done" && oldTask?.status !== "done") {
+    try {
+      await notifyRequestTaskDone(createAdminClient(), id);
+    } catch (err) {
+      console.error("[tasks] request notification failed:", err instanceof Error ? err.message : "unknown");
+    }
+  }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id && oldTask) {

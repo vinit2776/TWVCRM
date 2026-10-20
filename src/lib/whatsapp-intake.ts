@@ -9,7 +9,9 @@ import { logAudit } from "@/lib/audit";
 import { CUSTOMER_BOOKING_WINDOW_DAYS, classifyByRules, decideGrouping, type TriageContext, type TriageKind } from "@/lib/whatsapp-triage";
 import { COUNTED_BOOKING_STATUSES } from "@/lib/enquiry-progress";
 import { classifyWithAi } from "@/lib/whatsapp-triage-ai";
-import { appendToOpenComplaint, recordComplaint } from "@/lib/complaints-server";
+import { appendToOpenComplaint, recordComplaint, recordRequest } from "@/lib/complaints-server";
+import { classifyRequest, REQUEST_OWNER_ROLE, REQUEST_TYPE_LABEL, type RequestType } from "@/lib/requests";
+import { notifyRoles } from "@/lib/notify-roles";
 import { PLACEHOLDER_NAME, extractNameFromMessage, isPlaceholderName } from "@/lib/whatsapp-names";
 
 const MAX_STORED_MESSAGES = 20;
@@ -67,7 +69,7 @@ export interface IntakeResult {
   leadId: string | null;
   reference: string | null;
   kind: TriageKind;
-  outcome: "new_lead" | "re_enquiry" | "joined_open_enquiry" | "logged_only" | "spam_stashed";
+  outcome: "new_lead" | "re_enquiry" | "joined_open_enquiry" | "logged_only" | "spam_stashed" | "request_recorded";
 }
 
 interface StoredMessage { at: string; text: string }
@@ -193,6 +195,16 @@ export async function ingestInboundWhatsAppEnquiry(
     triage = { kind: "unsure", reason: "looks like spam but the number belongs to a known lead", source: triage.source };
   }
   const kind = triage.kind;
+
+  // A customer asking for something we can name (invoice copy, a pass, more seats, a contract
+  // question, a booking change) is a request with an owner. Anything unnamed stays a note.
+  if (input.matchedLeadId && ctx.isCustomer && (kind === "customer" || kind === "unsure")) {
+    const type = classifyRequest(input.messageBody);
+    if (type) {
+      const recorded = await flagRequest(supabase, input.matchedLeadId, displayName, num.mobile, input.messageBody, type);
+      return { leadId: input.matchedLeadId, reference: recorded?.reference ?? null, kind: "customer", outcome: "request_recorded" };
+    }
+  }
 
   // Customers, complaints and bare acknowledgements are not enquiries.
   if (kind === "customer" || kind === "complaint" || kind === "low_signal") {
@@ -337,15 +349,51 @@ async function flagComplaint(supabase: SupabaseClient, leadId: string, name: str
       description: "Flagged automatically: an active customer wrote something that sounds like a problem. See the WhatsApp reply note.",
     }),
     // A message added to a complaint someone is already assessing does not need another alert.
+    // Told to the people who handle facility complaints, not to everyone.
     recorded?.appended
       ? Promise.resolve()
-      : sendPushToAll({
+      : notifyRoles(supabase, ["fms", "floor_manager", "manager"], {
           title: `Customer complaint${recorded ? ` ${recorded.reference}` : ""}: ${name}`,
           body: "Possible complaint or support request on WhatsApp",
           url: `${APP_URL}/facility/issues?view=complaints`,
           tag: `wa-complaint-${leadId}`,
         }),
   ]);
+}
+
+/** A named customer request: record it (or add to the open one of the same type), note it on the
+ *  lead, and tell the role that owns that type. */
+async function flagRequest(
+  supabase: SupabaseClient,
+  leadId: string,
+  name: string,
+  phone: string,
+  text: string,
+  type: RequestType
+) {
+  let recorded: Awaited<ReturnType<typeof recordRequest>> = null;
+  try {
+    recorded = await recordRequest(supabase, { leadId, customerName: name, customerPhone: phone, text, type });
+  } catch (err) {
+    console.error("[whatsapp-intake] request record failed:", err instanceof Error ? err.message : "unknown");
+  }
+  await Promise.allSettled([
+    supabase.from("activities").insert({
+      lead_id: leadId,
+      type: "note",
+      subject: `WhatsApp request: ${REQUEST_TYPE_LABEL[type]}${recorded ? ` (${recorded.reference})` : ""}`,
+      description: "Logged automatically from a customer's WhatsApp message. See the WhatsApp reply note.",
+    }),
+    recorded && !recorded.appended
+      ? notifyRoles(supabase, [REQUEST_OWNER_ROLE[type]], {
+          title: `${REQUEST_TYPE_LABEL[type]} request ${recorded.reference}: ${name}`,
+          body: "A customer asked on WhatsApp. Open Complaints and requests to handle it.",
+          url: `${APP_URL}/facility/issues?view=complaints`,
+          tag: `wa-request-${leadId}-${type}`,
+        })
+      : Promise.resolve(),
+  ]);
+  return recorded;
 }
 
 async function alertStaff(

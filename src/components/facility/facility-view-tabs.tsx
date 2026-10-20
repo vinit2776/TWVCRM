@@ -28,7 +28,7 @@ export function FacilityViewTabs({ active, refreshKey = 0 }: { active: "work" | 
         href="/facility/issues?view=complaints"
         className={cn(base, active === "complaints" ? "border-foreground bg-foreground text-background" : "text-muted-foreground hover:bg-muted")}
       >
-        Complaints{open ? ` (${open})` : ""}
+        Complaints &amp; requests{open ? ` (${open})` : ""}
       </Link>
     </div>
   );
