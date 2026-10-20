@@ -709,10 +709,10 @@ export function generateLeaveLicensePdf(
   );
   ctx.y += 10;
 
-  // A stamped run makes the first body row taller (see didParseCell below),
-  // so reserve for that height — otherwise the block starts low enough to
-  // split, stranding the Lessor cell on the previous page.
-  ctx.checkPageBreak(options?.applyCompanyStamp ? 62 : 45);
+  // The signature row is tall (room to sign/stamp above the line, see
+  // didParseCell below), so reserve for it — otherwise the block starts low
+  // enough to split, stranding the Lessor cell on the previous page.
+  ctx.checkPageBreak(62);
 
   autoTable(doc, {
     startY: ctx.y,
@@ -743,7 +743,10 @@ export function generateLeaveLicensePdf(
     bodyStyles: { fontSize: 8.5, cellPadding: 4, minCellHeight: 12 },
     margin: { left: ctx.marginLeft, right: ctx.marginRight },
     didParseCell: (data) => {
-      if (options?.applyCompanyStamp && data.section === "body" && data.row.index === 0) {
+      if (data.section === "body" && data.row.index === 0) {
+        // Signature line sits at the bottom of the cell (signing space above
+        // it, stamp included) for both parties.
+        data.cell.styles.valign = "bottom";
         data.cell.styles.minCellHeight = 26;
       }
     },

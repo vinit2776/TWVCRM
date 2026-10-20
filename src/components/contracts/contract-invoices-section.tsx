@@ -20,6 +20,7 @@ import { unbilledMonths, backfillableRentMonths, type BillingMonth } from "@/lib
 import { toast } from "sonner";
 import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
 import { WaiveRentMonthDialog } from "@/components/billing/waive-rent-month-dialog";
+import { RENT_WAIVER_KIND_LABELS, type StoredRentWaiverKind } from "@/lib/constants";
 
 interface Statement {
   id: string;
@@ -112,6 +113,7 @@ interface RentWaiver {
   id: string;
   waived_month: string;
   reason: string;
+  waiver_kind: StoredRentWaiverKind;
   waived_at: string;
   waived_by_user: { full_name: string | null } | null;
 }
@@ -716,7 +718,7 @@ export function ContractInvoicesSection({
                     <div className="min-w-0">
                       <span className="text-xs font-medium">{MONTH_LABELS[m.month - 1]} {m.year}</span>
                       <p className="text-[11px] text-muted-foreground truncate">
-                        {waiver.reason}
+                        {RENT_WAIVER_KIND_LABELS[waiver.waiver_kind ?? "unknown"]} · {waiver.reason}
                         {waiver.waived_by_user?.full_name ? ` · ${waiver.waived_by_user.full_name}` : ""}
                         {` · ${formatDate(waiver.waived_at)}`}
                       </p>

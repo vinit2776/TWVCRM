@@ -25,6 +25,8 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { WaiveRentMonthDialog } from "@/components/billing/waive-rent-month-dialog";
+import { RentWaiverKindSelect } from "@/components/billing/rent-waiver-kind-select";
+import type { RentWaiverKind } from "@/lib/constants";
 import { ReviewSendStatementDialog, type ReviewSendTarget } from "@/components/billing/review-send-statement-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
@@ -133,6 +135,10 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
   const [openGapGroups, setOpenGapGroups] = useState<Record<string, boolean>>({});
   const [bulkWaiveOpen, setBulkWaiveOpen] = useState(false);
   const [bulkReason, setBulkReason] = useState("");
+  // This bucket is, by definition, months from before rent billing moved into
+  // the CRM, so "billed outside the CRM" is the sensible starting point. It stays
+  // visible and changeable: it decides whether the months count as concessions.
+  const [bulkKind, setBulkKind] = useState<RentWaiverKind>("billed_elsewhere");
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkSaving, setBulkSaving] = useState(false);
 
@@ -486,7 +492,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
                   )}
                   {g.before && canWaive && (
                     <button
-                      onClick={() => { setBulkReason(""); setBulkError(null); setBulkWaiveOpen(true); }}
+                      onClick={() => { setBulkReason(""); setBulkKind("billed_elsewhere"); setBulkError(null); setBulkWaiveOpen(true); }}
                       className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 ml-1"
                     >
                       Waive all…
@@ -517,6 +523,7 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reason: bulkReason.trim(),
+          kind: bulkKind,
           items: beforeCrmRows.map((r) => ({ contract_id: r.contractId, waived_month: r.gapMonth })),
         }),
       });
@@ -806,7 +813,8 @@ export function UnbilledBilledTabs({ type, userRole, onFinalized, onViewStatemen
               month from its contract page.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-3">
+            <RentWaiverKindSelect id="bulk-waive-kind" value={bulkKind} onChange={(k) => { setBulkKind(k); setBulkError(null); }} />
             <Textarea
               value={bulkReason}
               onChange={(e) => { setBulkReason(e.target.value); setBulkError(null); }}

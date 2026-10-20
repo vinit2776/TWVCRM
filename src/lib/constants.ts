@@ -127,6 +127,7 @@ export const LEAD_SOURCES = [
   "meta_ads",
   "google_ads",
   "direct_walkin",
+  "whatsapp",
   "referral",
   "cold_call",
   "aggregator",
@@ -136,6 +137,7 @@ export const LEAD_SOURCE_LABELS: Record<string, string> = {
   meta_ads: "Meta Ads",
   google_ads: "Google Ads",
   direct_walkin: "Direct/Walk-in",
+  whatsapp: "WhatsApp",
   referral: "Referral",
   cold_call: "Cold Call",
   aggregator: "Aggregator",
@@ -2444,6 +2446,26 @@ export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
 export const RENT_MANAGEMENT_ROLES = ["admin"] as const;
 // Finance › Rent Payable tab (view + process approved payments): admin + accounts + viewer
 export const RENT_PAYABLE_ROLES = ["admin", "accounts", "viewer"] as const;
+
+/**
+ * Why a missed rent month won't be billed through the CRM
+ * (contract_rent_waivers.waiver_kind, migration 00615). A new waiver must be
+ * one of the first two; rows made before the column existed read "unknown".
+ */
+export const RENT_WAIVER_KINDS = ["giveaway", "billed_elsewhere"] as const;
+export type RentWaiverKind = (typeof RENT_WAIVER_KINDS)[number];
+export type StoredRentWaiverKind = RentWaiverKind | "unknown";
+
+export const RENT_WAIVER_KIND_LABELS: Record<StoredRentWaiverKind, string> = {
+  giveaway: "Given to the customer",
+  billed_elsewhere: "Billed outside the CRM",
+  unknown: "Not classified",
+};
+
+export const RENT_WAIVER_KIND_HELP: Record<RentWaiverKind, string> = {
+  giveaway: "The customer was deliberately not charged for this month. Counts as a concession.",
+  billed_elsewhere: "The rent was collected outside the CRM, for example before rent billing moved in. No rent is given away.",
+};
 
 export const LEASE_STATUSES = ["active", "expired", "terminated", "on_hold"] as const;
 

@@ -4,6 +4,8 @@ import {
   canTransition, timestampsForStatus, resolutionMinutes, metSla, logIssueEvent,
 } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
+import { notifyComplaintResolved } from "@/lib/complaint-messages";
+import { createAdminClient } from "@/lib/supabase/server";
 import { computeKpiPoints, writeKpiCredits } from "@/lib/facility-kpi";
 import type { FacilityIssueStatus, FacilityIssuePriority, FacilityRootCause } from "@/types";
 
@@ -152,6 +154,14 @@ export async function resolveIssue(
       reportedByUserId: existing.reported_by ?? null,
     },
   );
+
+  // A work order raised from a customer complaint: tell the customer it is fixed and ask for a
+  // rating. Does nothing for an ordinary ticket, and a failure here never blocks the resolve.
+  try {
+    await notifyComplaintResolved(createAdminClient(), issueId, existing.satisfaction_token ?? null);
+  } catch (err) {
+    console.error(`[facility-resolve] complaint notification failed for ${issueId}:`, err instanceof Error ? err.message : "unknown");
+  }
 
   // Auto-log a maintenance event on the linked asset. logged_by references
   // auth.users(id), not public.users(id) — passing the latter fails the

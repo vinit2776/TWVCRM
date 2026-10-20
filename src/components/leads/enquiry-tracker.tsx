@@ -80,7 +80,7 @@ export function EnquiryTracker() {
   const stats = useMemo(() => {
     const active = rows.filter((r) => !r.resolvedAt);
     // Superseded rows have no recorded outcome, so they stay out of resolved / conversion.
-    const resolved = rows.filter((r) => r.resolvedAt && r.resolutionOutcome !== "superseded");
+    const resolved = rows.filter((r) => r.resolvedAt && r.resolutionOutcome !== "superseded" && r.resolutionOutcome !== "spam");
     const converted = resolved.filter((r) => r.resolutionOutcome === "converted").length;
     return {
       unclaimed: active.filter((r) => !r.claimedBy).length,

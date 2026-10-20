@@ -3,6 +3,7 @@ import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { createRentWaiver } from "@/lib/rent-waivers";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
+import { RENT_WAIVER_KINDS } from "@/lib/constants";
 
 /**
  * Rent waivers — an admin marks a missed rent month as "not billed through the
@@ -14,6 +15,9 @@ import { zodErrorResponse } from "@/lib/validations";
 const CreateSchema = z.object({
   waived_month: z.string().regex(/^\d{4}-\d{2}-01$/, "Must be first of month (YYYY-MM-01)"),
   reason: z.string().trim().min(5, "Give a short reason (at least 5 characters)"),
+  kind: z.enum(RENT_WAIVER_KINDS, {
+    message: "Say whether the customer was given this month or it was billed outside the CRM",
+  }),
 });
 
 // GET /api/contracts/[id]/rent-waivers — live (un-revoked) waivers for a contract
@@ -28,7 +32,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contract_rent_waivers")
-    .select("id, waived_month, reason, waived_at, waived_by_user:users!contract_rent_waivers_waived_by_fkey(full_name)")
+    .select("id, waived_month, reason, waiver_kind, waived_at, waived_by_user:users!contract_rent_waivers_waived_by_fkey(full_name)")
     .eq("contract_id", contractId)
     .is("revoked_at", null)
     .order("waived_month", { ascending: true });
@@ -55,9 +59,9 @@ export async function POST(
 
   const parsed = CreateSchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
-  const { waived_month, reason } = parsed.data;
+  const { waived_month, reason, kind } = parsed.data;
 
-  const result = await createRentWaiver(admin, { contractId, waivedMonth: waived_month, reason, userId: dbUser.id });
+  const result = await createRentWaiver(admin, { contractId, waivedMonth: waived_month, reason, kind, userId: dbUser.id });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json(result.waiver, { status: 201 });
 }
