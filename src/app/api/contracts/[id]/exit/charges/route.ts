@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { EXIT_CHARGE_ROLES, EXIT_CHARGE_TYPES } from "@/lib/contract-exit";
 import { getLiveExit } from "@/lib/contract-exit-server";
+import { getLiveSettlement } from "@/lib/exit-settlement-server";
 
 const schema = z.object({
   charge_type: z.enum(EXIT_CHARGE_TYPES),
@@ -27,6 +28,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const admin = createAdminClient();
   const exit = await getLiveExit(admin, id);
   if (!exit) return NextResponse.json({ error: "No exit in progress for this contract." }, { status: 404 });
+  if (await getLiveSettlement(admin, exit.id)) {
+    return NextResponse.json({ error: "Charges are locked: this exit has been sent for admin approval." }, { status: 409 });
+  }
 
   const { data: row, error } = await admin
     .from("contract_exit_charges")
