@@ -3,6 +3,7 @@ import { chartRange } from "@/components/leads/value/score-chart";
 import {
   computedAgo,
   confidenceChip,
+  marginCounted,
   isStale,
   monthlySeries,
   pillarHeadline,
@@ -47,6 +48,10 @@ describe("confidenceChip", () => {
   it("always calls revenue health partial", () => {
     expect(confidenceChip("profitability", 90, 1)).toEqual({ label: "Partial", tone: "warn" });
   });
+  it("grades revenue health like the others once a margin is counted", () => {
+    expect(confidenceChip("profitability", 90, 1, true)).toEqual({ label: "Full data", tone: "good" });
+    expect(confidenceChip("profitability", 90, 0.4, true).label).toBe("Low confidence");
+  });
   it("separates full from some data missing", () => {
     expect(confidenceChip("payment", 80, 1).label).toBe("Full data");
     expect(confidenceChip("payment", 80, 0.7).label).toBe("Some gaps");
@@ -55,6 +60,15 @@ describe("confidenceChip", () => {
 
 const method = (metrics: StoredPillarMethod["metrics"], notes: string[] = []): StoredPillarMethod => ({ notes, months_used: 6, metrics });
 const m = (key: string, score: number | null, status: "ok" | "missing" | "na" = "ok") => ({ key, status, method: "fixed", cohort_size: 0, value: 1, score });
+
+describe("marginCounted", () => {
+  it("is true only when the margin metric was scored", () => {
+    expect(marginCounted(method([m("concessions_pct", 80), m("margin_pct", 70)]))).toBe(true);
+    expect(marginCounted(method([m("concessions_pct", 80), m("margin_pct", null, "na")]))).toBe(false);
+    expect(marginCounted(method([m("concessions_pct", 80)]))).toBe(false);
+    expect(marginCounted(undefined)).toBe(false);
+  });
+});
 
 describe("pillarHeadline", () => {
   it("names the weakest measured metric", () => {
