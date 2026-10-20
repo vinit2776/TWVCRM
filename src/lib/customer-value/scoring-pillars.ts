@@ -71,6 +71,8 @@ export interface MarginPoint {
   month: string;
   revenue: number;
   margin_after_variable: number;
+  /** Share of that month's variable cost resting on measured data, 0 to 1; null when nothing was costed. */
+  confidence: number | null;
 }
 
 /** Other customers' values for each metric, for percentile ranking. Never includes this customer. */
@@ -316,13 +318,15 @@ export function scoreEngagement(
 /**
  * Margin after variable costs over the window, recency-weighted and revenue-weighted so a quiet
  * month does not swing it. Null while the metric is off (weight zero), which leaves the pillar
- * exactly as it was. Not applicable, not missing, when there is no stored margin: absent cost data
- * is not evidence of a poor margin.
+ * exactly as it was. Not applicable, not missing, when there is no usable margin (none stored, or
+ * every month below the measured-cost floor): absent cost data is not evidence of a poor margin.
  */
 function marginMetric(points: MarginPoint[] | undefined, asOf: string, s: ScoringSettings, cohort: CohortValues): MetricResult | null {
   const weight = s.metricWeights.margin_after_variable_pct;
   if (!(weight > 0)) return null;
-  const win = selectWindow(points ?? [], asOf, s.windowMonths, s.halfLifeMonths);
+  // Only months where enough of the cost is measured: a month with no costed lines is not a margin, it is an absence of data.
+  const usable = (points ?? []).filter((p) => p.confidence !== null && p.confidence >= s.marginMinConfidence);
+  const win = selectWindow(usable, asOf, s.windowMonths, s.halfLifeMonths);
   const revenue = win.reduce((n, x) => n + x.weight * x.row.revenue, 0);
   if (win.length === 0 || !(revenue > 0)) return notApplicableMetric("margin_after_variable_pct", weight);
   const value = win.reduce((n, x) => n + x.weight * x.row.margin_after_variable, 0) / revenue;

@@ -12,7 +12,7 @@ const row = (month: string): MonthlyMetrics => ({
 });
 const months = ["2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01"];
 const rows = months.map(row);
-const margin = (pct: number): MarginPoint[] => months.map((m) => ({ month: m, revenue: 100_000, margin_after_variable: 100_000 * pct }));
+const margin = (pct: number, confidence: number | null = 1): MarginPoint[] => months.map((m) => ({ month: m, revenue: 100_000, margin_after_variable: 100_000 * pct, confidence }));
 const on = mergeSettings({ metricWeights: { ...DEFAULT_SCORING_SETTINGS.metricWeights, margin_after_variable_pct: 50 } });
 
 describe("margin in Profitability", () => {
@@ -47,9 +47,9 @@ describe("margin in Profitability", () => {
 
   it("weights months by revenue and ignores months after the date", () => {
     const pts: MarginPoint[] = [
-      { month: "2026-08-01", revenue: 100_000, margin_after_variable: 90_000 },
-      { month: "2026-09-01", revenue: 1_000, margin_after_variable: -500 },
-      { month: "2026-12-01", revenue: 500_000, margin_after_variable: -400_000 },
+      { month: "2026-08-01", revenue: 100_000, margin_after_variable: 90_000, confidence: 1 },
+      { month: "2026-09-01", revenue: 1_000, margin_after_variable: -500, confidence: 1 },
+      { month: "2026-12-01", revenue: 500_000, margin_after_variable: -400_000, confidence: 1 },
     ];
     const m = scoreProfitability(rows, ASOF, on, {}, { margin: pts }).metrics.find((x) => x.key === "margin_after_variable_pct")!;
     expect(m.value!).toBeGreaterThan(0.8);
@@ -79,5 +79,41 @@ describe("comparePreview", () => {
   it("reports nothing when nothing changes", () => {
     const same = new Map([["a", score("B", 70, 60)]]);
     expect(comparePreview(same, same)).toEqual({ tierChanges: [], counts: { unchanged: 1, up: 0, down: 0, gainedTier: 0, lostTier: 0 }, profitabilityChanged: 0 });
+  });
+});
+
+describe("margin measured-cost floor", () => {
+  const find = (r: ReturnType<typeof scoreProfitability>) => r.metrics.find((x) => x.key === "margin_after_variable_pct")!;
+
+  it("is on by default at half the cost measured", () => {
+    expect(DEFAULT_SCORING_SETTINGS.marginMinConfidence).toBe(0.5);
+  });
+
+  it("ignores months where too little of the cost is measured, and months where nothing was costed", () => {
+    const pts: MarginPoint[] = [
+      { month: "2026-08-01", revenue: 100_000, margin_after_variable: 60_000, confidence: 1 },
+      { month: "2026-09-01", revenue: 100_000, margin_after_variable: 100_000, confidence: 0.2 },
+      { month: "2026-07-01", revenue: 100_000, margin_after_variable: 100_000, confidence: null },
+    ];
+    const m = find(scoreProfitability(rows, ASOF, on, {}, { margin: pts }));
+    expect(m.status).toBe("ok");
+    expect(m.value).toBeCloseTo(0.6); // only the confident month counts
+  });
+
+  it("is not applicable, and leaves the pillar's confidence alone, when no month clears the floor", () => {
+    const off = scoreProfitability(rows, ASOF, DEFAULT_SCORING_SETTINGS);
+    const r = scoreProfitability(rows, ASOF, on, {}, { margin: margin(0.95, 0.1) });
+    expect(find(r).status).toBe("na");
+    expect(r.confidence).toBe(off.confidence);
+    expect(r.score).toBe(off.score);
+  });
+
+  it("can be raised or lowered, and is validated", () => {
+    const strict = mergeSettings({ metricWeights: { ...DEFAULT_SCORING_SETTINGS.metricWeights, margin_after_variable_pct: 50 }, marginMinConfidence: 0.95 });
+    expect(find(scoreProfitability(rows, ASOF, strict, {}, { margin: margin(0.9, 0.9) })).status).toBe("na");
+    const loose = mergeSettings({ metricWeights: { ...DEFAULT_SCORING_SETTINGS.metricWeights, margin_after_variable_pct: 50 }, marginMinConfidence: 0 });
+    expect(find(scoreProfitability(rows, ASOF, loose, {}, { margin: margin(0.9, 0) })).status).toBe("ok");
+    expect(() => mergeSettings({ marginMinConfidence: 1.5 })).toThrow();
+    expect(() => mergeSettings({ marginMinConfidence: -0.1 })).toThrow();
   });
 });

@@ -56,16 +56,16 @@ export interface ScoresRefreshResult {
  * Only ever called when the margin metric is on or being previewed.
  */
 export async function loadMarginPoints(supabase: SupabaseClient, leadIds: string[]): Promise<Map<string, MarginPoint[]>> {
-  const rows = await fetchInChunks<{ lead_id: string; month: string; revenue: number | string; margin_after_variable: number | string }>(
+  const rows = await fetchInChunks<{ lead_id: string; month: string; revenue: number | string; margin_after_variable: number | string; confidence: number | string | null }>(
     "margin",
     leadIds,
     (batch, from, to) =>
-      supabase.from("customer_value_margin").select("lead_id, month, revenue, margin_after_variable").in("lead_id", batch).order("lead_id").order("month").range(from, to)
+      supabase.from("customer_value_margin").select("lead_id, month, revenue, margin_after_variable, confidence").in("lead_id", batch).order("lead_id").order("month").range(from, to)
   );
   const byLead = new Map<string, MarginPoint[]>();
   for (const r of rows) {
     const list = byLead.get(r.lead_id) ?? [];
-    list.push({ month: r.month, revenue: Number(r.revenue), margin_after_variable: Number(r.margin_after_variable) });
+    list.push({ month: r.month, revenue: Number(r.revenue), margin_after_variable: Number(r.margin_after_variable), confidence: r.confidence === null ? null : Number(r.confidence) });
     byLead.set(r.lead_id, list);
   }
   return byLead;

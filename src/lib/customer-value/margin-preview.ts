@@ -31,7 +31,7 @@ export interface MarginPreview {
   /** The weight tried for margin inside Profitability. */
   weight: number;
   customers: number;
-  /** Customers with stored margin inside the scoring window. */
+  /** Customers with a stored margin month inside the scoring window that clears the measured-cost floor. */
   withMargin: number;
   /** Customers whose Profitability score would change at all. */
   profitabilityChanged: number;
@@ -98,8 +98,8 @@ export async function previewMarginScoring(supabase: SupabaseClient, today: stri
   const cmp = comparePreview(baseScores, trialScores);
 
   const windowStart = new Date(Date.parse(`${today}T00:00:00Z`) - base.windowMonths * 31 * 86_400_000).toISOString().slice(0, 7);
-  const withMargin = customers.filter((c) => (c.margin ?? []).some((m) => m.month.slice(0, 7) >= windowStart && m.revenue > 0)).length;
-  if (withMargin === 0) warnings.push("No customer has stored margin yet, so nothing can change. It is filled by the nightly margin job.");
+  const withMargin = customers.filter((c) => (c.margin ?? []).some((m) => m.month.slice(0, 7) >= windowStart && m.revenue > 0 && m.confidence !== null && m.confidence >= base.marginMinConfidence)).length;
+  if (withMargin === 0) warnings.push(`No customer has a month with at least ${Math.round(base.marginMinConfidence * 100)}% of its cost measured yet, so nothing can change. Margin is filled by the nightly job, and enter your cost rates so more of it counts.`);
 
   return { today, weight, customers: customers.length, withMargin, ...cmp, warnings };
 }
