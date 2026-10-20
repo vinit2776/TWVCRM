@@ -26,6 +26,75 @@ interface Location {
   name: string;
 }
 
+interface PreviewData {
+  weight: number;
+  customers: number;
+  withMargin: number;
+  profitabilityChanged: number;
+  counts: { unchanged: number; up: number; down: number; gainedTier: number; lostTier: number };
+  tierChanges: Array<{ leadId: string; name: string; from: string | null; to: string | null; overallFrom: number | null; overallTo: number | null }>;
+  moreChanges: number;
+  warnings: string[];
+}
+
+function MarginPreviewCard() {
+  const [weight, setWeight] = useState("40");
+  const [running, setRunning] = useState(false);
+  const [data, setData] = useState<PreviewData | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      const res = await fetch(`/api/admin/customer-value/margin-preview?weight=${encodeURIComponent(weight)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? "Could not run the preview");
+      setData((await res.json()) as PreviewData);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not run the preview");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Would margin change anyone&apos;s tier?</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Margin after variable costs is stored beside each score but is not part of it. This tries giving it a weight inside Profitability and shows who would move. Nothing is saved or changed.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-xs text-muted-foreground">
+            Weight inside Profitability (others: concessions 50, rent 30, escalation 20)
+            <Input value={weight} onChange={(e) => setWeight(e.target.value)} inputMode="numeric" className="mt-1 h-9 w-28" aria-label="Margin weight" />
+          </label>
+          <Button size="sm" onClick={() => void run()} disabled={running}>{running ? <Loader2 className="h-4 w-4 animate-spin" /> : "Run preview"}</Button>
+        </div>
+        {data && (
+          <div className="space-y-3 text-sm">
+            {data.warnings.map((w) => <p key={w} className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">{w}</p>)}
+            <p>
+              {data.withMargin} of {data.customers} customers have stored margin. At weight {data.weight}: <strong>{data.counts.up}</strong> would move up a tier, <strong>{data.counts.down}</strong> down, {data.counts.gainedTier} would gain a tier and {data.counts.lostTier} lose one; {data.counts.unchanged} stay put. Profitability would change for {data.profitabilityChanged}.
+            </p>
+            {data.tierChanges.length > 0 && (
+              <ul className="divide-y rounded-md border">
+                {data.tierChanges.map((c) => (
+                  <li key={c.leadId} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="font-medium">{c.name}</span>
+                    <span className="tabular-nums text-muted-foreground">{c.from ?? "no tier"} → <strong className="text-foreground">{c.to ?? "no tier"}</strong> · overall {c.overallFrom === null ? "—" : Math.round(c.overallFrom)} → {c.overallTo === null ? "—" : Math.round(c.overallTo)}</span>
+                  </li>
+                ))}
+                {data.moreChanges > 0 && <li className="px-3 py-2 text-xs text-muted-foreground">and {data.moreChanges} more</li>}
+              </ul>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 const GLOBAL = "global";
 const todayYmd = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
 const fmtDate = (ymd: string) => new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -210,6 +279,8 @@ export default function CostParametersPage() {
           )}
         </CardContent>
       </Card>
+      <MarginPreviewCard />
+
       <p className="text-xs text-muted-foreground">A value for one customer (for example their acquisition cost) is set from that customer&apos;s Value tab, and overrides these.</p>
     </div>
   );
