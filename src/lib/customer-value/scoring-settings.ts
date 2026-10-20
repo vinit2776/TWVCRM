@@ -33,7 +33,9 @@ export type MetricKey =
   // Profitability (revenue side)
   | "concessions_pct"
   | "rent_vs_center"
-  | "escalation_outcomes";
+  | "escalation_outcomes"
+  // Profitability (margin side; off until its weight is above zero, see PR E)
+  | "margin_after_variable_pct";
 
 /** A straight line from `worst` (score 0) to `best` (score 100), clamped. Works in either direction. */
 export interface ReferenceScale {
@@ -109,6 +111,9 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
     concessions_pct: 50,
     rent_vs_center: 30,
     escalation_outcomes: 20,
+    // Off. Margin after variable costs only joins the Profitability pillar when an admin
+    // gives it a weight, after looking at how many customers' tiers it would move.
+    margin_after_variable_pct: 0,
   },
   scales: {
     avg_days_late: { best: 0, worst: 15 },
@@ -124,6 +129,9 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
     bookings_per_seat_month: { best: 1, worst: 0 },
     concessions_pct: { best: 0, worst: 15 },
     rent_vs_center: { best: 1.1, worst: 0.7 },
+    // Margin as a share of revenue. Not calibrated on real data yet (rates were only just entered),
+    // so it matters only for a center too small to rank by percentile; revisit before relying on it.
+    margin_after_variable_pct: { best: 0.9, worst: 0.3 },
   },
   seatTrendPoints: [
     [-25, 0],
