@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { todayYmdIst } from "@/lib/customer-value/journey";
+import { summariseShadow, type ShadowRow } from "@/lib/customer-value/shadow-margin";
 import { monthlySeries, type StoredScoreRow } from "@/lib/customer-value/summary-view";
 
 export const maxDuration = 30;
@@ -80,8 +81,31 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     );
   }
 
+  // The shadow margin (after variable costs) sits beside the score and is not part of it. A failed read
+  // here must not take the score away, so it just leaves the margin out.
+  let shadowMargin = null;
+  const marginRes = await supabase
+    .from("customer_value_margin")
+    .select("month, revenue, variable_cost, margin_after_variable, confidence")
+    .eq("lead_id", leadId)
+    .order("month", { ascending: false })
+    .limit(3)
+    .returns<Array<{ month: string; revenue: number | string; variable_cost: number | string; margin_after_variable: number | string; confidence: number | string | null }>>();
+  if (marginRes.error) {
+    console.error("[api/leads/value/summary] margin query failed:", marginRes.error.message);
+  } else {
+    const marginRows: ShadowRow[] = (marginRes.data ?? []).map((r) => ({
+      month: r.month,
+      revenue: Number(r.revenue),
+      variable_cost: Number(r.variable_cost),
+      margin_after_variable: Number(r.margin_after_variable),
+      confidence: r.confidence === null ? null : Number(r.confidence),
+    }));
+    shadowMargin = summariseShadow(marginRows);
+  }
+
   return NextResponse.json(
-    { today, latest, series: monthlySeries(rows, today), evidence },
+    { today, latest, series: monthlySeries(rows, today), evidence, shadowMargin },
     { headers: { "Cache-Control": "private, max-age=60, stale-while-revalidate=120" } }
   );
 }

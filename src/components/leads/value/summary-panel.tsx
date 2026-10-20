@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { LineChart } from "lucide-react";
 import { ScoreChart } from "@/components/leads/value/score-chart";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import type { ShadowSummary } from "@/lib/customer-value/shadow-margin";
 import {
   PILLAR_HELP,
   PILLAR_LABELS,
@@ -22,6 +23,8 @@ export interface SummaryData {
   latest: StoredScoreRow | null;
   series: SeriesPoint[];
   evidence: Record<string, { reference: string; total: number | null; due_date: string | null }>;
+  /** Margin after variable costs over the last few months; shown beside the score and not part of it. */
+  shadowMargin?: ShadowSummary | null;
 }
 
 const TONE: Record<"good" | "warn" | "bad", string> = {
@@ -76,7 +79,7 @@ export function SummaryPanel({
     );
   }
 
-  const { latest, series, evidence } = data;
+  const { latest, series, evidence, shadowMargin } = data;
 
   if (!latest) {
     return (
@@ -137,6 +140,25 @@ export function SummaryPanel({
           );
         })}
       </div>
+
+      {shadowMargin && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <div>
+              <p className="text-xs text-muted-foreground">
+                Margin after variable costs · average of {shadowMargin.months.length} month{shadowMargin.months.length === 1 ? "" : "s"}
+              </p>
+              <p className={`text-lg font-semibold tabular-nums ${shadowMargin.marginPerMonth < 0 ? "text-red-700" : ""}`}>
+                {formatCurrency(shadowMargin.marginPerMonth)} a month
+                {shadowMargin.marginPct !== null && <span className="ml-2 text-sm font-normal text-muted-foreground">{Math.round(shadowMargin.marginPct * 100)}% of revenue</span>}
+              </p>
+            </div>
+            <p className="max-w-md text-xs text-muted-foreground">
+              Shown for comparison only: it is not part of the score. {shadowMargin.confidence === null ? "No variable cost could be costed." : `${Math.round(shadowMargin.confidence * 100)}% of the cost counted rests on measured data.`} See the Costs tab for the working.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-2">
