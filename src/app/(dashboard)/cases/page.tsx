@@ -101,6 +101,12 @@ export default function CasesPage() {
               <LayoutGrid className="h-4 w-4" />
             </Button>
           </div>
+          <Button variant="outline" asChild>
+            <Link href="/cases/renewals">
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Renewals
+            </Link>
+          </Button>
           <Button onClick={() => router.push("/cases/new")}>
             <Plus className="mr-2 h-4 w-4" />
             Create Case

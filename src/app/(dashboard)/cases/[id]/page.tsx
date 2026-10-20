@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Edit2,
@@ -30,6 +30,7 @@ import { CaseBillingTab } from "@/components/cases/case-billing-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
 import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-history";
+import { CaseRenewalTab } from "@/components/cases/case-renewal-tab";
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -63,6 +64,8 @@ export default function CaseDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  // The Renewals desk links straight to the Renewal tab.
+  const initialTab = useSearchParams().get("tab") === "renewal" ? "renewal" : "overview";
   const { data: caseData, loading, refetch } = useCase(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -227,10 +230,11 @@ export default function CaseDetailPage({
         onSent={refetch}
       />
 
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue={initialTab}>
         <TabsList className="flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+          <TabsTrigger value="renewal">Renewal</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
           <TabsTrigger value="proposal" className="flex items-center gap-1">Proposal <InfoTooltip text="Commercial offer with pricing and terms for this case" side="bottom" /></TabsTrigger>
@@ -426,6 +430,10 @@ export default function CaseDetailPage({
 
         <TabsContent value="subscriptions" className="mt-4">
           <CaseSubscriptionHistory caseId={id} />
+        </TabsContent>
+
+        <TabsContent value="renewal" className="mt-4">
+          <CaseRenewalTab caseId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">
