@@ -1,18 +1,7 @@
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { PUBLIC_FORM_LOCATIONS } from "@/lib/public-forms/locations";
 
 export async function GET() {
-  const supabase = await createAdminClient();
-
-  const { data, error } = await supabase
-    .from("locations")
-    .select("id, name")
-    .eq("is_active", true)
-    .order("name");
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
+  const data = PUBLIC_FORM_LOCATIONS.map((name) => ({ id: name, name }));
   return NextResponse.json({ data });
 }

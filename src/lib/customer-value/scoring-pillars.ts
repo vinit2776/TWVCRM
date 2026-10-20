@@ -65,6 +65,14 @@ export interface MonthlyMetrics {
   billing_queries: number | null;
 }
 
+/** One customer-month's margin after variable costs, from `customer_value_margin`. */
+export interface MarginPoint {
+  /** First of the month, `YYYY-MM-01`. */
+  month: string;
+  revenue: number;
+  margin_after_variable: number;
+}
+
 /** Other customers' values for each metric, for percentile ranking. Never includes this customer. */
 export type CohortValues = Partial<Record<MetricKey, number[]>>;
 
@@ -105,6 +113,7 @@ const HIGHER_IS_BETTER: Record<MetricKey, boolean> = {
   concessions_pct: false,
   rent_vs_center: true,
   escalation_outcomes: true,
+  margin_after_variable_pct: true,
 };
 
 /** Below this share of a center's tickets being attributable, ticket metrics are not trusted. */
@@ -304,12 +313,28 @@ export function scoreEngagement(
 
 // ── Profitability (revenue side) ────────────────────────────────────────
 
+/**
+ * Margin after variable costs over the window, recency-weighted and revenue-weighted so a quiet
+ * month does not swing it. Null while the metric is off (weight zero), which leaves the pillar
+ * exactly as it was. Not applicable, not missing, when there is no stored margin: absent cost data
+ * is not evidence of a poor margin.
+ */
+function marginMetric(points: MarginPoint[] | undefined, asOf: string, s: ScoringSettings, cohort: CohortValues): MetricResult | null {
+  const weight = s.metricWeights.margin_after_variable_pct;
+  if (!(weight > 0)) return null;
+  const win = selectWindow(points ?? [], asOf, s.windowMonths, s.halfLifeMonths);
+  const revenue = win.reduce((n, x) => n + x.weight * x.row.revenue, 0);
+  if (win.length === 0 || !(revenue > 0)) return notApplicableMetric("margin_after_variable_pct", weight);
+  const value = win.reduce((n, x) => n + x.weight * x.row.margin_after_variable, 0) / revenue;
+  return scored("margin_after_variable_pct", value, s, cohort);
+}
+
 export function scoreProfitability(
   rows: MonthlyMetrics[],
   asOf: string,
   s: ScoringSettings,
   cohort: CohortValues = {},
-  facts: { centerRentPerSeat?: number | null; escalations?: EscalationOutcome[] } = {}
+  facts: { centerRentPerSeat?: number | null; escalations?: EscalationOutcome[]; margin?: MarginPoint[] } = {}
 ): PillarResult {
   const win = selectWindow(rows, asOf, s.windowMonths, s.halfLifeMonths);
   if (win.length === 0) return allMissing("profitability", s, ["No data in the scoring window"]);
@@ -332,11 +357,15 @@ export function scoreProfitability(
         )
       : notApplicableMetric("escalation_outcomes", s.metricWeights.escalation_outcomes);
 
+  const margin = marginMetric(facts.margin, asOf, s, cohort);
   const metrics = [
     scored("concessions_pct", concessionsPct, s, cohort),
     scored("rent_vs_center", rentVsCenter, s, cohort),
     escalationMetric,
+    ...(margin ? [margin] : []),
   ];
-  // Real margin needs cost data that arrives in a later phase.
-  return finish("profitability", metrics, ["Revenue side only: real margin needs cost data"], win.length);
+  const note = margin
+    ? "Includes margin after variable costs, an estimate that rests on the cost rates entered"
+    : "Revenue side only: real margin needs cost data";
+  return finish("profitability", metrics, [note], win.length);
 }

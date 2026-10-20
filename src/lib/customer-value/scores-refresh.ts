@@ -11,7 +11,8 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { fetchAllPages } from "@/lib/customer-value/query-helpers";
+import { fetchAllPages, fetchInChunks } from "@/lib/customer-value/query-helpers";
+import type { MarginPoint } from "@/lib/customer-value/scoring-pillars";
 import { contractRan } from "@/lib/customer-value/journey";
 import { monthStart } from "@/lib/customer-value/monthly-metrics";
 import { loadCustomers } from "@/lib/customer-value/snapshot-load";
@@ -50,6 +51,26 @@ export interface ScoresRefreshResult {
   latest: Map<string, ScoreRecord>;
 }
 
+/**
+ * Margin after variable costs for these customers, by month, from `customer_value_margin`.
+ * Only ever called when the margin metric is on or being previewed.
+ */
+export async function loadMarginPoints(supabase: SupabaseClient, leadIds: string[]): Promise<Map<string, MarginPoint[]>> {
+  const rows = await fetchInChunks<{ lead_id: string; month: string; revenue: number | string; margin_after_variable: number | string }>(
+    "margin",
+    leadIds,
+    (batch, from, to) =>
+      supabase.from("customer_value_margin").select("lead_id, month, revenue, margin_after_variable").in("lead_id", batch).order("lead_id").order("month").range(from, to)
+  );
+  const byLead = new Map<string, MarginPoint[]>();
+  for (const r of rows) {
+    const list = byLead.get(r.lead_id) ?? [];
+    list.push({ month: r.month, revenue: Number(r.revenue), margin_after_variable: Number(r.margin_after_variable) });
+    byLead.set(r.lead_id, list);
+  }
+  return byLead;
+}
+
 /** Every customer that has at least one contract, in a stable order. */
 export async function listCustomerIds(supabase: SupabaseClient): Promise<string[]> {
   const rows = await fetchAllPages<{ id: string; lead_id: string }>("contracts", (from, to) =>
@@ -85,10 +106,12 @@ export async function refreshScores(
   let notEnoughData = 0;
 
   if (wantScores) {
+    // Margin is read only when its metric is on: with it off nothing here changes.
+    const margin = settings.metricWeights.margin_after_variable_pct > 0 ? await loadMarginPoints(supabase, loadIds) : null;
     const customers: RunCustomer[] = loadIds
       .map((id) => assembled.get(id))
       .filter((c): c is NonNullable<typeof c> => Boolean(c))
-      .map((c) => ({ leadId: c.leadId, raw: c.raw, locationIds: c.locationIds, ticketLinkCoverage: c.ticketLinkCoverage }));
+      .map((c) => ({ leadId: c.leadId, raw: c.raw, locationIds: c.locationIds, ticketLinkCoverage: c.ticketLinkCoverage, margin: margin?.get(c.leadId) }));
 
     // Each customer's first month, so history does not create rows for months before they existed.
     const firstMonth = new Map<string, string>();

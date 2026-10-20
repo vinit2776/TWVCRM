@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import { loadLeadFacts } from "@/lib/enquiry-progress-load";
+import { enquiryMessages, type RawEnquiryRow } from "@/lib/enquiries";
 import { ENQUIRY_UPDATE_KINDS, ENQUIRY_UPDATE_LABEL, enquiryOutcomeLabel, type EnquiryOutcome } from "@/lib/enquiries";
 
 const bodySchema = z.object({
@@ -61,6 +62,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const events: { at: string; text: string; by: string | null; auto: boolean; nextStep?: string | null; followUpAt?: string | null }[] = [
     { at: e.received_at, text: "Enquiry received", by: null, auto: true },
   ];
+  // What the customer wrote, in the same timeline as everything people and the system did about it.
+  for (const m of enquiryMessages(e.payload as unknown as RawEnquiryRow["payload"])) {
+    events.push({ at: m.at ?? e.received_at, text: `Customer wrote: “${m.text.slice(0, 300)}”`, by: null, auto: true });
+  }
   const triage = e.payload?.triage;
   if (triage?.kind === "spam") {
     events.push({ at: e.received_at, text: `Flagged as spam automatically: ${triage.reason ?? "unclear"}`, by: null, auto: true });
