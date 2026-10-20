@@ -15,6 +15,7 @@ import {
   scoreFriction,
   scorePayment,
   scoreProfitability,
+  type MarginMonth,
   type CohortValues,
   type MonthlyMetrics,
   type PillarResult,
@@ -42,6 +43,8 @@ export interface CustomerScoreInput {
   renewal?: RenewalFacts;
   centerRentPerSeat?: number | null;
   escalations?: EscalationOutcome[];
+  /** Monthly margin after variable costs; only read when `settings.margin.enabled`. */
+  margins?: MarginMonth[];
   /** Other customers' values per metric, for percentile ranking. */
   cohort?: CohortValues;
 }
@@ -112,6 +115,7 @@ export function scoreCustomer(
     profitability: scoreProfitability(input.rows, asOf, settings, cohort, {
       centerRentPerSeat: input.centerRentPerSeat,
       escalations: input.escalations,
+      margins: input.margins,
     }),
   };
 

@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllPages } from "@/lib/customer-value/query-helpers";
 import { contractRan } from "@/lib/customer-value/journey";
 import { monthStart } from "@/lib/customer-value/monthly-metrics";
+import { loadMarginsByLead } from "@/lib/customer-value/margin-load";
 import { loadCustomers } from "@/lib/customer-value/snapshot-load";
 import { buildMonthlyRecords, upsertInChunks, type RefreshSummary } from "@/lib/customer-value/snapshot-refresh";
 import {
@@ -85,10 +86,12 @@ export async function refreshScores(
   let notEnoughData = 0;
 
   if (wantScores) {
+    // Margin is only read when it is switched on: off, scoring makes no extra query and nothing changes.
+    const margins = settings.margin.enabled ? await loadMarginsByLead(supabase) : null;
     const customers: RunCustomer[] = loadIds
       .map((id) => assembled.get(id))
       .filter((c): c is NonNullable<typeof c> => Boolean(c))
-      .map((c) => ({ leadId: c.leadId, raw: c.raw, locationIds: c.locationIds, ticketLinkCoverage: c.ticketLinkCoverage }));
+      .map((c) => ({ leadId: c.leadId, raw: c.raw, locationIds: c.locationIds, ticketLinkCoverage: c.ticketLinkCoverage, ...(margins ? { margins: margins.get(c.leadId) ?? [] } : {}) }));
 
     // Each customer's first month, so history does not create rows for months before they existed.
     const firstMonth = new Map<string, string>();

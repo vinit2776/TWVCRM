@@ -1,6 +1,6 @@
 # Customer Value tab — Phase 5 plan (cost simulator and real margin)
 
-Status: **decisions D1 to D5 settled on the recommendations, 2026-10-19. PR A (the maths) open; B to E not started.**
+Status: **PR A to D merged. PR E built 2026-10-20 but OFF: margin can be counted in Profitability via `margin.enabled` in the scoring settings; nothing changes until it is switched on. Compare first with `GET /api/admin/customer-value/margin-impact`.**
 Spec: `docs/customer-value-tab-spec.md` section 5.6. Builds on phase 2 (scores), 4 (electricity share) and 4b (Wi-Fi).
 
 ## 1. Goal

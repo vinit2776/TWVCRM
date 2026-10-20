@@ -33,7 +33,9 @@ export type MetricKey =
   // Profitability (revenue side)
   | "concessions_pct"
   | "rent_vs_center"
-  | "escalation_outcomes";
+  | "escalation_outcomes"
+  // Profitability (cost side): margin after variable costs. Only used when `margin.enabled` (off by default).
+  | "margin_pct";
 
 /** A straight line from `worst` (score 0) to `best` (score 100), clamped. Works in either direction. */
 export interface ReferenceScale {
@@ -80,6 +82,13 @@ export interface ScoringSettings {
    * only one pillar in four. Null (the default) means no cap.
    */
   weakPillarCap: { below: number; maxTier: Tier } | null;
+  /**
+   * Margin after variable costs as a Profitability metric (phase 5, PR E). OFF by default: with
+   * `enabled` false no score, tier or stored value changes. A month's margin only counts when at
+   * least `minConfidence` of its cost rests on measured data, so a month where most costs are
+   * unknown cannot rank customers against each other.
+   */
+  margin: { enabled: boolean; minConfidence: number };
 }
 
 export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
@@ -109,6 +118,7 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
     concessions_pct: 50,
     rent_vs_center: 30,
     escalation_outcomes: 20,
+    margin_pct: 40,
   },
   scales: {
     avg_days_late: { best: 0, worst: 15 },
@@ -124,6 +134,8 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
     bookings_per_seat_month: { best: 1, worst: 0 },
     concessions_pct: { best: 0, worst: 15 },
     rent_vs_center: { best: 1.1, worst: 0.7 },
+    // Margin after variable costs as a share of revenue: a first-cut range, to calibrate on real data.
+    margin_pct: { best: 0.6, worst: 0.1 },
   },
   seatTrendPoints: [
     [-25, 0],
@@ -134,6 +146,7 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
   severeOverdueDays: 30,
   severeOverdueCap: 30,
   weakPillarCap: null,
+  margin: { enabled: false, minConfidence: 0.5 },
 };
 
 /** Metric keys that belong to each pillar, in display order. */
@@ -183,6 +196,7 @@ export function validateSettings(s: ScoringSettings): string[] {
       problems.push(`Reference scale for ${key} needs two different numbers`);
     }
   }
+  if (!(s.margin.minConfidence >= 0 && s.margin.minConfidence <= 1)) problems.push("Margin minimum confidence must be between 0 and 1");
   if (s.weakPillarCap) {
     const { below, maxTier } = s.weakPillarCap;
     if (!(below > 0 && below < 100)) problems.push("Weak pillar floor must be between 0 and 100");
@@ -208,6 +222,7 @@ export function mergeSettings(overrides: Partial<ScoringSettings> = {}): Scoring
     metricWeights: { ...DEFAULT_SCORING_SETTINGS.metricWeights, ...overrides.metricWeights },
     scales: { ...DEFAULT_SCORING_SETTINGS.scales, ...overrides.scales },
     escalationScores: { ...DEFAULT_SCORING_SETTINGS.escalationScores, ...overrides.escalationScores },
+    margin: { ...DEFAULT_SCORING_SETTINGS.margin, ...overrides.margin },
   };
   const problems = validateSettings(merged);
   if (problems.length > 0) throw new Error(`Invalid scoring settings: ${problems.join("; ")}`);

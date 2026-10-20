@@ -40,6 +40,7 @@ export const METRIC_LABELS: Record<string, string> = {
   concessions_pct: "concessions",
   rent_vs_center: "rent against the center",
   escalation_outcomes: "escalation outcomes",
+  margin_pct: "margin after variable costs",
 };
 
 export interface StoredMetric {

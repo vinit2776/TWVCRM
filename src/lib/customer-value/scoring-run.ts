@@ -37,7 +37,7 @@ import {
   type CustomerScore,
   type Trend,
 } from "@/lib/customer-value/scoring-overall";
-import type { CohortValues } from "@/lib/customer-value/scoring-pillars";
+import type { CohortValues, MarginMonth } from "@/lib/customer-value/scoring-pillars";
 import {
   PILLAR_KEYS,
   type MetricKey,
@@ -51,6 +51,8 @@ export interface RunCustomer {
   raw: CustomerRaw;
   locationIds: string[];
   ticketLinkCoverage: number | null;
+  /** Margin after variable costs per completed month; loaded only when margin scoring is switched on. */
+  margins?: MarginMonth[];
 }
 
 export interface ScoredCustomer {
@@ -206,7 +208,7 @@ function scoreDate(customers: RunCustomer[], asOf: string, settings: ScoringSett
     first.set(
       p.customer.leadId,
       scoreCustomer(
-        { rows: p.rows, tenureMonths: p.tenureMonths, ticketLinkCoverage: p.customer.ticketLinkCoverage, renewal: p.renewal, escalations: p.escalations },
+        { rows: p.rows, tenureMonths: p.tenureMonths, ticketLinkCoverage: p.customer.ticketLinkCoverage, renewal: p.renewal, escalations: p.escalations, margins: p.customer.margins },
         asOf,
         settings
       )
@@ -249,6 +251,7 @@ function scoreDate(customers: RunCustomer[], asOf: string, settings: ScoringSett
           ticketLinkCoverage: p.customer.ticketLinkCoverage,
           renewal: p.renewal,
           escalations: p.escalations,
+          margins: p.customer.margins,
           centerRentPerSeat: centerRent,
           cohort,
         },

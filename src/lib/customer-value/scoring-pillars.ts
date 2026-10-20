@@ -105,6 +105,7 @@ const HIGHER_IS_BETTER: Record<MetricKey, boolean> = {
   concessions_pct: false,
   rent_vs_center: true,
   escalation_outcomes: true,
+  margin_pct: true,
 };
 
 /** Below this share of a center's tickets being attributable, ticket metrics are not trusted. */
@@ -302,14 +303,24 @@ export function scoreEngagement(
   return finish("engagement", metrics, notes, win.length);
 }
 
-// ── Profitability (revenue side) ────────────────────────────────────────
+// ── Profitability ───────────────────────────────────────────────────────
+
+/** One completed month's margin after variable costs, from `customer_value_margin`. */
+export interface MarginMonth {
+  /** First day of the month, YYYY-MM-DD */
+  month: string;
+  /** Margin as a share of revenue; null when revenue was zero. */
+  margin_pct: number | null;
+  /** Share of that month's variable cost resting on measured data, 0 to 1. */
+  confidence: number | null;
+}
 
 export function scoreProfitability(
   rows: MonthlyMetrics[],
   asOf: string,
   s: ScoringSettings,
   cohort: CohortValues = {},
-  facts: { centerRentPerSeat?: number | null; escalations?: EscalationOutcome[] } = {}
+  facts: { centerRentPerSeat?: number | null; escalations?: EscalationOutcome[]; margins?: MarginMonth[] } = {}
 ): PillarResult {
   const win = selectWindow(rows, asOf, s.windowMonths, s.halfLifeMonths);
   if (win.length === 0) return allMissing("profitability", s, ["No data in the scoring window"]);
@@ -337,6 +348,20 @@ export function scoreProfitability(
     scored("rent_vs_center", rentVsCenter, s, cohort),
     escalationMetric,
   ];
+
+  // Margin is only part of the pillar when switched on; off, nothing here changes at all.
+  if (s.margin.enabled) {
+    const usable = selectWindow(
+      (facts.margins ?? []).filter((m) => m.margin_pct !== null && m.confidence !== null && m.confidence >= s.margin.minConfidence),
+      asOf,
+      s.windowMonths,
+      s.halfLifeMonths
+    );
+    const margin = weightedMean(usable.map((x) => ({ value: x.row.margin_pct, weight: x.weight })));
+    // No usable margin is "does not apply", not "missing": it must not lower the pillar's confidence.
+    metrics.push(margin === null ? notApplicableMetric("margin_pct", s.metricWeights.margin_pct) : scored("margin_pct", margin, s, cohort));
+    return finish("profitability", metrics, ["Includes margin after variable costs where enough of the cost is measured"], win.length);
+  }
   // Real margin needs cost data that arrives in a later phase.
   return finish("profitability", metrics, ["Revenue side only: real margin needs cost data"], win.length);
 }
