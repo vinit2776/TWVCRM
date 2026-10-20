@@ -8,6 +8,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { RentWaiverKindSelect } from "@/components/billing/rent-waiver-kind-select";
+import type { RentWaiverKind } from "@/lib/constants";
 
 /**
  * Admin-only: record that one missed rent month won't be billed through the
@@ -26,13 +28,18 @@ export function WaiveRentMonthDialog({
   onWaived: () => void | Promise<void>;
 }) {
   const [reason, setReason] = useState("");
+  const [kind, setKind] = useState<RentWaiverKind | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { setReason(""); setError(null); }, [target]);
+  useEffect(() => { setReason(""); setKind(""); setError(null); }, [target]);
 
   const submit = async () => {
     if (!target) return;
+    if (!kind) {
+      setError("Choose what kind of waiver this is");
+      return;
+    }
     if (reason.trim().length < 5) {
       setError("Give a short reason (at least 5 characters)");
       return;
@@ -42,7 +49,7 @@ export function WaiveRentMonthDialog({
       const res = await fetch(`/api/contracts/${target.contractId}/rent-waivers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ waived_month: target.month, reason: reason.trim() }),
+        body: JSON.stringify({ waived_month: target.month, reason: reason.trim(), kind }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -71,7 +78,8 @@ export function WaiveRentMonthDialog({
             billed later from the contract page, and the admin can undo the waiver there.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-1.5">
+        <div className="space-y-3">
+          <RentWaiverKindSelect id="waive-kind" value={kind} onChange={(k) => { setKind(k); setError(null); }} />
           <Textarea
             value={reason}
             onChange={(e) => { setReason(e.target.value); setError(null); }}

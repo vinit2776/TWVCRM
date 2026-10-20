@@ -131,6 +131,13 @@ export function daysOverdueFromDueDate(dueDateYmd: string): number {
   return Math.floor((todayMs - dueMs) / 86400000);
 }
 
+/** Never-reminded first, then longest since last reminder. */
+export function byLeastRecentlyReminded<T extends { last_reminder_sent_at?: string | null }>(a: T, b: T) {
+  const ta = a.last_reminder_sent_at ? Date.parse(a.last_reminder_sent_at) : 0;
+  const tb = b.last_reminder_sent_at ? Date.parse(b.last_reminder_sent_at) : 0;
+  return ta - tb;
+}
+
 /** The delivery stamps a statement can carry, one per issuance path. */
 export interface DeliveryMarkers {
   /** Proforma First — stamped by dispatchProforma only on a successful send. */

@@ -6,11 +6,16 @@ import { pingCronHealth } from "@/lib/cron-ping";
 /**
  * GET /api/petty-cash/day-book
  * Generates and emails the daily petty cash summary.
- * Called by Vercel cron at 6:30 PM IST daily.
- * Also supports ?date=YYYY-MM-DD for on-demand generation.
+ * Called by Vercel cron at 6:30 PM IST daily. Requires `Authorization: Bearer $CRON_SECRET`.
+ * ?date=YYYY-MM-DD regenerates a past day (still needs the secret).
  */
 export async function GET(request: Request) {
-  // Verify cron secret for automated runs (optional header check)
+  // Vercel cron sends this header; nothing else calls the route. Without the check anyone
+  // with the URL could make it email the day book to accounts/admin on demand.
+  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const targetDate = searchParams.get("date") || new Date().toISOString().slice(0, 10);
 

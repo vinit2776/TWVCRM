@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
+import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS, ACTIVATION_UNBLOCKING_PURPOSE, CONTRACT_PRE_ACTIVATION_STATUSES, canWithdrawContract } from "@/lib/constants";
@@ -580,6 +581,14 @@ export async function PATCH(
   // Auto-advance lead status when contract becomes active
   if (body.status === "active" && oldContract.status !== "active") {
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
+
+    // Resolve the lead's enquiry as Converted. The daily enquiry-reconcile cron is the backstop,
+    // so a failure here must never fail the activation.
+    try {
+      await reconcileLeadEnquiries(createAdminClient(), [oldContract.lead_id]);
+    } catch (err) {
+      console.error("[contract activation] enquiry reconcile failed:", err instanceof Error ? err.message : "unknown");
+    }
 
     // Activation deliberately raises NO invoice.
     //

@@ -14,6 +14,8 @@ import {
 import { LocationSelector } from "@/components/shared/location-selector";
 import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
+import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -31,6 +33,7 @@ type Summary = {
   notInterested: number;
   noResponse: number;
   superseded: number;
+  spam?: number;
 };
 
 const OUTCOME_CLASS: Record<string, string> = {
@@ -38,6 +41,7 @@ const OUTCOME_CLASS: Record<string, string> = {
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
   superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
+  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
 };
 
 function defaultFromDate(): string {
@@ -50,7 +54,7 @@ export default function EnquiryLogPage() {
   const { user } = useCurrentUser();
   // Read-only role: names aren't links into the lead record and there's no mobile column.
   const readOnly = user?.role === ENQUIRY_VIEWER_ROLE;
-  const columnCount = readOnly ? 7 : 8;
+  const columnCount = readOnly ? 7 : 9;
   const [rows, setRows] = useState<EnquiryItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,6 +149,7 @@ export default function EnquiryLogPage() {
                 <SelectItem value="google_ads">Google Ads</SelectItem>
                 <SelectItem value="meta_ads">Meta Ads</SelectItem>
                 <SelectItem value="direct_walkin">Walk-in</SelectItem>
+                <SelectItem value="whatsapp">WhatsApp</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -159,6 +164,7 @@ export default function EnquiryLogPage() {
                 <SelectItem value="not_interested">Not interested</SelectItem>
                 <SelectItem value="no_response">No response</SelectItem>
                 <SelectItem value="superseded">Superseded</SelectItem>
+                <SelectItem value="spam">Spam{summary?.spam ? ` (${summary.spam})` : ""}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -189,6 +195,7 @@ export default function EnquiryLogPage() {
                 {!readOnly && <th className="px-3 py-2 text-left">Mobile</th>}
                 <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-left">Status</th>
+                {!readOnly && <th className="px-3 py-2 text-left">Next step</th>}
                 <th className="px-3 py-2 text-left">Resolved by</th>
                 <th className="px-3 py-2 text-left">Resolved at</th>
               </tr>
@@ -215,10 +222,26 @@ export default function EnquiryLogPage() {
                           {row.name}
                         </Link>
                       )}
+                      {!readOnly && (
+                        <span className="ml-1.5 align-middle">
+                          <EnquiryNameControl
+                            enquiryId={row.enquiryId}
+                            name={row.name}
+                            placeholder={row.namePlaceholder}
+                            suggestedName={row.suggestedName}
+                            onChanged={load}
+                          />
+                        </span>
+                      )}
                       {row.isReEnquiry && (
                         <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
                           Re-enquiry
                         </span>
+                      )}
+                      {!readOnly && row.message && (
+                        <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground" title={row.message}>
+                          “{row.message}”
+                        </p>
                       )}
                     </td>
                     {!readOnly && (
@@ -239,7 +262,30 @@ export default function EnquiryLogPage() {
                           {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
                         </span>
                       )}
+                      {!readOnly && row.stage && (
+                        <div className="mt-1">
+                          <StageChip stage={row.stage} />
+                        </div>
+                      )}
                     </td>
+                    {!readOnly && (
+                      <td className="px-3 py-2">
+                        <div className="space-y-1.5">
+                          <NextStepLine nextStep={row.nextStep} followUpAt={row.followUpAt} />
+                          <EnquiryActions
+                            enquiryId={row.enquiryId}
+                            claimedAt={row.claimedAt}
+                            claimerName={row.claimerName}
+                            resolvedAt={row.resolvedAt}
+                            isSpam={row.resolutionOutcome === "spam"}
+                            needsReview={row.needsReview}
+                            nextStep={row.nextStep}
+                            followUpAt={row.followUpAt}
+                            onChanged={load}
+                          />
+                        </div>
+                      </td>
+                    )}
                     <td className="px-3 py-2 text-xs">
                       {row.resolutionOutcome === "superseded" ? "—" : (row.resolverName ?? "—")}
                     </td>

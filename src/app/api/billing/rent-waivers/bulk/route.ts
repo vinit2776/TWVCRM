@@ -3,6 +3,7 @@ import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { zodErrorResponse } from "@/lib/validations";
 import { createRentWaiver } from "@/lib/rent-waivers";
+import { RENT_WAIVER_KINDS } from "@/lib/constants";
 
 const BulkSchema = z.object({
   items: z.array(z.object({
@@ -10,6 +11,9 @@ const BulkSchema = z.object({
     waived_month: z.string().regex(/^\d{4}-\d{2}-01$/, "Must be first of month (YYYY-MM-01)"),
   })).min(1).max(300),
   reason: z.string().trim().min(5, "Give a short reason (at least 5 characters)"),
+  kind: z.enum(RENT_WAIVER_KINDS, {
+    message: "Say whether the customer was given these months or they were billed outside the CRM",
+  }),
 });
 
 /**
@@ -34,13 +38,13 @@ export async function POST(req: NextRequest) {
 
   const parsed = BulkSchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
-  const { items, reason } = parsed.data;
+  const { items, reason, kind } = parsed.data;
 
   let waived = 0;
   const skipped: { contract_id: string; waived_month: string; error: string }[] = [];
   for (const item of items) {
     const result = await createRentWaiver(admin, {
-      contractId: item.contract_id, waivedMonth: item.waived_month, reason, userId: dbUser.id,
+      contractId: item.contract_id, waivedMonth: item.waived_month, reason, kind, userId: dbUser.id,
     });
     if (result.ok) waived++;
     else skipped.push({ ...item, error: result.error });

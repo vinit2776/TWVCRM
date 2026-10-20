@@ -30,6 +30,8 @@ import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
 import { classify } from "@/lib/facility-classifier";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
+import { TicketCustomerPicker } from "@/components/facility/ticket-customer-picker";
+import type { TicketCustomerOption } from "@/lib/facility/ticket-customer";
 import type {
   FacilityAsset, FacilityIssuePriority, FacilityScope,
 } from "@/types";
@@ -101,6 +103,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [reporterName, setReporterName] = useState("");
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
+  const [customer, setCustomer] = useState<TicketCustomerOption | null>(null);
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [tatMode, setTatMode] = useState<"hours" | "datetime">("datetime");
   const [tatHours, setTatHours] = useState("");
@@ -155,6 +158,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setReporterName("");
     setReporterPhone("");
     setReporterEmail("");
+    setCustomer(null);
     setPriority(defaults?.priority || "medium");
     setLocationId(defaults?.location_id || "");
     setFloorId(defaults?.floor_id || "");
@@ -260,6 +264,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           floor_id: floorId || null,
           space_unit_id: spaceUnitId || null,
           asset_id: assetId || null,
+          contract_id: customer?.contractId ?? null,
           title: title.trim(),
           description: description.trim() || null,
           priority,
@@ -669,6 +674,16 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   // ── Step 3: Who ────────────────────────────────────────────────
   const Step3 = (
     <div className="space-y-4">
+      <div className="rounded-lg border bg-muted/30 p-3">
+        <TicketCustomerPicker
+          locationId={locationId}
+          spaceUnitId={spaceUnitId}
+          value={customer}
+          onChange={setCustomer}
+          disabled={submitting}
+        />
+      </div>
+
       <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
         <p className="text-xs text-muted-foreground">
           If you&apos;re reporting on someone else&apos;s behalf, add their contact so they get the resolution update. Skip if not applicable.
@@ -693,6 +708,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       <div className="rounded-lg border p-3 space-y-1.5 text-sm">
         <div className="text-xs text-muted-foreground uppercase tracking-wide">Summary</div>
         <div><span className="text-muted-foreground">Location:</span> {prefilledLocation?.name ?? "—"}</div>
+        {customer && <div><span className="text-muted-foreground">Customer:</span> {customer.customerName} · {customer.contractNumber}</div>}
         {selectedAsset && <div><span className="text-muted-foreground">Asset:</span> {selectedAsset.asset_code} · {selectedAsset.name}</div>}
         <div><span className="text-muted-foreground">Scope:</span> {scope ? SCOPE_LABEL[scope] : "—"}</div>
         <div className="flex items-center gap-2">

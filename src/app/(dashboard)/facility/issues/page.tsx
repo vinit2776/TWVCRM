@@ -26,6 +26,8 @@ import { cn, getInitials } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
 import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
+import { ComplaintsQueue } from "@/components/facility/complaints-queue";
+import { FacilityViewTabs } from "@/components/facility/facility-view-tabs";
 import {
   PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
   timeAgo, timeUntil,
@@ -66,6 +68,7 @@ function FacilityIssuesPageInner() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [complaintsRefresh, setComplaintsRefresh] = useState(0);
   const [delegateOpen, setDelegateOpen] = useState(false);
   // Groups that are all-closed (nothing open) start collapsed; anyone with
   // open work stays visible by default.
@@ -237,6 +240,20 @@ function FacilityIssuesPageInner() {
     return parts.length > 0 ? parts.join(" · ") : null;
   };
 
+  if (searchParams.get("view") === "complaints") {
+    return (
+      <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+        <PageBreadcrumb resetTo={{ label: "Issues" }} />
+        <div>
+          <h1 className="text-xl md:text-2xl font-semibold">Tasks / Work Orders</h1>
+          <p className="text-xs md:text-sm text-muted-foreground">Customer complaints and requests from WhatsApp, to assess and act on</p>
+        </div>
+        <FacilityViewTabs active="complaints" refreshKey={complaintsRefresh} />
+        <ComplaintsQueue onChanged={() => setComplaintsRefresh((n) => n + 1)} />
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
       <PageBreadcrumb resetTo={{ label: "Issues" }} />
@@ -260,6 +277,8 @@ function FacilityIssuesPageInner() {
           </Button>
         </div>
       </div>
+
+      <FacilityViewTabs active="work" />
 
       <ActivityFeed />
 

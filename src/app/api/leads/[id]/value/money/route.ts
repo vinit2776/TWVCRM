@@ -127,7 +127,7 @@ export async function GET(
     inChunks<MoneyConcessionInput["rentWaivers"][number]>(contractIds, (batch) =>
       supabase
         .from("contract_rent_waivers")
-        .select("contract_id, waived_month, reason, revoked_at")
+        .select("contract_id, waived_month, reason, revoked_at, waiver_kind")
         .in("contract_id", batch)
         .returns<MoneyConcessionInput["rentWaivers"]>()
     ),

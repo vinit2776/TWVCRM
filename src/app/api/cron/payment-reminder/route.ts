@@ -4,14 +4,25 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { pingCronHealth } from "@/lib/cron-ping";
 import {
   STAGES, pickStageIndex, daysOverdueFromDueDate,
-  sendOneReminder, fetchCcPools, hasReachedCustomer,
+  sendOneReminder, fetchCcPools, hasReachedCustomer, byLeastRecentlyReminded,
 } from "@/lib/payment-reminder";
 import {
   pickStageForKind, shouldFire, sendReceivableReminder,
 } from "@/lib/receivable-reminder";
 import { fetchDunnableReceivables } from "@/lib/receivable-fetch";
 
-export const maxDuration = 60;
+// This used to be 60s. Sends are sequential (~2s each: email + WhatsApp), so the run was
+// killed ~25 sends in, every day, before the health ping — and the rest of the due
+// reminders (plus the whole deposits/top-ups pass) were never reached.
+export const maxDuration = 300;
+
+// Catch-up throttle. A backlog is released over a few days instead of in one burst to
+// customers, and a run can never be cut off mid-flight: past STOP_STARTING_AFTER_MS no
+// new send begins, so the health ping always lands. Anything left over is reported as
+// `deferred` and picked up next run — oldest / never-reminded first, so nobody starves.
+const MAX_STATEMENT_SENDS_PER_RUN = 30;
+const MAX_OTHER_SENDS_PER_RUN = 15;
+const STOP_STARTING_AFTER_MS = 240_000;
 
 /**
  * GET /api/cron/payment-reminder
@@ -41,6 +52,7 @@ export async function GET(request: NextRequest) {
   const dry = url.searchParams.get("dry") === "1";
   const force = url.searchParams.get("force") === "1";
 
+  const startedAt = Date.now();
   const admin = createAdminClient();
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
@@ -76,13 +88,15 @@ export async function GET(request: NextRequest) {
   }
 
   const ccPools = await fetchCcPools(admin);
-  let sent = 0, skipped = 0, errors = 0;
+  let sent = 0, skipped = 0, errors = 0, deferred = 0;
   // Statements held back because there's no evidence the customer ever received
   // them. Reported, never silent — each one needs a human to resend it.
   const undelivered: string[] = [];
   const summary: { id: string; stmt: string; stage: number; tone: string; channel: string; status: string; reason?: string }[] = [];
 
-  for (const s of statements || []) {
+  const ordered = [...(statements || [])].sort(byLeastRecentlyReminded);
+
+  for (const s of ordered) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract: any = s.contract;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -157,6 +171,13 @@ export async function GET(request: NextRequest) {
       continue;
     }
 
+    // Capped for this run — leave it for the next one (it keeps its place at the front).
+    if (sent + errors >= MAX_STATEMENT_SENDS_PER_RUN || Date.now() - startedAt > STOP_STARTING_AFTER_MS) {
+      deferred++;
+      summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "deferred", reason: "per-run send cap reached" });
+      continue;
+    }
+
     const r = await sendOneReminder(admin, {
       statement: s, stageIdx, appUrl, triggeredBy: "cron", triggeredByUserId: null, ccPools,
     });
@@ -177,19 +198,20 @@ export async function GET(request: NextRequest) {
   // These live outside billing_statements and were historically undunned.
   // Handled by their own dispatcher so this cron's statement path — which
   // drives live monthly invoicing — stays untouched.
-  const other = await runOtherReceivablesPass(admin, { dry, force, ccPools });
-  sent += other.sent; skipped += other.skipped; errors += other.errors;
+  const other = await runOtherReceivablesPass(admin, { dry, force, ccPools, startedAt });
+  sent += other.sent; skipped += other.skipped; errors += other.errors; deferred += other.deferred;
 
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", {
-    sent, skipped, errors,
+    sent, skipped, errors, deferred,
+    elapsed_s: Math.round((Date.now() - startedAt) / 1000),
     undelivered: undelivered.length,
     ...(undelivered.length > 0 ? { undelivered_statements: undelivered.join(", ") } : {}),
   });
   return NextResponse.json({
     date: todayIst, dry,
     considered: (statements || []).length + other.considered,
-    sent, skipped, errors,
+    sent, skipped, errors, deferred,
     // Open receivables that were never delivered — excluded from dunning and
     // waiting on a resend. Surfaced at the top level so it can't hide inside
     // a long per-statement summary.
@@ -203,14 +225,15 @@ interface OtherPassOpts {
   dry: boolean;
   force: boolean;
   ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+  startedAt: number;
 }
 
 async function runOtherReceivablesPass(
   admin: SupabaseClient,
-  { dry, force, ccPools }: OtherPassOpts,
+  { dry, force, ccPools, startedAt }: OtherPassOpts,
 ) {
-  const rows = await fetchDunnableReceivables(admin);
-  let sent = 0, skipped = 0, errors = 0;
+  const rows = (await fetchDunnableReceivables(admin)).sort(byLeastRecentlyReminded);
+  let sent = 0, skipped = 0, errors = 0, deferred = 0;
   const summary: { kind: string; ref: string; stage: number; status: string; reason?: string }[] = [];
 
   for (const r of rows) {
@@ -244,6 +267,12 @@ async function runOtherReceivablesPass(
       continue;
     }
 
+    if (sent + errors >= MAX_OTHER_SENDS_PER_RUN || Date.now() - startedAt > STOP_STARTING_AFTER_MS) {
+      deferred++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "deferred", reason: "per-run send cap reached" });
+      continue;
+    }
+
     const res = await sendReceivableReminder(admin, {
       kind: r.kind, id: r.id, reference: r.reference, partyName: r.party_name,
       email: r.email, phone: r.phone, amount: r.amount, dueDate: r.due_date,
@@ -259,5 +288,5 @@ async function runOtherReceivablesPass(
     }
   }
 
-  return { considered: rows.length, sent, skipped, errors, summary };
+  return { considered: rows.length, sent, skipped, errors, deferred, summary };
 }

@@ -187,9 +187,13 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 | Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
+| Daily 10:30 IST | `/api/cron/enquiry-reconcile` | Auto-resolve enquiries: contract active → Converted, lead lost → Not interested, 21 quiet days → No response (only enquiries received after `app_settings.enquiry_auto_resolve_effective_from`) |
 | Daily 06:30 IST | `/api/cron/gmail-watch-renew` | Renew Gmail watch (no-ops until Gmail is configured) |
 | Daily 10:00 IST | `/api/cron/rent-gap-alert` | In-app + push alert to admin/manager/accounts/sales_rep for each new rent gap that can be raised from Billing → Unbilled → Rent gap (staff only, once per contract-month) |
 | Hourly at :07 | `/api/cron/energy-ledger-capture` | Extend each OneGrid-enabled location's energy ledger (`location_energy_readings`) from its last stored row; feeds the Usage baseline |
+| Hourly at :17 | `/api/cron/wifi-ledger-capture` | Copy each UniFi center's Wi-Fi usage (per device and site total) into `wifi_client_hourly` / `wifi_site_hourly` (console keeps ~7 days) and `wifi_client_daily` / `wifi_site_daily` (~90 days) before it ages out; read-only against UniFi, sends nothing |
+| Daily 03:00 IST | `/api/cron/customer-value` | Recompute every customer's monthly Value figures and today's score into `customer_value_monthly` / `customer_value_scores` (writes only those two tables; sends nothing) |
+| Daily 03:15 IST | `/api/cron/customer-value-margin` | Shadow margin after variable costs per customer-month into `customer_value_margin`, from the stored monthly figures and the cost rates in force; shown beside the score, never changes it (writes only that table; sends nothing) |
 
 Billing generation logic is centralised in `src/lib/billing.ts` — used by both the cron and the manual trigger, and called on contract activation to generate the first statement immediately.
 
@@ -354,7 +358,9 @@ and nothing you are about to click is safe.
    `.env.local`, so the seeder can never be pointed at production by picking up
    the wrong env. It also refuses to run if the target project ref matches
    production's. `scripts/seed-facility-demo.mjs` and
-   `scripts/seed-staging-queries.mjs` add module-specific fixtures.
+   `scripts/seed-staging-queries.mjs` add module-specific fixtures. `scripts/seed-staging-enquiry-flow.mjs`
+   seeds the WhatsApp enquiry, complaint and request screens; everything it creates is marked as test
+   data and removed with `--clear`.
 
 Seed data uses reserved-fake addresses (`@example.com`) and obviously fake phone
 numbers, so even a bug that triggers a live send against it reaches nobody real.

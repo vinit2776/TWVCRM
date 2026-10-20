@@ -11,12 +11,15 @@ import {
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
 import type { EnquiryOutcome } from "@/lib/enquiries";
+import { NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
+import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
 
 const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
   not_interested: "Not interested / no fit",
   no_response: "Followed up — no response",
   superseded: "Superseded by a later enquiry",
+  spam: "Spam",
 };
 
 const OUTCOME_BG: Record<EnquiryOutcome, string> = {
@@ -24,6 +27,7 @@ const OUTCOME_BG: Record<EnquiryOutcome, string> = {
   not_interested: "bg-slate-100 text-slate-700",
   no_response: "bg-amber-100 text-amber-800",
   superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
+  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
 };
 
 function timeAgo(iso: string): string {
@@ -134,12 +138,31 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         </div>
       </div>
 
+      {!isResolved && item.namePlaceholder && (
+        <div className="mt-1">
+          <EnquiryNameControl
+            enquiryId={item.enquiryId}
+            name={item.name}
+            placeholder
+            suggestedName={item.suggestedName}
+            onChanged={() => {}}
+          />
+        </div>
+      )}
+
       {isResolved && (item.claimerName || item.resolverName) && (
         <p className="mt-1.5 text-[11px] text-muted-foreground">
           {item.claimerName && <>Claimed by {item.claimerName}</>}
           {item.claimerName && item.resolverName && " · "}
           {item.resolverName && <>Resolved by {item.resolverName}</>}
         </p>
+      )}
+
+      {!isResolved && (item.nextStep || (item.stage && item.stage.key !== "new" && item.stage.key !== "contacted")) && (
+        <div className="mt-1.5 space-y-1">
+          {item.stage && item.stage.key !== "new" && item.stage.key !== "contacted" && <StageChip stage={item.stage} />}
+          <NextStepLine nextStep={item.nextStep} followUpAt={item.followUpAt} />
+        </div>
       )}
 
       {!isResolved && (

@@ -49,7 +49,14 @@ export interface MoneyPaymentRow {
 }
 
 export interface MoneyConcessionInput {
-  rentWaivers: Array<{ contract_id: string; waived_month: string; reason: string | null; revoked_at: string | null }>;
+  rentWaivers: Array<{
+    contract_id: string;
+    waived_month: string;
+    reason: string | null;
+    revoked_at: string | null;
+    /** giveaway | billed_elsewhere | unknown (contract_rent_waivers.waiver_kind, migration 00615). */
+    waiver_kind: string | null;
+  }>;
   moratoriums: Array<{
     contract_id: string;
     moratorium_month: string;
@@ -162,10 +169,11 @@ export interface Money {
   concessions: {
     entries: MoneyConcession[];
     /**
-     * Counted concessions by kind, and their sum. Months not billed through the
-     * CRM (`rent_waiver`) are never counted here: some were billed elsewhere,
-     * and nothing in the data says which, so they are priced separately in
-     * `unbilledRent`.
+     * Counted concessions by kind, and their sum. A rent waiver counts only when
+     * it was marked as given to the customer. One marked "billed outside the
+     * CRM" gave nothing away and is listed without a price. One not yet
+     * classified (made before waiver_kind existed) might be either, so it stays
+     * out of the sum and is priced separately in `unbilledRent`.
      */
     totals: Record<ConcessionKind, number> & { all: number; unbilledRent: number };
   };
@@ -211,6 +219,129 @@ export function settledOn(
     if (running >= target) return p.payment_date ?? isoToYmdIst(p.created_at);
   }
   return null;
+}
+
+/**
+ * The concessions ledger: every waiver, skipped month, refund and credit note,
+ * newest first, with the ones that count toward the total flagged and summed.
+ * Shared by the Money tab and the snapshot builder so "what counts as a
+ * concession" is defined exactly once.
+ */
+export function buildConcessions(c: MoneyConcessionInput, rentSteps: JourneyRentStep[]): Money["concessions"] {
+  const entries: MoneyConcession[] = [];
+
+  for (const w of c.rentWaivers) {
+    if (w.revoked_at) continue;
+    const waiverKind =
+      w.waiver_kind === "giveaway" || w.waiver_kind === "billed_elsewhere" ? w.waiver_kind : "unknown";
+    const rent = rentInMonth(rentSteps, w.contract_id, w.waived_month);
+    const detail = [c.contractNumbers[w.contract_id], w.reason].filter(Boolean).join(" · ") || null;
+
+    if (waiverKind === "giveaway") {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Rent waived for ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: rent,
+        counted: true,
+        note: rent === null ? "Rent for that month could not be determined" : null,
+      });
+    } else if (waiverKind === "billed_elsewhere") {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Billed outside the CRM: ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: null,
+        counted: false,
+        note: "Billed outside the CRM, so no rent was given away",
+      });
+    } else {
+      entries.push({
+        kind: "rent_waiver",
+        date: w.waived_month,
+        label: `Not billed in the CRM: ${monthLabel(w.waived_month)}`,
+        detail,
+        amount: rent,
+        counted: false,
+        note:
+          rent === null
+            ? "Rent for that month could not be determined"
+            : "Not classified: may have been billed elsewhere, so not counted",
+      });
+    }
+  }
+  for (const m of c.moratoriums) {
+    if (m.status === "rejected") continue;
+    const approved = m.status === "approved";
+    const billedAnyway = approved && Boolean(m.overridden_at);
+    const amount = rentInMonth(rentSteps, m.contract_id, m.moratorium_month);
+    entries.push({
+      kind: "moratorium",
+      date: m.moratorium_month,
+      label: `Billing skipped for ${monthLabel(m.moratorium_month)}`,
+      detail: [c.contractNumbers[m.contract_id], m.reason].filter(Boolean).join(" · ") || null,
+      amount,
+      counted: approved && !billedAnyway,
+      note: billedAnyway ? "Billed anyway after approval" : approved ? null : "Awaiting approval",
+    });
+  }
+  for (const b of c.bookingWaivers) {
+    if (b.status === "denied" || b.status === "expired") continue;
+    const approved = b.status === "approved";
+    entries.push({
+      kind: "booking_waiver",
+      date: isoToYmdIst(b.approved_at ?? b.created_at),
+      label: `Booking charge waived (${b.waiver_type})`,
+      detail: b.note,
+      amount: num(b.waiver_amount),
+      counted: approved,
+      note: approved ? null : "Awaiting approval",
+    });
+  }
+  for (const r of c.refunds) {
+    if (r.status === "rejected") continue;
+    const processed = r.status === "processed";
+    entries.push({
+      kind: "refund",
+      date: isoToYmdIst(r.processed_at ?? r.requested_at),
+      label: "Booking refund",
+      detail: r.reason,
+      amount: num(r.amount_requested),
+      counted: processed,
+      note: processed ? null : "Not paid out yet",
+    });
+  }
+  for (const n of c.creditNotes) {
+    if (n.superseded_by) continue;
+    entries.push({
+      kind: "credit_note",
+      date: n.credit_note_date ?? "",
+      label: `Credit note${n.credit_note_number ? ` ${n.credit_note_number}` : ""}`,
+      detail: n.reason,
+      amount: num(n.credit_note_amount),
+      counted: true,
+      note: null,
+    });
+  }
+  entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  const totals = { ...EMPTY_KIND_TOTALS, all: 0, unbilledRent: 0 };
+  for (const e of entries) {
+    if (e.amount === null) continue;
+    // A rent waiver that is not counted is an unclassified one: price it, but
+    // keep it out of the concession total.
+    if (e.kind === "rent_waiver" && !e.counted) {
+      totals.unbilledRent += e.amount;
+      continue;
+    }
+    if (!e.counted) continue;
+    totals[e.kind] += e.amount;
+    totals.all += e.amount;
+  }
+
+  return { entries, totals };
 }
 
 /** Monthly rent a contract charged in a given month, from the rent steps. */
@@ -292,92 +423,7 @@ export function buildMoney(input: MoneyInput): Money {
   const overdue = invoices.filter((i) => i.daysOverdue !== null);
   const lateValues = measured.map((i) => i.daysLate as number);
 
-  // Concessions
-  const entries: MoneyConcession[] = [];
-  const c = input.concessions;
-
-  for (const w of c.rentWaivers) {
-    if (w.revoked_at) continue;
-    const amount = rentInMonth(input.rentSteps, w.contract_id, w.waived_month);
-    entries.push({
-      kind: "rent_waiver",
-      date: w.waived_month,
-      label: `Not billed in the CRM: ${monthLabel(w.waived_month)}`,
-      detail: [c.contractNumbers[w.contract_id], w.reason].filter(Boolean).join(" · ") || null,
-      amount,
-      counted: false,
-      note:
-        amount === null
-          ? "Rent for that month could not be determined"
-          : "May have been billed elsewhere, so not counted",
-    });
-  }
-  for (const m of c.moratoriums) {
-    if (m.status === "rejected") continue;
-    const approved = m.status === "approved";
-    const billedAnyway = approved && Boolean(m.overridden_at);
-    const amount = rentInMonth(input.rentSteps, m.contract_id, m.moratorium_month);
-    entries.push({
-      kind: "moratorium",
-      date: m.moratorium_month,
-      label: `Billing skipped for ${monthLabel(m.moratorium_month)}`,
-      detail: [c.contractNumbers[m.contract_id], m.reason].filter(Boolean).join(" · ") || null,
-      amount,
-      counted: approved && !billedAnyway,
-      note: billedAnyway ? "Billed anyway after approval" : approved ? null : "Awaiting approval",
-    });
-  }
-  for (const b of c.bookingWaivers) {
-    if (b.status === "denied" || b.status === "expired") continue;
-    const approved = b.status === "approved";
-    entries.push({
-      kind: "booking_waiver",
-      date: isoToYmdIst(b.approved_at ?? b.created_at),
-      label: `Booking charge waived (${b.waiver_type})`,
-      detail: b.note,
-      amount: num(b.waiver_amount),
-      counted: approved,
-      note: approved ? null : "Awaiting approval",
-    });
-  }
-  for (const r of c.refunds) {
-    if (r.status === "rejected") continue;
-    const processed = r.status === "processed";
-    entries.push({
-      kind: "refund",
-      date: isoToYmdIst(r.processed_at ?? r.requested_at),
-      label: "Booking refund",
-      detail: r.reason,
-      amount: num(r.amount_requested),
-      counted: processed,
-      note: processed ? null : "Not paid out yet",
-    });
-  }
-  for (const n of c.creditNotes) {
-    if (n.superseded_by) continue;
-    entries.push({
-      kind: "credit_note",
-      date: n.credit_note_date ?? "",
-      label: `Credit note${n.credit_note_number ? ` ${n.credit_note_number}` : ""}`,
-      detail: n.reason,
-      amount: num(n.credit_note_amount),
-      counted: true,
-      note: null,
-    });
-  }
-  entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-
-  const totals = { ...EMPTY_KIND_TOTALS, all: 0, unbilledRent: 0 };
-  for (const e of entries) {
-    if (e.amount === null) continue;
-    if (e.kind === "rent_waiver") {
-      totals.unbilledRent += e.amount;
-      continue;
-    }
-    if (!e.counted) continue;
-    totals[e.kind] += e.amount;
-    totals.all += e.amount;
-  }
+  const concessions = buildConcessions(input.concessions, input.rentSteps);
 
   return {
     lifetime: {
@@ -411,6 +457,6 @@ export function buildMoney(input: MoneyInput): Money {
       totalReminders: issued.reduce((sum, s) => sum + (s.reminder_count ?? 0), 0),
     },
     invoices,
-    concessions: { entries, totals },
+    concessions,
   };
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { updateLeadSchema } from "@/lib/validations";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 
@@ -116,6 +117,15 @@ export async function PATCH(
       performedBy: dbUser.id,
       changes: diffChanges(oldLead as Record<string, unknown>, updateData),
     });
+  }
+
+  // A lost lead's open enquiries resolve as Not interested; the daily cron is the backstop.
+  if (result.data.status === "lost") {
+    try {
+      await reconcileLeadEnquiries(createAdminClient(), [id]);
+    } catch (err) {
+      console.error("[lead update] enquiry reconcile failed:", err instanceof Error ? err.message : "unknown");
+    }
   }
 
   return NextResponse.json({ data });
