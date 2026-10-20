@@ -19,7 +19,7 @@ interface ElectricityData {
 
 const NOT_AVAILABLE: Record<Exclude<ElectricityData["status"], "ok">, { title: string; description: string }> = {
   no_center: { title: "No center yet", description: "This customer has no contract at a center, so there is no electricity to share." },
-  no_meter: { title: "No meter linked", description: "No OneGrid meter is linked to an electricity connection at this center. Link one under the center's electricity connections." },
+  no_meter: { title: "No meter linked", description: "No OneGrid meter is set up for this center: neither the center's OneGrid setup has a default meter nor does an electricity connection have one attached." },
   several_meters: { title: "More than one meter", description: "This center has several linked meters, and adding a main meter to a sub-meter would count the same power twice. The share needs one meter that measures the whole center." },
   no_capacity: { title: "No seat count for the center", description: "The center's space units have no seats set, so there is nothing to split the electricity over." },
   no_readings: { title: "No meter readings yet", description: "The meter is linked but the energy ledger holds no readings for the last 12 months." },
@@ -138,9 +138,11 @@ export function ElectricityPanel({ leadId }: { leadId: string }) {
   }
 
   if (data.status !== "ok" || data.months.length === 0) {
-    const msg = data.status === "ok"
+    const base = data.status === "ok"
       ? { title: "No months to show", description: "This customer had no seats at the center in the last 12 months." }
       : NOT_AVAILABLE[data.status];
+    // Name the center the page looked at, so a customer who also has a contract elsewhere is easy to spot.
+    const msg = data.center ? { ...base, description: `${base.description} (Looked at ${data.center.name}.)` } : base;
     return (
       <Card>
         <CardContent>

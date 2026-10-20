@@ -21,6 +21,7 @@ import {
   type ElectricityMonth,
   type ElectricitySummary,
 } from "@/lib/customer-value/electricity-share";
+import { chooseMeter } from "@/lib/customer-value/meter-choice";
 import { fetchInChunks } from "@/lib/customer-value/query-helpers";
 
 const MONTHS = 12;
@@ -46,17 +47,23 @@ export async function loadElectricity(supabase: SupabaseClient, leadId: string, 
   if (!cohort) return empty("no_center");
   const center = { id: cohort.centerId, name: cohort.centerName };
 
-  const [connRes, unitRes] = await Promise.all([
+  const [connRes, cfgRes, unitRes] = await Promise.all([
     supabase.from("location_electricity_connections").select("onegrid_device_id").eq("location_id", center.id).eq("is_active", true).not("onegrid_device_id", "is", null),
+    // Never the API key: only whether OneGrid is on and which device is the default.
+    supabase.from("location_electricity_config").select("onegrid_enabled, onegrid_default_device_id").eq("location_id", center.id).maybeSingle(),
     supabase.from("space_units").select("capacity").eq("location_id", center.id).eq("is_active", true),
   ]);
   if (connRes.error) throw new Error(connRes.error.message);
+  if (cfgRes.error) throw new Error(cfgRes.error.message);
   if (unitRes.error) throw new Error(unitRes.error.message);
 
-  const devices = [...new Set((connRes.data ?? []).map((c) => c.onegrid_device_id as string))];
-  if (devices.length === 0) return empty("no_meter", center);
   // One meter at a time: summing a main and a sub meter would count the same power twice.
-  if (devices.length > 1) return empty("several_meters", center);
+  const meter = chooseMeter(
+    (connRes.data ?? []).map((c) => c.onegrid_device_id as string | null),
+    cfgRes.data ? { enabled: Boolean(cfgRes.data.onegrid_enabled), defaultDeviceId: (cfgRes.data.onegrid_default_device_id as string | null) ?? null } : null
+  );
+  if (meter.status !== "ok") return empty(meter.status, center);
+  const devices = [meter.deviceId];
 
   const capacity = (unitRes.data ?? []).reduce((sum, u) => sum + (Number(u.capacity) || 0), 0);
   if (capacity <= 0) return empty("no_capacity", center);
