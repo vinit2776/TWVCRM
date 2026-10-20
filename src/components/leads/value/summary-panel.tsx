@@ -12,8 +12,10 @@ import type { ShadowSummary } from "@/lib/customer-value/shadow-margin";
 import {
   PILLAR_HELP,
   PILLAR_LABELS,
+  PROFITABILITY_HELP_WITH_MARGIN,
   SUMMARY_PILLARS,
   confidenceChip,
+  marginCounted,
   pillarHeadline,
   type SeriesPoint,
   type StoredScoreRow,
@@ -96,6 +98,7 @@ export function SummaryPanel({
   }
 
   const pillars = latest.method?.pillars ?? {};
+  const withMargin = marginCounted(pillars.profitability);
   const sentences = latest.story?.sentences ?? [];
   // Each invoice once, tagged with why it is listed. Being overdue outranks any other reason.
   const REASON: Record<string, string> = { open_problems: "Overdue", payment: "Recent invoice" };
@@ -122,12 +125,13 @@ export function SummaryPanel({
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {SUMMARY_PILLARS.map((key) => {
           const score = latest[key];
-          const chip = confidenceChip(key, score, latest.confidence?.[key]);
+          const chip = confidenceChip(key, score, latest.confidence?.[key], key === "profitability" && withMargin);
+          const help = key === "profitability" && withMargin ? PROFITABILITY_HELP_WITH_MARGIN : PILLAR_HELP[key];
           return (
             <Card key={key}>
               <CardContent className="space-y-2 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="text-xs text-muted-foreground" title={PILLAR_HELP[key]}>{PILLAR_LABELS[key]}</p>
+                  <p className="text-xs text-muted-foreground" title={help}>{PILLAR_LABELS[key]}</p>
                   <Badge variant="secondary" className={`${TONE[chip.tone]} px-1.5 text-[10px]`}>{chip.label}</Badge>
                 </div>
                 <p className="text-2xl font-semibold leading-none">{score === null ? "—" : Math.round(score)}</p>
@@ -154,7 +158,7 @@ export function SummaryPanel({
               </p>
             </div>
             <p className="max-w-md text-xs text-muted-foreground">
-              Shown for comparison only: it is not part of the score. {shadowMargin.confidence === null ? "No variable cost could be costed." : `${Math.round(shadowMargin.confidence * 100)}% of the cost counted rests on measured data.`} See the Costs tab for the working.
+              {withMargin ? "Counted in Revenue health." : "Shown for comparison only: it is not part of the score."} {shadowMargin.confidence === null ? "No variable cost could be costed." : `${Math.round(shadowMargin.confidence * 100)}% of the cost counted rests on measured data.`} See the Costs tab for the working.
             </p>
           </CardContent>
         </Card>
@@ -227,7 +231,10 @@ export function SummaryPanel({
       )}
 
       <p className="text-xs text-muted-foreground">
-        Scores are a guide, not a verdict, and are in beta. Revenue health uses revenue-side measures only until cost data is added.
+        Scores are a guide, not a verdict, and are in beta.{" "}
+        {withMargin
+          ? "Revenue health counts margin after variable costs, an estimate that rests on the cost rates entered."
+          : "Revenue health uses revenue-side measures only until cost data is added."}
       </p>
     </div>
   );
