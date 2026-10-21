@@ -320,19 +320,18 @@ export async function POST(
     });
   } catch (err) {
     console.error(`[start-renewal] could not raise the renewal bill for case ${caseId}:`, err);
-    // When the link was meant to be made and failed, the bill must not be left
-    // payable or counted as the open renewal; the bill it would have replaced
-    // stays as it was.
+    // The bill is created before its payment link. If the link fails, discard
+    // the bill: it is brand new, unpaid and not yet linked to the case or sent
+    // to anyone, so leaving it would strand an unpayable bill on the case.
     if (statementId) {
-      await adminSupabase
+      const { error: discardError } = await adminSupabase
         .from("billing_statements")
-        .update({
-          status: "voided",
-          voided_at: new Date().toISOString(),
-          voided_by: dbUser.id,
-          void_reason: "Start renewal failed: the payment link could not be created",
-        })
-        .eq("id", statementId);
+        .delete()
+        .eq("id", statementId)
+        .is("razorpay_payment_link_id", null);
+      if (discardError) {
+        console.error(`[start-renewal] could not discard bill ${statementId} after the failure:`, discardError);
+      }
     }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Could not raise the renewal bill" },
