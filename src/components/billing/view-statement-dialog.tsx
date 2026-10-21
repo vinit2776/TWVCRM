@@ -225,6 +225,11 @@ export function ViewStatementDialog({
   const [voidReason, setVoidReason] = useState("");
   const [voidSubmitting, setVoidSubmitting] = useState(false);
 
+  // Reverse-a-recorded-payment state (admin only) — which payment row has the form open
+  const [reversingPaymentId, setReversingPaymentId] = useState<string | null>(null);
+  const [reversePaymentReason, setReversePaymentReason] = useState("");
+  const [reversePaymentSubmitting, setReversePaymentSubmitting] = useState(false);
+
   // Write-off state
   const [showWriteOffConfirm, setShowWriteOffConfirm] = useState(false);
   const [writeOffReason, setWriteOffReason] = useState("");
@@ -486,6 +491,36 @@ export function ViewStatementDialog({
       toast.error("Something went wrong");
     } finally {
       setWaivedChargeLoading(null);
+    }
+  };
+
+  const handleReversePayment = async () => {
+    if (!statementId || !reversingPaymentId || reversePaymentReason.trim().length < 10) return;
+    setReversePaymentSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/payment/${reversingPaymentId}/reverse`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reversePaymentReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Payment reversed — the statement is back to awaiting payment");
+        setReversingPaymentId(null);
+        setReversePaymentReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to reverse payment");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setReversePaymentSubmitting(false);
     }
   };
 
@@ -1025,7 +1060,8 @@ export function ViewStatementDialog({
                         const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
                         const settled = Number(p.amount) + Number(p.tds_amount || 0);
                         return (
-                          <div key={p.id} className="flex items-center justify-between px-3 py-2">
+                          <React.Fragment key={p.id}>
+                          <div className="flex items-center justify-between px-3 py-2">
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                               <span className="text-xs text-muted-foreground">{formatDate(p.payment_date)}</span>
                               <Badge variant="outline" className={`text-xs ${isRazorpay ? "border-violet-300 text-violet-700 bg-violet-50" : ""}`}>
@@ -1058,8 +1094,57 @@ export function ViewStatementDialog({
                               {(p.tds_amount || 0) > 0 && (
                                 <span className="text-[10px] text-muted-foreground">settled {formatCurrency(settled)}</span>
                               )}
+                              {userRole === "admin" && !isRazorpay && reversingPaymentId !== p.id && (
+                                <button
+                                  className="mt-0.5 text-[11px] text-red-600 hover:text-red-800 underline"
+                                  onClick={() => { setReversingPaymentId(p.id); setReversePaymentReason(""); }}
+                                >
+                                  Reverse
+                                </button>
+                              )}
                             </div>
                           </div>
+                          {reversingPaymentId === p.id && (
+                            <div className="flex flex-col gap-2 border-t border-red-200 bg-red-50 px-3 py-3">
+                              <p className="text-xs font-medium text-red-700">
+                                Use this only if the payment was recorded in error (e.g. the money never arrived).
+                                It removes this {formatCurrency(p.amount)} payment, sets the statement back to awaiting payment
+                                and takes it off the accounts Tally Inbox. Nothing is sent to the customer.
+                              </p>
+                              <Textarea
+                                placeholder="Why is this payment being reversed? (required, saved to the audit trail)"
+                                value={reversePaymentReason}
+                                onChange={(e) => setReversePaymentReason(e.target.value)}
+                                className="text-sm"
+                                rows={2}
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1"
+                                  onClick={() => { setReversingPaymentId(null); setReversePaymentReason(""); }}
+                                  disabled={reversePaymentSubmitting}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                                  onClick={handleReversePayment}
+                                  disabled={reversePaymentSubmitting || reversePaymentReason.trim().length < 10}
+                                >
+                                  {reversePaymentSubmitting ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <RotateCcw className="mr-2 h-4 w-4" />
+                                  )}
+                                  Reverse payment
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                          </React.Fragment>
                         );
                       })}
                       <div className="flex justify-between items-center px-3 py-2 bg-muted/30 text-xs">
