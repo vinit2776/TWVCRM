@@ -17,6 +17,17 @@ export async function GET(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Used inside a PostgREST or() filter below.
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: "Invalid case id" }, { status: 400 });
+
+  // Paying a renewal moves its bill onto the next term's case. The renewed
+  // case keeps a pointer to it, so its history still shows what renewed it.
+  const { data: caseRow } = await supabase
+    .from("cases")
+    .select("renewal_billing_statement_id")
+    .eq("id", id)
+    .maybeSingle();
+  const movedBillId = caseRow?.renewal_billing_statement_id as string | null | undefined;
 
   const [remindersRes, billsRes] = await Promise.all([
     supabase
@@ -27,7 +38,7 @@ export async function GET(
     supabase
       .from("billing_statements")
       .select("id, statement_number, period_start, period_end, total_amount, payment_status, created_at, voided_at")
-      .eq("case_id", id)
+      .or(movedBillId ? `case_id.eq.${id},id.eq.${movedBillId}` : `case_id.eq.${id}`)
       .eq("statement_type", "vo_renewal")
       .order("created_at", { ascending: false }),
   ]);

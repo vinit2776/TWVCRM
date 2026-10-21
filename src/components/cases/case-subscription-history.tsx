@@ -33,6 +33,7 @@ interface SubscriptionRow {
 
 interface CaseSubscriptionHistoryProps {
   caseId: string;
+  onStartRenewal: () => void;
 }
 
 function daysUntil(dateStr?: string): number | null {
@@ -41,7 +42,7 @@ function daysUntil(dateStr?: string): number | null {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
-export function CaseSubscriptionHistory({ caseId }: CaseSubscriptionHistoryProps) {
+export function CaseSubscriptionHistory({ caseId, onStartRenewal }: CaseSubscriptionHistoryProps) {
   const router = useRouter();
   const [subscriptions, setSubscriptions] = useState<SubscriptionRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,9 +70,10 @@ export function CaseSubscriptionHistory({ caseId }: CaseSubscriptionHistoryProps
   // Determine which row is the active subscription
   const activeSub = subscriptions.find((s) => activeStatuses.has(s.status));
 
-  // Show Renew button only when viewing the active/renewal_due case
+  // Same statuses Start renewal accepts. Payment then creates the next term
+  // as its own case, so there is no separate intake for a renewal.
   const currentSub = subscriptions.find((s) => s.id === caseId);
-  const canRenew = currentSub && activeStatuses.has(currentSub.status);
+  const canRenew = currentSub && ["active", "renewal_due", "grace_period"].includes(currentSub.status);
 
   if (loading) {
     return (
@@ -101,10 +103,10 @@ export function CaseSubscriptionHistory({ caseId }: CaseSubscriptionHistoryProps
         {canRenew && (
           <Button
             size="sm"
-            onClick={() => router.push(`/cases/new?renew_from=${caseId}`)}
+            onClick={onStartRenewal}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
-            Renew
+            Start renewal
           </Button>
         )}
       </div>
@@ -209,10 +211,10 @@ export function CaseSubscriptionHistory({ caseId }: CaseSubscriptionHistoryProps
                   size="sm"
                   variant="outline"
                   className="ml-4 border-current"
-                  onClick={() => router.push(`/cases/new?renew_from=${caseId}`)}
+                  onClick={onStartRenewal}
                 >
                   <RefreshCw className="mr-1.5 h-3 w-3" />
-                  Renew Now
+                  Start renewal
                 </Button>
               )}
             </div>

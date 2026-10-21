@@ -161,11 +161,22 @@ export function CaseBillingTab({ caseId }: CaseBillingTabProps) {
     try {
       const [caseRes, stmtRes] = await Promise.all([
         fetch(`/api/cases/${caseId}`).then((r) => r.json()),
-        fetch(`/api/billing-statements?case_id=${caseId}&statement_type=vo_case&limit=1`).then((r) => r.json()),
+        fetch(`/api/billing-statements?case_id=${caseId}&statement_type=vo_case,vo_renewal&limit=20`).then((r) => r.json()),
       ]);
       setCaseInfo(caseRes.data ?? null);
-      const rows = (stmtRes.data ?? []) as CaseStatement[];
-      const live = rows.find((s) => !s.voided_at) ?? null;
+      const rows = ((stmtRes.data ?? []) as (CaseStatement & { statement_type?: string; period_start?: string | null })[])
+        .filter((s) => !s.voided_at);
+      // A renewed term is billed by the renewal bill that created it, not a
+      // VO case invoice; showing it here keeps Generate Invoice from billing
+      // the same term twice. Any other renewal bill on this case is for the
+      // next term and lives on the Renewal tab.
+      const termStart = caseRes.data?.is_renewal ? String(caseRes.data.start_date ?? "").slice(0, 10) : null;
+      const live =
+        rows.find((s) => s.statement_type === "vo_case")
+        ?? (termStart
+          ? rows.find((s) => s.statement_type === "vo_renewal" && String(s.period_start ?? "").slice(0, 10) === termStart)
+          : undefined)
+        ?? null;
       setStatement(live);
 
       // "Paid" on its own doesn't answer how, when, or against what reference

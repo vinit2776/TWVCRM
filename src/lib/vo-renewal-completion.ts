@@ -8,12 +8,17 @@
  * here: the webhook directly, and recorded payments (including verified
  * "Report paid" claims) through finalizeBillingPayment.
  *
+ * Each term is its own case: completion marks the paid-up case Renewed and
+ * creates the next term's case (see vo-renewal-successor.ts), moving the
+ * paid bill and carrying KYC over, instead of rolling the same case's dates.
+ *
  * Kept out of vo-renewal.ts on purpose: that module pulls in the mailer,
  * WhatsApp and jsPDF, none of which the payment-settlement path should load.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 import { nextRenewalTerm, statementCoversNextTerm, termMonthsFromPeriod } from "@/lib/vo-renewal-term";
+import { carriedChildRow, successorCaseRow } from "@/lib/vo-renewal-successor";
 
 export type RenewalCompletionOutcome =
   | "renewed"
@@ -46,7 +51,7 @@ export async function completeVoRenewal(
 
   const { data: caseRow } = await supabase
     .from("cases")
-    .select("id, status, start_date, end_date, tenure_months, rate, aggregator_id, aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
+    .select("*, aggregator:aggregators!cases_aggregator_id_fkey(billing_method)")
     .eq("id", stmt.case_id)
     .maybeSingle();
 
@@ -86,30 +91,59 @@ export async function completeVoRenewal(
   const billedFee = Number(stmt.fixed_amount);
   const newRate = !isPostpaid && Number.isFinite(billedFee) && billedFee > 0 ? billedFee : null;
 
-  const update: Record<string, unknown> = {
-    status: "active",
-    start_date: term.start,
-    end_date: term.end,
-    renewal_billing_statement_id: null,
-    renewal_razorpay_link_id: null,
-    renewal_razorpay_link_url: null,
-    renewal_grace_ends_at: null,
-    renewal_reminder_count: 0,
-  };
-  if (newRate !== null) update.rate = newRate;
-  if (months !== currentTenure) update.tenure_months = months;
-
-  // Conditional on the end date we read, so two settlements racing each
-  // other roll the case once.
-  const { data: updated, error } = await supabase
+  // Each term is its own case. Claiming the current one as renewed first is
+  // what makes this safe to run twice: two settlements racing each other,
+  // or a replayed webhook, find it already renewed and stop.
+  const now = new Date().toISOString();
+  const { data: claimed, error: claimError } = await supabase
     .from("cases")
-    .update(update)
+    .update({ status: "renewed", renewed_at: now })
     .eq("id", caseRow.id)
-    .eq("end_date", oldEnd)
+    .neq("status", "renewed")
     .select("id");
 
-  if (error) throw new Error(`Failed to renew case ${caseRow.id}: ${error.message}`);
-  if (!updated || updated.length === 0) return "already_renewed";
+  if (claimError) throw new Error(`Failed to renew case ${caseRow.id}: ${claimError.message}`);
+  if (!claimed || claimed.length === 0) return "already_renewed";
+
+  const { aggregator: _aggregator, ...previous } = caseRow as Record<string, unknown>;
+  const { data: successor, error: insertError } = await supabase
+    .from("cases")
+    .insert(successorCaseRow(previous, { term, months, rate: newRate, statementId, performedBy, now }))
+    .select("id, case_number")
+    .single();
+
+  if (insertError || !successor) {
+    // Put the current term back so the payment can complete it on a retry.
+    await supabase
+      .from("cases")
+      .update({ status: caseRow.status, renewed_at: caseRow.renewed_at ?? null })
+      .eq("id", caseRow.id);
+    throw new Error(`Failed to create the next term for case ${caseRow.id}: ${insertError?.message ?? "no row returned"}`);
+  }
+  const successorId = successor.id as string;
+
+  // The paid bill is for the new term, so it belongs on the new case: its
+  // Billing tab shows it as paid, and its agreement can execute against it.
+  const { error: moveError } = await supabase
+    .from("billing_statements")
+    .update({ case_id: successorId })
+    .eq("id", statementId);
+  if (moveError) console.error(`[vo-renewal] could not move bill ${statementId} to case ${successorId}:`, moveError);
+
+  // KYC and compliance carry over as they stood; documents are only asked for
+  // again if staff change something on the new case.
+  for (const table of ["case_documents", "case_compliance_checks"] as const) {
+    const { data: rows, error: readError } = await supabase.from(table).select("*").eq("case_id", caseRow.id);
+    if (readError) {
+      console.error(`[vo-renewal] could not read ${table} for case ${caseRow.id}:`, readError);
+      continue;
+    }
+    if (!rows || rows.length === 0) continue;
+    const { error: copyError } = await supabase
+      .from(table)
+      .insert(rows.map((r) => carriedChildRow(r as Record<string, unknown>, successorId)));
+    if (copyError) console.error(`[vo-renewal] could not carry ${table} to case ${successorId}:`, copyError);
+  }
 
   logAudit(supabase, {
     entityType: "case",
@@ -120,7 +154,19 @@ export async function completeVoRenewal(
       action: { old: null, new: "renewal_payment_received" },
       source: { old: null, new: source },
       billing_statement_id: { old: null, new: statementId },
-      status: { old: caseRow.status, new: "active" },
+      status: { old: caseRow.status, new: "renewed" },
+      renewed_to_case_id: { old: null, new: successorId },
+    },
+  });
+  logAudit(supabase, {
+    entityType: "case",
+    entityId: successorId,
+    action: "create",
+    performedBy: performedBy ?? "system",
+    changes: {
+      action: { old: null, new: "renewal_term_created" },
+      renewed_from_case_id: { old: null, new: caseRow.id },
+      billing_statement_id: { old: null, new: statementId },
       start_date: { old: caseRow.start_date, new: term.start },
       end_date: { old: oldEnd, new: term.end },
       ...(months !== currentTenure ? { tenure_months: { old: currentTenure, new: months } } : {}),

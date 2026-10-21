@@ -435,7 +435,7 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="subscriptions" className="mt-4">
-          <CaseSubscriptionHistory caseId={id} />
+          <CaseSubscriptionHistory caseId={id} onStartRenewal={() => setStartRenewalOpen(true)} />
         </TabsContent>
 
         <TabsContent value="renewal" className="mt-4">
