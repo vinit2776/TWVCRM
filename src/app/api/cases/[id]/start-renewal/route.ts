@@ -275,7 +275,7 @@ export async function POST(
   const dueDate = offer.term.start > today ? offer.term.start : today;
   const piNumber = `TWV-PI-${caseRow.case_number.replace(/\D/g, "")}-M${Date.now().toString().slice(-4)}`;
 
-  let statementId: string;
+  let statementId: string | undefined;
   let link: { id: string; url: string };
   try {
     statementId = await createRenewalBillingStatement({
@@ -298,6 +298,19 @@ export async function POST(
     });
   } catch (err) {
     console.error(`[start-renewal] could not raise the renewal bill for case ${caseId}:`, err);
+    // The bill is created before its payment link. If the link fails, discard
+    // the bill: it is brand new, unpaid and not yet linked to the case or sent
+    // to anyone, so leaving it would strand an unpayable bill on the case.
+    if (statementId) {
+      const { error: discardError } = await adminSupabase
+        .from("billing_statements")
+        .delete()
+        .eq("id", statementId)
+        .is("razorpay_payment_link_id", null);
+      if (discardError) {
+        console.error(`[start-renewal] could not discard bill ${statementId} after the failure:`, discardError);
+      }
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Could not raise the renewal bill" },
       { status: 500 },
