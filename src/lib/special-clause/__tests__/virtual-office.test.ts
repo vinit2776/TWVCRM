@@ -48,7 +48,7 @@ describe("virtual office drafting", () => {
 
 const llParams = {
   agreementNumber: "TWV-VO-1", agreementDate: "2026-10-21", clientName: "A Person", clientCompanyName: "Acme Pvt Ltd",
-  clientEntityType: "private_limited" as const, clientAddress: "1 Road, Chennai", locationName: "Test", locationAddress: "Chennai",
+  clientEntityType: "pvt_ltd" as const, clientAddress: "1 Road, Chennai", locationName: "Test", locationAddress: "Chennai",
   purpose: "gst_registration" as const, rate: 10000, tenureMonths: 12, startDate: "2026-11-01", securityDeposit: 0,
 };
 
