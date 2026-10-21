@@ -58,55 +58,73 @@ describe("statementCoversNextTerm", () => {
   });
 });
 
-/** Stateful stub: one case row and one statement, with filtered updates. */
-function makeClient(caseRow: Record<string, unknown>, statement: Record<string, unknown>) {
-  const state = { caseRow: { ...caseRow }, updates: 0 };
+type Row = Record<string, unknown>;
+
+/** In-memory stand-in for the few tables completion touches. */
+function makeClient(caseRow: Row, statement: Row, extra: Record<string, Row[]> = {}) {
+  const db: Record<string, Row[]> = {
+    cases: [{ ...caseRow }],
+    billing_statements: [{ ...statement }],
+    case_documents: [],
+    case_compliance_checks: [],
+    ...extra,
+  };
+  let nextId = 1;
   const client = {
     from(table: string) {
-      const filters: Record<string, unknown> = {};
-      let pending: Record<string, unknown> | null = null;
-      const builder: Record<string, unknown> = {
+      const eqs: [string, unknown][] = [];
+      const neqs: [string, unknown][] = [];
+      let op: { kind: "select" } | { kind: "update"; values: Row } | { kind: "insert"; rows: Row[] } = { kind: "select" };
+      const matches = (r: Row) => eqs.every(([k, v]) => r[k] === v) && neqs.every(([k, v]) => r[k] !== v);
+      const run = () => {
+        const rows = db[table] ?? (db[table] = []);
+        if (op.kind === "insert") {
+          const inserted = op.rows.map((r) => ({ ...r, id: `new-${nextId++}`, case_number: r.case_number ?? `TWV-CASE-${nextId}` }));
+          rows.push(...inserted);
+          return inserted;
+        }
+        const hit = rows.filter(matches);
+        if (op.kind === "update") {
+          const values = op.values;
+          for (const r of hit) Object.assign(r, values);
+        }
+        return hit.map((r) => ({ ...r }));
+      };
+      const builder: Row = {
         select: () => builder,
-        eq: (col: string, val: unknown) => {
-          filters[col] = val;
-          return builder;
-        },
-        update: (values: Record<string, unknown>) => {
-          pending = values;
-          return builder;
-        },
-        maybeSingle: async () => ({
-          data: table === "cases" ? { ...state.caseRow } : { ...statement },
-        }),
-        then: (resolve: (v: unknown) => void) => {
-          // Awaiting update().eq().eq().select() lands here.
-          if (table === "cases" && pending) {
-            const matches = Object.entries(filters).every(([k, v]) => state.caseRow[k] === v);
-            if (matches) {
-              state.caseRow = { ...state.caseRow, ...pending };
-              state.updates += 1;
-            }
-            resolve({ data: matches ? [{ id: state.caseRow.id }] : [], error: null });
-            return;
-          }
-          resolve({ data: null, error: null });
-        },
+        eq: (col: string, val: unknown) => (eqs.push([col, val]), builder),
+        neq: (col: string, val: unknown) => (neqs.push([col, val]), builder),
+        update: (values: Row) => ((op = { kind: "update", values }), builder),
+        insert: (rows: Row | Row[]) => ((op = { kind: "insert", rows: Array.isArray(rows) ? rows : [rows] }), builder),
+        maybeSingle: async () => ({ data: run()[0] ?? null, error: null }),
+        single: async () => ({ data: run()[0] ?? null, error: null }),
+        then: (resolve: (v: unknown) => void) => resolve({ data: run(), error: null }),
       };
       return builder;
     },
   };
-  return { client: client as never, state };
+  return { client: client as never, db };
 }
 
 const CASE = {
   id: "case-1",
+  case_number: "TWV-CASE-0001",
   status: "renewal_due",
+  is_renewal: false,
+  parent_case_id: null,
+  client_name: "Acme",
+  purpose: "business_address",
   start_date: "2025-12-19",
   end_date: "2026-12-18",
   tenure_months: 12,
   rate: 18000,
   aggregator_id: null,
   aggregator: null,
+  renewal_notices_enabled: false,
+  renewal_billing_statement_id: "stmt-1",
+  ll_agreement_id: "ll-1",
+  email_thread_id: "thread-1",
+  metadata: { source: "intake" },
 };
 const STATEMENT = {
   id: "stmt-1",
@@ -119,25 +137,69 @@ const STATEMENT = {
 };
 
 describe("completeVoRenewal", () => {
-  it("rolls the case to the next continuous term and saves the billed fee", async () => {
-    const { client, state } = makeClient(CASE, STATEMENT);
+  it("creates the next continuous term as its own case and marks this one renewed", async () => {
+    const { client, db } = makeClient(CASE, STATEMENT);
     const outcome = await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
     expect(outcome).toBe("renewed");
-    expect(state.caseRow).toMatchObject({
+    expect(db.cases[0]).toMatchObject({ status: "renewed", start_date: "2025-12-19", end_date: "2026-12-18", rate: 18000 });
+    expect(db.cases).toHaveLength(2);
+    expect(db.cases[1]).toMatchObject({
       status: "active",
+      is_renewal: true,
+      parent_case_id: "case-1",
+      client_name: "Acme",
+      purpose: "business_address",
       start_date: "2026-12-19",
       end_date: "2027-12-18",
+      tenure_months: 12,
       rate: 19800,
+      renewal_notices_enabled: false,
+      metadata: { source: "intake", renewed_from_case_id: "case-1", renewal_billing_statement_id: "stmt-1" },
     });
+    expect(db.cases[1].case_number).not.toBe("TWV-CASE-0001");
+    for (const column of ["aggregator", "ll_agreement_id", "email_thread_id", "renewal_billing_statement_id"]) {
+      expect(db.cases[1]).not.toHaveProperty(column);
+    }
   });
 
-  it("renews only once when the same statement settles twice", async () => {
-    const { client, state } = makeClient(CASE, STATEMENT);
+  it("moves the paid bill onto the new term's case", async () => {
+    const { client, db } = makeClient(CASE, STATEMENT);
+    await completeVoRenewal(client, { statementId: "stmt-1", source: "razorpay_link" });
+    expect(db.billing_statements[0].case_id).toBe(db.cases[1].id);
+  });
+
+  it("carries KYC documents and compliance checks over", async () => {
+    const { client, db } = makeClient(CASE, STATEMENT, {
+      case_documents: [{ id: "doc-1", case_id: "case-1", document_id: "file-1", status: "approved", created_at: "x" }],
+      case_compliance_checks: [{ id: "chk-1", case_id: "case-1", check_name: "PAN", status: "passed" }],
+    });
+    await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
+    const newId = db.cases[1].id;
+    expect(db.case_documents).toHaveLength(2);
+    expect(db.case_documents[1]).toMatchObject({ case_id: newId, document_id: "file-1", status: "approved" });
+    expect(db.case_documents[1].id).not.toBe("doc-1");
+    expect(db.case_compliance_checks[1]).toMatchObject({ case_id: newId, check_name: "PAN", status: "passed" });
+  });
+
+  it("points later terms at the first case, one level deep", async () => {
+    const { client, db } = makeClient({ ...CASE, id: "case-2", is_renewal: true, parent_case_id: "root" }, { ...STATEMENT, case_id: "case-2" });
+    await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
+    expect(db.cases[1].parent_case_id).toBe("root");
+  });
+
+  it("creates one new term when the same statement settles twice", async () => {
+    const { client, db } = makeClient(CASE, STATEMENT);
     await completeVoRenewal(client, { statementId: "stmt-1", source: "razorpay_link" });
     const second = await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
     expect(second).toBe("already_renewed");
-    expect(state.updates).toBe(1);
-    expect(state.caseRow.end_date).toBe("2027-12-18");
+    expect(db.cases).toHaveLength(2);
+  });
+
+  it("does nothing for a case that is already renewed", async () => {
+    const { client, db } = makeClient({ ...CASE, status: "renewed" }, STATEMENT);
+    const outcome = await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
+    expect(outcome).toBe("already_renewed");
+    expect(db.cases).toHaveLength(1);
   });
 
   it("ignores statements that are not renewals, unpaid or voided", async () => {
@@ -146,27 +208,27 @@ describe("completeVoRenewal", () => {
       { ...STATEMENT, payment_status: "partially_paid" },
       { ...STATEMENT, voided_at: "2026-12-01T00:00:00Z" },
     ]) {
-      const { client, state } = makeClient(CASE, s);
+      const { client, db } = makeClient(CASE, s);
       const outcome = await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
       expect(outcome).not.toBe("renewed");
-      expect(state.updates).toBe(0);
+      expect(db.cases).toHaveLength(1);
+      expect(db.cases[0].status).toBe("renewal_due");
     }
   });
 
   it("leaves a postpaid partner case's monthly rate alone", async () => {
-    const { client, state } = makeClient(
+    const { client, db } = makeClient(
       { ...CASE, aggregator_id: "agg-1", aggregator: { billing_method: "postpaid" } },
       STATEMENT,
     );
     await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
-    expect(state.caseRow.end_date).toBe("2027-12-18");
-    expect(state.caseRow.rate).toBe(18000);
+    expect(db.cases[1]).toMatchObject({ end_date: "2027-12-18", rate: 18000, aggregator_id: "agg-1" });
   });
 
   it("takes the term length from the bill when Start renewal offered a different one", async () => {
-    const { client, state } = makeClient(CASE, { ...STATEMENT, period_end: "2027-06-18", fixed_amount: 9900 });
+    const { client, db } = makeClient(CASE, { ...STATEMENT, period_end: "2027-06-18", fixed_amount: 9900 });
     await completeVoRenewal(client, { statementId: "stmt-1", source: "razorpay_link" });
-    expect(state.caseRow).toMatchObject({
+    expect(db.cases[1]).toMatchObject({
       start_date: "2026-12-19",
       end_date: "2027-06-18",
       tenure_months: 6,

@@ -227,9 +227,11 @@ export async function GET(request: NextRequest) {
 
   // Cases only matter here once they are committed: an intake still gathering
   // paperwork is normal, a paid or live case missing its board resolution is not.
+  // Not "renewed": a renewed term's KYC is carried onto the next term's case,
+  // which is chased instead, so including both would chase it twice.
   const CHASEABLE_CASE_STATUSES = [
     "invoiced", "paid", "executed", "signing_in_progress",
-    "active", "renewal_due", "renewed",
+    "active", "renewal_due",
   ];
 
   const caseMap = new Map<string, ContractRow>();
