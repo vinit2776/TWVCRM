@@ -15,6 +15,8 @@ const schema = z.object({
   reason: z.string().trim().min(10, "Say why this is needed").max(1500),
   facts: z.record(z.string().max(60), z.string().max(300)).refine((f) => Object.keys(f).length <= 20, "Too many facts").default({}),
   feedback: z.string().trim().max(2000).optional(),
+  // The author skipped Claude's questions: gaps are filled and every addition is disclosed to the approver.
+  relaxed: z.boolean().default(false),
   previous_text: z.string().trim().max(4000).optional(),
 });
 
@@ -38,6 +40,7 @@ export async function POST(request: NextRequest) {
       reason: d.reason,
       feedback: d.feedback,
       previousText: d.previous_text,
+      relaxed: d.relaxed,
       context: d.kind === "virtual_office"
         ? { clauseNumber: null, facts: d.facts, fixedClauseTopics: VIRTUAL_OFFICE_FIXED_CLAUSE_TOPICS }
         : { clauseNumber: MEMBERSHIP_SPECIAL_CLAUSE_NUMBER, facts: d.facts, fixedClauseTopics: MEMBERSHIP_FIXED_CLAUSE_TOPICS },

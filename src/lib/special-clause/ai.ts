@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { unsupportedTerms } from "./unsupported-terms";
 
 // Drafts a customer-specific contract clause and independently verifies it.
 // Unlike the internal-note check this FAILS CLOSED: a clause that was not
@@ -27,6 +28,10 @@ export interface DraftInput {
   /** Approver's feedback on a previous revision, when resubmitting. */
   feedback?: string;
   previousText?: string;
+  /** The author chose to skip questions. Claude fills small gaps itself, but
+   *  every term it adds is listed in report.added for the approver. Meaning
+   *  errors and conflicts with fixed clauses are still enforced. */
+  relaxed?: boolean;
 }
 
 export interface ClauseReport {
@@ -36,6 +41,8 @@ export interface ClauseReport {
   added: string[];
   topics_checked: string[];
   rounds: number;
+  /** True when the author skipped the questions; the approver should read "added" closely. */
+  relaxed?: boolean;
 }
 
 export type DraftResult =
@@ -49,7 +56,7 @@ const DRAFT_SYSTEM = `You draft ONE special clause for a single customer's cowor
 
 Principles:
 - Understand WHY the clause is wanted before writing. If the request is ambiguous or missing a figure, date, scope or consequence that changes its meaning, do NOT guess: return questions instead.
-- Say only what the author asked for. Do not add obligations, limits, conditions, deadlines, booking or approval rules, transfer or assignment restrictions, carry-forward rules, fees or remedies they did not state, even when they seem sensible. The clause may stay silent on anything not requested; the rest of the agreement governs.
+- Say only what the author asked for. Do not add anything about payment, billing, invoicing, due dates, time limits or notice unless they stated it. Do not add obligations, limits, conditions, deadlines, booking or approval rules, transfer or assignment restrictions, carry-forward rules, fees or remedies they did not state, even when they seem sensible. The clause may stay silent on anything not requested; the rest of the agreement governs.
 - If a missing detail would change what the clause means for either party (for example: what happens to unused hours, what happens beyond a quota, a start or end date, whether something is free or only discounted), ask about it in "questions" instead of filling the gap yourself. Ask at most 3 short, specific questions. If nothing material is missing, draft without asking.
 - Use formal, plain contract English: "The Member shall…", "The Company shall…", numbers in words and figures, defined terms "Member", "Company", "Premises", "Term". One focused paragraph; no headings except the clause title.
 - Do not restate, override or contradict the fixed clauses or the contract facts given. If the request conflicts with them, return questions explaining the conflict.
@@ -59,17 +66,27 @@ Respond with ONLY JSON:
 {"questions": string[], "restated_intent": string, "clause_text": string, "kept": string[], "added": string[]}
 Use "questions" (non-empty) and an empty clause_text when you cannot draft safely; otherwise leave questions empty. "kept" lists the facts from the request that the clause preserves: at most 5 items, each under 10 words. "added" must always be an empty array: if you feel the clause needs something the author did not state, ask about it in "questions" instead.`;
 
+const RELAXED_DRAFT_ADDENDUM = `
+
+RELAXED MODE: the author has chosen to skip clarifying questions, so do NOT return questions. Take the most reasonable reading of the request and, where a detail is missing, fill the gap with short, standard, balanced wording. The rule against adding terms is lifted for this draft on one condition: list every term you added that the author did not state in "added" (each under 12 words), so the approver can check it. Meaning must still match the request exactly, and nothing may conflict with the contract facts or fixed clauses.`;
+
+const draftSystem = (relaxed?: boolean) => (relaxed ? DRAFT_SYSTEM + RELAXED_DRAFT_ADDENDUM : DRAFT_SYSTEM);
+
 const VERIFY_SYSTEM = `You are a meticulous contract reviewer checking a drafted special clause against what the author actually asked for. Be strict; a wrong meaning in a signed agreement is costly.
 
 Check every item:
 1. Meaning preserved: every figure, date, scope and party matches the request; nothing reversed or softened.
-2. Nothing beyond the request: no new obligation, limit, condition, deadline, booking or transfer rule, number or remedy, even a sensible one. List each in both "problems" and "unlisted_additions".
+2. Nothing beyond the request. Go through the clause one sentence at a time and find what in the request supports it. Any new obligation, limit, condition, deadline, booking or transfer rule, number or remedy is an addition, even a sensible one. Payment, billing, invoicing, due dates, time limits, notice periods and rates are additions unless the author stated them. List each in both "problems" and "unlisted_additions".
 3. No conflict with the contract facts or the fixed clause topics (payment, use of premises, termination, liability, governing law, deposit, lock-in, notice).
 4. Unambiguous, enforceable wording; no one-sided surprise for either party.
 5. Numbered and titled as instructed (or carrying no number or title when none was given).
 
 Respond with ONLY JSON: {"ok": boolean, "problems": string[], "unlisted_additions": string[], "topics_checked": string[]}
 "problems" must be specific and fixable. "unlisted_additions" lists new commitments in the clause that the draft's "added" list omitted. ok is true only when problems is empty. "topics_checked" has at most 6 items, each under 8 words.`;
+
+const RELAXED_VERIFY_NOTE = `
+
+RELAXED MODE: the author allowed the drafter to fill small gaps. Do NOT count additions as problems; list each new commitment in "unlisted_additions" only, so the approver sees it. Everything else still applies: a changed meaning, a conflict with the contract facts or fixed clauses, or ambiguous wording is a problem.`;
 
 function extractJson<T>(raw: string): T {
   const match = raw.match(/\{[\s\S]*\}/);
@@ -112,6 +129,8 @@ function draftPrompt(input: DraftInput, problems: string[], lastText: string | n
   if (input.previousText) parts.push(`Previous revision text: ${input.previousText}`);
   if (lastText && problems.length) {
     parts.push(`Your last draft:\n${lastText}\nA reviewer found these problems; fix all of them:\n- ${problems.join("\n- ")}`);
+  } else if (problems.length) {
+    parts.push(`Instruction:\n- ${problems.join("\n- ")}`);
   }
   return parts.join("\n\n");
 }
@@ -123,23 +142,33 @@ export async function draftSpecialClause(input: DraftInput, call: ModelCall = an
   let restated = "";
 
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    const draftRaw: string = await call(DRAFT_SYSTEM, draftPrompt(input, problems, lastText));
+    const draftRaw: string = await call(draftSystem(input.relaxed), draftPrompt(input, problems, lastText));
     const drafted = extractJson<{
       questions?: unknown; restated_intent?: unknown; clause_text?: unknown; kept?: unknown; added?: unknown;
     }>(draftRaw);
 
     const questions = strArr(drafted.questions);
-    if (questions.length > 0) return { status: "questions", questions };
+    if (questions.length > 0) {
+      if (!input.relaxed) return { status: "questions", questions };
+      // Relaxed means no questions: make it draft on its best reading instead.
+      if (round === MAX_ROUNDS) throw new SpecialClauseAiError("Claude kept asking questions. Describe the request in more detail and try again.");
+      problems = ["Do not ask questions. Draft now on the most reasonable reading and list any gap you filled under added."];
+      continue;
+    }
 
     const text: string = typeof drafted.clause_text === "string" ? drafted.clause_text.trim() : "";
     if (!text) throw new SpecialClauseAiError("The model returned an empty clause");
     lastText = text;
     kept = strArr(drafted.kept);
-    const draftExtras = strArr(drafted.added);
+    // Backstop that does not rely on the model: payment/billing/timing wording the author never used.
+    const request = [input.intent, input.feedback].filter(Boolean).join("\n");
+    const draftExtras = [...strArr(drafted.added), ...unsupportedTerms(text, request)];
+    // Relaxed mode discloses additions to the approver instead of removing them.
+    const disclosed: string[] = input.relaxed ? [...draftExtras] : [];
     restated = typeof drafted.restated_intent === "string" ? drafted.restated_intent : input.intent;
 
     // The draft itself admits to additions: no need to spend a review on it.
-    if (draftExtras.length > 0) {
+    if (!input.relaxed && draftExtras.length > 0) {
       if (round === MAX_ROUNDS) return { status: "questions", questions: additionQuestions(draftExtras) };
       problems = removalProblems(draftExtras);
       continue;
@@ -147,8 +176,8 @@ export async function draftSpecialClause(input: DraftInput, call: ModelCall = an
 
     const verdict = extractJson<{ ok?: unknown; problems?: unknown; unlisted_additions?: unknown; topics_checked?: unknown }>(
       await call(
-        VERIFY_SYSTEM,
-        `${describeContext(input.context)}\n\nAuthor's request: ${input.intent}\nWhy: ${input.reason}\n\nDrafted clause:\n${text}\n\nThe author asked for nothing beyond their request.`,
+        VERIFY_SYSTEM + (input.relaxed ? RELAXED_VERIFY_NOTE : ""),
+        `${describeContext(input.context)}\n\nAuthor's request: ${input.intent}\nWhy: ${input.reason}\n\nDrafted clause:\n${text}\n\n${input.relaxed ? "The author allowed small gap-filling; disclose it." : "The author asked for nothing beyond their request."}`,
       ),
     );
     if (typeof verdict.ok !== "boolean") throw new SpecialClauseAiError("The reviewer returned no verdict");
@@ -156,24 +185,25 @@ export async function draftSpecialClause(input: DraftInput, call: ModelCall = an
     const found = strArr(verdict.problems);
     const unlisted = strArr(verdict.unlisted_additions);
 
-    if (verdict.ok && found.length === 0 && unlisted.length === 0) {
+    if (verdict.ok && found.length === 0 && (input.relaxed || unlisted.length === 0)) {
       return {
         status: "drafted",
         clause_text: text,
         report: {
           restated_intent: restated,
           kept: brief(kept),
-          added: [],
+          added: input.relaxed ? brief([...new Set([...disclosed, ...unlisted])], 6) : [],
           topics_checked: brief(strArr(verdict.topics_checked), 6, 80),
           rounds: round,
+          ...(input.relaxed ? { relaxed: true } : {}),
         },
       };
     }
     // Only additions left on the last round: hand them to the author as questions.
-    if (round === MAX_ROUNDS && found.length === 0 && unlisted.length > 0) {
+    if (!input.relaxed && round === MAX_ROUNDS && found.length === 0 && unlisted.length > 0) {
       return { status: "questions", questions: additionQuestions(unlisted) };
     }
-    problems = [...found, ...removalProblems(unlisted)];
+    problems = [...found, ...(input.relaxed ? [] : removalProblems(unlisted))];
     if (problems.length === 0) problems = ["The reviewer rejected the draft without a reason; tighten the wording."];
   }
   return { status: "failed", problems };
