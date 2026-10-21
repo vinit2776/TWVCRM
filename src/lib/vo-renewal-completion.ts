@@ -13,7 +13,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
-import { nextRenewalTerm, statementCoversNextTerm } from "@/lib/vo-renewal-term";
+import { nextRenewalTerm, statementCoversNextTerm, termMonthsFromPeriod } from "@/lib/vo-renewal-term";
 
 export type RenewalCompletionOutcome =
   | "renewed"
@@ -35,7 +35,7 @@ export async function completeVoRenewal(
 
   const { data: stmt } = await supabase
     .from("billing_statements")
-    .select("id, case_id, statement_type, period_start, payment_status, voided_at, fixed_amount")
+    .select("id, case_id, statement_type, period_start, period_end, payment_status, voided_at, fixed_amount")
     .eq("id", statementId)
     .maybeSingle();
 
@@ -71,7 +71,12 @@ export async function completeVoRenewal(
     return "already_renewed";
   }
 
-  const term = nextRenewalTerm(oldEnd, Number(caseRow.tenure_months) || 12);
+  // Start renewal can offer a different length than the current tenure; the
+  // statement's period says which was billed. Older statements fall back to
+  // the case's tenure.
+  const currentTenure = Number(caseRow.tenure_months) || 12;
+  const months = termMonthsFromPeriod(oldEnd, stmt.period_end as string | null) ?? currentTenure;
+  const term = nextRenewalTerm(oldEnd, months);
 
   // The rate the next renewal escalates from is the fee this term was billed
   // at. Postpaid partner cases are billed monthly from `rate` and don't fit a
@@ -92,6 +97,7 @@ export async function completeVoRenewal(
     renewal_reminder_count: 0,
   };
   if (newRate !== null) update.rate = newRate;
+  if (months !== currentTenure) update.tenure_months = months;
 
   // Conditional on the end date we read, so two settlements racing each
   // other roll the case once.
@@ -117,6 +123,7 @@ export async function completeVoRenewal(
       status: { old: caseRow.status, new: "active" },
       start_date: { old: caseRow.start_date, new: term.start },
       end_date: { old: oldEnd, new: term.end },
+      ...(months !== currentTenure ? { tenure_months: { old: currentTenure, new: months } } : {}),
       ...(newRate !== null && newRate !== Number(caseRow.rate)
         ? { rate: { old: caseRow.rate, new: newRate } }
         : {}),

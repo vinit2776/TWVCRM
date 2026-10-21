@@ -3,6 +3,7 @@ import {
   addMonthsEndAnchored,
   nextRenewalTerm,
   statementCoversNextTerm,
+  termMonthsFromPeriod,
 } from "@/lib/vo-renewal-term";
 
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
@@ -160,5 +161,28 @@ describe("completeVoRenewal", () => {
     await completeVoRenewal(client, { statementId: "stmt-1", source: "recorded_payment" });
     expect(state.caseRow.end_date).toBe("2027-12-18");
     expect(state.caseRow.rate).toBe(18000);
+  });
+
+  it("takes the term length from the bill when Start renewal offered a different one", async () => {
+    const { client, state } = makeClient(CASE, { ...STATEMENT, period_end: "2027-06-18", fixed_amount: 9900 });
+    await completeVoRenewal(client, { statementId: "stmt-1", source: "razorpay_link" });
+    expect(state.caseRow).toMatchObject({
+      start_date: "2026-12-19",
+      end_date: "2027-06-18",
+      tenure_months: 6,
+      rate: 9900,
+    });
+  });
+});
+
+describe("termMonthsFromPeriod", () => {
+  it("reads whole-month terms back from the period end", () => {
+    expect(termMonthsFromPeriod("2026-12-18", "2027-12-18")).toBe(12);
+    expect(termMonthsFromPeriod("2026-12-18", "2029-12-18")).toBe(36);
+    expect(termMonthsFromPeriod("2027-02-28", "2027-08-31")).toBe(6);
+  });
+  it("returns null for a period that is not a whole-month term", () => {
+    expect(termMonthsFromPeriod("2026-12-18", "2027-12-20")).toBeNull();
+    expect(termMonthsFromPeriod("2026-12-18", null)).toBeNull();
   });
 });

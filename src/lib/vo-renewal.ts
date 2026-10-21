@@ -76,6 +76,8 @@ export function generateRenewalPI(params: {
   periodEnd: string;
   dueDate: string;
   razorpayUrl?: string;
+  /** Fee for the term before GST; defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Buffer {
   const { caseData, piNumber, periodStart, periodEnd, dueDate, razorpayUrl } = params;
 
@@ -152,7 +154,7 @@ export function generateRenewalPI(params: {
   const gstRate = 18;
   // Same helper the billing statement uses — the printed PI and the invoice
   // must never quote different amounts for the same renewal.
-  const subtotal = renewalRate(caseData);
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
   const sgst = gstAmount / 2;
@@ -253,10 +255,12 @@ export async function createRenewalBillingStatement(params: {
   periodEnd: string;
   dueDate: string;
   piNumber: string;
+  /** Fee for the term before GST, as offered by Start renewal. Defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Promise<string> {
   const { adminSupabase, caseData, periodStart, periodEnd, dueDate, piNumber } = params;
 
-  const subtotal = renewalRate(caseData);
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstRate = 18;
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
@@ -330,8 +334,12 @@ export async function createRenewalRazorpayLink(params: {
   totalAmount: number;
   dueDate: string;
   piNumber: string;
+  /** Let Razorpay email/SMS the payer itself. Start renewal turns this off
+   *  so the customer hears only through the channels a person ticked. */
+  notifyCustomer?: boolean;
 }): Promise<{ id: string; url: string }> {
   const { adminSupabase, caseData, statementId, totalAmount, piNumber } = params;
+  const notifyCustomer = params.notifyCustomer ?? true;
 
   const settings = await getCachedSettings(adminSupabase, [
     "razorpay_enabled",
@@ -353,8 +361,8 @@ export async function createRenewalRazorpayLink(params: {
     description: `VO Renewal — ${piNumber} — ${caseData.client_name} — ${COMPANY_NAME}`,
     reference_id: `VO-${caseData.case_number}-${Date.now()}`,
     expire_by: expireBy,
-    notify: { sms: true, email: true },
-    reminder_enable: true,
+    notify: { sms: notifyCustomer, email: notifyCustomer },
+    reminder_enable: notifyCustomer,
     notes: {
       case_id: caseData.id,
       case_number: caseData.case_number,
@@ -392,10 +400,19 @@ export async function createRenewalRazorpayLink(params: {
   }
 
   const linkData = await res.json() as Record<string, unknown>;
-  return {
-    id: String(linkData.id),
-    url: String(linkData.short_url),
-  };
+  const link = { id: String(linkData.id), url: String(linkData.short_url) };
+
+  // The webhook finds the statement a payment belongs to by this column.
+  // Renewal links were only ever stored on the case, so a customer paying
+  // one landed as "no matching entity" and nothing renewed.
+  const { error: linkErr } = await adminSupabase
+    .from("billing_statements")
+    .update({ razorpay_payment_link_id: link.id, razorpay_payment_link_url: link.url })
+    .eq("id", statementId);
+  if (linkErr) {
+    throw new Error(`Could not attach the payment link to the renewal bill: ${linkErr.message}`);
+  }
+  return link;
 }
 
 // ---------------------------------------------------------------------------

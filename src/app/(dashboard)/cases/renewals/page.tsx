@@ -264,14 +264,21 @@ export default function RenewalsDeskPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Button asChild variant="outline" size="sm">
-                        <Link
-                          href={`/cases/${r.id}?tab=renewal`}
-                          onClick={() => pushTrailEntry({ href: `/cases/${r.id}`, label: r.client })}
-                        >
-                          Open case
-                        </Link>
-                      </Button>
+                      {(() => {
+                        // A case with no renewal bill yet gets Start renewal; one
+                        // already offered is followed up from the case.
+                        const canStart = !r.payer.postpaid && !r.payer.blocked && !r.open_bill && r.tab !== "lapsed";
+                        return (
+                          <Button asChild variant={canStart ? "default" : "outline"} size="sm">
+                            <Link
+                              href={`/cases/${r.id}?tab=renewal${canStart ? "&start_renewal=1" : ""}`}
+                              onClick={() => pushTrailEntry({ href: `/cases/${r.id}`, label: r.client })}
+                            >
+                              {canStart ? "Start renewal" : "Open case"}
+                            </Link>
+                          </Button>
+                        );
+                      })()}
                     </td>
                   </tr>
                 );
@@ -282,7 +289,7 @@ export default function RenewalsDeskPage() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Nothing on this screen contacts a customer. Sending a notice, recording a payment and starting discontinuation are always a person&apos;s click.
+        Nothing on this screen contacts a customer. Start renewal sends only on the channels you tick, and recording a payment and starting discontinuation are always a person&apos;s click.
       </p>
     </div>
   );

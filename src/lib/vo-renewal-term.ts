@@ -86,3 +86,27 @@ export function statementCoversNextTerm(
   const end = currentEnd.slice(0, 10);
   return start === addDays(end, 1) || start === end;
 }
+
+/** Longest term a renewal statement is read back as (Start renewal offers up to 36). */
+const MAX_TERM_MONTHS = 60;
+
+/**
+ * How many months a renewal statement billed, read back from its period.
+ *
+ * Start renewal lets the term length differ from the case's current tenure,
+ * and the statement's period is the only record of what was offered, so
+ * completion reads the length from there. Null when the period doesn't line
+ * up with a whole-month term after `currentEnd` (older statements); callers
+ * then fall back to the case's tenure.
+ */
+export function termMonthsFromPeriod(
+  currentEnd: string | null | undefined,
+  statementPeriodEnd: string | null | undefined,
+): number | null {
+  if (!currentEnd || !statementPeriodEnd) return null;
+  const target = statementPeriodEnd.slice(0, 10);
+  for (let m = 1; m <= MAX_TERM_MONTHS; m++) {
+    if (addMonthsEndAnchored(currentEnd, m) === target) return m;
+  }
+  return null;
+}

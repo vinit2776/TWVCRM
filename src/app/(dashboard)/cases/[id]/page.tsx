@@ -45,7 +45,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { caseDisplayName } from "@/lib/case-workflow";
 import { caseExpiry } from "@/lib/case-expiry";
-import { RenewalNoticeDialog } from "@/components/cases/renewal-notice-dialog";
+import { StartRenewalDialog } from "@/components/cases/start-renewal-dialog";
 import {
   Dialog,
   DialogContent,
@@ -64,13 +64,16 @@ export default function CaseDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  // The Renewals desk links straight to the Renewal tab.
-  const initialTab = useSearchParams().get("tab") === "renewal" ? "renewal" : "overview";
+  // The Renewals desk links straight to the Renewal tab, and can open Start renewal.
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") === "renewal" ? "renewal" : "overview";
   const { data: caseData, loading, refetch } = useCase(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
-  const [renewalNoticeOpen, setRenewalNoticeOpen] = useState(false);
+  const [startRenewalOpen, setStartRenewalOpen] = useState(searchParams.get("start_renewal") === "1");
+  // Bumped after a renewal starts so the Renewal tab reloads its history.
+  const [renewalVersion, setRenewalVersion] = useState(0);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -213,21 +216,24 @@ export default function CaseDetailPage({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setRenewalNoticeOpen(true)}
+              onClick={() => setStartRenewalOpen(true)}
               className="bg-background"
             >
               <Send className="mr-1.5 h-3.5 w-3.5" />
-              Send renewal intimation
+              Start renewal
             </Button>
           </div>
         );
       })()}
 
-      <RenewalNoticeDialog
+      <StartRenewalDialog
         caseId={id}
-        open={renewalNoticeOpen}
-        onClose={() => setRenewalNoticeOpen(false)}
-        onSent={refetch}
+        open={startRenewalOpen}
+        onClose={() => setStartRenewalOpen(false)}
+        onStarted={() => {
+          refetch();
+          setRenewalVersion((v) => v + 1);
+        }}
       />
 
       <Tabs defaultValue={initialTab}>
@@ -433,7 +439,7 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="renewal" className="mt-4">
-          <CaseRenewalTab caseId={id} />
+          <CaseRenewalTab key={renewalVersion} caseId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">
