@@ -140,7 +140,7 @@ async function seed() {
           tenure_months: s.tenure,
           start_date: termStart,
           end_date: s.endDate,
-          renewal_escalation_percentage: s.escalation || null,
+          renewal_escalation_percentage: s.escalation ?? 0,
           renewal_notices_enabled: false,
           renewal_grace_ends_at: s.status === "grace_period" ? plusDays(s.endDate, 7) : null,
           tags: ["test-seed"],

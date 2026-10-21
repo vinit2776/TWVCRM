@@ -8,6 +8,7 @@ import {
   createRenewalRazorpayLink,
   generateRenewalPI,
   logRenewalReminder,
+  renewalPaymentLinksAvailable,
   sendRenewalEmail,
   sendRenewalWhatsApp,
   type VoCaseForRenewal,
@@ -271,11 +272,18 @@ export async function POST(
   const locked = replaced.find((b) => b.locked);
   if (locked) return NextResponse.json({ error: locked.locked }, { status: 409 });
 
+  if (!(await renewalPaymentLinksAvailable(adminSupabase))) {
+    return NextResponse.json(
+      { error: "Online payments (Razorpay) aren't set up, so a renewal payment link can't be made. Nothing was created." },
+      { status: 400 },
+    );
+  }
+
   const today = todayIst();
   const dueDate = offer.term.start > today ? offer.term.start : today;
   const piNumber = `TWV-PI-${caseRow.case_number.replace(/\D/g, "")}-M${Date.now().toString().slice(-4)}`;
 
-  let statementId: string;
+  let statementId: string | null = null;
   let link: { id: string; url: string };
   try {
     statementId = await createRenewalBillingStatement({
@@ -298,6 +306,19 @@ export async function POST(
     });
   } catch (err) {
     console.error(`[start-renewal] could not raise the renewal bill for case ${caseId}:`, err);
+    // A bill without a payment link must not be left payable or counted as the
+    // open renewal; the bill it would have replaced stays as it was.
+    if (statementId) {
+      await adminSupabase
+        .from("billing_statements")
+        .update({
+          status: "voided",
+          voided_at: new Date().toISOString(),
+          voided_by: dbUser.id,
+          void_reason: "Start renewal failed: the payment link could not be created",
+        })
+        .eq("id", statementId);
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Could not raise the renewal bill" },
       { status: 500 },
