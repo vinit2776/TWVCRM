@@ -44,7 +44,8 @@ export function SpecialClauseBadge({ status }: { status: string | null | undefin
 }
 
 interface Props {
-  contractId: string;
+  /** Where the clause lives: a membership contract, or a virtual-office case. */
+  subject: { kind: "contract" | "case"; id: string };
   status: string | null | undefined;
   /** True once the agreement is out for signature or signed — no new clause then. */
   locked: boolean;
@@ -53,7 +54,10 @@ interface Props {
   onChanged: () => void;
 }
 
-export function SpecialClauseCard({ contractId, status, locked, userRole, facts, onChanged }: Props) {
+export function SpecialClauseCard({ subject, status, locked, userRole, facts, onChanged }: Props) {
+  const isCase = subject.kind === "case";
+  const apiBase = `/api/${isCase ? "cases" : "contracts"}/${subject.id}/special-clause`;
+  const printsAs = isCase ? "a Special Conditions clause in both the proposal and the Leave & License agreement" : "Clause 37 in the agreement";
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [loading, setLoading] = useState(true);
   const [composing, setComposing] = useState(false);
@@ -65,10 +69,10 @@ export function SpecialClauseCard({ contractId, status, locked, userRole, facts,
   const [showHistory, setShowHistory] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/contracts/${contractId}/special-clause`);
+    const res = await fetch(apiBase);
     if (res.ok) setRevisions((await res.json()).data ?? []);
     setLoading(false);
-  }, [contractId]);
+  }, [apiBase]);
 
   // Reload whenever the contract's clause status changes (page refetch after any action).
   useEffect(() => { load(); }, [load, status]);
@@ -80,7 +84,7 @@ export function SpecialClauseCard({ contractId, status, locked, userRole, facts,
   async function post(path: string, body?: unknown) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/contracts/${contractId}/special-clause${path}`, {
+      const res = await fetch(`${apiBase}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
@@ -132,7 +136,7 @@ export function SpecialClauseCard({ contractId, status, locked, userRole, facts,
         {!loading && !current && !composing && (
           <div className="space-y-2">
             <p className="text-muted-foreground">
-              A paragraph that applies to this customer&apos;s contract only. It prints as Clause 37 and needs a manager or admin&apos;s approval before the agreement can go out.
+              {isCase ? "A paragraph that applies to this customer only. It prints in both the proposal and the Leave & License agreement, and needs a manager or admin's approval before either can go out." : "A paragraph that applies to this customer's contract only. It prints as Clause 37 and needs a manager or admin's approval before the agreement can go out."}
             </p>
             <Button variant="outline" size="sm" onClick={() => setComposing(true)}><Plus className="mr-1.5 h-3.5 w-3.5" />Add special clause</Button>
           </div>
@@ -175,7 +179,7 @@ export function SpecialClauseCard({ contractId, status, locked, userRole, facts,
               <p className="flex items-center gap-1.5 text-xs text-amber-800"><Clock className="h-3.5 w-3.5" />Waiting for a manager or admin. Locked while pending.</p>
             )}
             {current.status === "approved" && (
-              <p className="flex items-center gap-1.5 text-xs text-green-700"><CheckCircle2 className="h-3.5 w-3.5" />Prints as Clause 37 in the agreement.</p>
+              <p className="flex items-center gap-1.5 text-xs text-green-700"><CheckCircle2 className="h-3.5 w-3.5" />Prints as {printsAs}.</p>
             )}
 
             {current.status === "changes_requested" && (
@@ -221,6 +225,7 @@ export function SpecialClauseCard({ contractId, status, locked, userRole, facts,
         {composing && (
           <div className="space-y-3">
             <SpecialClauseComposer
+              kind={isCase ? "virtual_office" : "membership"}
               facts={facts}
               onChange={setVetted}
               selfApproves={canApprove}

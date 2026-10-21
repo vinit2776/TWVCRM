@@ -12,8 +12,8 @@ export const MAX_ROUNDS = 3;
 export class SpecialClauseAiError extends Error {}
 
 export interface ClauseContext {
-  /** Printed clause number, e.g. 37. */
-  clauseNumber: number;
+  /** Printed clause number, e.g. 37. Null when each document prints its own heading (virtual office). */
+  clauseNumber: number | null;
   /** Real contract facts the clause must not contradict (rent, term, lock-in…). */
   facts: Record<string, string>;
   /** Titles of the fixed clauses already in the agreement. */
@@ -52,7 +52,7 @@ Principles:
 - Preserve the author's meaning exactly. Never invent commitments, numbers, dates, discounts or remedies that were not stated. If a standard guard-rail seems prudent (for example no carry-forward, or what happens beyond a quota), list it under "added" so the approver sees it; do not hide it.
 - Use formal, plain contract English: "The Member shall…", "The Company shall…", numbers in words and figures, defined terms "Member", "Company", "Premises", "Term". One focused paragraph; no headings except the clause title.
 - Do not restate, override or contradict the fixed clauses or the contract facts given. If the request conflicts with them, return questions explaining the conflict.
-- Begin the clause with its number and the title "Special Conditions."
+- If a clause number is given, begin with that number and the title, e.g. "37. Special Conditions." If none is given, write only the operative paragraph with no number or title.
 
 Respond with ONLY JSON:
 {"questions": string[], "restated_intent": string, "clause_text": string, "kept": string[], "added": string[]}
@@ -65,7 +65,7 @@ Check every item:
 2. No new obligations or numbers beyond the request, other than ones listed as "added".
 3. No conflict with the contract facts or the fixed clause topics (payment, use of premises, termination, liability, governing law, deposit, lock-in, notice).
 4. Unambiguous, enforceable wording; no one-sided surprise for either party.
-5. Correctly numbered and titled.
+5. Numbered and titled as instructed (or carrying no number or title when none was given).
 
 Respond with ONLY JSON: {"ok": boolean, "problems": string[], "unlisted_additions": string[], "topics_checked": string[]}
 "problems" must be specific and fixable. "unlisted_additions" lists new commitments in the clause that the draft's "added" list omitted. ok is true only when problems is empty.`;
@@ -85,7 +85,8 @@ const strArr = (v: unknown): string[] =>
 
 function describeContext(c: ClauseContext): string {
   const facts = Object.entries(c.facts).map(([k, v]) => `- ${k}: ${v}`).join("\n");
-  return `Clause number: ${c.clauseNumber}\nContract facts:\n${facts}\nFixed clauses already in the agreement: ${c.fixedClauseTopics.join("; ")}`;
+  const number = c.clauseNumber === null ? "none (do not number or title the clause)" : String(c.clauseNumber);
+  return `Clause number: ${number}\nContract facts:\n${facts}\nFixed clauses already in the agreement: ${c.fixedClauseTopics.join("; ")}`;
 }
 
 function draftPrompt(input: DraftInput, problems: string[], lastText: string | null): string {

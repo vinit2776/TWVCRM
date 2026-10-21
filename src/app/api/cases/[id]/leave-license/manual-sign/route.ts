@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseClauseGateError } from "@/lib/special-clause/case-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { checkVoExecutionPaymentGate } from "@/lib/vo-execution-gate";
@@ -69,6 +70,11 @@ export async function POST(
 
   if (!agreement) {
     return NextResponse.json({ error: "L&L Agreement not found" }, { status: 404 });
+  }
+
+  {
+    const clauseBlock = await caseClauseGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
 
   // sent_to_client belongs here: it is the state an agreement sits in from the

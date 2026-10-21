@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { caseClauseGateError } from "@/lib/special-clause/case-gate";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import {
@@ -148,6 +149,10 @@ export async function POST(
   });
 
   // Generate PDF
+  // The case's approved special clause (if any) prints in every agreement generated for it.
+  (variables as { special_clause_text?: string | null }).special_clause_text =
+    caseData.special_clause_status === "approved" ? caseData.special_clause_text : null;
+
   const pdfDoc = generateLeaveLicensePdf(variables);
   const pdfBuffer = Buffer.from(pdfDoc.output("arraybuffer"));
 
@@ -284,6 +289,14 @@ export async function PUT(
 
   const existingVars = (existingAgreement.variables || {}) as Record<string, unknown>;
   const mergedVars = { ...existingVars, ...updatedVars };
+
+  // Keep the stored copy in step with the case's approved clause, so saving an edit
+  // also repairs an agreement whose PDF fell behind (see agreementClauseGate).
+  {
+    const { data: kase } = await supabase.from("cases").select("special_clause_status, special_clause_text").eq("id", caseId).single();
+    (mergedVars as Record<string, unknown>).special_clause_text =
+      kase?.special_clause_status === "approved" ? kase.special_clause_text : null;
+  }
 
   // Regenerate PDF
   const pdfDoc = generateLeaveLicensePdf(mergedVars as never);
@@ -427,6 +440,11 @@ export async function PATCH(
     if (gateError) {
       return NextResponse.json({ error: gateError }, { status: 400 });
     }
+  }
+
+  if (["send_to_client", "initiate_signing", "mark_executed"].includes(action)) {
+    const clauseBlock = await caseClauseGateError(supabase, caseId, agreementId);
+    if (clauseBlock) return NextResponse.json({ error: clauseBlock }, { status: 409 });
   }
 
   const updateData: Record<string, unknown> = {};

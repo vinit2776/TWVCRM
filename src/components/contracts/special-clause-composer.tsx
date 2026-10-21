@@ -26,6 +26,8 @@ export interface VettedClause {
 }
 
 interface Props {
+  /** Which agreement family this clause is for; picks the numbering and conflict check. */
+  kind?: "membership" | "virtual_office";
   /** Real contract values the clause must not contradict (rent, term, lock-in…). */
   facts: Record<string, string>;
   /** Emits the vetted clause, or null whenever the inputs change after a review. */
@@ -44,7 +46,7 @@ type DraftResponse =
   | { status: "drafted"; clause_text: string; report: ClauseReport; review_token: string }
   | { status: "failed"; problems: string[] };
 
-export function SpecialClauseComposer({ facts, onChange, selfApproves, initialIntent = "", initialReason = "", feedback, previousText }: Props) {
+export function SpecialClauseComposer({ kind = "membership", facts, onChange, selfApproves, initialIntent = "", initialReason = "", feedback, previousText }: Props) {
   const [intent, setIntent] = useState(initialIntent);
   const [reason, setReason] = useState(initialReason);
   const [answers, setAnswers] = useState("");
@@ -76,6 +78,7 @@ export function SpecialClauseComposer({ facts, onChange, selfApproves, initialIn
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          kind,
           intent: fullIntent,
           reason: reason.trim(),
           facts,

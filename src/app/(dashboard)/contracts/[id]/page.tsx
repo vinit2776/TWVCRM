@@ -1917,7 +1917,7 @@ export default function ContractDetailPage({
           />
 
           <SpecialClauseCard
-            contractId={id}
+            subject={{ kind: "contract", id }}
             status={contract.special_clause_status}
             locked={!!contract.signed_document || !!contract.leegality_document_id}
             userRole={userRole}

@@ -2089,6 +2089,10 @@ export interface VoCase {
   agreement_status?: AgreementStatus;
   ll_agreement_id?: string;
   ll_agreement_status?: AgreementStatus;
+  // Customer-specific clause (migration 00632); prints in both agreements once approved.
+  special_clause_status?: "pending_approval" | "changes_requested" | "approved" | null;
+  special_clause_text?: string | null;
+  special_clause_id?: string | null;
   // Populated by GET /api/cases/[id] only (latest row per type, or null) —
   // not present on list-page rows from GET /api/cases.
   agreement?: { status?: AgreementStatus } | null;

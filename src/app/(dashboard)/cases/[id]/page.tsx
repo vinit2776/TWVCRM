@@ -13,6 +13,7 @@ import {
   RefreshCw,
   User,
   Send,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,9 @@ import { CaseStatusPipeline } from "@/components/cases/case-status-pipeline";
 import { CaseDocumentsTab } from "@/components/cases/case-documents-tab";
 import { CaseComplianceTab } from "@/components/cases/case-compliance-tab";
 import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
+import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { specialClauseGate } from "@/lib/special-clause/gate";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { CaseLeaveAgreementTab } from "@/components/cases/case-leave-agreement-tab";
 import { CaseBillingTab } from "@/components/cases/case-billing-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
@@ -68,6 +72,9 @@ export default function CaseDetailPage({
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "renewal" ? "renewal" : "overview";
   const { data: caseData, loading, refetch } = useCase(id);
+  const { user } = useCurrentUser();
+  // Special clause not yet approved: neither agreement may be sent, signed or stamped.
+  const clauseGate = specialClauseGate(caseData?.special_clause_status);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
@@ -134,6 +141,7 @@ export default function CaseDetailPage({
               <h1 className="text-2xl font-bold">{caseDisplayName(caseData)}</h1>
               <StatusBadge type="case_status" value={caseData.status} />
               <StatusBadge type="vo_purpose" value={caseData.purpose} />
+              <SpecialClauseBadge status={caseData.special_clause_status} />
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="font-mono">{caseData.case_number}</span>
@@ -234,6 +242,30 @@ export default function CaseDetailPage({
           refetch();
           setRenewalVersion((v) => v + 1);
         }}
+      />
+
+      {clauseGate.blocked && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <Lock className="mt-0.5 h-4 w-4 text-amber-700 shrink-0" />
+          <div className="flex-1 text-sm text-amber-900">
+            <span className="font-medium">Sending is blocked.</span> {clauseGate.reason} It affects both the proposal and the Leave &amp; License agreement.
+          </div>
+        </div>
+      )}
+
+      <SpecialClauseCard
+        subject={{ kind: "case", id }}
+        status={caseData.special_clause_status}
+        locked={caseData.ll_agreement_status === "executed" || caseData.ll_agreement_status === "signing" || caseData.agreement_status === "executed"}
+        userRole={user?.role ?? null}
+        facts={{
+          "Customer": caseData.client_company_name || caseData.client_name || "",
+          "Service": VO_PURPOSE_LABELS[caseData.purpose as keyof typeof VO_PURPOSE_LABELS] ?? String(caseData.purpose ?? ""),
+          "Licence fee (before tax)": caseData.rate ? formatCurrency(caseData.rate) : "",
+          "Term (months)": String(caseData.tenure_months ?? ""),
+          "Security deposit": caseData.security_deposit ? formatCurrency(caseData.security_deposit) : "None",
+        }}
+        onChanged={refetch}
       />
 
       <Tabs defaultValue={initialTab}>
@@ -465,11 +497,11 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="proposal" className="mt-4">
-          <CaseAgreementTab caseId={id} />
+          <CaseAgreementTab caseId={id} clauseGate={clauseGate} />
         </TabsContent>
 
         <TabsContent value="agreement" className="mt-4">
-          <CaseLeaveAgreementTab caseId={id} />
+          <CaseLeaveAgreementTab caseId={id} clauseGate={clauseGate} />
         </TabsContent>
 
         <TabsContent value="billing" className="mt-4">

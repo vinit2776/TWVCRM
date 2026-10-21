@@ -375,7 +375,7 @@ export async function POST(request: NextRequest) {
   let specialClauseStatus: string | null = null;
   if (data && d.special_clause && dbUser?.id) {
     const res = await submitSpecialClause(createAdminClient(), {
-      contractId: data.id,
+      subject: { kind: "contract", id: data.id },
       actor: { id: dbUser.id, role: dbUser.role, name: dbUser.full_name || "A teammate" },
       intent: d.special_clause.intent,
       reason: d.special_clause.reason,

@@ -5,6 +5,7 @@
  * DOCX template ("New VO Agreement Format-1.DOCX").
  * Uses jsPDF with shared branding from pdf-utils.ts.
  */
+import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS, KYC_DOCUMENTS } from "@/lib/constants";
@@ -53,6 +54,8 @@ export interface LeaveLicenseVariables {
    *  the clause below drops the escalation sentence rather than promising a
    *  increase nobody agreed to. */
   renewal_escalation_percentage?: number;
+  /** Approved customer-specific clause (special_clauses); printed as clause 11 when present. */
+  special_clause_text?: string | null;
   start_date: string;
   start_date_formatted: string;
   end_date: string;
@@ -608,6 +611,14 @@ export function generateLeaveLicensePdf(
     "Lessee/Client agrees that the Lessee/Client is not the owner of any phone number assigned to them by the Service Provider. Upon termination of the Agreement for any reason, such number may be reassigned to another Lessee/Client."
   );
   ctx.y += 6;
+
+  // ── 11. SPECIAL CONDITIONS (customer-specific, approved) ──
+  if (variables.special_clause_text) {
+    ctx.checkPageBreak(30);
+    addClauseHeading("11. SPECIAL CONDITIONS");
+    addBodyText(stripSpecialConditionsHeading(variables.special_clause_text));
+    ctx.y += 6;
+  }
 
   // ── REQUIRED DOCUMENTS ──
   ctx.checkPageBreak(40);
