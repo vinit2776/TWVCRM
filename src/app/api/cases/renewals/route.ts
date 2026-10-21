@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getCachedSettings } from "@/lib/app-settings-cache";
 import { renewalRate } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import {
   RENEWAL_DESK_STATUSES,
   RENEWAL_DESK_WINDOW_DAYS,
+  VO_RENEWAL_GRACE_DAYS_SETTING,
   daysUntil,
+  graceLastDay,
+  parseGraceDays,
   renewalDeskTab,
 } from "@/lib/vo-renewal-desk";
 
@@ -36,7 +40,7 @@ export async function GET(request: NextRequest) {
     .select(
       `id, case_number, status, purpose, client_name, client_company_name, client_email, client_phone,
        aggregator_id, bill_to, end_date, tenure_months, rate, renewal_escalation_percentage,
-       renewal_notices_enabled,
+       renewal_notices_enabled, renewal_grace_ends_at,
        aggregator:aggregators!cases_aggregator_id_fkey(id, name, billing_method, primary_email, primary_phone),
        location:locations!cases_location_id_fkey(id, name)`
     )
@@ -47,11 +51,15 @@ export async function GET(request: NextRequest) {
     .order("end_date", { ascending: true, nullsFirst: false });
   if (locationId) query = query.eq("location_id", locationId);
 
-  const { data: cases, error } = await query;
+  const [{ data: cases, error }, settings] = await Promise.all([
+    query,
+    getCachedSettings(await createAdminClient(), [VO_RENEWAL_GRACE_DAYS_SETTING]),
+  ]);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const graceDays = parseGraceDays(settings[VO_RENEWAL_GRACE_DAYS_SETTING]);
 
   const ids = (cases ?? []).map((c) => c.id as string);
-  if (ids.length === 0) return NextResponse.json({ data: [], today });
+  if (ids.length === 0) return NextResponse.json({ data: [], today, grace_days: graceDays });
 
   const [billsRes, remindersRes, draftsRes] = await Promise.all([
     supabase
@@ -100,11 +108,12 @@ export async function GET(request: NextRequest) {
 
   const rows = (cases ?? []).flatMap((c) => {
     const bill = openBill.get(c.id as string) ?? null;
-    const tab = renewalDeskTab(
-      { status: c.status as string, end_date: c.end_date as string | null },
-      today,
-      !!bill,
-    );
+    const term = {
+      status: c.status as string,
+      end_date: c.end_date as string | null,
+      renewal_grace_ends_at: c.renewal_grace_ends_at as string | null,
+    };
+    const tab = renewalDeskTab(term, today, !!bill, graceDays);
     if (!tab) return [];
 
     const aggregator = Array.isArray(c.aggregator) ? c.aggregator[0] : c.aggregator;
@@ -131,6 +140,7 @@ export async function GET(request: NextRequest) {
       tab,
       end_date: c.end_date,
       days_left: c.end_date ? daysUntil(c.end_date as string, today) : null,
+      grace_last_day: tab === "grace" ? graceLastDay(term, graceDays) : null,
       payer: {
         kind: routing.billing.kind,
         name: routing.billing.name,
@@ -157,5 +167,5 @@ export async function GET(request: NextRequest) {
     }];
   });
 
-  return NextResponse.json({ data: rows, today });
+  return NextResponse.json({ data: rows, today, grace_days: graceDays });
 }

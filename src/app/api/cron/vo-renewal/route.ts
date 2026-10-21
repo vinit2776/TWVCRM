@@ -15,6 +15,8 @@ import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { withCronHealth } from "@/lib/cron-ping";
 import { renewalRecipients } from "@/lib/renewal-recipients";
 import { nextRenewalTerm } from "@/lib/vo-renewal-term";
+import { getCachedSettings } from "@/lib/app-settings-cache";
+import { VO_RENEWAL_GRACE_DAYS_SETTING, parseGraceDays } from "@/lib/vo-renewal-desk";
 
 /**
  * VO Renewal cron — SCHEDULE CURRENTLY DISABLED in vercel.json.
@@ -378,6 +380,9 @@ async function handler(request: Request) {
   // -------------------------------------------------------------------------
   // 3. Move to grace_period: renewal_due where end_date <= today
   // -------------------------------------------------------------------------
+  const graceDays = parseGraceDays(
+    (await getCachedSettings(adminSupabase, [VO_RENEWAL_GRACE_DAYS_SETTING]))[VO_RENEWAL_GRACE_DAYS_SETTING],
+  );
   const { data: expiredCases } = await adminSupabase
     .from("cases")
     .select("*, location:locations!cases_location_id_fkey(name, address, city, state), aggregator:aggregators!cases_aggregator_id_fkey(name, billing_method, primary_email, primary_phone)")
@@ -393,7 +398,7 @@ async function handler(request: Request) {
         continue;
       }
       const caseData = c as VoCaseForRenewal;
-      const graceEnds = addDays(todayIST, 7);
+      const graceEnds = addDays(todayIST, graceDays);
       const piNumber = buildPiNumber(caseData.case_number, 5); // final notice
       const { start: periodStart, end: periodEnd } = nextRenewalTerm(caseData.end_date, caseData.tenure_months ?? 12);
       // renewalRate, not caseData.rate: this total is what the email, the

@@ -474,3 +474,28 @@ export async function generateDiscontinuationDrafts(params: {
     );
   }
 }
+
+/**
+ * generateDiscontinuationDrafts for a case row read with its location
+ * (`*, location:locations!cases_location_id_fkey(name, address, city, state)`).
+ */
+export async function generateDiscontinuationDraftsForCase(
+  adminSupabase: SupabaseClient,
+  c: Record<string, unknown>,
+  effectiveDate: string,
+): Promise<void> {
+  const location = c.location as { name?: string; address?: string; city?: string; state?: string } | null;
+  await generateDiscontinuationDrafts({
+    adminSupabase,
+    caseId: c.id as string,
+    caseNumber: c.case_number as string,
+    clientName: c.client_name as string,
+    clientCompanyName: c.client_company_name as string | null,
+    clientGstin: c.client_gst_number as string | null,
+    clientCin: (c.client_cin_number as string | null) ?? null,
+    locationName: location?.name ?? "The WorkVilla",
+    locationAddress: [location?.address, location?.city, location?.state].filter(Boolean).join(", ") || "Chennai",
+    effectiveDate,
+    purpose: c.purpose as string,
+  });
+}
