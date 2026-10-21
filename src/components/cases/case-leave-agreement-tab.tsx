@@ -53,9 +53,12 @@ interface LeegalityHealth {
 
 interface CaseLeaveAgreementTabProps {
   caseId: string;
+  /** From the case's special clause: when blocked, nothing may leave the building. */
+  clauseGate?: { blocked: boolean; reason: string | null };
 }
 
-export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
+export function CaseLeaveAgreementTab({ caseId, clauseGate }: CaseLeaveAgreementTabProps) {
+  const clauseBlocked = clauseGate?.blocked ?? false;
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
@@ -816,7 +819,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
                 behind two clicks that recorded nothing anyone acted on, and
                 left an agreement in sent_to_client with no way forward. */}
             {agreement.status !== "executed" && (
-              <Button size="sm" onClick={openSendDialog} disabled={sendPreviewLoading}>
+              <Button size="sm" onClick={openSendDialog} disabled={sendPreviewLoading || clauseBlocked} title={clauseGate?.reason ?? undefined}>
                 {sendPreviewLoading
                   ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   : <Send className="mr-2 h-4 w-4" />}
@@ -828,8 +831,8 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={handleInitiateSigning}
-                disabled={acting || !leegalityEnabled}
-                title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing."}
+                disabled={acting || !leegalityEnabled || clauseBlocked}
+                title={clauseGate?.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing.")}
               >
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Stamping & Signing
@@ -848,7 +851,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             )}
 
             {canUploadManualSign && (
-              <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)}>
+              <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)} disabled={clauseBlocked} title={clauseGate?.reason ?? undefined}>
                 <Upload className="mr-2 h-4 w-4" />
                 Upload Signed Document
               </Button>
@@ -859,7 +862,8 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
                 size="sm"
                 variant="outline"
                 onClick={handleOpenStampPreview}
-                disabled={stampPreviewLoading}
+                disabled={stampPreviewLoading || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
               >
                 {stampPreviewLoading ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

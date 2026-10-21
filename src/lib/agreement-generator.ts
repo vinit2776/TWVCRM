@@ -1,4 +1,5 @@
 import Handlebars from "handlebars";
+import { stripSpecialConditionsHeading } from "@/lib/special-clause/membership";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
@@ -196,6 +197,8 @@ TERMS:
 // ================================================================
 
 export interface AgreementVariables {
+  /** Approved customer-specific clause (special_clauses); printed before the signatures when present. */
+  special_clause_text?: string | null;
   agreement_date: string;
   agreement_number: string;
   company_name: string;
@@ -371,6 +374,15 @@ export function generateAgreementPdf(
     } else {
       ctx.addWrappedText(trimmed, ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5);
     }
+  }
+
+  // ── Special conditions (customer-specific, approved) ──
+  if (variables.special_clause_text) {
+    ctx.y += 4;
+    ctx.checkPageBreak(25);
+    ctx.addWrappedText("SPECIAL CONDITIONS:", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5);
+    ctx.y += 2;
+    ctx.addWrappedText(stripSpecialConditionsHeading(variables.special_clause_text), ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5);
   }
 
   // ── Signature block ──

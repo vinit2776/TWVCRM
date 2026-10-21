@@ -52,3 +52,27 @@ export function specialClauseGate(
 export function canReviseSpecialClause(status: string | null | undefined): boolean {
   return status === "changes_requested";
 }
+
+const norm = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim();
+
+/** Virtual-office agreements are stored PDFs generated from variables, so besides
+ *  the approval status the stored copy must actually carry the approved clause.
+ *  A mismatch means regeneration failed or was skipped: block rather than send a
+ *  document that disagrees with what was approved. */
+export function agreementClauseGate(params: {
+  caseStatus: string | null | undefined;
+  caseText: string | null | undefined;
+  agreementText: string | null | undefined;
+  submittedAt?: string | null;
+}): SpecialClauseGate {
+  const base = specialClauseGate(params.caseStatus, params.submittedAt);
+  if (base.blocked) return base;
+  const wanted = params.caseStatus === "approved" ? norm(params.caseText) : "";
+  if (wanted !== norm(params.agreementText)) {
+    return {
+      blocked: true,
+      reason: "This agreement PDF doesn't match the approved special clause. Edit and save the agreement to regenerate it, then send.",
+    };
+  }
+  return { blocked: false, reason: null };
+}

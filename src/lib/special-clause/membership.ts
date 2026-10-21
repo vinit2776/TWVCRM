@@ -31,3 +31,28 @@ export function stripClauseHeading(text: string, clauseNumber: number): string {
   const re = new RegExp(`^\\s*(?:clause\\s*)?${clauseNumber}\\s*[.):\\-–—]?\\s*special\\s+conditions?\\s*[.:\\-–—]?\\s*`, "i");
   return text.replace(re, "").trim();
 }
+
+/** Virtual-office documents print their own heading ("11. SPECIAL CONDITIONS" or
+ *  "SPECIAL CONDITIONS:"), so strip whatever number/title lead-in the stored text has. */
+export function stripSpecialConditionsHeading(text: string): string {
+  return text
+    .replace(/^\s*(?:clause\s*)?(?:\d+\s*[.):\-–—]?\s*)?special\s+conditions?\s*[.:\-–—]?\s*/i, "")
+    .trim();
+}
+
+/** Topics covered by the virtual-office Leave & License agreement and proposal, for the conflict check. */
+export const VIRTUAL_OFFICE_FIXED_CLAUSE_TOPICS = [
+  "terms of usage of the address and services",
+  "license fees and taxes",
+  "service retainer / security deposit",
+  "mail handling",
+  "termination of service",
+  "refund policy",
+  "nature of business and permitted use",
+  "liability",
+  "confidentiality",
+  "ownership (the licence gives no leasehold rights)",
+  "required documents",
+  "dispute resolution by arbitration at Chennai",
+  "execution by electronic signature",
+];

@@ -30,9 +30,12 @@ import type { CaseAgreement } from "@/types";
 
 interface CaseAgreementTabProps {
   caseId: string;
+  /** From the case's special clause: when blocked, nothing may leave the building. */
+  clauseGate?: { blocked: boolean; reason: string | null };
 }
 
-export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
+export function CaseAgreementTab({ caseId, clauseGate }: CaseAgreementTabProps) {
+  const clauseBlocked = clauseGate?.blocked ?? false;
   const [agreement, setAgreement] = useState<CaseAgreement | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -412,7 +415,8 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={() => handleAction("send_to_client")}
-                disabled={acting}
+                disabled={acting || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
               >
                 <Send className="mr-2 h-4 w-4" />
                 Send to Client
@@ -434,7 +438,8 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
               <Button
                 size="sm"
                 onClick={handleInitiateSigning}
-                disabled={acting}
+                disabled={acting || clauseBlocked}
+                title={clauseGate?.reason ?? undefined}
               >
                 <PenTool className="mr-2 h-4 w-4" />
                 Initiate E-Signing
