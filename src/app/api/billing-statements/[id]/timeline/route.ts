@@ -364,7 +364,11 @@ export async function GET(
     const handoff = changes.handoff_state;
     let label: string;
     let highlight = false;
-    if (handoff) {
+    const reversedPayment = a.action === "rollback" && changes.rollback_kind?.new === "customer_payment_reversed";
+    if (reversedPayment) {
+      label = `Payment reversed — ${changes.payment_reversed?.old ?? ""}`.trim();
+      highlight = true;
+    } else if (handoff) {
       const to = HANDOFF_STATE_LABELS[handoff.new as HandoffState] ?? String(handoff.new);
       label = `Workflow → ${to}`;
       highlight = handoff.new === "direct_gst_requested";
@@ -379,7 +383,9 @@ export async function GET(
 
     push({
       id: `aud-${a.id}`, at: a.created_at, kind: "audit", label,
-      detail: trigger ? `via ${trigger.replace(/_/g, " ")}` : null,
+      detail: reversedPayment
+        ? String(changes.rollback_reason?.new ?? "")
+        : trigger ? `via ${trigger.replace(/_/g, " ")}` : null,
       actor: actorName(a.performed_by) ?? actorLabel ?? "System",
       highlight,
     });

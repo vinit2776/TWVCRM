@@ -215,6 +215,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
 | Facility tickets | `fms`, `admin` |
 | Void billing statements | `admin` only |
+| Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 
 ### Procurement → Payment Flow (strict separation)
 
