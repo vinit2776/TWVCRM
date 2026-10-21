@@ -94,14 +94,55 @@ describe("draftSpecialClause", () => {
     if (r.status === "drafted") { expect(r.clause_text).toBe("v2"); expect(r.report.rounds).toBe(2); }
   });
 
-  it("surfaces additions the draft forgot to list", async () => {
+  it("redrafts without anything the reviewer says the author never asked for", async () => {
+    let n = 0;
+    const prompts: string[] = [];
+    const r = await draftSpecialClause(input, async (_s, user) => {
+      n++;
+      prompts.push(user);
+      if (n === 1) return draftJson("v1 with booking rule");
+      if (n === 2) return JSON.stringify({ ok: true, problems: [], unlisted_additions: ["advance booking"], topics_checked: [] });
+      if (n === 3) return draftJson("v2");
+      return verdict(true);
+    });
+    expect(prompts[2]).toContain('Remove "advance booking"');
+    expect(r.status).toBe("drafted");
+    if (r.status === "drafted") { expect(r.clause_text).toBe("v2"); expect(r.report.added).toEqual([]); }
+  });
+
+  it("redrafts, without a review, when the draft admits to adding something", async () => {
+    let n = 0;
+    const roles: string[] = [];
+    const r = await draftSpecialClause(input, async (system) => {
+      n++;
+      roles.push(system.startsWith("You draft") ? "draft" : "verify");
+      if (n === 1) return draftJson("v1", { added: ["no carry-forward"] });
+      if (n === 2) return draftJson("v2");
+      return verdict(true);
+    });
+    expect(roles).toEqual(["draft", "draft", "verify"]);
+    expect(r.status).toBe("drafted");
+  });
+
+  it("turns additions that survive every round into questions for the author", async () => {
+    const r = await draftSpecialClause(input, async (system) =>
+      system.startsWith("You draft") ? draftJson("sticky", { added: ["no carry-forward"] }) : verdict(true));
+    expect(r).toEqual({ status: "questions", questions: ["Should the clause also say: no carry-forward?"] });
+  });
+
+  it("keeps the report short however chatty the model is", async () => {
+    const long = "x".repeat(300);
     let n = 0;
     const r = await draftSpecialClause(input, async () => {
       n++;
-      return n === 1 ? draftJson("v1") : JSON.stringify({ ok: true, problems: [], unlisted_additions: ["no carry-forward"], topics_checked: [] });
+      return n === 1
+        ? draftJson("v1", { kept: Array.from({ length: 9 }, (_, i) => `${i}${long}`) })
+        : JSON.stringify({ ok: true, problems: [], unlisted_additions: [], topics_checked: Array.from({ length: 12 }, () => long) });
     });
-    if (r.status === "drafted") expect(r.report.added).toContain("no carry-forward");
-    else throw new Error("expected drafted");
+    if (r.status !== "drafted") throw new Error("expected drafted");
+    expect(r.report.kept).toHaveLength(5);
+    expect(r.report.topics_checked).toHaveLength(6);
+    expect(Math.max(...r.report.kept.map((t) => t.length))).toBeLessThanOrEqual(120);
   });
 
   it("gives up after three failed rounds rather than returning unvetted text", async () => {
