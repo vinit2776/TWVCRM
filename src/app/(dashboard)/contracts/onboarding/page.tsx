@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1417,7 +1418,7 @@ function ContractOnboardingWizard() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
+                          {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
                             <SelectItem key={m} value={String(m)}>
                               {m} month{m !== 1 ? "s" : ""}
                             </SelectItem>
@@ -1434,7 +1435,7 @@ function ContractOnboardingWizard() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                          {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), PROPOSAL_MAX_TENURE_MONTHS) }, (_, i) => i + 1).map((m) => (
                             <SelectItem key={m} value={String(m)}>
                               {m} month{m !== 1 ? "s" : ""}
                             </SelectItem>

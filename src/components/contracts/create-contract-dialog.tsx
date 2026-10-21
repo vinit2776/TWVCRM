@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -803,7 +804,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: PROPOSAL_MAX_TENURE_MONTHS }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -823,7 +824,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, lockInMonths, 1), PROPOSAL_MAX_TENURE_MONTHS) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>

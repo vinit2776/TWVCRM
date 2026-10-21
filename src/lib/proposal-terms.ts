@@ -12,7 +12,10 @@
 
 import { STANDARD_DEPOSIT_LINE, depositTermText } from "@/lib/proposal-deposit-terms";
 
-export const PROPOSAL_MAX_TENURE_MONTHS = 18;
+export const PROPOSAL_MAX_TENURE_MONTHS = 60;
+
+/** Notice period stays capped where it was; only term and lock-in go up to 60. */
+export const PROPOSAL_MAX_NOTICE_MONTHS = 18;
 
 export interface ProposalCommitmentTerms {
   tenure_months?: number | null;
