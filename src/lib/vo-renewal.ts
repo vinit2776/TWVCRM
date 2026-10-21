@@ -8,7 +8,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
-import { logAudit } from "@/lib/audit";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -21,6 +20,7 @@ import {
 } from "@/lib/pdf-utils";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { renewalRecipients, type RenewalRecipient } from "@/lib/renewal-recipients";
+import { completeVoRenewal } from "@/lib/vo-renewal-completion";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +76,8 @@ export function generateRenewalPI(params: {
   periodEnd: string;
   dueDate: string;
   razorpayUrl?: string;
+  /** Fee for the term before GST; defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Buffer {
   const { caseData, piNumber, periodStart, periodEnd, dueDate, razorpayUrl } = params;
 
@@ -152,7 +154,7 @@ export function generateRenewalPI(params: {
   const gstRate = 18;
   // Same helper the billing statement uses — the printed PI and the invoice
   // must never quote different amounts for the same renewal.
-  const subtotal = renewalRate(caseData);
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
   const sgst = gstAmount / 2;
@@ -253,10 +255,12 @@ export async function createRenewalBillingStatement(params: {
   periodEnd: string;
   dueDate: string;
   piNumber: string;
+  /** Fee for the term before GST, as offered by Start renewal. Defaults to renewalRate(caseData). */
+  subtotal?: number;
 }): Promise<string> {
   const { adminSupabase, caseData, periodStart, periodEnd, dueDate, piNumber } = params;
 
-  const subtotal = renewalRate(caseData);
+  const subtotal = params.subtotal ?? renewalRate(caseData);
   const gstRate = 18;
   const gstAmount = Math.round(subtotal * gstRate) / 100;
   const cgst = gstAmount / 2;
@@ -330,8 +334,12 @@ export async function createRenewalRazorpayLink(params: {
   totalAmount: number;
   dueDate: string;
   piNumber: string;
+  /** Let Razorpay email/SMS the payer itself. Start renewal turns this off
+   *  so the customer hears only through the channels a person ticked. */
+  notifyCustomer?: boolean;
 }): Promise<{ id: string; url: string }> {
   const { adminSupabase, caseData, statementId, totalAmount, piNumber } = params;
+  const notifyCustomer = params.notifyCustomer ?? true;
 
   const settings = await getCachedSettings(adminSupabase, [
     "razorpay_enabled",
@@ -353,8 +361,8 @@ export async function createRenewalRazorpayLink(params: {
     description: `VO Renewal — ${piNumber} — ${caseData.client_name} — ${COMPANY_NAME}`,
     reference_id: `VO-${caseData.case_number}-${Date.now()}`,
     expire_by: expireBy,
-    notify: { sms: true, email: true },
-    reminder_enable: true,
+    notify: { sms: notifyCustomer, email: notifyCustomer },
+    reminder_enable: notifyCustomer,
     notes: {
       case_id: caseData.id,
       case_number: caseData.case_number,
@@ -392,10 +400,19 @@ export async function createRenewalRazorpayLink(params: {
   }
 
   const linkData = await res.json() as Record<string, unknown>;
-  return {
-    id: String(linkData.id),
-    url: String(linkData.short_url),
-  };
+  const link = { id: String(linkData.id), url: String(linkData.short_url) };
+
+  // The webhook finds the statement a payment belongs to by this column.
+  // Renewal links were only ever stored on the case, so a customer paying
+  // one landed as "no matching entity" and nothing renewed.
+  const { error: linkErr } = await adminSupabase
+    .from("billing_statements")
+    .update({ razorpay_payment_link_id: link.id, razorpay_payment_link_url: link.url })
+    .eq("id", statementId);
+  if (linkErr) {
+    throw new Error(`Could not attach the payment link to the renewal bill: ${linkErr.message}`);
+  }
+  return link;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,68 +628,27 @@ export async function logRenewalReminder(params: {
 // Handle a successful renewal payment (called from webhook)
 // ---------------------------------------------------------------------------
 
+/**
+ * Stamps the Razorpay reference on the statement, then hands off to the same
+ * completion every other payment route uses (completeVoRenewal), so a link
+ * payment and a recorded bank transfer renew a case identically and only once.
+ */
 export async function handleRenewalPayment(params: {
   adminSupabase: SupabaseClient;
-  caseId: string;
   statementId: string;
-  amountPaid: number;
   razorpayPaymentId: string;
   razorpayLinkId: string;
 }): Promise<void> {
-  const { adminSupabase, caseId, statementId, amountPaid, razorpayPaymentId, razorpayLinkId } = params;
+  const { adminSupabase, statementId, razorpayPaymentId, razorpayLinkId } = params;
 
-  // Fetch current case to know tenure_months and end_date
-  const { data: caseData } = await adminSupabase
-    .from("cases")
-    .select("end_date, tenure_months, start_date, renewal_reminder_count")
-    .eq("id", caseId)
-    .single();
-
-  if (!caseData) throw new Error("Case not found for renewal payment");
-
-  // Mark billing statement paid
   await adminSupabase
     .from("billing_statements")
     .update({
-      payment_status: "paid",
       payment_received_at: new Date().toISOString(),
       payment_reference: razorpayPaymentId,
       razorpay_payment_link_id: razorpayLinkId,
     })
     .eq("id", statementId);
 
-  // Advance the end_date by tenure_months
-  const currentEnd = new Date(caseData.end_date);
-  const tenureMonths = caseData.tenure_months || 12;
-  const newStart = new Date(currentEnd);
-  newStart.setDate(newStart.getDate() + 1);
-  const newEnd = new Date(currentEnd);
-  newEnd.setMonth(newEnd.getMonth() + tenureMonths);
-
-  // Update case: back to active for the new term, clear renewal tracking
-  await adminSupabase
-    .from("cases")
-    .update({
-      status: "active",
-      start_date: newStart.toISOString().split("T")[0],
-      end_date: newEnd.toISOString().split("T")[0],
-      renewal_billing_statement_id: null,
-      renewal_razorpay_link_id: null,
-      renewal_razorpay_link_url: null,
-      renewal_grace_ends_at: null,
-      renewal_reminder_count: 0,
-    })
-    .eq("id", caseId);
-
-  logAudit(adminSupabase, {
-    entityType: "case",
-    entityId: caseId,
-    action: "update",
-    performedBy: "system",
-    changes: {
-      action: { old: null, new: "renewal_payment_received" },
-      amount: { old: null, new: amountPaid },
-      new_end_date: { old: caseData.end_date, new: newEnd.toISOString().split("T")[0] },
-    },
-  });
+  await completeVoRenewal(adminSupabase, { statementId, source: "razorpay_link" });
 }

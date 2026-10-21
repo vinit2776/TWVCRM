@@ -14,6 +14,7 @@ import { generateDiscontinuationDrafts } from "@/lib/vo-discontinuation";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { withCronHealth } from "@/lib/cron-ping";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { nextRenewalTerm } from "@/lib/vo-renewal-term";
 
 /**
  * VO Renewal cron — SCHEDULE CURRENTLY DISABLED in vercel.json.
@@ -250,8 +251,7 @@ async function handler(request: Request) {
 
       const nextCount = caseData.renewal_reminder_count + 1;
       const piNumber = buildPiNumber(caseData.case_number, nextCount);
-      const periodStart = caseData.end_date; // same period
-      const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
+      const { start: periodStart, end: periodEnd } = nextRenewalTerm(caseData.end_date, caseData.tenure_months ?? 12);
       const dueDate = addDays(todayIST, 7);
       // renewalRate, not caseData.rate: this total is what the email, the
   // WhatsApp, the Razorpay link and the PI all quote, while
@@ -395,8 +395,7 @@ async function handler(request: Request) {
       const caseData = c as VoCaseForRenewal;
       const graceEnds = addDays(todayIST, 7);
       const piNumber = buildPiNumber(caseData.case_number, 5); // final notice
-      const periodStart = caseData.end_date;
-      const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
+      const { start: periodStart, end: periodEnd } = nextRenewalTerm(caseData.end_date, caseData.tenure_months ?? 12);
       // renewalRate, not caseData.rate: this total is what the email, the
   // WhatsApp, the Razorpay link and the PI all quote, while
   // createRenewalBillingStatement bills renewalRate(). Using the flat rate
@@ -682,12 +681,6 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().split("T")[0];
 }
 
-function addMonths(dateStr: string, months: number): string {
-  const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().split("T")[0];
-}
-
 function daysBetween(from: string, to: string): number {
   const msPerDay = 86400000;
   return Math.round((new Date(to).getTime() - new Date(from).getTime()) / msPerDay);
@@ -708,8 +701,7 @@ async function openRenewalStatement(
   caseData: VoCaseForRenewal,
   reminderNumber: number
 ) {
-  const periodStart = caseData.end_date;
-  const periodEnd = addMonths(caseData.end_date, caseData.tenure_months ?? 12);
+  const { start: periodStart, end: periodEnd } = nextRenewalTerm(caseData.end_date, caseData.tenure_months ?? 12);
   const dueDate = addDays(getTodayIST(), 7);
   const piNumber = buildPiNumber(caseData.case_number, reminderNumber);
   // renewalRate, not caseData.rate: this total is what the email, the
