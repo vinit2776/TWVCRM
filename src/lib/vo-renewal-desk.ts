@@ -11,8 +11,21 @@
  */
 
 export const RENEWAL_DESK_WINDOW_DAYS = 60;
-/** Mirrors the cron's hardcoded 7-day grace (src/app/api/cron/vo-renewal). */
-export const RENEWAL_GRACE_DAYS = 7;
+
+/**
+ * Days after the end date a case stays in grace before it lapses. Set by an
+ * admin under Settings → Virtual office (app_settings), read by the desk and
+ * the renewal cron alike.
+ */
+export const VO_RENEWAL_GRACE_DAYS_SETTING = "vo_renewal_grace_days";
+export const DEFAULT_RENEWAL_GRACE_DAYS = 7;
+export const MAX_RENEWAL_GRACE_DAYS = 30;
+
+/** The stored setting as a day count; anything missing or out of range is the default. */
+export function parseGraceDays(value: string | null | undefined): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_RENEWAL_GRACE_DAYS ? n : DEFAULT_RENEWAL_GRACE_DAYS;
+}
 
 export const RENEWAL_DESK_TABS = ["coming", "due", "grace", "lapsed"] as const;
 export type RenewalDeskTab = (typeof RENEWAL_DESK_TABS)[number];
@@ -24,12 +37,18 @@ export const RENEWAL_DESK_TAB_LABELS: Record<RenewalDeskTab, string> = {
   lapsed: "Lapsed",
 };
 
-export const RENEWAL_DESK_TAB_HINTS: Record<RenewalDeskTab, string> = {
-  coming: "Not yet contacted",
-  due: "Notice sent, unpaid",
-  grace: `Ended, ${RENEWAL_GRACE_DAYS}-day window`,
-  lapsed: "Decision needed",
-};
+export function renewalDeskTabHint(tab: RenewalDeskTab, graceDays: number): string {
+  switch (tab) {
+    case "coming":
+      return "Not yet contacted";
+    case "due":
+      return "Notice sent, unpaid";
+    case "grace":
+      return `Ended, ${graceDays}-day window`;
+    case "lapsed":
+      return "Decision needed";
+  }
+}
 
 /** Statuses a case can have and still be on the desk. */
 export const RENEWAL_DESK_STATUSES = ["active", "renewal_due", "grace_period", "lapsed"] as const;
@@ -41,18 +60,48 @@ export function daysUntil(endDate: string, today: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
+function addDays(date: string, days: number): string {
+  return new Date(Date.parse(date.slice(0, 10) + "T00:00:00Z") + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** The IST calendar date of a timestamp. */
+function istDate(iso: string): string {
+  return new Date(Date.parse(iso) + 330 * 60_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The last day a case is still in grace. renewal_grace_ends_at is the moment
+ * it lapses (set by the cron, or moved by "Give more time"), so the day
+ * before it; with none set, the end date plus the grace setting.
+ */
+export function graceLastDay(
+  c: { end_date: string | null; renewal_grace_ends_at?: string | null },
+  graceDays: number,
+): string | null {
+  if (c.renewal_grace_ends_at) return addDays(istDate(c.renewal_grace_ends_at), -1);
+  return c.end_date ? addDays(c.end_date, graceDays) : null;
+}
+
+/** The renewal_grace_ends_at that keeps a case in grace through `lastDay` (IST midnight after it). */
+export function graceEndsAtFor(lastDay: string): string {
+  return new Date(`${addDays(lastDay, 1)}T00:00:00+05:30`).toISOString();
+}
+
 export function renewalDeskTab(
-  c: { status: string; end_date: string | null },
+  c: { status: string; end_date: string | null; renewal_grace_ends_at?: string | null },
   today: string,
   hasOpenRenewalBill: boolean,
+  graceDays: number = DEFAULT_RENEWAL_GRACE_DAYS,
 ): RenewalDeskTab | null {
   if (!(RENEWAL_DESK_STATUSES as readonly string[]).includes(c.status)) return null;
   if (c.status === "lapsed") return "lapsed";
   if (!c.end_date) return null;
 
   const days = daysUntil(c.end_date, today);
-  if (days < -RENEWAL_GRACE_DAYS) return "lapsed";
-  if (c.status === "grace_period" || days < 0) return "grace";
+  if (c.status === "grace_period" || days < 0) {
+    const lastDay = graceLastDay(c, graceDays);
+    return lastDay && today > lastDay ? "lapsed" : "grace";
+  }
   if (c.status === "renewal_due" || hasOpenRenewalBill) return "due";
   if (days <= RENEWAL_DESK_WINDOW_DAYS) return "coming";
   return null;

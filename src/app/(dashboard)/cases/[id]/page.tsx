@@ -471,7 +471,12 @@ export default function CaseDetailPage({
         </TabsContent>
 
         <TabsContent value="renewal" className="mt-4">
-          <CaseRenewalTab key={renewalVersion} caseId={id} />
+          <CaseRenewalTab
+            key={renewalVersion}
+            caseId={id}
+            onStartRenewal={() => setStartRenewalOpen(true)}
+            onChanged={refetch}
+          />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">

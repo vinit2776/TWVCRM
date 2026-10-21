@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { CaseLapsePanel } from "@/components/cases/case-lapse-panel";
 
 interface Reminder {
   id: string;
@@ -75,9 +76,18 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 
 /**
  * The case's renewal record: notices sent, renewal bills, and every payment
- * with its full provenance. Read-only — actions live on the existing buttons.
+ * with its full provenance. Above it, for a term that has ended unpaid, the
+ * decision on what happens next.
  */
-export function CaseRenewalTab({ caseId }: { caseId: string }) {
+export function CaseRenewalTab({
+  caseId,
+  onStartRenewal,
+  onChanged,
+}: {
+  caseId: string;
+  onStartRenewal?: () => void;
+  onChanged?: () => void;
+}) {
   const [history, setHistory] = useState<History | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,113 +125,116 @@ export function CaseRenewalTab({ caseId }: { caseId: string }) {
   const modeLabel = (m: string | null) => (m ? STATEMENT_PAYMENT_MODE_LABELS[m] ?? m : "—");
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Renewal payments</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {history.open_reports.map((r) => (
-            <div key={r.id} className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-1 dark:bg-amber-950/30">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Reported paid, waiting for accounts</span>
-                <Badge variant="outline">{formatCurrency(r.amount)}</Badge>
-              </div>
-              <Row label="Bill" value={r.statement_number ?? "—"} />
-              <Row label="Paid on" value={formatDate(r.paid_on)} />
-              <Row label="Mode" value={modeLabel(r.payment_mode)} />
-              <Row label="Reference" value={r.reference ?? "—"} />
-              <Row label="Reported by" value={r.reported_by ?? "—"} />
-            </div>
-          ))}
-          {history.payments.length === 0 && history.open_reports.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No renewal payment received yet.</p>
-          ) : (
-            history.payments.map((p) => (
-              <div key={p.id} className="rounded-md border p-3 space-y-1">
+    <div className="space-y-6">
+      <CaseLapsePanel caseId={caseId} onStartRenewal={onStartRenewal} onChanged={onChanged} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Renewal payments</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {history.open_reports.map((r) => (
+              <div key={r.id} className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-1 dark:bg-amber-950/30">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">
-                    {p.source === "razorpay_link" ? "Paid by payment link" : "Recorded payment"}
-                  </span>
-                  <Badge variant="outline">{formatCurrency(p.amount)}</Badge>
+                  <span className="text-sm font-medium">Reported paid, waiting for accounts</span>
+                  <Badge variant="outline">{formatCurrency(r.amount)}</Badge>
                 </div>
-                <Row label="Bill" value={p.statement_number ?? "—"} />
-                <Row label="Paid on" value={p.payment_date ? formatDate(p.payment_date) : "—"} />
-                <Row label="Source" value={modeLabel(p.payment_mode)} />
-                <Row label="Reference" value={p.reference ?? "—"} />
-                {p.payer_name && <Row label="Paid from" value={p.payer_name} />}
-                <Row label="Reported by" value={p.reported_by ?? "—"} />
-                <Row label="Recorded by" value={p.source === "razorpay_link" ? "Automatic (Razorpay)" : p.recorded_by ?? "—"} />
-                <Row label="Recorded on" value={formatDate(p.recorded_at)} />
+                <Row label="Bill" value={r.statement_number ?? "—"} />
+                <Row label="Paid on" value={formatDate(r.paid_on)} />
+                <Row label="Mode" value={modeLabel(r.payment_mode)} />
+                <Row label="Reference" value={r.reference ?? "—"} />
+                <Row label="Reported by" value={r.reported_by ?? "—"} />
               </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Renewal bills</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {history.bills.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No renewal bill has been issued.</p>
+            ))}
+            {history.payments.length === 0 && history.open_reports.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No renewal payment received yet.</p>
             ) : (
-              <ul className="divide-y text-sm">
-                {history.bills.map((b) => (
-                  <li key={b.id} className="flex items-center justify-between gap-3 py-2">
-                    <div>
-                      <div className="font-medium">{b.statement_number ?? "—"}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {b.period_start && b.period_end
-                          ? `${formatDate(b.period_start)} to ${formatDate(b.period_end)}`
-                          : "—"}
-                        {" · issued "}
-                        {formatDate(b.created_at)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="tabular-nums">{formatCurrency(b.total_amount)}</div>
-                      <Badge variant={b.payment_status === "paid" ? "default" : "outline"}>
-                        {b.voided_at ? "Voided" : PAYMENT_STATUS_LABEL[b.payment_status] ?? b.payment_status}
-                      </Badge>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              history.payments.map((p) => (
+                <div key={p.id} className="rounded-md border p-3 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">
+                      {p.source === "razorpay_link" ? "Paid by payment link" : "Recorded payment"}
+                    </span>
+                    <Badge variant="outline">{formatCurrency(p.amount)}</Badge>
+                  </div>
+                  <Row label="Bill" value={p.statement_number ?? "—"} />
+                  <Row label="Paid on" value={p.payment_date ? formatDate(p.payment_date) : "—"} />
+                  <Row label="Source" value={modeLabel(p.payment_mode)} />
+                  <Row label="Reference" value={p.reference ?? "—"} />
+                  {p.payer_name && <Row label="Paid from" value={p.payer_name} />}
+                  <Row label="Reported by" value={p.reported_by ?? "—"} />
+                  <Row label="Recorded by" value={p.source === "razorpay_link" ? "Automatic (Razorpay)" : p.recorded_by ?? "—"} />
+                  <Row label="Recorded on" value={formatDate(p.recorded_at)} />
+                </div>
+              ))
             )}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Notices sent</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {history.reminders.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No renewal notice has been sent.</p>
-            ) : (
-              <ul className="divide-y text-sm">
-                {history.reminders.map((r) => (
-                  <li key={r.id} className="flex items-center justify-between gap-3 py-2">
-                    <div>
-                      <div className="font-medium">
-                        {r.is_grace_notice ? "Grace notice" : r.reminder_number === 1 ? "Renewal notice" : `Reminder ${r.reminder_number - 1}`}
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Renewal bills</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {history.bills.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No renewal bill has been issued.</p>
+              ) : (
+                <ul className="divide-y text-sm">
+                  {history.bills.map((b) => (
+                    <li key={b.id} className="flex items-center justify-between gap-3 py-2">
+                      <div>
+                        <div className="font-medium">{b.statement_number ?? "—"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {b.period_start && b.period_end
+                            ? `${formatDate(b.period_start)} to ${formatDate(b.period_end)}`
+                            : "—"}
+                          {" · issued "}
+                          {formatDate(b.created_at)}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">{formatDate(r.sent_at)}</div>
-                    </div>
-                    <div className="flex gap-1">
-                      {r.email_sent && <Badge variant="outline">Email</Badge>}
-                      {r.whatsapp_sent && <Badge variant="outline">WhatsApp</Badge>}
-                      {!r.email_sent && !r.whatsapp_sent && <Badge variant="outline">Not delivered</Badge>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+                      <div className="text-right">
+                        <div className="tabular-nums">{formatCurrency(b.total_amount)}</div>
+                        <Badge variant={b.payment_status === "paid" ? "default" : "outline"}>
+                          {b.voided_at ? "Voided" : PAYMENT_STATUS_LABEL[b.payment_status] ?? b.payment_status}
+                        </Badge>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Notices sent</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {history.reminders.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No renewal notice has been sent.</p>
+              ) : (
+                <ul className="divide-y text-sm">
+                  {history.reminders.map((r) => (
+                    <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+                      <div>
+                        <div className="font-medium">
+                          {r.is_grace_notice ? "Grace notice" : r.reminder_number === 1 ? "Renewal notice" : `Reminder ${r.reminder_number - 1}`}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{formatDate(r.sent_at)}</div>
+                      </div>
+                      <div className="flex gap-1">
+                        {r.email_sent && <Badge variant="outline">Email</Badge>}
+                        {r.whatsapp_sent && <Badge variant="outline">WhatsApp</Badge>}
+                        {!r.email_sent && !r.whatsapp_sent && <Badge variant="outline">Not delivered</Badge>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );

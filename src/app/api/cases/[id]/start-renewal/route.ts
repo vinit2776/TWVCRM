@@ -14,6 +14,7 @@ import {
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { latestLapseDecision } from "@/lib/vo-lapse-decision";
 import { isProductionDatabase } from "@/lib/environment";
 import { statementCoversNextTerm } from "@/lib/vo-renewal-term";
 import {
@@ -38,8 +39,13 @@ import {
  */
 
 const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "accounts"];
-/** Lapsed cases need the lapsed-case decision instead (a later step). */
 const STARTABLE_STATUSES = ["active", "renewal_due", "grace_period"];
+
+/** A lapsed case can be renewed only once someone has recorded that the client paid or renewed. */
+function isStartable(c: { status: string; metadata?: unknown }): boolean {
+  if (STARTABLE_STATUSES.includes(c.status)) return true;
+  return c.status === "lapsed" && latestLapseDecision(c.metadata)?.decision === "paid";
+}
 
 const CASE_SELECT =
   "*, location:locations!cases_location_id_fkey(name, address, city, state), " +
@@ -47,6 +53,7 @@ const CASE_SELECT =
 
 type CaseRow = VoCaseForRenewal & {
   status: string;
+  metadata?: unknown;
   renewal_notices_enabled?: boolean | null;
 };
 
@@ -197,7 +204,7 @@ export async function GET(
       headsUp: routing.headsUp,
       blocked: routing.blocked,
       postpaid: isPostpaid(caseRow),
-      startable: STARTABLE_STATUSES.includes(caseRow.status),
+      startable: isStartable(caseRow),
       paymentLinks: (await renewalPaymentLinksAvailable(adminSupabase))
         ? "available"
         : isProductionDatabase() ? "missing" : "staging_none",
@@ -234,7 +241,7 @@ export async function POST(
   if (!caseRow.end_date) {
     return NextResponse.json({ error: "This case has no end date, so there is no term to renew." }, { status: 400 });
   }
-  if (!STARTABLE_STATUSES.includes(caseRow.status)) {
+  if (!isStartable(caseRow)) {
     return NextResponse.json({ error: `A ${caseRow.status.replace(/_/g, " ")} case can't be renewed from here.` }, { status: 400 });
   }
   if (isPostpaid(caseRow)) {

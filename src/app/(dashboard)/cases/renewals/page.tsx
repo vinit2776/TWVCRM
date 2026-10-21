@@ -21,9 +21,10 @@ import { formatDate, formatCurrency, cn } from "@/lib/utils";
 import {
   RENEWAL_DESK_TABS,
   RENEWAL_DESK_TAB_LABELS,
-  RENEWAL_DESK_TAB_HINTS,
-  RENEWAL_GRACE_DAYS,
+  renewalDeskTabHint,
+  DEFAULT_RENEWAL_GRACE_DAYS,
   RENEWAL_DESK_WINDOW_DAYS,
+  daysUntil,
   relativeEnd,
   type RenewalDeskTab,
 } from "@/lib/vo-renewal-desk";
@@ -39,6 +40,8 @@ interface DeskRow {
   tab: RenewalDeskTab;
   end_date: string | null;
   days_left: number | null;
+  /** Last day still in grace, for a case on the In grace tab. */
+  grace_last_day: string | null;
   payer: { kind: "client" | "aggregator"; name: string; postpaid: boolean; blocked: string | null };
   fee: number | null;
   escalation_percentage: number | null;
@@ -80,6 +83,13 @@ function whereItStands(r: DeskRow): { text: string; tone: keyof typeof PILL } {
   }
 }
 
+/** "3 grace days left" / "last grace day today", counting the last day itself. */
+function graceLeft(lastDay: string, today: string): string {
+  const left = daysUntil(lastDay, today);
+  if (left <= 0) return "last grace day today";
+  return `${left} grace day${left === 1 ? "" : "s"} left`;
+}
+
 const DATE_COLUMN: Record<RenewalDeskTab, string> = {
   coming: "Ends",
   due: "Ends",
@@ -89,6 +99,8 @@ const DATE_COLUMN: Record<RenewalDeskTab, string> = {
 
 export default function RenewalsDeskPage() {
   const [rows, setRows] = useState<DeskRow[]>([]);
+  const [today, setToday] = useState<string | null>(null);
+  const [graceDays, setGraceDays] = useState(DEFAULT_RENEWAL_GRACE_DAYS);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<RenewalDeskTab>("coming");
   const [locationId, setLocationId] = useState<string | null>(null);
@@ -102,6 +114,8 @@ export default function RenewalsDeskPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load renewals");
       setRows(json.data ?? []);
+      setToday(json.today ?? null);
+      if (json.grace_days) setGraceDays(json.grace_days);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load renewals");
       setRows([]);
@@ -176,7 +190,7 @@ export default function RenewalsDeskPage() {
           >
             <span className="text-sm font-medium text-muted-foreground">{RENEWAL_DESK_TAB_LABELS[t]}</span>
             <span className="text-2xl font-bold tabular-nums">{loading ? "–" : counts[t]}</span>
-            <span className="text-xs text-muted-foreground">{RENEWAL_DESK_TAB_HINTS[t]}</span>
+            <span className="text-xs text-muted-foreground">{renewalDeskTabHint(t, graceDays)}</span>
           </button>
         ))}
       </div>
@@ -231,8 +245,8 @@ export default function RenewalsDeskPage() {
                           <div>{formatDate(r.end_date)}</div>
                           {r.days_left !== null && (
                             <div className="text-xs text-muted-foreground">
-                              {r.tab === "grace" && r.days_left < 0
-                                ? `${relativeEnd(r.days_left)}, ${Math.max(RENEWAL_GRACE_DAYS + r.days_left, 0)} grace days left`
+                              {r.tab === "grace" && r.days_left < 0 && r.grace_last_day && today
+                                ? `${relativeEnd(r.days_left)}, ${graceLeft(r.grace_last_day, today)}`
                                 : relativeEnd(r.days_left)}
                             </div>
                           )}
@@ -274,7 +288,7 @@ export default function RenewalsDeskPage() {
                               href={`/cases/${r.id}?tab=renewal${canStart ? "&start_renewal=1" : ""}`}
                               onClick={() => pushTrailEntry({ href: `/cases/${r.id}`, label: r.client })}
                             >
-                              {canStart ? "Start renewal" : "Open case"}
+                              {canStart ? "Start renewal" : r.tab === "lapsed" ? "Decide" : "Open case"}
                             </Link>
                           </Button>
                         );
