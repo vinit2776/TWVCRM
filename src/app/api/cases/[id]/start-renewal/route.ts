@@ -8,11 +8,13 @@ import {
   createRenewalRazorpayLink,
   generateRenewalPI,
   logRenewalReminder,
+  renewalPaymentLinksAvailable,
   sendRenewalEmail,
   sendRenewalWhatsApp,
   type VoCaseForRenewal,
 } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { isProductionDatabase } from "@/lib/environment";
 import { statementCoversNextTerm } from "@/lib/vo-renewal-term";
 import {
   RENEWAL_DURATIONS,
@@ -196,6 +198,9 @@ export async function GET(
       blocked: routing.blocked,
       postpaid: isPostpaid(caseRow),
       startable: STARTABLE_STATUSES.includes(caseRow.status),
+      paymentLinks: (await renewalPaymentLinksAvailable(adminSupabase))
+        ? "available"
+        : isProductionDatabase() ? "missing" : "staging_none",
       openBills: openBills.map(({ id, statement_number, total_amount, locked }) => ({
         id, statement_number, total_amount, locked,
       })),
@@ -271,12 +276,29 @@ export async function POST(
   const locked = replaced.find((b) => b.locked);
   if (locked) return NextResponse.json({ error: locked.locked }, { status: 409 });
 
+  // Staging has no Razorpay keys (Vinit, 2026-10-21), so there the bill is
+  // raised without a link and settled by a recorded or reported payment.
+  // Production always needs the link.
+  const withLink = await renewalPaymentLinksAvailable(adminSupabase);
+  if (!withLink && isProductionDatabase()) {
+    return NextResponse.json(
+      { error: "Online payments (Razorpay) aren't set up, so a renewal payment link can't be made. Nothing was created." },
+      { status: 400 },
+    );
+  }
+  if (!withLink && (body.send_email || body.send_whatsapp)) {
+    return NextResponse.json(
+      { error: "There is no payment link here, so nothing can be sent. Untick Email and WhatsApp." },
+      { status: 400 },
+    );
+  }
+
   const today = todayIst();
   const dueDate = offer.term.start > today ? offer.term.start : today;
   const piNumber = `TWV-PI-${caseRow.case_number.replace(/\D/g, "")}-M${Date.now().toString().slice(-4)}`;
 
-  let statementId: string | undefined;
-  let link: { id: string; url: string };
+  let statementId: string | null = null;
+  let link: { id: string; url: string } | null = null;
   try {
     statementId = await createRenewalBillingStatement({
       adminSupabase,
@@ -287,7 +309,7 @@ export async function POST(
       piNumber,
       subtotal: offer.fee,
     });
-    link = await createRenewalRazorpayLink({
+    if (withLink) link = await createRenewalRazorpayLink({
       adminSupabase,
       caseData: caseRow,
       statementId,
@@ -336,7 +358,8 @@ export async function POST(
   let emailSent = false;
   let headsUpSent = false;
   let whatsAppSent = false;
-  if (body.send_email || body.send_whatsapp) {
+  // Ticking a channel without a link was refused above.
+  if ((body.send_email || body.send_whatsapp) && link) {
     const pdfBuffer = generateRenewalPI({
       caseData: caseRow,
       piNumber,
@@ -393,8 +416,8 @@ export async function POST(
   const sentAny = emailSent || whatsAppSent;
   const caseUpdate: Record<string, unknown> = {
     renewal_billing_statement_id: statementId,
-    renewal_razorpay_link_id: link.id,
-    renewal_razorpay_link_url: link.url,
+    renewal_razorpay_link_id: link?.id ?? null,
+    renewal_razorpay_link_url: link?.url ?? null,
     renewal_reminder_count: sentAny ? 1 : 0,
     ...(sentAny ? { renewal_last_reminder_at: new Date().toISOString() } : {}),
   };
@@ -443,7 +466,7 @@ export async function POST(
     data: {
       statementId,
       piNumber,
-      paymentLink: link.url,
+      paymentLink: link?.url ?? null,
       total: offer.total,
       termStart: offer.term.start,
       termEnd: offer.term.end,

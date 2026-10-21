@@ -326,6 +326,25 @@ export async function createRenewalBillingStatement(params: {
 // Create Razorpay payment link for a renewal
 // ---------------------------------------------------------------------------
 
+// Settings are stored as text, so "false" must not count as enabled.
+function razorpayReady(settings: Record<string, string | null>): boolean {
+  return settings.razorpay_enabled === "true" && !!settings.razorpay_key_id && !!settings.razorpay_key_secret;
+}
+
+/**
+ * Whether renewal payment links can be made at all. Checked before a renewal
+ * bill is raised, so a missing Razorpay setup never leaves a bill behind.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function renewalPaymentLinksAvailable(adminSupabase: any): Promise<boolean> {
+  const settings = await getCachedSettings(adminSupabase, [
+    "razorpay_enabled",
+    "razorpay_key_id",
+    "razorpay_key_secret",
+  ]);
+  return razorpayReady(settings);
+}
+
 export async function createRenewalRazorpayLink(params: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   adminSupabase: any;
@@ -346,7 +365,7 @@ export async function createRenewalRazorpayLink(params: {
     "razorpay_key_id",
     "razorpay_key_secret",
   ]);
-  if (!settings.razorpay_enabled || !settings.razorpay_key_id || !settings.razorpay_key_secret) {
+  if (!razorpayReady(settings)) {
     throw new Error("Razorpay is not configured");
   }
 
