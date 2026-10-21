@@ -61,12 +61,14 @@ interface Setup {
   blocked: string | null;
   postpaid: boolean;
   startable: boolean;
+  /** staging_none: no Razorpay on staging, so the bill is raised without a link. */
+  paymentLinks: "available" | "missing" | "staging_none";
   openBills: { id: string; statement_number: string | null; total_amount: number; locked: string | null }[];
 }
 
 interface Result {
   piNumber: string;
-  paymentLink: string;
+  paymentLink: string | null;
   total: number;
   termStart: string;
   termEnd: string;
@@ -165,7 +167,9 @@ export function StartRenewalDialog({
       ? "This case is billed monthly to a postpaid partner, so it has no renewal bill."
       : !setup.startable
         ? `A ${setup.status.replace(/_/g, " ")} case can't be renewed from here.`
-        : setup.blocked ?? lockedReason ?? (setup.currentFee > 0 ? null : "This case has no fee on record. Set its rate first.");
+        : setup.paymentLinks === "missing"
+          ? "Online payments (Razorpay) aren't set up, so a renewal payment link can't be made."
+          : setup.blocked ?? lockedReason ?? (setup.currentFee > 0 ? null : "This case has no fee on record. Set its rate first.");
   const customInvalid = mode === "custom" && (!(Number(customPct) > 0) || reason.trim().length < 10);
   const canSubmit = !!offer && !cannotStartReason && !customInvalid && endConfirmed && !submitting;
 
@@ -206,7 +210,7 @@ export function StartRenewalDialog({
   };
 
   const copyLink = async () => {
-    if (!result) return;
+    if (!result?.paymentLink) return;
     try {
       await navigator.clipboard.writeText(result.paymentLink);
       toast.success("Payment link copied");
@@ -248,6 +252,7 @@ export function StartRenewalDialog({
                 }
               />
             </div>
+            {result.paymentLink ? (
             <div className="space-y-1.5">
               <Label className="text-xs">Payment link</Label>
               <div className="flex gap-2">
@@ -261,6 +266,11 @@ export function StartRenewalDialog({
                 verified by accounts.
               </p>
             </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No payment link here (staging has no Razorpay). Record or report a payment against the bill to renew the case.
+              </p>
+            )}
           </div>
         )}
 
@@ -392,7 +402,7 @@ export function StartRenewalDialog({
               <label className="flex items-center gap-2">
                 <Checkbox
                   checked={sendEmail}
-                  disabled={!setup.billing.email}
+                  disabled={!setup.billing.email || setup.paymentLinks !== "available"}
                   onCheckedChange={(v) => setSendEmail(v === true)}
                 />
                 <span>Email{setup.billing.email ? ` to ${setup.billing.email}` : " (no email on file)"}</span>
@@ -400,12 +410,14 @@ export function StartRenewalDialog({
               <label className="flex items-center gap-2">
                 <Checkbox
                   checked={sendWhatsApp}
-                  disabled={!setup.billing.phone}
+                  disabled={!setup.billing.phone || setup.paymentLinks !== "available"}
                   onCheckedChange={(v) => setSendWhatsApp(v === true)}
                 />
                 <span>WhatsApp{setup.billing.phone ? ` to ${setup.billing.phone}` : " (no phone on file)"}</span>
               </label>
-              {!sendEmail && !sendWhatsApp && (
+              {setup.paymentLinks === "staging_none" ? (
+                <p className="text-xs text-muted-foreground">Staging has no Razorpay, so the bill is raised without a payment link and nothing can be sent.</p>
+              ) : !sendEmail && !sendWhatsApp && (
                 <p className="text-xs text-muted-foreground">Nothing is sent. You get the payment link to share yourself.</p>
               )}
               {sendEmail && (

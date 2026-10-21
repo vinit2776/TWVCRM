@@ -8,12 +8,10 @@
 // This exists so nobody (human or agent) has to remember which URL/branch
 // they're on to know if what's on screen is real customer data — see the
 // 2026-09-01 incident in CLAUDE.md for why that mattered.
-const PRODUCTION_SUPABASE_REF = "zlbvadtajetylacxevsm";
+import { isProductionDatabase } from "@/lib/environment";
 
 export function EnvironmentBanner() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const isProduction = url.includes(PRODUCTION_SUPABASE_REF);
-  if (isProduction) return null;
+  if (isProductionDatabase()) return null;
 
   return (
     <div
