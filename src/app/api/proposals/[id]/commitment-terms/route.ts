@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { hasCommitmentTerms, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
+import { hasCommitmentTerms, PROPOSAL_MAX_NOTICE_MONTHS, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 import { RECORD_COMMITMENT_TERMS_ROLES } from "@/lib/contract-commitment";
 
 /**
@@ -22,7 +22,7 @@ import { RECORD_COMMITMENT_TERMS_ROLES } from "@/lib/contract-commitment";
 const schema = z.object({
   tenure_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
   lock_in_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
-  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_TENURE_MONTHS),
+  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_NOTICE_MONTHS),
   note: z.string().trim().min(10, "Say where these terms were agreed (e.g. signed proposal, email of 12 Sep)"),
 });
 

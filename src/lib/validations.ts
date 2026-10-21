@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ACCOUNTING_HEADS } from "@/lib/constants";
-import { PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
+import { PROPOSAL_MAX_NOTICE_MONTHS, PROPOSAL_MAX_TENURE_MONTHS, validateCommitmentTerms } from "@/lib/proposal-terms";
 
 export function zodErrorResponse<T>(error: z.ZodError<T>): { error: string; details: Record<string, string[] | undefined> } {
   const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>;
@@ -234,7 +234,7 @@ const proposalBaseSchema = z.object({
   security_deposit_amount: z.number().min(0).optional(),
   tenure_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
   lock_in_months: z.number().int().min(1).max(PROPOSAL_MAX_TENURE_MONTHS),
-  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_TENURE_MONTHS),
+  notice_period_months: z.number().int().min(0).max(PROPOSAL_MAX_NOTICE_MONTHS),
 });
 
 export const createProposalSchema = proposalBaseSchema.superRefine((d, ctx) => {
@@ -306,7 +306,7 @@ export const createContractSchema = z.object({
   security_deposit_months: z.number().min(0).default(3.0),
   escalation_percentage: z.number().min(0).max(100).default(10.0),
   notice_period_months: z.number().min(0).default(2.0),
-  lock_in_months: z.number().min(1).max(18).optional().nullable(),
+  lock_in_months: z.number().min(1).max(PROPOSAL_MAX_TENURE_MONTHS).optional().nullable(),
   member_signatory_name: z.string().min(1, "Signatory name is required"),
   member_signatory_designation: z.string().min(1, "Signatory designation is required"),
   member_signatory_pan: z.string().optional(),
