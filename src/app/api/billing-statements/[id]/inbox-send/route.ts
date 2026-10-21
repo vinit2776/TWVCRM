@@ -2,6 +2,7 @@ import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 import { formatCurrency } from "@/lib/utils";
 import {
   isHandoffV2Enabled,
@@ -283,12 +284,11 @@ export async function POST(
       const rzpAuth = Buffer.from(`${settings.razorpay_key_id}:${settings.razorpay_key_secret}`).toString("base64");
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-        const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
-        const payload: Record<string, unknown> = {
+        const payload: Record<string, unknown> & { reference_id: string; amount: number } = {
           amount: Math.round(totalAmount * 100),
           currency: "INR",
           description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
-          reference_id: refId,
+          reference_id: gstLinkReferenceId(invoiceNumber),
           expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!recipientEmail },
           reminder_enable: true,
@@ -303,21 +303,14 @@ export async function POST(
             ...(customerPhone ? { contact: customerPhone.replace(/\s/g, "") } : {}),
           };
         }
-        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-          method: "POST",
-          headers: { Authorization: `Basic ${rzpAuth}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (rzpRes.ok) {
-          const linkData = await rzpRes.json() as { id: string; short_url: string };
-          rzpLinkId = linkData.id;
-          rzpLinkUrl = linkData.short_url;
+        const link = await createOrRecoverGstLink({ rzpAuth, payload, logTag: "inbox-send" });
+        if (link) {
+          rzpLinkId = link.id;
+          rzpLinkUrl = link.url;
           await adminClient.from("billing_statements").update({
             razorpay_payment_link_id: rzpLinkId,
             razorpay_payment_link_url: rzpLinkUrl,
           }).eq("id", id);
-        } else {
-          console.error("[inbox-send] Razorpay link failed:", await rzpRes.text());
         }
       } catch (err) {
         console.error("[inbox-send] Razorpay link threw:", err);
