@@ -620,6 +620,10 @@ export interface Contract {
   // invoice for this contract when the customer requires it for their own
   // invoice processing.
   po_number?: string | null;
+  // Customer-specific clause (migration 00631); text prints only once approved.
+  special_clause_status?: "pending_approval" | "changes_requested" | "approved" | null;
+  special_clause_text?: string | null;
+  special_clause_id?: string | null;
   terms_and_conditions?: string;
   notes?: string;
   // Membership agreement fields
@@ -1117,7 +1121,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn";
 export type AuditEntityType =
   | "value_cost_parameter"
   | "lead"

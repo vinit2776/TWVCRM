@@ -1,3 +1,4 @@
+import { specialClauseGate } from "@/lib/special-clause/gate";
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -91,6 +92,11 @@ export async function POST(
           { error: "Cannot initiate e-signing on a rejected, terminated, or completed contract" },
           { status: 400 }
         );
+      }
+
+      const clauseGate = specialClauseGate(contract.special_clause_status);
+      if (clauseGate.blocked) {
+        return NextResponse.json({ error: clauseGate.reason }, { status: 409 });
       }
 
       const adminSupabase = await createAdminClient();

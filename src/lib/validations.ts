@@ -322,6 +322,22 @@ export const createContractSchema = z.object({
   // Admin-only: set when term / lock-in / notice deliberately differ from the
   // linked proposal. Enforced by resolveContractCommitment.
   commitment_override_reason: z.string().optional(),
+  // Optional customer-specific clause drafted + AI-vetted in the create dialog.
+  // Stored as a pending (or, for managers/admins, approved) revision after the
+  // contract row exists; see src/lib/special-clause/service.ts.
+  special_clause: z.object({
+    intent: z.string().trim().min(10).max(1500),
+    reason: z.string().trim().min(10).max(1500),
+    clause_text: z.string().trim().min(20).max(4000),
+    review_token: z.string().min(10),
+    report: z.object({
+      restated_intent: z.string(),
+      kept: z.array(z.string()),
+      added: z.array(z.string()),
+      topics_checked: z.array(z.string()),
+      rounds: z.number(),
+    }),
+  }).optional(),
 }).refine(
   (d) => !d.end_date || d.end_date >= d.start_date,
   { message: "End date must be on or after the start date", path: ["end_date"] }

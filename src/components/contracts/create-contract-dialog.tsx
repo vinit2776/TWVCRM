@@ -28,6 +28,8 @@ import type { Proposal, Lead } from "@/types";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useProposalCommitmentLock } from "@/components/contracts/use-proposal-commitment-lock";
 import { ProposalCommitmentPanel } from "@/components/contracts/proposal-commitment-panel";
+import { SpecialClauseComposer, type VettedClause } from "@/components/contracts/special-clause-composer";
+import { canApproveSpecialClause, canAuthorSpecialClause } from "@/lib/special-clause/gate";
 
 interface CreateContractDialogProps {
   open: boolean;
@@ -96,6 +98,9 @@ export function CreateContractDialog({
   const [notes, setNotes] = useState("");
   // Customer's own PO number, when they require one on every invoice for this contract
   const [poNumber, setPoNumber] = useState("");
+  // Optional customer-specific clause: drafted + AI-vetted here, approved by a manager/admin.
+  const [specialClauseOpen, setSpecialClauseOpen] = useState(false);
+  const [specialClause, setSpecialClause] = useState<VettedClause | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Space allocation
@@ -294,6 +299,8 @@ export function CreateContractDialog({
   const missingAddress = !street.trim() && !city.trim();
 
   const resetForm = () => {
+    setSpecialClauseOpen(false);
+    setSpecialClause(null);
     setSelectedProposalId("");
     setCompany("");
     setPanNumber("");
@@ -371,6 +378,10 @@ export function CreateContractDialog({
       toast.error(commitmentLock.submitError);
       return;
     }
+    if (specialClauseOpen && !specialClause) {
+      toast.error("Draft and review the special clause, or remove it, before creating the contract");
+      return;
+    }
     if (!signatoryName.trim()) {
       toast.error("Member signatory name is required");
       return;
@@ -427,6 +438,7 @@ export function CreateContractDialog({
       notes: notes.trim() || undefined,
       pan_number: panNumber.trim() || undefined,
       po_number: poNumber.trim() || undefined,
+      special_clause: specialClauseOpen ? specialClause ?? undefined : undefined,
     };
 
     const res = await fetch("/api/contracts", {
@@ -444,6 +456,9 @@ export function CreateContractDialog({
 
     const contractJson = await res.json();
     const newContractId: string = contractJson.data?.id;
+    if (contractJson.special_clause_error) {
+      toast.error(`Contract created, but the special clause wasn't saved: ${contractJson.special_clause_error}. Add it from the contract page.`);
+    }
 
     // Create space allocations if any units were selected
     if (newContractId && selectedSpaceUnitIds.length > 0) {
@@ -462,7 +477,11 @@ export function CreateContractDialog({
     }
 
     setSubmitting(false);
-    toast.success("Membership Agreement created successfully");
+    toast.success(
+      contractJson.special_clause_status === "pending_approval"
+        ? "Agreement created. The special clause is waiting for manager approval before it can be sent."
+        : "Membership Agreement created successfully",
+    );
     resetForm();
     onOpenChange(false);
     onSuccess();
@@ -1004,6 +1023,48 @@ export function CreateContractDialog({
               Printed on every Proforma and GST invoice for this contract. Optional — only some customers require this.
             </p>
           </div>
+
+          {canAuthorSpecialClause(currentUser?.role) && (
+            <div className="rounded-md border bg-muted/20">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-left"
+                onClick={() => {
+                  if (specialClauseOpen) setSpecialClause(null);
+                  setSpecialClauseOpen((o) => !o);
+                }}
+              >
+                <span>
+                  Special clause for this contract only
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">optional</span>
+                </span>
+                <span className="text-xs font-normal text-[#015E65]">{specialClauseOpen ? "Remove" : "+ Add"}</span>
+              </button>
+              {specialClauseOpen && (
+                <div className="space-y-3 border-t px-4 py-3">
+                  <p className="text-xs text-muted-foreground">
+                    Printed in this agreement as Clause 37. It never applies to other contracts.
+                    {canApproveSpecialClause(currentUser?.role)
+                      ? " As a manager/admin, it's approved when you create the contract."
+                      : " A manager or admin must approve it before the agreement can be sent."}
+                  </p>
+                  <SpecialClauseComposer
+                    facts={{
+                      "Customer": company,
+                      "Monthly rent (before tax)": selectedProposal ? formatCurrency(Number(selectedProposal.subtotal ?? 0)) : "",
+                      "Term (months)": String(tenureMonths),
+                      "Lock-in (months)": String(lockInMonths),
+                      "Notice period (months)": String(noticePeriodMonths),
+                      "Security deposit (months)": String(securityDepositMonths),
+                      "Workspace": workspaceDescription,
+                    }}
+                    onChange={setSpecialClause}
+                    selfApproves={canApproveSpecialClause(currentUser?.role)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Internal Notes</Label>

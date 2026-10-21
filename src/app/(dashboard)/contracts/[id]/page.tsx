@@ -30,6 +30,7 @@ import {
   Plus,
   Link2,
   Receipt,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +60,8 @@ import { ContractAccessLogsSection } from "@/components/contracts/contract-acces
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { SpecialClauseCard, SpecialClauseBadge } from "@/components/contracts/special-clause-card";
+import { specialClauseGate } from "@/lib/special-clause/gate";
 import { AgreementDocumentHistory } from "@/components/agreements/agreement-document-history";
 import {
   Dialog,
@@ -194,6 +197,8 @@ export default function ContractDetailPage({
 
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Special clause not yet approved: nothing leaves the building, previews are watermarked.
+  const clauseGate = specialClauseGate(contract?.special_clause_status);
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
@@ -493,7 +498,7 @@ export default function ContractDetailPage({
       contract,
       contract.lead || undefined,
       contract.location || undefined,
-      { watermarkDraft: includeDraftWatermark }
+      { watermarkDraft: includeDraftWatermark || clauseGate.blocked }
     );
     doc.save(`${contract.contract_number}.pdf`);
     if (await recordSignatureCopyIfClean()) fetchContract(false);
@@ -542,7 +547,7 @@ export default function ContractDetailPage({
   // handleGeneratePDFBase64 stays generic for the stamp/e-sign call sites
   // (which never honor the manual toggle — see the watermarkDraft option's
   // doc comment in generateMembershipAgreementPDF).
-  const handleGeneratePDFForEmail = () => handleGeneratePDFBase64({ watermarkDraft: includeDraftWatermark });
+  const handleGeneratePDFForEmail = () => handleGeneratePDFBase64({ watermarkDraft: includeDraftWatermark || clauseGate.blocked });
 
   const handleOpenEmailDialog = () => {
     setEmailDialogOpen(true);
@@ -1057,6 +1062,7 @@ export default function ContractDetailPage({
               <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[contractDisplayStatus(contract)]}>
                 {CONTRACT_STATUS_LABELS[contractDisplayStatus(contract)]}
               </Badge>
+              <SpecialClauseBadge status={contract.special_clause_status} />
               {contract.signed_document && (
                 <Badge className="bg-green-100 text-green-700 border-green-200">
                   <CheckCircle2 className="h-3 w-3 mr-1" /> Signed
@@ -1081,8 +1087,8 @@ export default function ContractDetailPage({
             !["rejected", "terminated", "completed"].includes(contract.status) && (
               <Button
                 onClick={handleInitiateSigning}
-                disabled={initiatingSigning || !leegalityEnabled}
-                title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead."}
+                disabled={initiatingSigning || !leegalityEnabled || clauseGate.blocked}
+                title={clauseGate.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing. Use company stamp or upload a manually signed document instead.")}
               >
                 {initiatingSigning ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1099,7 +1105,8 @@ export default function ContractDetailPage({
             <Button
               variant="outline"
               onClick={handleOpenStampPreview}
-              disabled={stampPreviewLoading || uploadingSignedDoc}
+              disabled={stampPreviewLoading || uploadingSignedDoc || clauseGate.blocked}
+              title={clauseGate.reason ?? undefined}
             >
               {stampPreviewLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1137,7 +1144,7 @@ export default function ContractDetailPage({
           )}
 
           {contract.status === "draft" && !contract.signed_document && (
-            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating}>
+            <Button variant="outline" onClick={handleOpenEmailDialog} disabled={statusUpdating || clauseGate.blocked} title={clauseGate.reason ?? undefined}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
             </Button>
@@ -1423,7 +1430,7 @@ export default function ContractDetailPage({
               PDF and re-sending that as if it were still under review would be
               misleading once a signed copy exists. */}
           {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && !contract.signed_document && (
-            <Button variant="outline" onClick={() => setEmailDialogOpen(true)}>
+            <Button variant="outline" onClick={() => setEmailDialogOpen(true)} disabled={clauseGate.blocked} title={clauseGate.reason ?? undefined}>
               <Mail className="mr-2 h-4 w-4" />
               Email
             </Button>
@@ -1460,6 +1467,17 @@ export default function ContractDetailPage({
           )}
         </div>
       </div>
+
+      {/* What is gating the agreement: a special clause that is not yet approved. */}
+      {clauseGate.blocked && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <Lock className="mt-0.5 h-4 w-4 text-amber-700 shrink-0" />
+          <div className="flex-1 text-sm text-amber-900">
+            <span className="font-medium">Sending is blocked.</span> {clauseGate.reason} Previews and downloads are watermarked DRAFT until then.
+          </div>
+        </div>
+      )}
+
 
       {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
       {contract.lead_id && (
@@ -1896,6 +1914,24 @@ export default function ContractDetailPage({
             contractId={id}
             userRole={userRole}
             onKycStatusChange={handleKycStatusChange}
+          />
+
+          <SpecialClauseCard
+            contractId={id}
+            status={contract.special_clause_status}
+            locked={!!contract.signed_document || !!contract.leegality_document_id}
+            userRole={userRole}
+            facts={{
+              "Customer": contract.lead?.company || "",
+              "Location": contract.location?.name || "",
+              "Monthly rent (before tax)": contract.subtotal != null ? formatCurrency(Number(contract.subtotal)) : "",
+              "Term (months)": String(contract.tenure_months ?? ""),
+              "Lock-in (months)": String(contract.lock_in_months ?? ""),
+              "Notice period (months)": String(contract.notice_period_months ?? ""),
+              "Security deposit (months)": String(contract.security_deposit_months ?? ""),
+              "Workspace": contract.workspace_description || "",
+            }}
+            onChanged={() => fetchContract(false)}
           />
 
           {/* Line Items Table */}
@@ -2640,8 +2676,8 @@ export default function ContractDetailPage({
                     variant="outline"
                     className="w-full"
                     onClick={handleInitiateSigning}
-                    disabled={initiatingSigning || !leegalityEnabled}
-                    title={leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing."}
+                    disabled={initiatingSigning || !leegalityEnabled || clauseGate.blocked}
+                    title={clauseGate.reason ?? (leegalityEnabled ? undefined : "E-signing is turned off — see Settings → E-Signing.")}
                   >
                     {initiatingSigning ? (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

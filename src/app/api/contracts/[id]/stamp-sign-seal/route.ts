@@ -1,3 +1,4 @@
+import { specialClauseGate } from "@/lib/special-clause/gate";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -54,12 +55,17 @@ export async function POST(
 
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, contract_number, signed_document_id")
+    .select("id, contract_number, signed_document_id, special_clause_status")
     .eq("id", contractId)
     .single();
 
   if (!contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+
+  const clauseGate = specialClauseGate(contract.special_clause_status);
+  if (clauseGate.blocked) {
+    return NextResponse.json({ error: clauseGate.reason }, { status: 409 });
   }
 
   if (contract.signed_document_id) {

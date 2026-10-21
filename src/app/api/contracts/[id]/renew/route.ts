@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
 import { firstBillingAnchor } from "@/lib/billing-months";
 import { normalizeRenewalNote } from "@/lib/renewal-note";
+import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
 
 /**
  * POST /api/contracts/[id]/renew
@@ -344,6 +345,12 @@ export async function POST(
     await admin.from("contract_service_quotas").insert(renewalQuotas);
   }
 
+  // 12b. An approved special clause rides along with a renewal (a new contract
+  // after a gap goes through POST /api/contracts and needs fresh approval).
+  const specialClauseCarried = await carrySpecialClauseToRenewal(admin, {
+    sourceContractId: source.id, newContractId: newContract.id, actorId: dbUser.id,
+  });
+
   // 13. Audit trail
   logAudit(admin, {
     entityType: "contract",
@@ -434,6 +441,7 @@ export async function POST(
       start_date: startDateStr,
       end_date: endDateStr,
       gap_days: gapDays,
+      special_clause_carried: specialClauseCarried,
       escalation_approval_status: approvalStatus,
     },
   }, { status: 201 });
