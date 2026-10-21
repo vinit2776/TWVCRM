@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/utils";
 import { enquiryStateLabel, type EnquiryOutcome } from "@/lib/enquiries";
 import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
+import { EnquiryContent } from "@/components/enquiries/enquiry-content";
 import { describeAttribution, sanitiseAttribution } from "@/lib/public-forms/attribution";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -29,6 +30,8 @@ interface LeadEnquiry {
   next_step: string | null;
   follow_up_at: string | null;
   stage?: { key: string; label: string } | null;
+  messages?: { at?: string; text: string }[];
+  details?: { label: string; value: string }[];
 }
 
 const stateTone = (e: LeadEnquiry) =>
@@ -87,6 +90,7 @@ export function LeadEnquiriesCard({ leadId }: { leadId: string }) {
                 </span>
               </div>
               {campaign && <p className="mt-0.5 text-xs text-muted-foreground">Campaign: {campaign}</p>}
+              <EnquiryContent messages={r.messages ?? []} details={r.details ?? []} />
               <div className="mt-1.5 space-y-1.5">
                 <StageChip stage={r.stage} />
                 <NextStepLine nextStep={r.next_step} followUpAt={r.follow_up_at} />

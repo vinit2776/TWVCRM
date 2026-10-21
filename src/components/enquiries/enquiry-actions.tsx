@@ -294,7 +294,13 @@ export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, 
             Log update
           </button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-80 space-y-2">
+        {/* The form is tall. Cap it to the room left on screen and scroll inside, with Save pinned,
+            so a row near the bottom of the page can never push the button out of reach. */}
+        <PopoverContent
+          align="start"
+          collisionPadding={12}
+          className="w-80 space-y-2 max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+        >
           <label className="text-xs font-medium text-muted-foreground">What happened?</label>
           <div className="flex flex-wrap gap-1.5">
             {ENQUIRY_UPDATE_KINDS.map((k) => (
@@ -329,9 +335,11 @@ export function EnquiryActions({ enquiryId, claimedAt, claimerName, resolvedAt, 
           <p className="text-[11px] text-muted-foreground">
             Leave the next step blank if nothing is planned. This replaces the current plan, and also marks you as on it if no one has taken this yet.
           </p>
-          <Button size="sm" className="w-full" disabled={saving} onClick={saveUpdate}>
-            {saving ? "Saving…" : "Save update"}
-          </Button>
+          <div className="sticky bottom-0 -mx-4 -mb-4 bg-popover px-4 pb-4 pt-2">
+            <Button size="sm" className="w-full" disabled={saving} onClick={saveUpdate}>
+              {saving ? "Saving…" : "Save update"}
+            </Button>
+          </div>
         </PopoverContent>
       </Popover>
 

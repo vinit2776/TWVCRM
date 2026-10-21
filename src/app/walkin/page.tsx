@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { preventEnterSubmit } from "@/lib/utils";
 import { readAttribution } from "@/lib/public-forms/attribution-client";
 import { trackLead } from "@/lib/public-forms/track-lead";
+import { PUBLIC_FORM_LOCATIONS } from "@/lib/public-forms/locations";
 import { TurnstileWidget } from "@/components/public/turnstile-widget";
 
 const WORKSPACE_TYPES = [
@@ -15,7 +16,6 @@ const WORKSPACE_TYPES = [
   { value: "virtual_office",  label: "Virtual Office" },
 ];
 
-const CONFERENCE_ROOM_LOCATIONS = ["Annasalai", "Nungambakkam"];
 
 interface Location {
   id: string;
@@ -279,7 +279,7 @@ export default function WalkInEnquirePage() {
                       className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent bg-white"
                     >
                       <option value="">Select a location</option>
-                      {CONFERENCE_ROOM_LOCATIONS.map((loc) => (
+                      {PUBLIC_FORM_LOCATIONS.map((loc) => (
                         <option key={loc} value={loc}>{loc}</option>
                       ))}
                     </select>

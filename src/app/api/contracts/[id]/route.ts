@@ -13,6 +13,8 @@ import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigF
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 import { resolveContractCommitment } from "@/lib/contract-commitment";
 import { hasCommitmentTerms } from "@/lib/proposal-terms";
+import { canCompleteOn } from "@/lib/contract-exit";
+import { completeExitOnTerminate, getLiveExit } from "@/lib/contract-exit-server";
 
 export async function GET(
   _request: NextRequest,
@@ -509,6 +511,17 @@ export async function PATCH(
       if (!body.termination_reason && !allowedFields.termination_reason) {
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
       }
+      // A contract with an exit in notice can only be terminated from its last
+      // day. (An admin can still shorten the exit's last day on the exit page.)
+      if (!isWithdrawal) {
+        const liveExit = await getLiveExit(createAdminClient(), id);
+        if (liveExit?.status === "in_notice" && !canCompleteOn(liveExit.last_day, new Date())) {
+          return NextResponse.json(
+            { error: `This exit's last day is ${liveExit.last_day}. Complete it on or after that day, or change the last day on the exit page.` },
+            { status: 409 }
+          );
+        }
+      }
       allowedFields.terminated_at = now;
       allowedFields.terminated_by = actorId;
     } else if (body.status === "renewal_in_progress") {
@@ -527,6 +540,19 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Close the exit workflow when a live contract is terminated: marks the exit
+  // completed and tells the team. A no-op when there was no exit.
+  if (body.status === "terminated" && oldContract.status !== "terminated" && !withdrawnBeforeActivation) {
+    const { data: leadRow } = await createAdminClient()
+      .from("leads").select("first_name, last_name, company").eq("id", oldContract.lead_id).maybeSingle();
+    await completeExitOnTerminate(createAdminClient(), {
+      contractId: id,
+      contractNumber: (oldContract.contract_number as string | null) ?? null,
+      actorId: dbUser?.id ?? null,
+      customer: leadRow?.company || `${leadRow?.first_name ?? ""} ${leadRow?.last_name ?? ""}`.trim() || "Customer",
+    });
+  }
 
   if (dbUser?.id && oldContract) {
     const auditChanges = diffChanges(oldContract as Record<string, unknown>, allowedFields);

@@ -335,7 +335,7 @@ function AssessDialog({ complaint, templates, onClose, onDone }: { complaint: Co
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Assess {complaint.reference}</DialogTitle>
         </DialogHeader>
@@ -528,7 +528,7 @@ function HandleRequestDialog({ request, templates, onClose, onDone }: { request:
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Handle {request.reference}</DialogTitle>
         </DialogHeader>

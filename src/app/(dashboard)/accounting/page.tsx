@@ -1,5 +1,6 @@
 "use client";
 
+import { ExitSettlementsPanel } from "@/components/accounting/exit-settlements-panel";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -667,6 +668,7 @@ export default function AccountingPage() {
 
         {/* ── Vendor Payments ──────────────────────────────────────────── */}
         <TabsContent value="vendor-payments" className="mt-4">
+          <ExitSettlementsPanel />
           {billsLoading ? (
             <div className="space-y-2">
               {[...Array(5)].map((_, i) => (
