@@ -13,6 +13,7 @@ const reportSchema = z.object({
   added: z.array(z.string()),
   topics_checked: z.array(z.string()),
   rounds: z.number(),
+  relaxed: z.boolean().optional(),
 });
 
 const submitSchema = z.object({

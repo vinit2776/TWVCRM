@@ -166,6 +166,9 @@ export function SpecialClauseCard({ subject, status, locked, userRole, facts, on
 
             {current.ai_report && (current.status === "pending_approval" || current.status === "changes_requested") && (
               <div className="space-y-1 text-xs">
+                {current.ai_report.relaxed && (
+                  <p className="font-medium text-amber-800">Drafted with Claude&apos;s questions skipped. Read the additions below closely.</p>
+                )}
                 {current.ai_report.added.length > 0 ? (
                   <p className="text-amber-700">Added by AI beyond the request: {current.ai_report.added.join("; ")}</p>
                 ) : (

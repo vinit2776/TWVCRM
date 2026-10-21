@@ -14,6 +14,7 @@ export interface ClauseReport {
   added: string[];
   topics_checked: string[];
   rounds: number;
+  relaxed?: boolean;
 }
 
 /** What the server needs to store a vetted clause (matches the submit schema). */
@@ -64,7 +65,7 @@ export function SpecialClauseComposer({ kind = "membership", facts, onChange, se
     }
   };
 
-  async function runDraft(adjust?: string) {
+  async function runDraft(adjust?: string, relaxed = false) {
     setError(null);
     setProblems([]);
     if (intent.trim().length < 10 || reason.trim().length < 10) {
@@ -82,6 +83,7 @@ export function SpecialClauseComposer({ kind = "membership", facts, onChange, se
           intent: fullIntent,
           reason: reason.trim(),
           facts,
+          relaxed,
           feedback: [feedback, adjust].filter(Boolean).join("\nAuthor's adjustment: ") || undefined,
           previous_text: drafted?.text ?? previousText,
         }),
@@ -159,10 +161,22 @@ export function SpecialClauseComposer({ kind = "membership", facts, onChange, se
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {!drafted && (
-        <Button type="button" variant="outline" onClick={() => runDraft()} disabled={loading}>
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-          {questions.length > 0 ? "Draft with my answers" : "Draft and review with Claude"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={() => runDraft()} disabled={loading}>
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            {questions.length > 0 ? "Draft with my answers" : "Draft and review with Claude"}
+          </Button>
+          {(questions.length > 0 || problems.length > 0) && (
+            <Button type="button" variant="ghost" onClick={() => runDraft(undefined, true)} disabled={loading}>
+              Skip questions and draft anyway
+            </Button>
+          )}
+        </div>
+      )}
+      {!drafted && (questions.length > 0 || problems.length > 0) && (
+        <p className="text-xs text-muted-foreground">
+          &quot;Draft anyway&quot; lets Claude fill small gaps itself. Everything it adds is listed for the approver to check.
+        </p>
       )}
 
       {drafted && (
