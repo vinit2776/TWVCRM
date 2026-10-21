@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { lineItemSchema } from "@/lib/validations";
+import { escalateUnitPrice } from "@/lib/line-item-escalation";
 import { firstBillingAnchor } from "@/lib/billing-months";
 import { normalizeRenewalNote } from "@/lib/renewal-note";
 import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
@@ -138,14 +139,13 @@ export async function POST(
   // Round to nearest Rupee.
   const roundToRupee = (n: number) => Math.round(n);
 
-  type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
+  type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string; escalates?: boolean };
   const oldSeats = Number(source.seats || 1);
   const oldItems = (source.items || []) as Item[];
   const newItems: Item[] = oldItems.map((item) => {
     // Scale seat-based items proportionally; leave flat-fee items (quantity !== oldSeats) unchanged.
     const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-    const rawUnitPrice = item.unit_price * escalationMultiplier;
-    const newUnitPrice = roundToRupee(rawUnitPrice);
+    const newUnitPrice = escalateUnitPrice(item, escalationMultiplier, roundToRupee);
     const newTotal = newUnitPrice * newQuantity;
     return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
   });
@@ -525,7 +525,7 @@ export async function PATCH(
         ? noteResult.value
         : undefined;
 
-    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
+    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string; escalates?: boolean };
 
     let newItems: Item[] | null = null;
     if (body.items !== undefined) {
@@ -655,7 +655,7 @@ export async function PATCH(
     // Restore parent contract's original prices (no escalation)
     if (!parent) return NextResponse.json({ error: "Parent contract not found" }, { status: 400 });
 
-    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
+    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string; escalates?: boolean };
     const parentItems = (parent.items as Item[]) || [];
     const parentSeatsWaive = Number(parent.seats) || 1;
     const renewalSeatsWaive = Number(contract.seats || 1);
@@ -714,7 +714,7 @@ export async function PATCH(
     // Restore escalation — re-apply from parent's prices
     if (!parent) return NextResponse.json({ error: "Parent contract not found" }, { status: 400 });
 
-    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
+    type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string; escalates?: boolean };
     const parentItems = (parent.items as Item[]) || [];
     const parentSeatsRestore = Number(parent.seats) || 1;
     const renewalSeatsRestore = Number(contract.seats || 1);
@@ -723,7 +723,7 @@ export async function PATCH(
 
     const newItems: Item[] = parentItems.map((item: Item) => {
       const newQuantity = item.quantity === parentSeatsRestore ? renewalSeatsRestore : item.quantity;
-      const newUnitPrice = Math.round(item.unit_price * multiplier * 100) / 100;
+      const newUnitPrice = escalateUnitPrice(item, multiplier, (n) => Math.round(n * 100) / 100);
       const newTotal = Math.round(newUnitPrice * newQuantity * 100) / 100;
       return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
     });

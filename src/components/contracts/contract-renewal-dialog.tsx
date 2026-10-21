@@ -42,6 +42,7 @@ import {
 import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { escalateUnitPrice } from "@/lib/line-item-escalation";
 import type { Contract } from "@/types";
 
 // ─── Field Help Tooltip ─────────────────────────────────────────────────────
@@ -95,13 +96,13 @@ export function ContractRenewalDialog({
   const multiplier = 1 + escalationPct / 100;
 
   // Preview: compute escalated subtotal per-item then sum (matches API logic)
-  type Item = { unit_price: number; quantity: number };
+  type Item = { unit_price: number; quantity: number; escalates?: boolean };
   const previewSubtotal = useMemo(() => {
     const items = (contract.items || []) as Item[];
     const oldSeats = contract.seats || 1;
     return items.reduce((sum, item) => {
       const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-      const newPrice = roundToRupee(item.unit_price * multiplier);
+      const newPrice = escalateUnitPrice(item, multiplier, roundToRupee);
       return sum + newPrice * newQuantity;
     }, 0);
   }, [contract.items, multiplier, seats, contract.seats]);
