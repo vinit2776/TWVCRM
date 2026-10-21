@@ -1,4 +1,5 @@
 import jsPDF, { GState } from "jspdf";
+import { MEMBERSHIP_SPECIAL_CLAUSE_NUMBER, stripClauseHeading } from "@/lib/special-clause/membership";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement, Location } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
@@ -1594,6 +1595,15 @@ export function generateMembershipAgreementPDF(
       "\u2022 Member is barred from usage/installation/affixing whether permanent or temporarily any personal electrical/mechanical equipment/machine including but not restricted to television, toaster, printer, projector etc. anywhere in the Premises without seeking prior written approval from the Company.\n" +
       "\u2022 This Agreement constitutes the entire agreement between the Member & the Company as to its subject matter and supersedes all prior and contemporaneous agreements, proposals or representations, written or oral, concerning its subject matter. No modification, amendment or waiver of any provision of this Agreement shall be effective unless in writing."],
   ];
+
+  // Customer-specific clause, printed only once a manager/admin has approved it.
+  if (contract.special_clause_status === "approved" && contract.special_clause_text) {
+    clauses.push([
+      String(MEMBERSHIP_SPECIAL_CLAUSE_NUMBER),
+      "Special\nConditions",
+      stripClauseHeading(contract.special_clause_text, MEMBERSHIP_SPECIAL_CLAUSE_NUMBER),
+    ]);
+  }
 
   autoTable(doc, {
     startY: y,

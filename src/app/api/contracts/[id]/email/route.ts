@@ -1,3 +1,4 @@
+import { specialClauseGate } from "@/lib/special-clause/gate";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
@@ -56,6 +57,11 @@ export async function POST(
 
   if (fetchError || !contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+
+  const clauseGate = specialClauseGate(contract.special_clause_status);
+  if (clauseGate.blocked) {
+    return NextResponse.json({ error: clauseGate.reason }, { status: 409 });
   }
 
   // Get sender info

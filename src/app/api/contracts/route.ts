@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { canAuthorSpecialClause } from "@/lib/special-clause/gate";
+import { submitSpecialClause } from "@/lib/special-clause/service";
 import { createContractSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
@@ -154,7 +156,11 @@ export async function POST(request: NextRequest) {
   const totalAmount = proposal.total_amount;
   const proposalLocationId: string | null = proposal.location_id;
 
-  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
+
+  if (d.special_clause && !canAuthorSpecialClause(dbUser?.role)) {
+    return NextResponse.json({ error: "You can't add a special clause." }, { status: 403 });
+  }
 
   // Term / lock-in / notice period must be what the proposal offered — the
   // form locks them, this enforces it. Only an admin can differ, with a reason.
@@ -362,5 +368,27 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ data }, { status: 201 });
+  // ── Optional special clause ───────────────────────────────────────────────
+  // Submitted after the contract exists so the revision has a real contract_id.
+  // A failure here must not lose the contract; the author can resubmit from its page.
+  let specialClauseError: string | null = null;
+  let specialClauseStatus: string | null = null;
+  if (data && d.special_clause && dbUser?.id) {
+    const res = await submitSpecialClause(createAdminClient(), {
+      contractId: data.id,
+      actor: { id: dbUser.id, role: dbUser.role, name: dbUser.full_name || "A teammate" },
+      intent: d.special_clause.intent,
+      reason: d.special_clause.reason,
+      clauseText: d.special_clause.clause_text,
+      reviewToken: d.special_clause.review_token,
+      report: d.special_clause.report,
+    });
+    if (res.ok) specialClauseStatus = res.status;
+    else specialClauseError = res.error;
+  }
+
+  return NextResponse.json(
+    { data, special_clause_status: specialClauseStatus, special_clause_error: specialClauseError },
+    { status: 201 },
+  );
 }
