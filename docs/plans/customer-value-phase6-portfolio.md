@@ -1,6 +1,6 @@
 # Customer Value tab — Phase 6 plan (portfolio list, renewal outlook, cross-pillar insights)
 
-Status: **decisions D1 to D4 settled on the recommendations, 2026-10-20 (Admin menu "Customer Value", renewing soon = 90 days, the eight starting rules, live-contract customers by default with a switch for past ones). PR A (the rules) open; B and C not started.**
+Status: **built 2026-10-22: PR A (rules), PR B (portfolio page) and PR C (Summary cards) done. Decisions D1 to D4 were settled on the recommendations.**
 Spec: `docs/customer-value-tab-spec.md` (scope item 11, build order phase 6). Builds on everything before it:
 scores (phase 2), comparison, electricity, Wi-Fi, cost simulator and the stored margin.
 

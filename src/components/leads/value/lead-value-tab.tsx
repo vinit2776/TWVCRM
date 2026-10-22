@@ -68,7 +68,7 @@ export function LeadValueTab({ leadId }: { leadId: string }) {
         </TabsList>
 
         <TabsContent value="summary" className="space-y-4">
-          <SummaryPanel data={summary} loading={loading} error={error} onRetry={reload} onOpenMoney={() => setSub("money")} />
+          <SummaryPanel leadId={leadId} data={summary} loading={loading} error={error} onRetry={reload} onOpenMoney={() => setSub("money")} />
         </TabsContent>
 
         <TabsContent value="performance" className="space-y-4">
