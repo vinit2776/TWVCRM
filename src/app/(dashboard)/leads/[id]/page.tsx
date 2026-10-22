@@ -81,10 +81,11 @@ export default function LeadDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  // The Value tab is admin-only and loads its own data, so it is never a
-  // deep-link target: a link to it falls back to Overview.
+  // The Value tab is admin-only and loads its own data. A link to it opens Overview first and
+  // switches to Value once the signed-in user is known to be an admin (below); anyone else stays on Overview.
   const requestedTab = searchParams.get("tab") ?? "overview";
   const initialTab = requestedTab === "value" ? "overview" : requestedTab;
+  const [tab, setTab] = useState(initialTab);
   const highlightActivityId = searchParams.get("highlight") ?? undefined;
   const { data: lead, loading, refetch: refetchLead } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -100,6 +101,10 @@ export default function LeadDetailPage({
   const [printEntryOpen, setPrintEntryOpen] = useState(false);
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Honour ?tab=value (the Customer Value portfolio links here) once we know the user is an admin.
+  useEffect(() => {
+    if (requestedTab === "value" && userRole === "admin") setTab("value");
+  }, [requestedTab, userRole]);
 
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);
@@ -251,7 +256,7 @@ export default function LeadDetailPage({
 
       <JourneyPanel leadId={lead.id} />
 
-      <Tabs defaultValue={initialTab}>
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activities">Activities</TabsTrigger>
