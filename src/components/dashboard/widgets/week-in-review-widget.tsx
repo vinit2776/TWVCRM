@@ -12,6 +12,7 @@ import {
   Cpu,
   Loader2,
 } from "lucide-react";
+import { dashboardFetch } from "@/lib/dashboard-fetch";
 
 interface WeekInReviewData {
   sales: {
@@ -108,7 +109,7 @@ export function WeekInReviewWidget() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/dashboard/week-in-review")
+    dashboardFetch("/api/dashboard/week-in-review")
       .then((r) => r.json())
       .then((json) => setData(json.data ?? null))
       .catch(() => setData(null))

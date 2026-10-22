@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getDashboardAuth } from "@/lib/dashboard-auth";
 
 export interface PendingActionItem {
   module: string;
@@ -18,14 +19,8 @@ export interface PendingActionItem {
  */
 export async function GET() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, dbUser } = await getDashboardAuth();
   if (!user) return NextResponse.json({ data: [] });
-
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("role")
-    .eq("auth_id", user.id)
-    .single();
 
   if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
     return NextResponse.json({ data: [] });
