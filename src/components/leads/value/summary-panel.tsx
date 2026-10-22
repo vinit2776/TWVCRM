@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { LineChart } from "lucide-react";
+import { RenewalCard } from "@/components/leads/value/renewal-card";
 import { ScoreChart } from "@/components/leads/value/score-chart";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ShadowSummary } from "@/lib/customer-value/shadow-margin";
@@ -44,12 +45,14 @@ function barColor(score: number | null): string {
 }
 
 export function SummaryPanel({
+  leadId,
   data,
   loading,
   error,
   onRetry,
   onOpenMoney,
 }: {
+  leadId: string;
   data: SummaryData | null;
   loading: boolean;
   error: string | null;
@@ -163,6 +166,8 @@ export function SummaryPanel({
           </CardContent>
         </Card>
       )}
+
+      <RenewalCard leadId={leadId} refreshKey={latest.computed_at} />
 
       <Card>
         <CardHeader className="pb-2">
