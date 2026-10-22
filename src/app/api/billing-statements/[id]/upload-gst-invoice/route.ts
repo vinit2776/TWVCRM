@@ -6,6 +6,7 @@ import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server"
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
  * POST /api/billing-statements/[id]/upload-gst-invoice
@@ -103,7 +104,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
-      statement_number, period_start, period_end, statement_type,
+      statement_number, period_start, period_end, statement_type, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -139,6 +140,7 @@ export async function POST(
     period_start: string | null;
     period_end: string | null;
     statement_type: string | null;
+    razorpay_payment_link_url: string | null;
     contract: {
       id: string;
       billing_mode: "proforma_first" | "gst_direct" | null;
@@ -425,12 +427,11 @@ export async function POST(
     if (rzpAuth) {
       try {
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-        const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
-        const payload: Record<string, unknown> = {
+        const payload: Record<string, unknown> & { reference_id: string; amount: number } = {
           amount: Math.round(totalAmount * 100),
           currency: "INR",
           description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
-          reference_id: refId,
+          reference_id: gstLinkReferenceId(invoiceNumber),
           expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
@@ -449,17 +450,10 @@ export async function POST(
             ...(customerPhone ? { contact: customerPhone } : {}),
           };
         }
-        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-          method: "POST",
-          headers: { Authorization: `Basic ${rzpAuth}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (rzpRes.ok) {
-          const linkData = await rzpRes.json() as { id: string; short_url: string };
-          rzpLinkId = linkData.id;
-          rzpLinkUrl = linkData.short_url;
-        } else {
-          console.error("[upload-gst-invoice] Razorpay link failed:", await rzpRes.text());
+        const link = await createOrRecoverGstLink({ rzpAuth, payload, logTag: "upload-gst-invoice" });
+        if (link) {
+          rzpLinkId = link.id;
+          rzpLinkUrl = link.url;
         }
       } catch (err) {
         console.error("[upload-gst-invoice] Razorpay link threw:", err);
@@ -479,6 +473,10 @@ export async function POST(
       console.error("[upload-gst-invoice] PDF download for attachment failed (non-blocking):", err);
     }
 
+    // No new link: the email still carries the one already on the statement
+    // rather than going out with nothing to click.
+    const emailLinkUrl = rzpLinkUrl ?? statement.razorpay_payment_link_url ?? null;
+
     const nowIso = new Date().toISOString();
     const nowYmd = nowIso.slice(0, 10);
 
@@ -488,9 +486,12 @@ export async function POST(
     // gates it on reminder_count, so a stale count behind a fresh due date
     // reads as "stage already sent" for every rung already fired and the
     // statement stops being chased until days-overdue catches back up.
+    // The link columns are only written when a link was obtained: a failed
+    // attempt used to overwrite a stored link with null.
     await adminSupabase.from("billing_statements").update({
-      razorpay_payment_link_id: rzpLinkId,
-      razorpay_payment_link_url: rzpLinkUrl,
+      ...(rzpLinkId && rzpLinkUrl
+        ? { razorpay_payment_link_id: rzpLinkId, razorpay_payment_link_url: rzpLinkUrl }
+        : {}),
       due_date: nowYmd,
       reminder_count: 0,
       last_reminder_sent_at: null,
@@ -524,15 +525,15 @@ export async function POST(
               <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${invoiceDateFormatted}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${amountFormatted}</td></tr>
             </table>
-            ${rzpLinkUrl ? `
+            ${emailLinkUrl ? `
             <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
             <table style="width:100%;border-collapse:collapse;font-size:13px;">
               <tr><td style="padding:4px 0;color:#666;">Bank Transfer</td><td style="padding:4px 0;">${COMPANY_BANK_DETAILS.accountName}<br/>${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}<br/>A/C: ${COMPANY_BANK_DETAILS.accountNumber} | IFSC: ${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
               ${upiId ? `<tr><td style="padding:4px 0;color:#666;">UPI</td><td style="padding:4px 0;">${upiId}</td></tr>` : ""}
-              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${rzpLinkUrl}" style="color:#015E65;font-weight:bold;">${rzpLinkUrl}</a></td></tr>
+              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${emailLinkUrl}" style="color:#015E65;font-weight:bold;">${emailLinkUrl}</a></td></tr>
             </table>
             <div style="text-align:center;margin:24px 0;">
-              <a href="${rzpLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
+              <a href="${emailLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
             </div>
             ` : ""}
             <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
