@@ -29,6 +29,10 @@ import {
   type RenewalDeskTab,
 } from "@/lib/vo-renewal-desk";
 import { toast } from "sonner";
+import { CircleHelp } from "lucide-react";
+import { RenewalWalkthrough } from "@/components/cases/renewal-walkthrough";
+import { useGuidanceProgress } from "@/lib/guidance-progress-client";
+import { WALKTHROUGH_KEY } from "@/lib/vo-renewal-learning";
 import { nextStepFor, needsRole, type RenewalJourney } from "@/lib/vo-renewal-journey";
 import { RenewalTermHint } from "@/components/cases/renewal-guidance";
 import type { RenewalTerm } from "@/lib/vo-renewal-guidance";
@@ -119,6 +123,15 @@ export default function RenewalsDeskPage() {
   const [payer, setPayer] = useState<PayerFilter>("all");
   const [role, setRole] = useState<string | null>(null);
   const [needsMe, setNeedsMe] = useState(false);
+  const { progress, loaded: progressLoaded, record } = useGuidanceProgress();
+  // Shown once per person; the ? button brings it back.
+  const [tourReopened, setTourReopened] = useState(false);
+  const tourSeen = (progress[WALKTHROUGH_KEY]?.times_completed ?? 0) > 0;
+  const showTour = tourReopened || (progressLoaded && !tourSeen);
+  const closeTour = () => {
+    if (!tourSeen) record(WALKTHROUGH_KEY, "completed");
+    setTourReopened(false);
+  };
 
   useEffect(() => {
     fetch("/api/me")
@@ -174,7 +187,18 @@ export default function RenewalsDeskPage() {
 
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Virtual office renewals</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-bold">
+            Virtual office renewals
+            <button
+              type="button"
+              onClick={() => setTourReopened(true)}
+              aria-label="How renewals work"
+              title="How renewals work"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <CircleHelp className="h-5 w-5" />
+            </button>
+          </h1>
           <p className="text-sm text-muted-foreground">
             Every live case appears here {RENEWAL_DESK_WINDOW_DAYS} days before its end date and stays until it is renewed or closed.
           </p>
@@ -210,6 +234,8 @@ export default function RenewalsDeskPage() {
           </Button>
         </div>
       </div>
+
+      {showTour && <RenewalWalkthrough role={role} onClose={closeTour} />}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {RENEWAL_DESK_TABS.map((t) => (

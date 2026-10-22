@@ -16,6 +16,8 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BlockerList, RenewalTermHint } from "@/components/cases/renewal-guidance";
 import { partnerConfirmAfter, partnerConfirmBlockers } from "@/lib/vo-renewal-guidance";
+import { reportGuidance } from "@/lib/guidance-progress-client";
+import { progressKeyFor } from "@/lib/vo-renewal-learning";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -142,13 +144,15 @@ export function PartnerRenewalDialog({
         }),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Could not record the confirmation"); return; }
+      if (!res.ok) { reportGuidance(progressKeyFor("partner"), "blocked"); toast.error(json.error || "Could not record the confirmation"); return; }
+      reportGuidance(progressKeyFor("partner"), "completed");
       if (json.data.rolled) toast.success(partnerConfirmAfter({ rolled: true, termStart: offer.term.start }));
       else if (json.data.warning) toast.warning(json.data.warning);
       else toast.success(partnerConfirmAfter({ rolled: false, termStart: offer.term.start }));
       onDone();
       onClose();
     } catch {
+      reportGuidance(progressKeyFor("partner"), "blocked");
       toast.error("Could not record the confirmation");
     } finally {
       setSubmitting(false);

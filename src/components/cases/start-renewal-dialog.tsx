@@ -30,6 +30,8 @@ import {
 import { VO_PURPOSE_LABELS } from "@/lib/constants";
 import { BlockerList, RenewalTermHint } from "@/components/cases/renewal-guidance";
 import { startRenewalAfter, startRenewalBlockers } from "@/lib/vo-renewal-guidance";
+import { reportGuidance } from "@/lib/guidance-progress-client";
+import { progressKeyFor } from "@/lib/vo-renewal-learning";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   RENEWAL_DURATIONS,
@@ -203,7 +205,7 @@ export function StartRenewalDialog({
         }),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Could not start the renewal"); return; }
+      if (!res.ok) { reportGuidance(progressKeyFor("start"), "blocked"); toast.error(json.error || "Could not start the renewal"); return; }
       const r = json.data as Result;
       setResult(r);
       const after = startRenewalAfter({
@@ -214,8 +216,10 @@ export function StartRenewalDialog({
       });
       if (after.kind === "warning") toast.warning(after.message);
       else toast.success(after.message);
+      reportGuidance(progressKeyFor("start"), "completed");
       onStarted();
     } catch {
+      reportGuidance(progressKeyFor("start"), "blocked");
       toast.error("Could not start the renewal");
     } finally {
       setSubmitting(false);

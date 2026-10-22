@@ -1,6 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useGuidanceProgress } from "@/lib/guidance-progress-client";
+import {
+  FADE_AFTER_COMPLETIONS,
+  guidanceDetail,
+  progressKeyFor,
+  shortHintFor,
+  type GuidanceProgress,
+} from "@/lib/vo-renewal-learning";
 import Link from "next/link";
 import { ArrowRight, Check, Clock, Lock, PartyPopper } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -67,13 +75,25 @@ export function RenewalJourneyView({
   journey,
   role,
   handlers,
+  progress = {},
 }: {
   journey: RenewalJourney;
   role: string | null;
   handlers: RenewalJourneyHandlers;
+  /** This person's progress by step; with none, every explanation is the long one. */
+  progress?: Record<string, GuidanceProgress>;
 }) {
   const view = nextStepFor(journey, role);
   const step = view?.step;
+  const [expanded, setExpanded] = useState(false);
+
+  // The explanation fades with practice: one line once the person has done this
+  // step a few times, the full text again if they have been blocked on it.
+  const shortHint = step ? shortHintFor(step.key) : undefined;
+  const stepProgress = step ? progress[progressKeyFor(step.key)] : undefined;
+  const practised = !!shortHint && guidanceDetail(stepProgress) === "short";
+  const showShort = practised && !expanded;
+  const canCollapse = !!shortHint && (stepProgress?.times_completed ?? 0) >= FADE_AFTER_COMPLETIONS && expanded;
 
   const run = (action: RenewalAction) => {
     if (action === "start_renewal") handlers.onStartRenewal?.();
@@ -156,7 +176,21 @@ export function RenewalJourneyView({
                   {step.label}
                   {step.detail && <span className="ml-2 text-xs font-normal text-muted-foreground">{step.detail}</span>}
                 </div>
-                {step.hint && <div className="text-xs text-muted-foreground">{step.hint}</div>}
+                {(showShort ? shortHint : step.hint) && (
+                  <div className="text-xs text-muted-foreground">
+                    {showShort ? shortHint : step.hint}
+                    {showShort && (
+                      <button type="button" onClick={() => setExpanded(true)} className="ml-2 text-blue-700 hover:underline">
+                        Show more
+                      </button>
+                    )}
+                    {canCollapse && (
+                      <button type="button" onClick={() => setExpanded(false)} className="ml-2 text-blue-700 hover:underline">
+                        Show less
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {step.action && view.mine && canClick(step.action) && (
                 <Button size="sm" onClick={() => run(step.action!)}>
@@ -180,6 +214,7 @@ export function RenewalJourneyView({
 export function RenewalJourneyPanel({ caseId, ...handlers }: { caseId: string } & RenewalJourneyHandlers) {
   const [journey, setJourney] = useState<RenewalJourney | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const { progress } = useGuidanceProgress();
 
   useEffect(() => {
     let live = true;
@@ -201,5 +236,5 @@ export function RenewalJourneyPanel({ caseId, ...handlers }: { caseId: string } 
   }, [caseId]);
 
   if (!journey) return null;
-  return <RenewalJourneyView journey={journey} role={role} handlers={handlers} />;
+  return <RenewalJourneyView journey={journey} role={role} handlers={handlers} progress={progress} />;
 }

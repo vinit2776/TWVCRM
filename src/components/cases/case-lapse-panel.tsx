@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { BlockerList } from "@/components/cases/renewal-guidance";
 import { lapseDecisionAfter, lapseDecisionBlockers } from "@/lib/vo-renewal-guidance";
+import { reportGuidance } from "@/lib/guidance-progress-client";
+import { progressKeyFor } from "@/lib/vo-renewal-learning";
 import { FileText, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -140,6 +142,7 @@ export function CaseLapsePanel({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to record the decision");
+      reportGuidance(progressKeyFor("lapse"), "completed");
       toast.success(lapseDecisionAfter(choice, choice === "more_time" ? until : undefined));
       setChoice(null);
       setReason("");
@@ -147,6 +150,7 @@ export function CaseLapsePanel({
       await load();
       onChanged?.();
     } catch (err) {
+      reportGuidance(progressKeyFor("lapse"), "blocked");
       toast.error(err instanceof Error ? err.message : "Failed to record the decision");
     } finally {
       setSaving(false);
