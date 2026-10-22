@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { unsupportedTerms } from "./unsupported-terms";
+import { modelAdditions } from "./supported-items";
 
 // Drafts a customer-specific contract clause and independently verifies it.
 // Unlike the internal-note check this FAILS CLOSED: a clause that was not
@@ -68,7 +69,7 @@ Use "questions" (non-empty) and an empty clause_text when you cannot draft safel
 
 const RELAXED_DRAFT_ADDENDUM = `
 
-RELAXED MODE: the author has chosen to skip clarifying questions, so do NOT return questions. Take the most reasonable reading of the request and, where a detail is missing, fill the gap with short, standard, balanced wording. The rule against adding terms is lifted for this draft on one condition: list every term you added that the author did not state in "added" (each under 12 words), so the approver can check it. Meaning must still match the request exactly, and nothing may conflict with the contract facts or fixed clauses.`;
+RELAXED MODE: the author has chosen to skip clarifying questions, so do NOT return questions. Take the most reasonable reading of the request and, where a detail is missing, fill the gap with short, standard, balanced wording. The rule against adding terms is lifted for this draft on one condition: list every term you added that has no basis anywhere in the request (including the author's answers) in "added", so the approver can check it. Restating or rephrasing something the author said, and routine wording such as "during the Term" or "the Member shall", is NOT an addition. Write each item as a plain phrase under 12 words with no commentary, at most 4 items. Meaning must still match the request exactly, and nothing may conflict with the contract facts or fixed clauses.`;
 
 const draftSystem = (relaxed?: boolean) => (relaxed ? DRAFT_SYSTEM + RELAXED_DRAFT_ADDENDUM : DRAFT_SYSTEM);
 
@@ -76,7 +77,7 @@ const VERIFY_SYSTEM = `You are a meticulous contract reviewer checking a drafted
 
 Check every item:
 1. Meaning preserved: every figure, date, scope and party matches the request; nothing reversed or softened.
-2. Nothing beyond the request. Go through the clause one sentence at a time and find what in the request supports it. Any new obligation, limit, condition, deadline, booking or transfer rule, number or remedy is an addition, even a sensible one. Payment, billing, invoicing, due dates, time limits, notice periods and rates are additions unless the author stated them. List each in both "problems" and "unlisted_additions".
+2. Nothing beyond the request. Go through the clause one sentence at a time and find what in the request supports it. Any new obligation, limit, condition, deadline, booking or transfer rule, number or remedy is an addition, even a sensible one. Payment, billing, invoicing, due dates, time limits, notice periods and rates are additions unless the author stated them. List each in both "problems" and "unlisted_additions". Restating or rephrasing something the author said (including their answers), and routine wording such as "during the Term", is NOT an addition. Write each item as a plain phrase under 12 words with no commentary.
 3. No conflict with the contract facts or the fixed clause topics (payment, use of premises, termination, liability, governing law, deposit, lock-in, notice).
 4. Unambiguous, enforceable wording; no one-sided surprise for either party.
 5. Numbered and titled as instructed (or carrying no number or title when none was given).
@@ -86,7 +87,7 @@ Respond with ONLY JSON: {"ok": boolean, "problems": string[], "unlisted_addition
 
 const RELAXED_VERIFY_NOTE = `
 
-RELAXED MODE: the author allowed the drafter to fill small gaps. Do NOT count additions as problems; list each new commitment in "unlisted_additions" only, so the approver sees it. Everything else still applies: a changed meaning, a conflict with the contract facts or fixed clauses, or ambiguous wording is a problem.`;
+RELAXED MODE: the author allowed the drafter to fill small gaps. Do NOT count additions as problems; list each new commitment that has no basis in the request in "unlisted_additions" only (plain phrases under 12 words, no commentary, never something the author said), so the approver sees it. Everything else still applies: a changed meaning, a conflict with the contract facts or fixed clauses, or ambiguous wording is a problem.`;
 
 function extractJson<T>(raw: string): T {
   const match = raw.match(/\{[\s\S]*\}/);
@@ -162,7 +163,7 @@ export async function draftSpecialClause(input: DraftInput, call: ModelCall = an
     kept = strArr(drafted.kept);
     // Backstop that does not rely on the model: payment/billing/timing wording the author never used.
     const request = [input.intent, input.feedback].filter(Boolean).join("\n");
-    const draftExtras = [...strArr(drafted.added), ...unsupportedTerms(text, request)];
+    const draftExtras = [...modelAdditions(strArr(drafted.added), request), ...unsupportedTerms(text, request)];
     // Relaxed mode discloses additions to the approver instead of removing them.
     const disclosed: string[] = input.relaxed ? [...draftExtras] : [];
     restated = typeof drafted.restated_intent === "string" ? drafted.restated_intent : input.intent;
@@ -183,7 +184,7 @@ export async function draftSpecialClause(input: DraftInput, call: ModelCall = an
     if (typeof verdict.ok !== "boolean") throw new SpecialClauseAiError("The reviewer returned no verdict");
 
     const found = strArr(verdict.problems);
-    const unlisted = strArr(verdict.unlisted_additions);
+    const unlisted = modelAdditions(strArr(verdict.unlisted_additions), request);
 
     if (verdict.ok && found.length === 0 && (input.relaxed || unlisted.length === 0)) {
       return {
