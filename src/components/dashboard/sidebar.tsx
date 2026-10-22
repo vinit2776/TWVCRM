@@ -257,6 +257,7 @@ const navSections: NavSection[] = [
       { href: "/admin/user-locations",             label: "User Locations",          icon: UsersRound,    roles: ["admin", "manager"] },
       { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
       { href: "/admin/electricity-billing-profiles", label: "Electricity Profiles",  icon: Zap,            roles: ["admin", "manager"] },
+      { href: "/admin/customer-value",             label: "Customer Value",          icon: TrendingUp,     roles: ["admin"] },
       { href: "/admin/cost-parameters",             label: "Value Cost Settings",    icon: Calculator,     roles: ["admin"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
       // "Tally Sync" nav entry intentionally hidden — the automated bridge-sync

@@ -230,9 +230,13 @@ export async function dispatchTallyInvoice(
 
     const now = new Date().toISOString();
     let emailedSuccessfully = false;
+    let emailError: string | null = null;
     if (customerEmail) {
       try {
-        await resend.emails.send({
+        // The mailer returns failures as { error } rather than throwing, so the
+        // result has to be checked — ignoring it marked failed sends as emailed.
+        const sendResult = await resend.emails.send({
+          patient: true,
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
@@ -241,9 +245,11 @@ export async function dispatchTallyInvoice(
           html: emailHtml,
           attachments: [{ filename: `Invoice-${ack.invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
         });
+        if (sendResult.error) throw new Error(sendResult.error.message);
         emailedSuccessfully = true;
       } catch (err) {
         console.error("[dispatch-tally] Email failed:", err);
+        emailError = err instanceof Error ? err.message : String(err);
       }
     }
 
@@ -268,6 +274,26 @@ export async function dispatchTallyInvoice(
       // Gate close failed — log loudly. We'll return ok:false so the caller knows.
       console.error("[dispatch-tally] CRITICAL: D3 gate close failed:", gateErr.message, gateErr);
       return { ok: false, error: `D3 gate update failed: ${gateErr.message}` };
+    }
+
+    // The gate above stays closed (a retry loop would re-send on every run), so
+    // a failed email must be recorded where staff can see it, not just in the log.
+    if (customerEmail && emailError) {
+      await supabase.from("audit_trail").insert({
+        entity_type: "billing_statement",
+        entity_id: billingStatementId,
+        action: "email_failed",
+        performed_by: null,
+        changes: { error: emailError, recipient: customerEmail, trigger: "tally_dispatch" },
+      });
+      await supabase.from("billing_send_log").insert({
+        billing_statement_id: billingStatementId,
+        send_type: "gst_invoice",
+        recipient: customerEmail,
+        status: "failed",
+        error: emailError,
+        triggered_by: "cron",
+      });
     }
 
     // ── WhatsApp (fire-and-forget) ───────────────────────────────────────────
