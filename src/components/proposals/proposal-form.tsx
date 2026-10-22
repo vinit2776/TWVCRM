@@ -76,6 +76,7 @@ export function ProposalForm({
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
+  const [escalationSplit, setEscalationSplit] = useState(false);
   const [taxPercentage, setTaxPercentage] = useState(18);
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [validUntil, setValidUntil] = useState("");
@@ -128,9 +129,11 @@ export function ProposalForm({
               unit: i.unit,
               unit_price: i.unit_price,
               total: i.total,
+              ...(i.escalates !== undefined ? { escalates: i.escalates } : {}),
             }))
           : [{ description: "", quantity: 1, unit_price: 0, total: 0 }]
       );
+      setEscalationSplit((initialProposal.items ?? []).some((i) => i.escalates !== undefined));
       setTaxPercentage(initialProposal.tax_percentage ?? 18);
       setDiscountPercentage(initialProposal.discount_percentage ?? 0);
       setValidUntil(initialProposal.valid_until ? initialProposal.valid_until.slice(0, 10) : "");
@@ -202,6 +205,7 @@ export function ProposalForm({
     setTitle("");
     setDescription("");
     setItems([{ description: "", quantity: 1, unit_price: 0, total: 0 }]);
+    setEscalationSplit(false);
     setTaxPercentage(18);
     setDiscountPercentage(0);
     setValidUntil("");
@@ -312,6 +316,7 @@ export function ProposalForm({
         unit: item.unit || undefined,
         unit_price: item.unit_price,
         total: Math.max(1, item.quantity) * item.unit_price,
+        ...(escalationSplit && item.escalates !== undefined ? { escalates: item.escalates } : {}),
       })),
       tax_percentage: taxPercentage,
       discount_percentage: discountPercentage,
@@ -405,6 +410,8 @@ export function ProposalForm({
               onTaxChange={setTaxPercentage}
               discountPercentage={discountPercentage}
               onDiscountChange={setDiscountPercentage}
+              escalationSplit={escalationSplit}
+              onEscalationSplitChange={setEscalationSplit}
             />
           </div>
 

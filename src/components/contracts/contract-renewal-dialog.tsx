@@ -225,7 +225,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
             <div className="grid grid-cols-3 gap-3 items-end">
               <div className="space-y-1">
-                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
+                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line marked Escalates. Lines marked fixed (such as maintenance) stay as they are. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
                 <Input
                   type="number"
                   min={0}
@@ -261,6 +261,34 @@ export function ContractRenewalDialog({
                 <p className="font-mono font-semibold">{formatCurrency(previewTotal)}</p>
               </div>
             </div>
+            {(contract.items || []).some((i) => i.escalates === false) && (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b">
+                    <th className="py-1 text-left font-normal">Item</th>
+                    <th className="py-1 text-right font-normal">Current</th>
+                    <th className="py-1 text-right font-normal">Renewal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(contract.items || []).map((item, idx) => {
+                    const q = item.quantity === (contract.seats || 1) ? seats : item.quantity;
+                    return (
+                      <tr key={idx} className="border-b last:border-b-0">
+                        <td className="py-1">
+                          {item.description}
+                          {item.escalates === false && <span className="ml-1 text-amber-700">(fixed)</span>}
+                        </td>
+                        <td className="py-1 text-right font-mono">{formatCurrency(item.unit_price * item.quantity)}</td>
+                        <td className="py-1 text-right font-mono">
+                          {formatCurrency(escalateUnitPrice(item, multiplier, roundToRupee) * q)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
             <p className="text-[10px] text-muted-foreground text-center">
               Rates rounded to nearest ₹1 for cleaner invoicing
             </p>
