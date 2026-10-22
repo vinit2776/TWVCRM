@@ -91,9 +91,52 @@ export async function completeVoRenewal(
   const billedFee = Number(stmt.fixed_amount);
   const newRate = !isPostpaid && Number.isFinite(billedFee) && billedFee > 0 ? billedFee : null;
 
-  // Each term is its own case. Claiming the current one as renewed first is
-  // what makes this safe to run twice: two settlements racing each other,
-  // or a replayed webhook, find it already renewed and stop.
+  const outcome = await rollCaseToNextTerm(supabase, {
+    caseRow,
+    term,
+    months,
+    rate: newRate,
+    statementId,
+    performedBy,
+    auditAction: "renewal_payment_received",
+    auditSource: source,
+  });
+  return outcome.outcome;
+}
+
+/**
+ * Marks `caseRow` renewed and creates the next term as its own case.
+ *
+ * Shared by a paid renewal (completeVoRenewal) and a postpaid partner's
+ * confirmed continuation (no bill, no payment). Claiming the current case as
+ * renewed first is what makes it safe to run twice: two settlements racing
+ * each other, a replayed webhook or a double click find it already renewed and
+ * stop.
+ */
+export async function rollCaseToNextTerm(
+  supabase: SupabaseClient,
+  params: {
+    caseRow: Record<string, unknown> & { id: string; end_date: string; status: string };
+    term: { start: string; end: string };
+    months: number;
+    /** The new case's rate; null keeps the current one. */
+    rate: number | null;
+    /** The paid renewal bill to move onto the new case; null when there is none. */
+    statementId: string | null;
+    performedBy: string | null;
+    /** The audit action recorded on the renewed case. */
+    auditAction: string;
+    auditSource: string;
+    /** Keep this activation time on the new case (partner cases are billed by it). */
+    activatedAt?: string | null;
+    /** Extra audit detail, e.g. who confirmed and how. */
+    auditExtra?: Record<string, { old: unknown; new: unknown }>;
+  },
+): Promise<{ outcome: "renewed"; successorId: string } | { outcome: "already_renewed" }> {
+  const { caseRow, term, months, rate, statementId, performedBy, auditAction, auditSource, activatedAt, auditExtra } = params;
+  const oldEnd = String(caseRow.end_date).slice(0, 10);
+  const currentTenure = Number(caseRow.tenure_months) || 12;
+
   const now = new Date().toISOString();
   const { data: claimed, error: claimError } = await supabase
     .from("cases")
@@ -103,17 +146,17 @@ export async function completeVoRenewal(
     .select("id");
 
   if (claimError) throw new Error(`Failed to renew case ${caseRow.id}: ${claimError.message}`);
-  if (!claimed || claimed.length === 0) return "already_renewed";
+  if (!claimed || claimed.length === 0) return { outcome: "already_renewed" };
 
   const { aggregator: _aggregator, ...previous } = caseRow as Record<string, unknown>;
   const { data: successor, error: insertError } = await supabase
     .from("cases")
-    .insert(successorCaseRow(previous, { term, months, rate: newRate, statementId, performedBy, now }))
+    .insert(successorCaseRow(previous, { term, months, rate, statementId, performedBy, now, activatedAt }))
     .select("id, case_number")
     .single();
 
   if (insertError || !successor) {
-    // Put the current term back so the payment can complete it on a retry.
+    // Put the current term back so the renewal can complete on a retry.
     await supabase
       .from("cases")
       .update({ status: caseRow.status, renewed_at: caseRow.renewed_at ?? null })
@@ -124,11 +167,13 @@ export async function completeVoRenewal(
 
   // The paid bill is for the new term, so it belongs on the new case: its
   // Billing tab shows it as paid, and its agreement can execute against it.
-  const { error: moveError } = await supabase
-    .from("billing_statements")
-    .update({ case_id: successorId })
-    .eq("id", statementId);
-  if (moveError) console.error(`[vo-renewal] could not move bill ${statementId} to case ${successorId}:`, moveError);
+  if (statementId) {
+    const { error: moveError } = await supabase
+      .from("billing_statements")
+      .update({ case_id: successorId })
+      .eq("id", statementId);
+    if (moveError) console.error(`[vo-renewal] could not move bill ${statementId} to case ${successorId}:`, moveError);
+  }
 
   // KYC and compliance carry over as they stood; documents are only asked for
   // again if staff change something on the new case.
@@ -151,11 +196,12 @@ export async function completeVoRenewal(
     action: "update",
     performedBy: performedBy ?? "system",
     changes: {
-      action: { old: null, new: "renewal_payment_received" },
-      source: { old: null, new: source },
+      action: { old: null, new: auditAction },
+      source: { old: null, new: auditSource },
       billing_statement_id: { old: null, new: statementId },
       status: { old: caseRow.status, new: "renewed" },
       renewed_to_case_id: { old: null, new: successorId },
+      ...(auditExtra ?? {}),
     },
   });
   logAudit(supabase, {
@@ -170,11 +216,11 @@ export async function completeVoRenewal(
       start_date: { old: caseRow.start_date, new: term.start },
       end_date: { old: oldEnd, new: term.end },
       ...(months !== currentTenure ? { tenure_months: { old: currentTenure, new: months } } : {}),
-      ...(newRate !== null && newRate !== Number(caseRow.rate)
-        ? { rate: { old: caseRow.rate, new: newRate } }
+      ...(rate !== null && rate !== Number(caseRow.rate)
+        ? { rate: { old: caseRow.rate, new: rate } }
         : {}),
     },
   });
 
-  return "renewed";
+  return { outcome: "renewed", successorId };
 }

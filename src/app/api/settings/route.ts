@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { evictCachedSetting } from "@/lib/app-settings-cache";
 import { MAX_RENEWAL_GRACE_DAYS, VO_RENEWAL_GRACE_DAYS_SETTING } from "@/lib/vo-renewal-desk";
+import { RENEWAL_CRON_MODES, VO_RENEWAL_CRON_MODE_SETTING } from "@/lib/vo-renewal-reminders";
 
 // GET — fetch all settings (admin only, secrets masked)
 export async function GET() {
@@ -70,6 +71,7 @@ export async function PATCH(request: NextRequest) {
     "facility_category_autofill_enabled",
     "leegality_enabled",
     VO_RENEWAL_GRACE_DAYS_SETTING,
+    VO_RENEWAL_CRON_MODE_SETTING,
   ];
 
   const updates: { key: string; value: string }[] = [];
@@ -90,6 +92,11 @@ export async function PATCH(request: NextRequest) {
         { status: 400 },
       );
     }
+  }
+
+  const cronMode = updates.find((u) => u.key === VO_RENEWAL_CRON_MODE_SETTING);
+  if (cronMode && !(RENEWAL_CRON_MODES as readonly string[]).includes(cronMode.value)) {
+    return NextResponse.json({ error: "Renewal reminders must be off, dry_run or live" }, { status: 400 });
   }
 
   if (updates.length === 0) {

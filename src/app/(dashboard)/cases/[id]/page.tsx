@@ -50,6 +50,7 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { caseDisplayName } from "@/lib/case-workflow";
 import { caseExpiry } from "@/lib/case-expiry";
 import { StartRenewalDialog } from "@/components/cases/start-renewal-dialog";
+import { PartnerRenewalDialog } from "@/components/cases/partner-renewal-dialog";
 import {
   Dialog,
   DialogContent,
@@ -79,6 +80,7 @@ export default function CaseDetailPage({
   const [deleting, setDeleting] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const [startRenewalOpen, setStartRenewalOpen] = useState(searchParams.get("start_renewal") === "1");
+  const [partnerRenewalOpen, setPartnerRenewalOpen] = useState(searchParams.get("partner_renewal") === "1");
   // Bumped after a renewal starts so the Renewal tab reloads its history.
   const [renewalVersion, setRenewalVersion] = useState(0);
 
@@ -122,7 +124,9 @@ export default function CaseDetailPage({
     );
   }
 
-  const aggregator = caseData.aggregator as { id: string; name: string; company_name?: string; code: string } | null;
+  const aggregator = caseData.aggregator as { id: string; name: string; company_name?: string; code: string; billing_method?: string | null } | null;
+  // A postpaid partner is invoiced monthly, so its renewal is a confirmation, not a bill.
+  const isPostpaidPartner = !!aggregator && aggregator.billing_method === "postpaid";
 
   return (
     <div className="space-y-6">
@@ -224,15 +228,25 @@ export default function CaseDetailPage({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setStartRenewalOpen(true)}
+              onClick={() => (isPostpaidPartner ? setPartnerRenewalOpen(true) : setStartRenewalOpen(true))}
               className="bg-background"
             >
               <Send className="mr-1.5 h-3.5 w-3.5" />
-              Start renewal
+              {isPostpaidPartner ? "Confirm partner renewal" : "Start renewal"}
             </Button>
           </div>
         );
       })()}
+
+      <PartnerRenewalDialog
+        caseId={id}
+        open={partnerRenewalOpen}
+        onClose={() => setPartnerRenewalOpen(false)}
+        onDone={() => {
+          refetch();
+          setRenewalVersion((v) => v + 1);
+        }}
+      />
 
       <StartRenewalDialog
         caseId={id}
