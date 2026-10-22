@@ -148,6 +148,7 @@ export async function POST(
 
   const nowIso = new Date().toISOString();
   const sendResult = await resend.emails.send({
+    patient: true,
     from: EMAIL_FROM,
     to: toList,
     cc: additionalCc.length > 0 ? additionalCc : undefined,

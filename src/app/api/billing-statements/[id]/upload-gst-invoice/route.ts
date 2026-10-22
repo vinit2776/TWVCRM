@@ -557,6 +557,7 @@ export async function POST(
       try {
         const safeFilename = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
         const sendResult = await resend.emails.send({
+          patient: true,
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],

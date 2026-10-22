@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 import { formatCurrency } from "@/lib/utils";
+import { wasCustomerEmailed } from "@/lib/gst-invoice-delivery";
 import {
   isHandoffV2Enabled,
   setHandoffState,
@@ -61,7 +62,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, tally_delivered_at,
-      gst_invoice_number, statement_number, razorpay_payment_link_url,
+      emailed_at, gst_invoice_sent_at, gst_invoice_number, statement_number, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, billing_mode,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -93,6 +94,8 @@ export async function POST(
     payment_status: string;
     handoff_state: string | null;
     tally_delivered_at: string | null;
+    emailed_at: string | null;
+    gst_invoice_sent_at: string | null;
     gst_invoice_number: string | null;
     statement_number: string | null;
     razorpay_payment_link_url: string | null;
@@ -180,7 +183,24 @@ export async function POST(
   const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead ?? leadFromVoSource(statement);
 
   // D3 (deliver once): refuse to re-dispatch a statement that's already gone out.
-  if (statement.tally_delivered_at) {
+  // tally_delivered_at alone isn't proof of that: the Tally bridge stamps it when it
+  // acknowledges an invoice, even if the customer email failed. Only treat the
+  // statement as delivered when an email actually went (a 'sent' log row or an
+  // emailed timestamp); otherwise fall through and send it.
+  const customerWasEmailed = statement.tally_delivered_at
+    ? wasCustomerEmailed({
+        emailed_at: statement.emailed_at,
+        gst_invoice_sent_at: statement.gst_invoice_sent_at,
+        sentLogCount:
+          (await adminClient
+            .from("billing_send_log")
+            .select("id", { count: "exact", head: true })
+            .eq("billing_statement_id", statement.id)
+            .eq("send_type", "gst_invoice")
+            .eq("status", "sent")).count ?? 0,
+      })
+    : false;
+  if (statement.tally_delivered_at && customerWasEmailed) {
     // Auto-heal: if the email was sent but the state transition failed (step 3
     // succeeded, step 4 threw), the row is stuck in ready_to_send with
     // tally_delivered_at already set. Fix the state so the UI switches to
@@ -344,6 +364,7 @@ export async function POST(
   const filename = `${invoiceNumber.replace(/[^\w-]/g, "_")}.pdf`;
 
   const result = await resend.emails.send({
+    patient: true,
     from: EMAIL_FROM,
     to: allRecipients,
     bcc: [EMAIL_REPLY_TO],
