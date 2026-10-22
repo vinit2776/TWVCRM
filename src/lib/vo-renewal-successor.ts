@@ -61,23 +61,31 @@ export function successorCaseRow(
     term: { start: string; end: string };
     months: number;
     rate: number | null;
-    statementId: string;
+    /** The paid renewal bill, or null for a partner case continued without one. */
+    statementId: string | null;
     performedBy: string | null;
     now: string;
+    /** Carry the previous term's activation time instead of `now` (see below). */
+    activatedAt?: string | null;
   },
 ): CaseRow {
   const row: CaseRow = { ...previous };
   for (const column of TERM_ONLY_COLUMNS) delete row[column];
 
-  const previousMetadata =
+  const { lapse_decisions: _lapseDecisions, partner_renewal: _partnerRenewal, ...previousMetadata } =
     previous.metadata && typeof previous.metadata === "object" && !Array.isArray(previous.metadata)
       ? (previous.metadata as Record<string, unknown>)
-      : {};
+      : ({} as Record<string, unknown>);
+  // Term-only: the previous term's lapse decisions (and their "more time"
+  // allowance) and a partner's confirmation of that term stay with it.
 
   return {
     ...row,
     status: "active",
-    activated_at: params.now,
+    // Postpaid partner invoices prorate a case from the month its activated_at
+    // falls in, so a continuation must keep the original activation or the
+    // partner would be billed part of the month it was confirmed in.
+    activated_at: params.activatedAt ?? params.now,
     is_renewal: true,
     // One level deep: every term points at the first case, which is how the
     // subscription history finds them all.

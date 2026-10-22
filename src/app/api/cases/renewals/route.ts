@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { renewalRate } from "@/lib/vo-renewal";
 import { renewalRecipients } from "@/lib/renewal-recipients";
+import { partnerRenewalRecord } from "@/lib/vo-renewal-reminders";
 import {
   RENEWAL_DESK_STATUSES,
   RENEWAL_DESK_WINDOW_DAYS,
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
     .select(
       `id, case_number, status, purpose, client_name, client_company_name, client_email, client_phone,
        aggregator_id, bill_to, end_date, tenure_months, rate, renewal_escalation_percentage,
-       renewal_notices_enabled, renewal_grace_ends_at,
+       renewal_notices_enabled, renewal_grace_ends_at, metadata,
        aggregator:aggregators!cases_aggregator_id_fkey(id, name, billing_method, primary_email, primary_phone),
        location:locations!cases_location_id_fkey(id, name)`
     )
@@ -161,6 +162,12 @@ export async function GET(request: NextRequest) {
             payment_status: bill.payment_status,
             created_at: bill.created_at,
           }
+        : null,
+      partner_confirmation: isPostpaid
+        ? (() => {
+            const rec = partnerRenewalRecord(c.metadata);
+            return rec ? { term_start: rec.term_start, new_rate: rec.new_rate } : null;
+          })()
         : null,
       reminders: reminders.get(c.id as string) ?? { count: 0, last_sent_at: null },
       draft_documents: drafts.get(c.id as string) ?? 0,

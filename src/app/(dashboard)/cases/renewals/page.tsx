@@ -47,6 +47,7 @@ interface DeskRow {
   escalation_percentage: number | null;
   notices_enabled: boolean | null;
   open_bill: { id: string; statement_number: string | null; total_amount: number; payment_status: string; created_at: string } | null;
+  partner_confirmation: { term_start: string; new_rate: number } | null;
   reminders: { count: number; last_sent_at: string | null };
   draft_documents: number;
 }
@@ -63,7 +64,11 @@ const PILL: Record<string, string> = {
 
 /** One line on where the renewal stands, from data the desk already has. */
 function whereItStands(r: DeskRow): { text: string; tone: keyof typeof PILL } {
-  if (r.payer.postpaid) return { text: "Partner billed monthly", tone: "blue" };
+  if (r.payer.postpaid) {
+    return r.partner_confirmation
+      ? { text: `Partner confirmed · new term ${formatDate(r.partner_confirmation.term_start)}`, tone: "blue" }
+      : { text: "Partner not yet confirmed", tone: "amber" };
+  }
   if (r.payer.blocked) return { text: "Billing party not set", tone: "amber" };
   switch (r.tab) {
     case "coming":
@@ -282,13 +287,16 @@ export default function RenewalsDeskPage() {
                         // A case with no renewal bill yet gets Start renewal; one
                         // already offered is followed up from the case.
                         const canStart = !r.payer.postpaid && !r.payer.blocked && !r.open_bill && r.tab !== "lapsed";
+                        // A postpaid partner has no bill: staff confirm with the partner instead.
+                        const canConfirmPartner = r.payer.postpaid && !r.partner_confirmation && r.tab !== "lapsed";
+                        const primary = canStart || canConfirmPartner;
                         return (
-                          <Button asChild variant={canStart ? "default" : "outline"} size="sm">
+                          <Button asChild variant={primary ? "default" : "outline"} size="sm">
                             <Link
-                              href={`/cases/${r.id}?tab=renewal${canStart ? "&start_renewal=1" : ""}`}
+                              href={`/cases/${r.id}?tab=renewal${canStart ? "&start_renewal=1" : ""}${canConfirmPartner ? "&partner_renewal=1" : ""}`}
                               onClick={() => pushTrailEntry({ href: `/cases/${r.id}`, label: r.client })}
                             >
-                              {canStart ? "Start renewal" : r.tab === "lapsed" ? "Decide" : "Open case"}
+                              {canStart ? "Start renewal" : canConfirmPartner ? "Confirm partner" : r.tab === "lapsed" ? "Decide" : "Open case"}
                             </Link>
                           </Button>
                         );
@@ -303,7 +311,7 @@ export default function RenewalsDeskPage() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Nothing on this screen contacts a customer. Start renewal sends only on the channels you tick, and recording a payment and starting discontinuation are always a person&apos;s click.
+        Nothing on this screen contacts a customer. Start renewal sends only on the channels you tick, and recording a payment and starting discontinuation are always a person&apos;s click. The daily reminder job only follows up renewals started here, on cases switched on from their Renewal tab.
       </p>
     </div>
   );

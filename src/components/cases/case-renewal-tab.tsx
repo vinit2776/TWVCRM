@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { CaseLapsePanel } from "@/components/cases/case-lapse-panel";
+import { CaseRemindersCard } from "@/components/cases/case-reminders-card";
 
 interface Reminder {
   id: string;
@@ -127,6 +128,7 @@ export function CaseRenewalTab({
   return (
     <div className="space-y-6">
       <CaseLapsePanel caseId={caseId} onStartRenewal={onStartRenewal} onChanged={onChanged} />
+      <CaseRemindersCard caseId={caseId} onChanged={onChanged} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>

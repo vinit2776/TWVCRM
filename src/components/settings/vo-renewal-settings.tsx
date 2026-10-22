@@ -8,6 +8,16 @@ import { Label } from "@/components/ui/label";
 import { CalendarClock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  RENEWAL_CRON_MODES,
+  RENEWAL_CRON_MODE_LABELS,
+  VO_RENEWAL_CRON_MODE_SETTING,
+  parseCronMode,
+  type RenewalCronMode,
+} from "@/lib/vo-renewal-reminders";
+import {
   DEFAULT_RENEWAL_GRACE_DAYS,
   MAX_RENEWAL_GRACE_DAYS,
   VO_RENEWAL_GRACE_DAYS_SETTING,
@@ -18,6 +28,7 @@ export function VoRenewalSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [graceDays, setGraceDays] = useState(String(DEFAULT_RENEWAL_GRACE_DAYS));
+  const [cronMode, setCronMode] = useState<RenewalCronMode>("dry_run");
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -28,6 +39,7 @@ export function VoRenewalSettings() {
           const data = json.data as { key: string; value: string }[];
           const row = data.find((s) => s.key === VO_RENEWAL_GRACE_DAYS_SETTING);
           setGraceDays(String(parseGraceDays(row?.value)));
+          setCronMode(parseCronMode(data.find((s) => s.key === VO_RENEWAL_CRON_MODE_SETTING)?.value));
         }
       } catch { /* ignore */ }
       setLoading(false);
@@ -44,7 +56,10 @@ export function VoRenewalSettings() {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [VO_RENEWAL_GRACE_DAYS_SETTING]: String(n) }),
+        body: JSON.stringify({
+          [VO_RENEWAL_GRACE_DAYS_SETTING]: String(n),
+          [VO_RENEWAL_CRON_MODE_SETTING]: cronMode,
+        }),
       });
       if (res.ok) {
         toast.success("Virtual office settings saved");
@@ -99,6 +114,33 @@ export function VoRenewalSettings() {
           </p>
           {!valid && (
             <p className="text-xs text-destructive">Enter a whole number from 1 to {MAX_RENEWAL_GRACE_DAYS}.</p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="vo-cron-mode" className="text-sm font-medium">Automatic renewal reminders</Label>
+          <Select value={cronMode} onValueChange={(v) => setCronMode(parseCronMode(v))}>
+            <SelectTrigger id="vo-cron-mode" className="w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RENEWAL_CRON_MODES.map((m) => (
+                <SelectItem key={m} value={m}>{RENEWAL_CRON_MODE_LABELS[m]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground max-w-md">
+            A daily job (9:30 AM IST) that chases renewals someone has already started with Start
+            renewal, on the same payment link, and moves unpaid ones through grace to lapsed. It
+            never starts a renewal itself, and it only looks at cases switched on one at a time
+            from the case&apos;s Renewal tab. In <strong>dry run</strong> it emails admin and accounts
+            what it would do and sends nothing to customers. Keep it there for a cycle before
+            choosing Live.
+          </p>
+          {cronMode === "live" && (
+            <p className="text-xs text-amber-700">
+              Live: reminders, final notices and lapses will go out for every opted-in case.
+            </p>
           )}
         </div>
 
