@@ -82,6 +82,12 @@ export interface ScoringSettings {
    * only one pillar in four. Null (the default) means no cap.
    */
   weakPillarCap: { below: number; maxTier: Tier } | null;
+  /**
+   * A month's margin only counts toward the margin metric when at least this share of that month's
+   * variable cost rests on measured data. Without it, a month where most costs are simply unknown
+   * (no rates entered yet) would show a flattering margin and rank customers on noise.
+   */
+  marginMinConfidence: number;
 }
 
 export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
@@ -142,6 +148,7 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
   severeOverdueDays: 30,
   severeOverdueCap: 30,
   weakPillarCap: null,
+  marginMinConfidence: 0.5,
 };
 
 /** Metric keys that belong to each pillar, in display order. */
@@ -181,6 +188,7 @@ export function validateSettings(s: ScoringSettings): string[] {
   if (!(s.minPillarConfidence > 0 && s.minPillarConfidence <= 1)) problems.push("Minimum pillar confidence must be between 0 and 1");
   if (!(s.minConfidentPillars >= 1 && s.minConfidentPillars <= PILLAR_KEYS.length)) problems.push("Confident pillars needed must be between 1 and 4");
   if (!(s.minTenureMonths >= 0)) problems.push("Minimum tenure cannot be negative");
+  if (!(s.marginMinConfidence >= 0 && s.marginMinConfidence <= 1)) problems.push("Margin minimum confidence must be between 0 and 1");
   if (!positive(s.trendThreshold)) problems.push("Trend threshold must be above zero");
 
   for (const [key, w] of Object.entries(s.metricWeights)) {
