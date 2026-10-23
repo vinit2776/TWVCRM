@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { createUnifiVoucher, getUnifiHotspotSsid } from "@/lib/unifi";
+import { createUnifiVoucher, getUnifiHotspotSsid, siteConfigForLocationId } from "@/lib/unifi";
 import { issueAdhocRuijieVoucher, siteConfigFromLocation as ruijieSiteConfigFromLocation } from "@/lib/ruijie";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { createNotification } from "@/lib/in-app-notifications";
@@ -93,13 +93,15 @@ export async function PATCH(
   if (approvalReq.entity_type === "unifi_adhoc_voucher" && action === "approve") {
     const meta = approvalReq.metadata || {};
     try {
+      // The request was raised for one location; issue on that location's console.
+      const siteCfg = await siteConfigForLocationId(String(meta.location_id || approvalReq.entity_id));
       const [voucherResult, ssid] = await Promise.all([
         createUnifiVoucher({
           durationMinutes: Number(meta.duration_minutes),
           note:            String(meta.note || `adhoc_${approvalReq.id}`),
           quota:           Number(meta.quota ?? 1),
-        }),
-        getUnifiHotspotSsid(),
+        }, siteCfg),
+        getUnifiHotspotSsid(siteCfg),
       ]);
       const { id: unifiId, code } = voucherResult;
 

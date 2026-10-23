@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { createUnifiVoucher } from "@/lib/unifi";
+import { createUnifiVoucher, siteConfigFromLocation } from "@/lib/unifi";
 import { logAudit } from "@/lib/audit";
 import { zodErrorResponse } from "@/lib/validations";
 
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
   const { data: location } = await admin
     .from("locations")
-    .select("id, name, unifi_site_id")
+    .select("id, name, unifi_site_id, unifi_console_id")
     .eq("id", body.location_id)
     .single();
 
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
         durationMinutes: body.duration_minutes,
         note:            body.note,
         quota:           body.quota,
-      });
+      }, siteConfigFromLocation(location));
 
       logAudit(admin, {
         entityType: "location",

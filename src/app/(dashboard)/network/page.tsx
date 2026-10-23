@@ -1770,6 +1770,10 @@ function ConfigurationTab({
   onSaved: (updated: Partial<Location> & { id: string }) => void;
 }) {
   const [saving, setSaving] = useState(false);
+  // The API key is write-only: it is never sent back to the browser, so the
+  // UI only knows whether this console already has one stored.
+  const [apiKey, setApiKey] = useState("");
+  const [hasOwnKey, setHasOwnKey] = useState(false);
   const [form, setForm] = useState({
     wifi_voucher_mode: location?.wifi_voucher_mode ?? "repository",
     unifi_site_id: location?.unifi_site_id ?? "",
@@ -1784,9 +1788,37 @@ function ConfigurationTab({
     });
   }, [locationId, location]);
 
+  useEffect(() => {
+    setApiKey("");
+    setHasOwnKey(false);
+    let cancelled = false;
+    fetch(`/api/locations/${locationId}/unifi-connection`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!cancelled && j?.data) setHasOwnKey(Boolean(j.data.has_own_key)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [locationId]);
+
   async function handleSave() {
     setSaving(true);
     try {
+      // A typed key goes through the connection route, which checks it against
+      // the console before saving it (encrypted) and the location fields.
+      if (apiKey.trim() && form.unifi_console_id.trim()) {
+        const keyRes = await fetch(`/api/locations/${locationId}/unifi-connection`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            console_id: form.unifi_console_id.trim(),
+            site_id: form.unifi_site_id.trim() || "default",
+            api_key: apiKey.trim(),
+          }),
+        });
+        const keyJson = await keyRes.json();
+        if (!keyRes.ok) throw new Error(keyJson.error || "Could not verify the API key");
+        setApiKey("");
+        setHasOwnKey(true);
+      }
       const res = await fetch(`/api/locations/${locationId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1870,6 +1902,26 @@ function ConfigurationTab({
             <p className="text-xs text-muted-foreground">
               Cloud console UUID from the UniFi API URL. Leave blank to use the{" "}
               <code className="bg-muted px-1 rounded text-[11px]">UNIFI_CONSOLE_ID</code> env var.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              UniFi API Key
+              {hasOwnKey && <span className="ml-2 text-xs font-normal text-green-600">● saved for this console</span>}
+            </label>
+            <Input
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={hasOwnKey ? "Leave blank to keep the saved key" : "Paste the key from unifi.ui.com → API"}
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              Account-level key from the UniFi account that owns this console. It is checked
+              against the console, then stored encrypted and never shown again. Leave blank
+              (with none saved) to use the shared key that Nungambakkam uses.
             </p>
           </div>
 

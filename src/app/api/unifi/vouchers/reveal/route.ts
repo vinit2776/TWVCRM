@@ -7,7 +7,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigForLocationId } from "@/lib/unifi";
 import { logAudit } from "@/lib/audit";
 import type { UnifiVoucher } from "@/lib/unifi";
 
@@ -20,21 +20,24 @@ export async function POST(request: NextRequest) {
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  let body: { voucher_id?: string };
+  let body: { voucher_id?: string; location_id?: string };
   try {
-    body = await request.json() as { voucher_id?: string };
+    body = await request.json() as { voucher_id?: string; location_id?: string };
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { voucher_id } = body;
+  const { voucher_id, location_id } = body;
+  if (!location_id || typeof location_id !== "string") {
+    return NextResponse.json({ error: "location_id is required" }, { status: 400 });
+  }
   if (!voucher_id || typeof voucher_id !== "string") {
     return NextResponse.json({ error: "voucher_id is required" }, { status: 400 });
   }
 
   try {
     // Use cached list (60s TTL) — avoids re-fetching 19 MB on every reveal
-    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60);
+    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60, await siteConfigForLocationId(location_id));
     const voucher = vouchers.find((v) => v._id === voucher_id);
 
     if (!voucher) {
