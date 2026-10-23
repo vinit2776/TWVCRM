@@ -81,7 +81,9 @@ export async function GET(request: NextRequest) {
       tx_bytes_r: wan?.["tx_bytes-r"] ?? 0,
       rx_bytes_r: wan?.["rx_bytes-r"] ?? 0,
       latency: wan?.latency ?? 0,
-      uptime: wan?.uptime ?? 0,
+      // null (not 0) when the console reports no uptime, so the screen can say "unknown"
+      // instead of "Up 0d 0h", which reads like an outage.
+      uptime: wan?.uptime ?? null,
       isp_name: wan?.isp_name ?? null,
       xput_up: wan?.xput_up ?? 0,
       xput_down: wan?.xput_down ?? 0,
