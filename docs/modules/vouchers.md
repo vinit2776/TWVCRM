@@ -616,7 +616,7 @@ Response includes:
 | Dependency | Type | Notes |
 |------------|------|-------|
 | `UNIFI_API_KEY` | Env var | Shared key; consoles with a row in `unifi_console_credentials` use their own |
-| `unifi_console_credentials` | DB table | Encrypted per-console API key (migration 00635); service-role only |
+| `unifi_console_credentials` | DB table | Encrypted per-console API key (migration 00638); service-role only |
 | `UNIFI_CONSOLE_ID` | Env var | Default console; overridden by `locations.unifi_console_id` |
 | `UNIFI_SITE_NAME` | Env var | Default site slug; overridden by `locations.unifi_site_id` |
 | `RESEND_API_KEY` | Env var | Required for voucher email delivery |
