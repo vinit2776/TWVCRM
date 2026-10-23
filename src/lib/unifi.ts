@@ -11,6 +11,8 @@
  * Pass those values here via `siteConfigFromLocation()`.
  */
 import { unstable_cache } from "next/cache";
+import { createAdminClient } from "@/lib/supabase/server";
+import { decryptSecret } from "@/lib/crypto-secrets";
 
 // ─── Env-var defaults (Nungambakkam LGF / single-controller setup) ────────────
 
@@ -43,6 +45,24 @@ export function siteConfigFromLocation(location: {
   };
 }
 
+/**
+ * Resolve a location id to its UniFi site config (service-role lookup, for
+ * flows that only hold a location id — cron jobs, revocations, approvals).
+ * Without this, a call that omits the config silently targets the default
+ * (Nungambakkam) console, which is wrong for every other site.
+ */
+export async function siteConfigForLocationId(
+  locationId: string | null | undefined
+): Promise<SiteConfig | undefined> {
+  if (!locationId) return undefined;
+  const { data } = await createAdminClient()
+    .from("locations")
+    .select("unifi_console_id, unifi_site_id")
+    .eq("id", locationId)
+    .maybeSingle();
+  return data ? siteConfigFromLocation(data) : undefined;
+}
+
 function resolveBaseUrl(cfg?: SiteConfig): string {
   const consoleId = cfg?.consoleId || DEFAULT_CONSOLE_ID;
   const siteName  = cfg?.siteName  || DEFAULT_SITE_NAME;
@@ -51,10 +71,50 @@ function resolveBaseUrl(cfg?: SiteConfig): string {
       "[unifi] No console ID configured. Set UNIFI_CONSOLE_ID env var or location.unifi_console_id."
     );
   }
-  if (!UNIFI_API_KEY) {
-    throw new Error("[unifi] UNIFI_API_KEY env var is not set.");
-  }
   return `${UNIFI_API_ROOT}/${consoleId}/proxy/network/api/s/${siteName}`;
+}
+
+// ─── API key resolution ───────────────────────────────────────────────────────
+
+const KEY_CACHE_TTL_MS = 5 * 60_000;
+const keyCache = new Map<string, { key: string | null; at: number }>();
+
+/** Drop a console's cached key — call after saving or removing it. */
+export function clearUnifiKeyCache(consoleId?: string) {
+  if (consoleId) keyCache.delete(consoleId);
+  else keyCache.clear();
+}
+
+/**
+ * The API key for a console: its own encrypted key in unifi_console_credentials
+ * if one is stored, else the shared UNIFI_API_KEY env var. The cloud connector
+ * only proxies for the console's owning account, so consoles owned by a
+ * different UniFi account need their own key.
+ */
+async function resolveApiKey(consoleId: string): Promise<string> {
+  const hit = keyCache.get(consoleId);
+  let stored: string | null;
+  if (hit && Date.now() - hit.at < KEY_CACHE_TTL_MS) {
+    stored = hit.key;
+  } else {
+    const { data, error } = await createAdminClient()
+      .from("unifi_console_credentials")
+      .select("api_key_encrypted")
+      .eq("console_id", consoleId)
+      .maybeSingle();
+    if (error) {
+      // A failed lookup must not silently fall through to a key that belongs
+      // to a different account — fail loudly instead.
+      throw new Error(`[unifi] could not look up the API key for this console: ${error.message}`);
+    }
+    stored = data?.api_key_encrypted ? decryptSecret(data.api_key_encrypted) : null;
+    keyCache.set(consoleId, { key: stored, at: Date.now() });
+  }
+  const key = stored || UNIFI_API_KEY;
+  if (!key) {
+    throw new Error("[unifi] No API key for this console. Save one for the location or set UNIFI_API_KEY.");
+  }
+  return key;
 }
 
 // ─── Core request helpers ─────────────────────────────────────────────────────
@@ -65,11 +125,12 @@ export async function unifiRequest<T>(
   cfg?: SiteConfig
 ): Promise<T> {
   const baseUrl = resolveBaseUrl(cfg);
+  const apiKey = await resolveApiKey(cfg?.consoleId || DEFAULT_CONSOLE_ID);
   const url = `${baseUrl}${path}`;
   const res = await fetch(url, {
     ...options,
     headers: {
-      "X-API-KEY":     UNIFI_API_KEY,
+      "X-API-KEY":     apiKey,
       "Accept":        "application/json",
       "Content-Type":  "application/json",
       ...(options.headers || {}),
@@ -202,7 +263,15 @@ export async function createUnifiVoucher(
  */
 export async function revokeUnifiVoucher(voucherId: string, cfg?: SiteConfig): Promise<void> {
   try {
-    await unifiRequest(`/stat/voucher/${voucherId}`, { method: "DELETE" }, cfg);
+    // `DELETE /stat/voucher/{id}` is not a delete — UniFi answers 200 with the
+    // voucher list and removes nothing, so revocations silently did nothing.
+    // The hotspot command is what actually deletes (verified on the Perungudi
+    // console: the voucher is gone from /stat/voucher afterwards).
+    await unifiRequest(
+      "/cmd/hotspot",
+      { method: "POST", body: JSON.stringify({ cmd: "delete-voucher", _id: voucherId }) },
+      cfg
+    );
   } catch (err) {
     console.warn(`[unifi] revokeVoucher ${voucherId} failed (may already be deleted):`, err);
   }

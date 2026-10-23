@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { revokeUnifiVoucher } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForLocationId } from "@/lib/unifi";
 import { setUserActive } from "@/lib/cosec";
 import { withCronHealth } from "@/lib/cron-ping";
 
@@ -122,9 +122,10 @@ async function handler(request: NextRequest) {
   }
 
   for (const contract of toExpire) {
-    // 1. UniFi API voucher (Nungambakkam LGF — direct device revocation)
+    // 1. UniFi API voucher (direct device revocation on the contract's own site console)
     if (contract.unifi_voucher_id) {
-      revokeUnifiVoucher(contract.unifi_voucher_id)
+      siteConfigForLocationId(contract.location_id)
+        .then((cfg) => revokeUnifiVoucher(contract.unifi_voucher_id as string, cfg))
         .catch((err) => console.error(`[contract-expiry] UniFi revoke failed for ${contract.contract_number}:`, err));
     }
 

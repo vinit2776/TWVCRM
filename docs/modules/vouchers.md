@@ -388,9 +388,20 @@ All create/update/delete actions call `logAudit()`. Reveal of a UniFi voucher co
 ### Environment variables
 | Var | Purpose |
 |-----|---------|
-| `UNIFI_API_KEY` | Bearer key for the UniFi cloud API |
+| `UNIFI_API_KEY` | Shared UniFi cloud API key — used for any console that has no key of its own (Nungambakkam) |
+| `ASSET_CREDENTIALS_ENCRYPTION_KEY` | Also encrypts per-console UniFi keys (see below) |
 | `UNIFI_CONSOLE_ID` | Default console UUID (used if `locations.unifi_console_id` is null) |
 | `UNIFI_SITE_NAME` | Default site slug, e.g. `"default"` |
+
+### Adding another UniFi site (e.g. Perungudi)
+
+The cloud connector (`api.ui.com`) only proxies for the console's **owner**, so a console owned by a different UniFi account than Nungambakkam needs its own key:
+
+1. Signed in to unifi.ui.com as the account that owns the console: **API** (account-level page, not the console's `…/unifi-api/network` page) → Create New API Key → scopes Site Manager + UniFi Applications → Network. The key is shown once.
+2. CRM → **Network → Configuration** (admin) → pick the location, set mode *UniFi Live API*, site `default`, the console ID, and paste the key. Saving checks the key against the console first, then stores it AES-GCM encrypted in `unifi_console_credentials` (service-role only; never sent back to the browser).
+3. No key entered and none stored = the shared `UNIFI_API_KEY` is used.
+
+`unifiRequest` resolves the key per console (`resolveApiKey`, 5-minute cache). Any code holding only a location id uses `siteConfigForLocationId()` — **never call a UniFi helper without a site config**, or it silently targets the default (Nungambakkam) console. Revocation is `POST /cmd/hotspot {cmd:"delete-voucher"}`; `DELETE /stat/voucher/{id}` does nothing.
 
 ### API base URL
 ```
@@ -604,7 +615,8 @@ Response includes:
 
 | Dependency | Type | Notes |
 |------------|------|-------|
-| `UNIFI_API_KEY` | Env var | Required for any UniFi API operation |
+| `UNIFI_API_KEY` | Env var | Shared key; consoles with a row in `unifi_console_credentials` use their own |
+| `unifi_console_credentials` | DB table | Encrypted per-console API key (migration 00638); service-role only |
 | `UNIFI_CONSOLE_ID` | Env var | Default console; overridden by `locations.unifi_console_id` |
 | `UNIFI_SITE_NAME` | Env var | Default site slug; overridden by `locations.unifi_site_id` |
 | `RESEND_API_KEY` | Env var | Required for voucher email delivery |
