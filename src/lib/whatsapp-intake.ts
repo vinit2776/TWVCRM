@@ -13,6 +13,7 @@ import { appendToOpenComplaint, recordComplaint, recordRequest } from "@/lib/com
 import { classifyRequest, REQUEST_OWNER_ROLE, REQUEST_TYPE_LABEL, type RequestType } from "@/lib/requests";
 import { notifyRoles } from "@/lib/notify-roles";
 import { PLACEHOLDER_NAME, extractNameFromMessage, isPlaceholderName } from "@/lib/whatsapp-names";
+import { applyLabelToKind, labelSilencesNumber, shouldHoldForReview } from "@/lib/whatsapp-gate";
 
 const MAX_STORED_MESSAGES = 20;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
@@ -69,7 +70,9 @@ export interface IntakeResult {
   leadId: string | null;
   reference: string | null;
   kind: TriageKind;
-  outcome: "new_lead" | "re_enquiry" | "joined_open_enquiry" | "logged_only" | "spam_stashed" | "request_recorded";
+  outcome:
+    | "new_lead" | "re_enquiry" | "joined_open_enquiry" | "logged_only" | "spam_stashed" | "request_recorded"
+    | "held_for_review" | "labelled_ignored";
 }
 
 interface StoredMessage { at: string; text: string }
@@ -108,6 +111,18 @@ export async function ingestInboundWhatsAppEnquiry(
 
   const now = new Date();
   const message: StoredMessage = { at: now.toISOString(), text: input.messageBody.slice(0, 1000) };
+
+  // Who is writing comes first. A number someone labelled (or that belongs to a user or employee)
+  // is stored but never opens an enquiry. An ad reply always counts, whoever sends it. If the
+  // lookup is not there yet (code deployed before migration 00637) the gate is simply skipped.
+  let senderLabel: string | null = null;
+  if (!input.referral) {
+    const { data: labelData, error: labelErr } = await supabase.rpc("whatsapp_sender_label", { p_last10: num.last10 });
+    if (!labelErr) senderLabel = (labelData as string | null) ?? null;
+    if (labelSilencesNumber(senderLabel)) {
+      return { leadId: input.matchedLeadId, reference: null, kind: "customer", outcome: "labelled_ignored" };
+    }
+  }
 
   // What we already know about this sender.
   let leadStatus: string | null = null;
@@ -194,7 +209,7 @@ export async function ingestInboundWhatsAppEnquiry(
   if (triage.kind === "spam" && input.matchedLeadId && leadStatus !== "junk" && leadStatus !== "new") {
     triage = { kind: "unsure", reason: "looks like spam but the number belongs to a known lead", source: triage.source };
   }
-  const kind = triage.kind;
+  const kind = applyLabelToKind(senderLabel, triage.kind);
 
   // A customer asking for something we can name (invoice copy, a pass, more seats, a contract
   // question, a booking change) is a request with an owner. Anything unnamed stays a note.
@@ -249,6 +264,21 @@ export async function ingestInboundWhatsAppEnquiry(
     return { leadId, reference: (stashed?.reference as string | undefined) ?? null, kind, outcome: "spam_stashed" };
   }
 
+  // An unknown number whose message we cannot judge is held in the Possible leads tray: no lead,
+  // no enquiry, nothing lost. A clear enquiry from a number already held opens it with the
+  // earlier messages attached.
+  if (!input.matchedLeadId) {
+    if (shouldHoldForReview({ kind, knownSender: false, hasReferral: !!input.referral })) {
+      await holdPossibleLead(supabase, num, input, message, triage.reason);
+      return { leadId: null, reference: null, kind, outcome: "held_for_review" };
+    }
+    const held = await findHeld(supabase, num.last10);
+    if (held) {
+      const opened = await openEnquiryFromHeld(supabase, held, { extra: message });
+      if (opened) return { leadId: opened.leadId, reference: opened.reference, kind, outcome: "new_lead" };
+    }
+  }
+
   // A real (or possibly real) enquiry: same conversation, or a new one?
   if (grouping === "join" && latest) {
     // They may introduce themselves in a later message ("by the way, I'm Rahul").
@@ -295,6 +325,106 @@ export async function ingestInboundWhatsAppEnquiry(
   });
 
   return { leadId, reference, kind, outcome: isReEnquiry ? "re_enquiry" : "new_lead" };
+}
+
+export type HeldLead = {
+  id: string;
+  last10: string;
+  mobile: string;
+  profile_name: string | null;
+  message_type: string;
+  messages: StoredMessage[];
+};
+
+const HELD_COLUMNS = "id, last10, mobile, profile_name, message_type, messages";
+
+async function findHeld(supabase: SupabaseClient, last10: string): Promise<HeldLead | null> {
+  const { data } = await supabase
+    .from("whatsapp_possible_leads")
+    .select(HELD_COLUMNS)
+    .eq("last10", last10)
+    .eq("status", "held")
+    .maybeSingle();
+  return (data as HeldLead | null) ?? null;
+}
+
+/** Adds the message to this number's held conversation, starting one if there is none. */
+async function holdPossibleLead(
+  supabase: SupabaseClient,
+  num: { mobile: string; last10: string },
+  input: InboundWhatsAppEnquiry,
+  message: StoredMessage,
+  reason: string
+) {
+  const existing = await findHeld(supabase, num.last10);
+  if (existing) {
+    const messages = [...existing.messages, message].slice(-MAX_STORED_MESSAGES);
+    await supabase.from("whatsapp_possible_leads").update({ messages, last_at: message.at }).eq("id", existing.id);
+    return;
+  }
+  const { error } = await supabase.from("whatsapp_possible_leads").insert({
+    last10: num.last10,
+    mobile: num.mobile,
+    profile_name: input.profileName,
+    message_type: input.messageType,
+    messages: [message],
+    reason,
+    first_at: message.at,
+    last_at: message.at,
+  });
+  if (error) console.error("[whatsapp-intake] could not hold possible lead:", error.message);
+}
+
+/** Turns a held conversation into a real enquiry (a person tapped "It's a lead", or a clear
+ *  enquiry arrived from the same number). Returns null if someone else decided it first. */
+export async function openEnquiryFromHeld(
+  supabase: SupabaseClient,
+  held: HeldLead,
+  opts: { extra?: StoredMessage; decidedBy?: string | null } = {}
+): Promise<{ leadId: string; reference: string | null } | null> {
+  const { data: claimed } = await supabase
+    .from("whatsapp_possible_leads")
+    .update({ status: "promoted", decided_by: opts.decidedBy ?? null, decided_at: new Date().toISOString() })
+    .eq("id", held.id)
+    .eq("status", "held")
+    .select("id");
+  if (!claimed || claimed.length === 0) return null;
+
+  const messages = [...held.messages, ...(opts.extra ? [opts.extra] : [])].slice(-MAX_STORED_MESSAGES);
+  const firstText = messages[0]?.text ?? "";
+  // The number may have become a known lead while the message was held.
+  const { data: hit } = await supabase.rpc("find_lead_by_phone", { p_last10: held.last10 });
+  const existingLeadId = (hit as { lead_id: string }[] | null)?.[0]?.lead_id ?? null;
+  const leadId =
+    existingLeadId ??
+    (await createLead(
+      supabase,
+      { senderNumber: held.mobile, matchedLeadId: null, messageBody: firstText, messageType: held.message_type, profileName: held.profile_name },
+      held.mobile,
+      "new"
+    ));
+  if (!leadId) {
+    // Put it back so the message is not lost.
+    await supabase.from("whatsapp_possible_leads").update({ status: "held", decided_by: null, decided_at: null }).eq("id", held.id);
+    return null;
+  }
+  const displayName = held.profile_name ?? PLACEHOLDER_NAME;
+  const suggestedName = !held.profile_name ? extractNameFromMessage(messages.map((m) => m.text).join(" ")) : null;
+  const payload: Record<string, unknown> = { name: displayName, mobile: held.mobile, messages, message_type: held.message_type };
+  if (suggestedName) payload.suggested_name = suggestedName;
+  const { data: enquiry, error } = await supabase
+    .from("lead_enquiries")
+    .insert({ lead_id: leadId, source: "whatsapp", is_re_enquiry: !!existingLeadId, payload })
+    .select("reference")
+    .single();
+  if (error) console.error("[whatsapp-intake] could not record enquiry from held message:", error.message);
+  const reference = (enquiry?.reference as string | undefined) ?? null;
+  await supabase.from("whatsapp_possible_leads").update({ lead_id: leadId }).eq("id", held.id);
+  await alertStaff(supabase, {
+    leadId, reference, displayName, isReEnquiry: !!existingLeadId,
+    mobile: held.mobile, body: messages.map((m) => m.text).join(" / "),
+  });
+  return { leadId, reference };
 }
 
 async function createLead(
