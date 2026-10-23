@@ -26,6 +26,7 @@ import {
   Pencil,
   Stamp,
   CalendarPlus,
+  Scale,
   Minus,
   Plus,
   Link2,
@@ -100,6 +101,7 @@ import { ExitCard } from "@/components/contracts/exit/exit-card";
 import { useExit } from "@/components/contracts/exit/use-exit";
 import { EXIT_START_ROLES } from "@/lib/contract-exit";
 import { ContractExtendDialog } from "@/components/contracts/contract-extend-dialog";
+import { ContractPricingSplitDialog } from "@/components/contracts/contract-pricing-split-dialog";
 import { InvoiceCustomerWizard } from "@/components/contracts/invoice-customer-wizard";
 import { canUseInvoiceWizard } from "@/lib/invoice-wizard-availability";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
@@ -179,6 +181,7 @@ export default function ContractDetailPage({
   const [copiedLessee, setCopiedLessee] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
+  const [pricingSplitOpen, setPricingSplitOpen] = useState(false);
   const [invoiceWizardOpen, setInvoiceWizardOpen] = useState(false);
   const [addonOpenSignal, setAddonOpenSignal] = useState(0);
   const [depositOpenSignal, setDepositOpenSignal] = useState(0);
@@ -2196,6 +2199,13 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
+                {contract.status === "active" && userRole === "admin" && (
+                  <Button size="sm" variant="outline" className="w-full" onClick={() => setPricingSplitOpen(true)}>
+                    <Scale className="mr-1.5 h-3.5 w-3.5" />
+                    Edit pricing split
+                  </Button>
+                )}
+
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
                 {/* Role gate: admin, manager, sales_rep can renew/decline/extend */}
                 {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (() => {
@@ -3243,6 +3253,13 @@ export default function ContractDetailPage({
         onOpenAddon={() => setAddonOpenSignal((n) => n + 1)}
         onOpenDeposit={() => setDepositOpenSignal((n) => n + 1)}
         customerName={contract.lead ? (contract.lead.company || `${contract.lead.first_name} ${contract.lead.last_name}`) : null}
+      />
+
+      <ContractPricingSplitDialog
+        open={pricingSplitOpen}
+        onOpenChange={setPricingSplitOpen}
+        contract={contract}
+        onSuccess={() => fetchContract(false)}
       />
 
       {/* Extend Dialog */}
