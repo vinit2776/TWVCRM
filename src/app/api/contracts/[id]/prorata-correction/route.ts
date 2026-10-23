@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { computeProrataAmounts, prorataCorrectionBlocker } from "@/lib/prorata-correction";
+import { buildProrataLineItems, computeProrataAmounts, prorataCorrectionBlocker } from "@/lib/prorata-correction";
+import { fixedShareOfItems } from "@/lib/rent-maintenance-split";
 
 /**
  * Corrects a renewal's pro-rata statement to the contract's CURRENT rate, in
@@ -31,7 +32,7 @@ async function load(id: string) {
   const admin = createAdminClient();
   const { data: contract } = await admin
     .from("contracts")
-    .select("id, contract_number, start_date, subtotal, tax_percentage, prorata_billing_statement_id")
+    .select("id, contract_number, start_date, subtotal, items, tax_percentage, prorata_billing_statement_id")
     .eq("id", id)
     .single();
   if (!contract) return { error: NextResponse.json({ error: "Contract not found" }, { status: 404 }) };
@@ -66,7 +67,7 @@ async function load(id: string) {
     issuanceChannel: stmt.issuance_channel,
     handoffState: stmt.handoff_state,
     liveUploadsCount: liveUploadsCount ?? 0,
-    hasSingleProrataLine: lines.length === 1 && lines[0].type === "rent" && lines[0].items?.length === 1,
+    hasSingleProrataLine: lines.length === 1 && lines[0].type === "rent" && [1, 2].includes(lines[0].items?.length ?? 0),
   });
 
   const corrected = computeProrataAmounts({
@@ -123,17 +124,12 @@ export async function POST(request: NextRequest, { params }: Ctx) {
     );
   }
 
-  const oldLines = stmt.line_items as Array<{ items: Array<Record<string, unknown>> }>;
-  const newLines = [{
-    ...oldLines[0],
-    items: [{
-      ...oldLines[0].items[0],
-      unit_price: corrected.subtotal,
-      amount: corrected.subtotal,
-      monthly_rate: Number(contract.subtotal),
-    }],
-    subtotal: corrected.subtotal,
-  }];
+  const newLines = buildProrataLineItems({
+    startDate: contract.start_date,
+    prorataSubtotal: corrected.subtotal,
+    monthlySubtotal: Number(contract.subtotal),
+    fixedShare: fixedShareOfItems(contract.items),
+  });
 
   // Guarded on the values we validated so a concurrent change is not overwritten.
   const { data: updated, error } = await admin

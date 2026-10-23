@@ -25,6 +25,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { fixedShareOfItems, splitByShare } from "@/lib/rent-maintenance-split";
 import { logAudit } from "@/lib/audit";
 import { computePhaseBoundaries, daysBetweenInclusiveYmd, addDaysToYmd, formatDateRange, type PhaseBoundary } from "@/lib/rate-phase-dates";
 import { BILLING_CYCLE_MONTHS, USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS } from "@/lib/constants";
@@ -238,6 +239,7 @@ export type RenewalDraftPricing = {
   tax_percentage: number | null;
   phase_start_date: string | null;
   seats: number | null;
+  items?: Array<{ total: number; escalates?: boolean }> | null;
 };
 
 /**
@@ -258,7 +260,7 @@ async function fetchActiveRenewalDraftsByParentId(
 
   const { data } = await supabase
     .from("contracts")
-    .select("id, parent_contract_id, start_date, end_date, total_amount, subtotal, tax_percentage, phase_start_date, seats, renewal_sequence")
+    .select("id, parent_contract_id, start_date, end_date, total_amount, subtotal, tax_percentage, phase_start_date, seats, items, renewal_sequence")
     .in("parent_contract_id", parentIds)
     .neq("status", "rejected")
     .order("renewal_sequence", { ascending: false });
@@ -268,7 +270,7 @@ async function fetchActiveRenewalDraftsByParentId(
       map.set(row.parent_contract_id, {
         id: row.id, start_date: row.start_date, end_date: row.end_date,
         total_amount: row.total_amount, subtotal: row.subtotal, tax_percentage: row.tax_percentage,
-        phase_start_date: row.phase_start_date, seats: row.seats,
+        phase_start_date: row.phase_start_date, seats: row.seats, items: row.items ?? null,
       });
     }
   }
@@ -449,14 +451,15 @@ export function computeRenewalSplitRentSegments(
  * one — used when this call covers only one side (own or draft) of a
  * renewal split-month, so a lone partial segment doesn't read as a full month.
  */
-function buildSegmentedRentLineItems(
+export function buildSegmentedRentLineItems(
   segments: (RateSegment & { amount: number })[],
   fallbackSeats: number,
   allocations: SpaceAllocationDetail[],
   contractLocationName: string | null,
   billedMonthLabel: string,
   prepaidDaysInMonth: number,
-  forceRangeLabel: boolean = false
+  forceRangeLabel: boolean = false,
+  fixedShare: number = 0
 ): { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] {
   const multi = segments.length > 1 || forceRangeLabel;
   const anyProration = multi || (segments.length === 1 && segments[0].days < prepaidDaysInMonth);
@@ -464,7 +467,11 @@ function buildSegmentedRentLineItems(
   const out: { description: string; qty: number; unit_price: number; amount: number; monthly_rate?: number; days_used?: number; days_in_month?: number }[] = [];
   for (const seg of segments) {
     const label = multi ? formatDateRange(seg.start, seg.end) : billedMonthLabel;
-    const rawItems = buildRentLineItems(seg.amount, fallbackSeats, allocations, contractLocationName, label);
+    // A fixed component (maintenance) is carved out of the segment as its own
+    // line; rent + maintenance equal seg.amount exactly, so totals are unchanged.
+    const { rent: rentAmount, maintenance } = splitByShare(seg.amount, fixedShare);
+    const rentRate = maintenance > 0 ? seg.rate * (1 - fixedShare) : seg.rate;
+    const rawItems = buildRentLineItems(rentAmount, fallbackSeats, allocations, contractLocationName, label);
     for (const it of rawItems) {
       out.push({
         description: it.description,
@@ -472,7 +479,20 @@ function buildSegmentedRentLineItems(
         unit_price: it.seats ? it.amount / it.seats : it.amount,
         amount: it.amount,
         ...(anyProration ? {
-          monthly_rate: it.seats ? seg.rate / it.seats : seg.rate,
+          monthly_rate: it.seats ? rentRate / it.seats : rentRate,
+          days_used: seg.days,
+          days_in_month: prepaidDaysInMonth,
+        } : {}),
+      });
+    }
+    if (maintenance > 0) {
+      out.push({
+        description: `Maintenance | ${label}`,
+        qty: 1,
+        unit_price: maintenance,
+        amount: maintenance,
+        ...(anyProration ? {
+          monthly_rate: seg.rate * fixedShare,
           days_used: seg.days,
           days_in_month: prepaidDaysInMonth,
         } : {}),
@@ -727,7 +747,7 @@ export async function generateRentProformas(
     .select(`
       id, contract_number, title, status, total_amount, subtotal, tax_percentage,
       billing_cycle, start_date, end_date, next_billing_date, seats, phase_start_date,
-      location_id, lead_id, billing_mode, po_number,
+      location_id, lead_id, billing_mode, po_number, items,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress", "renewed"])
@@ -892,6 +912,14 @@ export async function generateRentProformas(
       const allocations = spaceAllocationsByContract.get(cid) ?? [];
       const contractLocationName = locationNamesByContract.get(cid) ?? null;
       const addons = addonsByContractId.get(cid) ?? null;
+      // Rent / maintenance split on the invoice lines. Phased rates carry one
+      // combined monthly_rate per phase, so a contract with phases is never split.
+      const ownFixedShare = ratePhasesByContract.get(cid)?.length
+        ? 0
+        : fixedShareOfItems(contract.items as Array<{ total: number; escalates?: boolean }> | null);
+      const draftFixedShare = renewalDraft && !ratePhasesByContract.get(renewalDraft.id)?.length
+        ? fixedShareOfItems(renewalDraft.items)
+        : 0;
 
       const rentLineItems: ReturnType<typeof buildSegmentedRentLineItems> = [];
       const addonLineItems: {
@@ -940,10 +968,10 @@ export async function generateRentProformas(
         const monthShort = monthLabelShort(w.month, w.year);
         rentLineItems.push(
           ...(split.ownSegments.length > 0
-            ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit)
+            ? buildSegmentedRentLineItems(split.ownSegments, ownSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit, ownFixedShare)
             : []),
           ...(split.draftSegments.length > 0
-            ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit)
+            ? buildSegmentedRentLineItems(split.draftSegments, draftSeatQty, allocations, contractLocationName, monthShort, w.days, split.isRenewalSplit, draftFixedShare)
             : []),
         );
 

@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
+import { buildProrataLineItems } from "@/lib/prorata-correction";
+import { fixedShareOfItems } from "@/lib/rent-maintenance-split";
 
 /**
  * POST /api/contracts/[id]/prorata-link
@@ -123,30 +125,12 @@ export async function POST(
   const sgstAmount = isInterstate ? 0 : taxAmount - halfTax;
   const igstAmount = isInterstate ? taxAmount : 0;
 
-  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const monthLabel = monthNames[startMonth];
-
-  const lineItems = [
-    {
-      type: "rent",
-      label: "Pro-Rata Workspace Fee",
-      items: [
-        {
-          description: `Pro-Rata Workspace Fee (${monthLabel} ${startDay}–${daysInMonth})`,
-          quantity: 1,
-          unit: "month",
-          unit_price: prorataSubtotal,
-          amount: prorataSubtotal,
-          // Persisted so the PDF breakdown reflects the rate actually charged at
-          // renewal time, even if the contract's rate later changes.
-          monthly_rate: monthlySubtotal,
-          days_used: prorataDays,
-          days_in_month: daysInMonth,
-        },
-      ],
-      subtotal: prorataSubtotal,
-    },
-  ];
+  const lineItems = buildProrataLineItems({
+    startDate: contract.start_date,
+    prorataSubtotal,
+    monthlySubtotal,
+    fixedShare: fixedShareOfItems(contract.items),
+  });
 
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 7);
