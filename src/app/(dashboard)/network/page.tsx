@@ -1,5 +1,6 @@
 "use client";
 
+import { internetState, INTERNET_STATE_LABEL, INTERNET_STATE_DOT, INTERNET_STATE_TEXT } from "@/lib/unifi-health";
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import {
@@ -344,7 +345,7 @@ function OverviewTab({ locationId }: { locationId: string }) {
   if (loading) return <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)}</div>;
   if (!data) return null;
 
-  const online = data.internet.status === "online";
+  const net = internetState(data.internet.status);
 
   return (
     <div className="space-y-4">
@@ -360,9 +361,9 @@ function OverviewTab({ locationId }: { locationId: string }) {
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2">
-              <span className={`inline-flex h-2.5 w-2.5 rounded-full ${online ? "bg-green-500" : "bg-red-500"}`} />
-              <span className={`text-lg font-bold ${online ? "text-green-700" : "text-red-600"}`}>
-                {online ? "Online" : "Degraded"}
+              <span className={`inline-flex h-2.5 w-2.5 rounded-full ${INTERNET_STATE_DOT[net]}`} />
+              <span className={`text-lg font-bold ${INTERNET_STATE_TEXT[net]}`}>
+                {INTERNET_STATE_LABEL[net]}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
