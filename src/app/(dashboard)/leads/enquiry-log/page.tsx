@@ -17,6 +17,7 @@ import { useCurrentUser } from "@/providers/current-user-provider";
 import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
 import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
 import { EnquiryContent } from "@/components/enquiries/enquiry-content";
+import { PossibleLeadsTray } from "@/components/enquiries/possible-leads-tray";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
   ENQUIRY_SOURCE_LABEL,
@@ -113,6 +114,8 @@ export default function EnquiryLogPage() {
           Campaign attribution and historical record of every enquiry from the public forms.
         </p>
       </div>
+
+      {!readOnly && <PossibleLeadsTray onChanged={load} />}
 
       {/* Summary tiles */}
       {summary && (
