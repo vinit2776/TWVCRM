@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
-import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,17 +11,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LocationSelector } from "@/components/shared/location-selector";
-import { formatDate } from "@/lib/utils";
 import { useCurrentUser } from "@/providers/current-user-provider";
-import { EnquiryActions, NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
-import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
-import { EnquiryContent } from "@/components/enquiries/enquiry-content";
+import { EnquiryLogRow } from "@/components/enquiries/enquiry-log-row";
 import { PossibleLeadsTray } from "@/components/enquiries/possible-leads-tray";
 import { ENQUIRY_VIEWER_ROLE } from "@/lib/restricted-roles";
 import {
-  ENQUIRY_SOURCE_LABEL,
-  enquiryOutcomeLabel,
-  enquiryStateLabel,
   toEnquiryItem,
   type EnquiryItem,
   type RawEnquiryRow,
@@ -38,14 +31,6 @@ type Summary = {
   spam?: number;
 };
 
-const OUTCOME_CLASS: Record<string, string> = {
-  converted: "bg-emerald-100 text-emerald-800",
-  not_interested: "bg-slate-100 text-slate-700",
-  no_response: "bg-amber-100 text-amber-800",
-  superseded: "bg-slate-50 text-slate-500 border border-dashed border-slate-300",
-  spam: "bg-red-50 text-red-700 border border-dashed border-red-200",
-};
-
 function defaultFromDate(): string {
   const d = new Date();
   d.setDate(d.getDate() - 30);
@@ -56,15 +41,7 @@ export default function EnquiryLogPage() {
   const { user } = useCurrentUser();
   // Read-only role: names aren't links into the lead record and there's no mobile column.
   const readOnly = user?.role === ENQUIRY_VIEWER_ROLE;
-  const columnCount = readOnly ? 7 : 9;
   const [rows, setRows] = useState<EnquiryItem[]>([]);
-  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
-  const toggleThread = (id: string) =>
-    setOpenThreads((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -194,138 +171,13 @@ export default function EnquiryLogPage() {
         </div>
       </Card>
 
-      {/* Table */}
+      {/* Rows: one line each; click a row for the conversation and every action */}
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 text-left">When</th>
-                <th className="px-3 py-2 text-left">Reference</th>
-                <th className="px-3 py-2 text-left">Name</th>
-                {!readOnly && <th className="px-3 py-2 text-left">Mobile</th>}
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                {!readOnly && <th className="px-3 py-2 text-left">Next step</th>}
-                <th className="px-3 py-2 text-left">Resolved by</th>
-                <th className="px-3 py-2 text-left">Resolved at</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr><td colSpan={columnCount} className="p-6 text-center text-muted-foreground">Loading…</td></tr>
-              )}
-              {!loading && rows.length === 0 && (
-                <tr><td colSpan={columnCount} className="p-6 text-center text-muted-foreground">No enquiries match these filters.</td></tr>
-              )}
-              {!loading &&
-                rows.map((row) => (
-                  <tr key={row.enquiryId} className="border-t hover:bg-muted/30">
-                    <td className="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">
-                      {formatDate(row.attentionResetAt)}
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">{row.reference}</td>
-                    <td className="px-3 py-2">
-                      {readOnly ? (
-                        <span className="font-medium">{row.name}</span>
-                      ) : (
-                        <Link href={`/leads/${row.leadId}`} className="font-medium hover:underline">
-                          {row.name}
-                        </Link>
-                      )}
-                      {!readOnly && (
-                        <span className="ml-1.5 align-middle">
-                          <EnquiryNameControl
-                            enquiryId={row.enquiryId}
-                            name={row.name}
-                            placeholder={row.namePlaceholder}
-                            suggestedName={row.suggestedName}
-                            onChanged={load}
-                          />
-                        </span>
-                      )}
-                      {row.isReEnquiry && (
-                        <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                          Re-enquiry
-                        </span>
-                      )}
-                      {!readOnly && row.message && (
-                        <div className="mt-0.5 max-w-sm">
-                          {openThreads.has(row.enquiryId) ? (
-                            <EnquiryContent messages={row.messages ?? []} details={row.details ?? []} visible={20} />
-                          ) : (
-                            <p className="line-clamp-2 text-xs text-muted-foreground" title={row.message}>
-                              “{row.message}”
-                            </p>
-                          )}
-                          {((row.messageCount ?? 0) > 1 || (row.details?.length ?? 0) > 0) && (
-                            <button
-                              onClick={() => toggleThread(row.enquiryId)}
-                              className="mt-0.5 text-[11px] font-medium text-primary hover:underline"
-                            >
-                              {openThreads.has(row.enquiryId)
-                                ? "Hide"
-                                : (row.messageCount ?? 0) > 1
-                                  ? `Show all ${row.messageCount} messages`
-                                  : "Show what they asked for"}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    {!readOnly && (
-                      <td className="px-3 py-2 text-xs">{row.mobile ? `+91 ${row.mobile}` : "—"}</td>
-                    )}
-                    <td className="px-3 py-2 text-xs">{ENQUIRY_SOURCE_LABEL[row.sourceTag] ?? row.source}</td>
-                    <td className="px-3 py-2">
-                      {row.resolutionOutcome ? (
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${OUTCOME_CLASS[row.resolutionOutcome]}`}>
-                          {enquiryOutcomeLabel(row.resolutionOutcome)}
-                        </span>
-                      ) : (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            row.claimedAt ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"
-                          }`}
-                        >
-                          {row.resolvedAt ? "Resolved" : enquiryStateLabel(row)}
-                        </span>
-                      )}
-                      {!readOnly && row.stage && (
-                        <div className="mt-1">
-                          <StageChip stage={row.stage} />
-                        </div>
-                      )}
-                    </td>
-                    {!readOnly && (
-                      <td className="px-3 py-2">
-                        <div className="space-y-1.5">
-                          <NextStepLine nextStep={row.nextStep} followUpAt={row.followUpAt} />
-                          <EnquiryActions
-                            enquiryId={row.enquiryId}
-                            claimedAt={row.claimedAt}
-                            claimerName={row.claimerName}
-                            resolvedAt={row.resolvedAt}
-                            isSpam={row.resolutionOutcome === "spam"}
-                            needsReview={row.needsReview}
-                            nextStep={row.nextStep}
-                            followUpAt={row.followUpAt}
-                            onChanged={load}
-                          />
-                        </div>
-                      </td>
-                    )}
-                    <td className="px-3 py-2 text-xs">
-                      {row.resolutionOutcome === "superseded" ? "—" : (row.resolverName ?? "—")}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                      {row.resolvedAt ? formatDate(row.resolvedAt) : "—"}
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
+        {loading && <p className="p-6 text-center text-sm text-muted-foreground">Loading…</p>}
+        {!loading && rows.length === 0 && (
+          <p className="p-6 text-center text-sm text-muted-foreground">No enquiries match these filters.</p>
+        )}
+        {!loading && rows.map((row) => <EnquiryLogRow key={row.enquiryId} row={row} readOnly={readOnly} onChanged={load} />)}
         {!loading && rows.length >= 200 && (
           <div className="border-t bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
             Showing first 200 results. Narrow the date range or filter by source to see older entries.
