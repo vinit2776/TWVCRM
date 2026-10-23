@@ -206,6 +206,8 @@ export const lineItemSchema = z.object({
   unit: z.string().optional(),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
+  // Absent = escalates (legacy lines). false = fixed, e.g. maintenance.
+  escalates: z.boolean().optional(),
 });
 
 const proposalBaseSchema = z.object({

@@ -300,6 +300,12 @@ export interface LineItem {
   unit?: string;
   unit_price: number;
   total: number;
+  /**
+   * Whether renewal escalation applies to this line. Absent means true, so
+   * every existing single-line contract escalates exactly as before. Set to
+   * false for a fixed component such as maintenance.
+   */
+  escalates?: boolean;
 }
 
 export interface ComplimentaryItem {
