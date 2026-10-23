@@ -1760,6 +1760,70 @@ function InfrastructureTab({
 
 // ─── Configuration Tab (admin-only) ──────────────────────────────────────────
 
+interface ConsoleConfirmation {
+  consoleId: string | null;
+  found: boolean | null;
+  name: string | null;
+  error: string | null;
+  sharedWith: Array<{ id: string; name: string; code: string | null }>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- response of /api/locations/[id]/unifi-connection
+function toConfirmation(d: any): ConsoleConfirmation {
+  return {
+    consoleId: d.console_id ?? null,
+    found: d.console ? Boolean(d.console.found) : null,
+    name: d.console?.name ?? null,
+    error: d.console_error ?? null,
+    sharedWith: d.shared_with ?? [],
+  };
+}
+
+function ConsoleConfirmationCard({
+  confirmation,
+  checking,
+  onRecheck,
+}: {
+  confirmation: ConsoleConfirmation | null;
+  checking: boolean;
+  onRecheck: () => void;
+}) {
+  return (
+    <div className="rounded-md border px-4 py-3 text-sm space-y-2" data-testid="unifi-console-confirmation">
+      <div className="flex items-center justify-between">
+        <p className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Console check</p>
+        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onRecheck} disabled={checking}>
+          {checking ? "Checking…" : "Check again"}
+        </Button>
+      </div>
+      {checking && !confirmation && <p className="text-xs text-muted-foreground">Asking UniFi which console this is…</p>}
+      {confirmation?.found === true && (
+        <p className="text-sm">
+          Connected to: <span className="font-semibold">{confirmation.name ?? "(unnamed console)"}</span>
+          <span className="block text-xs text-muted-foreground">Confirm this is the console for this location before issuing vouchers.</span>
+        </p>
+      )}
+      {confirmation?.found === false && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+          UniFi does not list this console id under the saved API key. Check the id and the key.
+        </p>
+      )}
+      {confirmation?.error && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+          Could not confirm the console name: {confirmation.error}
+        </p>
+      )}
+      {confirmation && confirmation.sharedWith.length > 0 && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+          Warning: this console id is also set on{" "}
+          {confirmation.sharedWith.map((l) => l.code ? `${l.name} (${l.code})` : l.name).join(", ")}.
+          Vouchers for both locations will go to the same console. Saving is not blocked.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ConfigurationTab({
   locationId,
   location,
@@ -1774,6 +1838,9 @@ function ConfigurationTab({
   // UI only knows whether this console already has one stored.
   const [apiKey, setApiKey] = useState("");
   const [hasOwnKey, setHasOwnKey] = useState(false);
+  // What UniFi itself says this console id is, so the admin can confirm it is the right one.
+  const [connection, setConnection] = useState<ConsoleConfirmation | null>(null);
+  const [checking, setChecking] = useState(false);
   const [form, setForm] = useState({
     wifi_voucher_mode: location?.wifi_voucher_mode ?? "repository",
     unifi_site_id: location?.unifi_site_id ?? "",
@@ -1788,18 +1855,41 @@ function ConfigurationTab({
     });
   }, [locationId, location]);
 
+  const checkConnection = useCallback(async () => {
+    setChecking(true);
+    try {
+      const r = await fetch(`/api/locations/${locationId}/unifi-connection?verify=1`);
+      const j = r.ok ? await r.json() : null;
+      setConnection(j?.data ? toConfirmation(j.data) : null);
+      if (j?.data) setHasOwnKey(Boolean(j.data.has_own_key));
+    } catch {
+      setConnection(null);
+    } finally {
+      setChecking(false);
+    }
+  }, [locationId]);
+
   useEffect(() => {
     setApiKey("");
     setHasOwnKey(false);
+    setConnection(null);
     let cancelled = false;
-    fetch(`/api/locations/${locationId}/unifi-connection`)
+    fetch(`/api/locations/${locationId}/unifi-connection?verify=1`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (!cancelled && j?.data) setHasOwnKey(Boolean(j.data.has_own_key)); })
+      .then((j) => {
+        if (cancelled || !j?.data) return;
+        setHasOwnKey(Boolean(j.data.has_own_key));
+        setConnection(j.data.console_id ? toConfirmation(j.data) : null);
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [locationId]);
 
   async function handleSave() {
+    if (form.wifi_voucher_mode === "unifi_api" && !form.unifi_console_id.trim()) {
+      toast.error("A UniFi Console ID is required for Live API mode — there is no default console.");
+      return;
+    }
     setSaving(true);
     try {
       // A typed key goes through the connection route, which checks it against
@@ -1831,6 +1921,8 @@ function ConfigurationTab({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       toast.success("Location configuration saved");
+      if (form.unifi_console_id.trim()) void checkConnection();
+      else setConnection(null);
       onSaved({
         id: locationId,
         wifi_voucher_mode: form.wifi_voucher_mode || null,
@@ -1892,7 +1984,10 @@ function ConfigurationTab({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">UniFi Console ID (UUID)</label>
+            <label className="text-sm font-medium">
+              UniFi Console ID
+              {isUnifi && <span className="text-red-500 ml-1">*</span>}
+            </label>
             <Input
               value={form.unifi_console_id}
               onChange={(e) => setForm((f) => ({ ...f, unifi_console_id: e.target.value }))}
@@ -1900,8 +1995,8 @@ function ConfigurationTab({
               className="font-mono text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              Cloud console UUID from the UniFi API URL. Leave blank to use the{" "}
-              <code className="bg-muted px-1 rounded text-[11px]">UNIFI_CONSOLE_ID</code> env var.
+              Cloud console id from the UniFi API URL. Required for Live API mode — there is no
+              default console, so a location without one cannot issue or revoke vouchers.
             </p>
           </div>
 
@@ -1939,6 +2034,14 @@ function ConfigurationTab({
           </div>
         </CardContent>
       </Card>
+
+      {form.unifi_console_id.trim() && (
+        <ConsoleConfirmationCard
+          confirmation={connection}
+          checking={checking}
+          onRecheck={checkConnection}
+        />
+      )}
 
       <div className="rounded-md border px-4 py-3 text-sm space-y-1">
         <p className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Current Status</p>

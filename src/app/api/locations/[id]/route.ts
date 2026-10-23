@@ -78,6 +78,25 @@ export async function PUT(
     );
   }
 
+  // Live-API mode needs the location's own console — there is no default
+  // console to fall back on, so refuse a save that would leave it without one.
+  if (wifi_voucher_mode === "unifi_api" || (wifi_voucher_mode === undefined && unifi_console_id !== undefined)) {
+    let effectiveMode = wifi_voucher_mode;
+    let effectiveConsole = unifi_console_id;
+    if (effectiveMode === undefined || effectiveConsole === undefined) {
+      const { data: current } = await supabase
+        .from("locations").select("wifi_voucher_mode, unifi_console_id").eq("id", id).maybeSingle();
+      if (effectiveMode === undefined) effectiveMode = current?.wifi_voucher_mode;
+      if (effectiveConsole === undefined) effectiveConsole = current?.unifi_console_id;
+    }
+    if (effectiveMode === "unifi_api" && !effectiveConsole?.trim()) {
+      return NextResponse.json(
+        { error: "A UniFi Console ID is required for Live API mode — there is no default console." },
+        { status: 400 }
+      );
+    }
+  }
+
   const updates: Record<string, unknown> = {};
   if (name !== undefined) updates.name = name;
   if (code !== undefined) updates.code = code.toUpperCase();

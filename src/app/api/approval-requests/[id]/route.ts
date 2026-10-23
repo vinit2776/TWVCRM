@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { createUnifiVoucher, getUnifiHotspotSsid, siteConfigForLocationId } from "@/lib/unifi";
+import { createUnifiVoucher, getUnifiHotspotSsid, siteConfigFromLocation, buildVoucherNote } from "@/lib/unifi";
 import { issueAdhocRuijieVoucher, siteConfigFromLocation as ruijieSiteConfigFromLocation } from "@/lib/ruijie";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { createNotification } from "@/lib/in-app-notifications";
@@ -94,11 +94,19 @@ export async function PATCH(
     const meta = approvalReq.metadata || {};
     try {
       // The request was raised for one location; issue on that location's console.
-      const siteCfg = await siteConfigForLocationId(String(meta.location_id || approvalReq.entity_id));
+      const adhocLocationId = String(meta.location_id || approvalReq.entity_id);
+      const { data: adhocLocation } = await admin
+        .from("locations")
+        .select("code, unifi_console_id, unifi_site_id")
+        .eq("id", adhocLocationId)
+        .maybeSingle();
+      if (!adhocLocation) throw new Error("Location not found for this voucher request");
+      const siteCfg = siteConfigFromLocation(adhocLocation); // throws if the location has no console of its own
+      const adhocNote = buildVoucherNote(adhocLocation.code, String(meta.note || `adhoc_${approvalReq.id}`));
       const [voucherResult, ssid] = await Promise.all([
         createUnifiVoucher({
           durationMinutes: Number(meta.duration_minutes),
-          note:            String(meta.note || `adhoc_${approvalReq.id}`),
+          note:            adhocNote,
           quota:           Number(meta.quota ?? 1),
         }, siteCfg),
         getUnifiHotspotSsid(siteCfg),
@@ -138,9 +146,11 @@ export async function PATCH(
         admin.from("unifi_adhoc_voucher_links").insert({
           location_id:      String(meta.location_id || approvalReq.entity_id),
           unifi_voucher_id: unifiId,
-          note:             String(meta.note || `adhoc_${approvalReq.id}`),
+          note:             adhocNote,
           contract_id:      String(meta.contract_id),
           issued_by:        dbUser.id,
+          unifi_console_id: siteCfg.consoleId,
+          unifi_location_code: adhocLocation.code ?? null,
         }).then(({ error }) => {
           if (error) console.error("[approval-requests] adhoc link insert failed:", error);
         });

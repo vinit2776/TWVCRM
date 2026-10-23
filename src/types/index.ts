@@ -54,7 +54,7 @@ export interface Location {
   incharge_2?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
   /** Set only for locations managed via the UniFi API (e.g. Nungambakkam LGF). */
   unifi_site_id?: string | null;
-  /** UniFi cloud console UUID — falls back to UNIFI_CONSOLE_ID env var when null. */
+  /** UniFi cloud console id — required for unifi_api mode (no env-var fallback). */
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' | 'ruijie_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
@@ -994,6 +994,10 @@ export interface VoucherIssuance {
   replaces_issuance_id?: string;
   /** UniFi internal _id — set when issued via Unifi live API. Used for revocation. */
   unifi_voucher_id?: string | null;
+  /** UniFi console the voucher was created on; revoke/email use this, not the location's current console. */
+  unifi_console_id?: string | null;
+  /** locations.code at issue time (also the prefix of the voucher note on the controller). */
+  unifi_location_code?: string | null;
 }
 
 export interface AdminOtp {
