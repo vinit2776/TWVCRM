@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/server";
-import { revokeUnifiVoucher, siteConfigForLocationId } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 import { setUserActive } from "@/lib/cosec";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -19,13 +19,16 @@ export async function revokeContractAccess(
 ): Promise<void> {
   if (contract.unifi_voucher_id) {
     const voucherId = contract.unifi_voucher_id;
-    // The voucher lives on the contract's own site console; look the site up
-    // from the contract so callers don't each have to pass it.
+    // The voucher lives on the console that issued it (recorded on the
+    // contract); look that up from the contract so callers don't each pass it.
     void (async () => {
       try {
         const { data } = await admin
-          .from("contracts").select("location_id").eq("id", contract.id).maybeSingle();
-        await revokeUnifiVoucher(voucherId, await siteConfigForLocationId(data?.location_id));
+          .from("contracts").select("location_id, unifi_voucher_console_id").eq("id", contract.id).maybeSingle();
+        await revokeUnifiVoucher(
+          voucherId,
+          await siteConfigForStoredVoucher({ consoleId: data?.unifi_voucher_console_id, locationId: data?.location_id })
+        );
       } catch (err) {
         console.error(`[contract-lifecycle] UniFi revoke failed for ${contract.contract_number}:`, err);
       }

@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUnifiHotspotSsid, siteConfigForLocationId } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -15,6 +16,10 @@ export async function GET(request: NextRequest) {
   // Each site names its guest network differently, so the SSID must come from
   // the location's own console, not the default one.
   const locationId = new URL(request.url).searchParams.get("location_id");
-  const ssid = await getUnifiHotspotSsid(await siteConfigForLocationId(locationId));
-  return NextResponse.json({ ssid });
+  try {
+    const ssid = await getUnifiHotspotSsid(await siteConfigForLocationId(locationId));
+    return NextResponse.json({ ssid });
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
+  }
 }

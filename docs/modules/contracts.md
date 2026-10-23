@@ -537,7 +537,7 @@ Per-contract overrides in `contract_electricity_config` table. The `ContractElec
 | `NEXT_PUBLIC_APP_URL` / `VERCEL_URL` | `[id]/route.ts` — renewal auto-issue vouchers internal fetch |
 | `CRON_SECRET` | Contract expiry cron (`Authorization: Bearer <secret>`) |
 | `RESEND_API_KEY` | Voucher revocation and renewal transition emails |
-| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD`, `UNIFI_CONSOLE_ID` | `src/lib/unifi.ts` — voucher API for UniFi locations |
+| UniFi config: `UNIFI_API_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD` (the console id comes from the location, never an env var) | `src/lib/unifi.ts` — voucher API for UniFi locations |
 | COSEC device config stored in `cosec_devices` table | `src/lib/cosec.ts` |
 | `locations.unifi_site_id` (DB column) | Determines if a location uses UniFi voucher mode |
 | `locations.wifi_voucher_mode` ('repository' or 'unifi_api') | Also checked via `isUnifiLocation()` |

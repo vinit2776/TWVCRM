@@ -20,7 +20,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { createUnifiVoucher, siteConfigFromLocation } from "@/lib/unifi";
+import { createUnifiVoucher, siteConfigFromLocation, buildVoucherNote, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 import { logAudit } from "@/lib/audit";
 import { zodErrorResponse } from "@/lib/validations";
 
@@ -53,13 +54,24 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient();
   const { data: location } = await admin
     .from("locations")
-    .select("id, name, unifi_site_id, unifi_console_id")
+    .select("id, name, code, unifi_site_id, unifi_console_id")
     .eq("id", body.location_id)
     .single();
 
   if (!location?.unifi_site_id) {
     return NextResponse.json({ error: "This location is not managed via the UniFi API" }, { status: 400 });
   }
+
+  // Fail now (400) if the location has no console of its own — nothing may
+  // fall back to another site's console.
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = siteConfigFromLocation(location);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
+  }
+  // The location code leads the note so the voucher is recognisable on the controller.
+  const note = buildVoucherNote(location.code, body.note);
 
   const canIssueDirectly = ["admin", "manager"].includes(dbUser.role);
 
@@ -68,9 +80,9 @@ export async function POST(request: NextRequest) {
     try {
       const { id: unifiId, code } = await createUnifiVoucher({
         durationMinutes: body.duration_minutes,
-        note:            body.note,
+        note,
         quota:           body.quota,
-      }, siteConfigFromLocation(location));
+      }, siteCfg);
 
       logAudit(admin, {
         entityType: "location",
@@ -83,7 +95,8 @@ export async function POST(request: NextRequest) {
           code:             { old: null, new: code },
           duration_minutes: { old: null, new: body.duration_minutes },
           quota:            { old: null, new: body.quota },
-          note:             { old: null, new: body.note },
+          note:             { old: null, new: note },
+          console_id:       { old: null, new: siteCfg.consoleId },
         },
       });
 
@@ -93,9 +106,11 @@ export async function POST(request: NextRequest) {
         admin.from("unifi_adhoc_voucher_links").insert({
           location_id:      body.location_id,
           unifi_voucher_id: unifiId,
-          note:             body.note,
+          note,
           contract_id:      body.contract_id,
           issued_by:        dbUser.id,
+          unifi_console_id: siteCfg.consoleId,
+          unifi_location_code: location.code ?? null,
         }).then(({ error }) => {
           if (error) console.error("[api/unifi/vouchers/adhoc] link insert failed:", error);
         });
@@ -107,7 +122,7 @@ export async function POST(request: NextRequest) {
         unifi_voucher_id: unifiId,
         duration_minutes: body.duration_minutes,
         quota:            body.quota,
-        note:             body.note,
+        note,
       });
     } catch (err) {
       console.error("[api/unifi/vouchers/adhoc] direct issuance failed:", err);

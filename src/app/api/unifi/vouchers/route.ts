@@ -9,7 +9,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation, type SiteConfig } from "@/lib/unifi";
+import { unifiConfigErrorResponse } from "@/lib/unifi-http";
 import type { UnifiVoucher } from "@/lib/unifi";
 
 /**
@@ -61,10 +62,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "This location is not managed via the UniFi API" }, { status: 400 });
   }
 
+  let siteCfg: SiteConfig;
+  try {
+    siteCfg = siteConfigFromLocation(location);
+  } catch (err) {
+    return unifiConfigErrorResponse(err);
+  }
+
   try {
     // Use cached full list (60s TTL) — avoids re-fetching 19 MB on every request.
     // Cache key is stable since we always fetch the full list and filter server-side.
-    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60, siteConfigFromLocation(location));
+    const vouchers = await cachedUnifiRequest<UnifiVoucher[]>("/stat/voucher", {}, 60, siteCfg);
 
     // Compute summary stats from full list
     const stats = {

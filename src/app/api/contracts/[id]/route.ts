@@ -9,7 +9,7 @@ import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
-import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForLocationId, isUnifiLocation } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForStoredVoucher, buildVoucherNote, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 import { resolveContractCommitment } from "@/lib/contract-commitment";
 import { hasCommitmentTerms } from "@/lib/proposal-terms";
@@ -664,7 +664,7 @@ export async function PATCH(
           const admin = createAdminClient();
           const { data: location } = await admin
             .from("locations")
-            .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
+            .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
             .eq("id", oldContract.location_id)
             .single();
 
@@ -674,13 +674,17 @@ export async function PATCH(
             const seatedCount = oldContract.seats || 1;
             const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
               durationMinutes,
-              note: `contract_${data.contract_number}`,
+              note: buildVoucherNote(location.code, `contract_${data.contract_number}`),
               quota: seatedCount,
             }, siteConfig);
             // Store the UniFi voucher _id on the contract for revocation on cancellation
             await admin
               .from("contracts")
-              .update({ unifi_voucher_id: unifiVoucherId })
+              .update({
+                unifi_voucher_id: unifiVoucherId,
+                unifi_voucher_console_id: siteConfig.consoleId,
+                unifi_voucher_location_code: location.code ?? null,
+              })
               .eq("id", id);
             console.log(`[unifi] Issued voucher ${unifiCode} (${durationMinutes} min, ${seatedCount} seats) for ${data.contract_number}`);
           }
@@ -718,11 +722,12 @@ export async function PATCH(
           // 1a. Revoke parent contract's UniFi API voucher (Nungambakkam LGF)
           const { data: parentContract } = await admin
             .from("contracts")
-            .select("unifi_voucher_id, location_id")
+            .select("unifi_voucher_id, unifi_voucher_console_id, location_id")
             .eq("id", oldContract.parent_contract_id)
             .single();
           if (parentContract?.unifi_voucher_id) {
-            revokeUnifiVoucher(parentContract.unifi_voucher_id, await siteConfigForLocationId(parentContract.location_id))
+            // The console that issued it, not whatever the location points at now.
+            revokeUnifiVoucher(parentContract.unifi_voucher_id, await siteConfigForStoredVoucher({ consoleId: parentContract.unifi_voucher_console_id, locationId: parentContract.location_id }))
               .catch((err: unknown) => console.error("[renewal-activate] UniFi voucher revocation failed:", err));
           }
 
@@ -893,7 +898,7 @@ export async function PATCH(
   // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
   if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
     // Revoke on the contract's own site console, not the default one.
-    siteConfigForLocationId(oldContract.location_id)
+    siteConfigForStoredVoucher({ consoleId: oldContract.unifi_voucher_console_id, locationId: oldContract.location_id })
       .then((cfg) => revokeUnifiVoucher(oldContract.unifi_voucher_id, cfg))
       .catch(err => console.error("[unifi] voucher revocation on termination failed:", err));
   }
@@ -905,7 +910,7 @@ export async function PATCH(
         // Fetch active voucher issuances with voucher codes
         const { data: issuances } = await supabase
           .from("voucher_issuances")
-          .select("id, voucher_id, unifi_voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
+          .select("id, voucher_id, unifi_voucher_id, unifi_console_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
           .eq("contract_id", id)
           .eq("is_active", true);
 
@@ -929,14 +934,16 @@ export async function PATCH(
           }
 
           // Revoke Unifi live-API per-seat vouchers (fire-and-forget)
-          const terminatedSiteCfg = await siteConfigForLocationId(oldContract.location_id);
           for (const issuance of issuances) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const uid = (issuance as any).unifi_voucher_id as string | null;
+            const { unifi_voucher_id: uid, unifi_console_id: issuedOn } = issuance as any as { unifi_voucher_id: string | null; unifi_console_id: string | null };
             if (uid) {
-              revokeUnifiVoucher(uid, terminatedSiteCfg).catch((err: unknown) =>
-                console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
-              );
+              // Each voucher goes back to the console that issued it.
+              siteConfigForStoredVoucher({ consoleId: issuedOn, locationId: oldContract.location_id })
+                .then((cfg) => revokeUnifiVoucher(uid, cfg))
+                .catch((err: unknown) =>
+                  console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
+                );
             }
           }
 

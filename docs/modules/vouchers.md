@@ -176,7 +176,7 @@ Used exclusively for voucher replacement authorization.
 | Column | Type | Notes |
 |--------|------|-------|
 | `unifi_site_id` | TEXT | UniFi site slug (e.g. `"default"`); NULL = repository mode |
-| `unifi_console_id` | TEXT | UniFi cloud console UUID; falls back to `UNIFI_CONSOLE_ID` env var |
+| `unifi_console_id` | TEXT | UniFi cloud console id. **Required** for `unifi_api` mode — there is no env-var fallback (a location without one errors instead of talking to another site's console) |
 | `ruijie_group_id` | INTEGER | Ruijie Cloud network group ID (site identifier); set when `wifi_voucher_mode = 'ruijie_api'` |
 | `wifi_voucher_mode` | TEXT NOT NULL DEFAULT `'repository'` CHECK (`repository`, `unifi_api`, or `ruijie_api`) | Definitive flag for mode selection |
 
@@ -390,8 +390,7 @@ All create/update/delete actions call `logAudit()`. Reveal of a UniFi voucher co
 |-----|---------|
 | `UNIFI_API_KEY` | Shared UniFi cloud API key — used for any console that has no key of its own (Nungambakkam) |
 | `ASSET_CREDENTIALS_ENCRYPTION_KEY` | Also encrypts per-console UniFi keys (see below) |
-| `UNIFI_CONSOLE_ID` | Default console UUID (used if `locations.unifi_console_id` is null) |
-| `UNIFI_SITE_NAME` | Default site slug, e.g. `"default"` |
+| ~~`UNIFI_CONSOLE_ID`~~ / ~~`UNIFI_SITE_NAME`~~ | **No longer read.** There is no default console; the console always comes from the location (or the voucher's recorded console). Safe to delete from Vercel. |
 
 ### Adding another UniFi site (e.g. Perungudi)
 
@@ -401,7 +400,24 @@ The cloud connector (`api.ui.com`) only proxies for the console's **owner**, so 
 2. CRM → **Network → Configuration** (admin) → pick the location, set mode *UniFi Live API*, site `default`, the console ID, and paste the key. Saving checks the key against the console first, then stores it AES-GCM encrypted in `unifi_console_credentials` (service-role only; never sent back to the browser).
 3. No key entered and none stored = the shared `UNIFI_API_KEY` is used.
 
-`unifiRequest` resolves the key per console (`resolveApiKey`, 5-minute cache). Any code holding only a location id uses `siteConfigForLocationId()` — **never call a UniFi helper without a site config**, or it silently targets the default (Nungambakkam) console. Revocation is `POST /cmd/hotspot {cmd:"delete-voucher"}`; `DELETE /stat/voucher/{id}` does nothing.
+`unifiRequest` resolves the key per console (`resolveApiKey`, 5-minute cache). Revocation is `POST /cmd/hotspot {cmd:"delete-voucher"}`; `DELETE /stat/voucher/{id}` does nothing.
+
+### Site-mixup guards (a voucher can never silently go to the wrong console)
+
+A Nungambakkam voucher must never be issued, revoked or shown for Perungudi, or vice versa. Four layers:
+
+1. **No default console.** Every UniFi helper requires a `SiteConfig`; a missing/blank console throws `UnifiConfigError` before any network call (`src/lib/unifi.ts`; routes turn it into a 400 via `src/lib/unifi-http.ts`). Resolvers:
+   - `siteConfigFromLocation(row)` — you hold a location row (throws if `unifi_console_id` is empty).
+   - `siteConfigForLocationId(id)` — you hold only an id (cron, approvals, `/api/unifi/*` list endpoints, which now require `location_id`).
+   - `siteConfigForStoredVoucher({ consoleId, locationId })` — you hold something already issued. **Use this for revoke / reveal / email.** It targets the console recorded at issue time; only rows that predate the record fall back to the location.
+   `PUT /api/locations/[id]` refuses `unifi_api` mode without a console id.
+2. **Recorded at issue time** (migration 00639): `voucher_issuances.unifi_console_id` + `unifi_location_code`, `contracts.unifi_voucher_console_id` + `unifi_voucher_location_code`, `unifi_adhoc_voucher_links.unifi_console_id` + `unifi_location_code`. Existing rows were backfilled from their location's console. A replacement voucher is issued on the location's *current* console; the old code is revoked on its *recorded* one. Reveal refuses (409) if the CRM recorded a different console for that voucher.
+3. **Location code in the voucher note** (`buildVoucherNote`), so a voucher is identifiable on the controller itself: `PGD | TWV-C-0123_seat1` (contract seat), `PGD | booking_<id>_seat1`, `PGD | contract_TWV-C-0123` (activation voucher), `PGD | <free text>` (ad-hoc). `stripVoucherNotePrefix` removes it again where notes are parsed (`/api/unifi/voucher-devices`); notes without a prefix (older vouchers) still parse.
+4. **Post-issue check.** After `create-voucher`, the voucher's `site_id` is compared with the configured site's internal id (`getUnifiSiteInternalId`, from the console's `/self/sites`). On a mismatch the voucher is deleted again and the issue fails. If the site id can't be determined the check is skipped with a warning (it never blocks).
+
+**Network → Configuration** shows `Connected to: <console name>` after a save (and on open), from `api.ui.com/v1/hosts` (`getUnifiConsoleInfo`), so the admin can confirm the id is the right console. If another location already uses the same console id a warning is shown (saving is not blocked).
+
+Known gap (not changed here): `contract-expiry` and `revokeContractAccess` mark per-seat issuances inactive in the CRM but do not delete the per-seat UniFi vouchers on the controller; only the contract-level voucher is revoked there. Termination and booking cancel do revoke per-seat vouchers.
 
 ### API base URL
 ```
@@ -617,8 +633,6 @@ Response includes:
 |------------|------|-------|
 | `UNIFI_API_KEY` | Env var | Shared key; consoles with a row in `unifi_console_credentials` use their own |
 | `unifi_console_credentials` | DB table | Encrypted per-console API key (migration 00638); service-role only |
-| `UNIFI_CONSOLE_ID` | Env var | Default console; overridden by `locations.unifi_console_id` |
-| `UNIFI_SITE_NAME` | Env var | Default site slug; overridden by `locations.unifi_site_id` |
 | `RESEND_API_KEY` | Env var | Required for voucher email delivery |
 | `locations.wifi_voucher_mode` | DB column | `'repository'` or `'unifi_api'` per location |
 | `locations.unifi_site_id` | DB column | Site slug; NULL = repository mode |

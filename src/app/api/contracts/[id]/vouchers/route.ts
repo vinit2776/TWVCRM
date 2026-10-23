@@ -7,6 +7,8 @@ import {
   siteConfigFromLocation,
   isUnifiLocation,
   calcVoucherMinutes,
+  buildVoucherNote,
+  UnifiConfigError,
 } from "@/lib/unifi";
 import {
   siteConfigFromLocation as ruijieSiteConfigFromLocation,
@@ -109,7 +111,7 @@ export async function POST(
   if (locationId) {
     const { data: loc } = await supabase
       .from("locations")
-      .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id, name")
+      .select("code, unifi_site_id, unifi_console_id, wifi_voucher_mode, ruijie_group_id, name")
       .eq("id", locationId)
       .single();
     location = loc;
@@ -121,7 +123,13 @@ export async function POST(
   // UNIFI PATH
   // ──────────────────────────────────────────────────────────────────
   if (useUnifi) {
-    const siteConfig = siteConfigFromLocation(location);
+    let siteConfig: ReturnType<typeof siteConfigFromLocation>;
+    try {
+      siteConfig = siteConfigFromLocation(location);
+    } catch (err) {
+      if (err instanceof UnifiConfigError) return NextResponse.json({ error: err.message }, { status: 400 });
+      throw err;
+    }
     const durationMinutes = calcVoucherMinutes(contract.end_date);
 
     const { data: dbUser } = await supabase
@@ -162,7 +170,7 @@ export async function POST(
         const result = await createUnifiVoucher(
           {
             durationMinutes,
-            note: `${contract.contract_number}_seat${seatNumber}`,
+            note: buildVoucherNote(location.code, `${contract.contract_number}_seat${seatNumber}`),
             quota: 2,
           },
           siteConfig
@@ -192,6 +200,8 @@ export async function POST(
           is_active: true,
           unifi_voucher_id: unifiId,
           unifi_code: unifiCode,
+          unifi_console_id: siteConfig.consoleId,
+          unifi_location_code: location.code ?? null,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();
@@ -257,7 +267,7 @@ export async function POST(
         const result = await createUnifiVoucher(
           {
             durationMinutes,
-            note: `${contract.contract_number}_seat${seatNumber}`,
+            note: buildVoucherNote(location.code, `${contract.contract_number}_seat${seatNumber}`),
             quota: 2,
           },
           siteConfig
@@ -285,6 +295,8 @@ export async function POST(
           is_active: true,
           unifi_voucher_id: unifiId,
           unifi_code: unifiCode,
+          unifi_console_id: siteConfig.consoleId,
+          unifi_location_code: location.code ?? null,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { revokeUnifiVoucher, siteConfigForLocationId } from "@/lib/unifi";
+import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 import { setUserActive } from "@/lib/cosec";
 import { withCronHealth } from "@/lib/cron-ping";
 
@@ -40,7 +40,7 @@ async function handler(request: NextRequest) {
   // Find active contracts whose end_date has passed
   const { data: expiring, error: fetchErr } = await admin
     .from("contracts")
-    .select("id, contract_number, end_date, lead_id, location_id, unifi_voucher_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
+    .select("id, contract_number, end_date, lead_id, location_id, unifi_voucher_id, unifi_voucher_console_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
     .eq("status", "active")
     .lt("end_date", todayIST);
 
@@ -124,7 +124,7 @@ async function handler(request: NextRequest) {
   for (const contract of toExpire) {
     // 1. UniFi API voucher (direct device revocation on the contract's own site console)
     if (contract.unifi_voucher_id) {
-      siteConfigForLocationId(contract.location_id)
+      siteConfigForStoredVoucher({ consoleId: contract.unifi_voucher_console_id, locationId: contract.location_id })
         .then((cfg) => revokeUnifiVoucher(contract.unifi_voucher_id as string, cfg))
         .catch((err) => console.error(`[contract-expiry] UniFi revoke failed for ${contract.contract_number}:`, err));
     }

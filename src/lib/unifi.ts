@@ -4,74 +4,138 @@
  * Uses the UniFi cloud connector REST API:
  *   https://api.ui.com/v1/connector/consoles/{consoleId}/proxy/network/api/s/{siteName}
  *
- * Each exported function accepts an optional `SiteConfig` that identifies which
- * console + site to target. When omitted, env-var defaults are used (backward compat).
+ * Every request needs a `SiteConfig` naming the console + site to target.
+ * There is deliberately NO default console: a call without one throws
+ * `UnifiConfigError` instead of quietly talking to some other site's console
+ * (the original single-site setup defaulted to Nungambakkam, which is wrong
+ * for every other location).
  *
  * Locations store their own `unifi_console_id` and `unifi_site_id` in the DB.
- * Pass those values here via `siteConfigFromLocation()`.
+ * Get a config with `siteConfigFromLocation()` (you hold the row),
+ * `siteConfigForLocationId()` (you hold an id) or `siteConfigForStoredVoucher()`
+ * (you hold a voucher — uses the console it was issued on).
  */
 import { unstable_cache } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/server";
 import { decryptSecret } from "@/lib/crypto-secrets";
 
-// ─── Env-var defaults (Nungambakkam LGF / single-controller setup) ────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_CONSOLE_ID = process.env.UNIFI_CONSOLE_ID || "";
-const DEFAULT_SITE_NAME  = process.env.UNIFI_SITE_NAME  || "default";
+// UniFi's built-in site slug; only a site *name* default, never a console.
+const DEFAULT_SITE_NAME = "default";
+// Shared fallback key for consoles without their own row in unifi_console_credentials.
 const UNIFI_API_KEY      = process.env.UNIFI_API_KEY    || "";
 const UNIFI_API_ROOT     = "https://api.ui.com/v1/connector/consoles";
+
+/** A UniFi call was attempted without a console/site that can be trusted. Never retried, never defaulted. */
+export class UnifiConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnifiConfigError";
+  }
+}
 
 // ─── Per-location site config ─────────────────────────────────────────────────
 
 export interface SiteConfig {
-  /** UniFi cloud console UUID. Defaults to UNIFI_CONSOLE_ID env var. */
-  consoleId?: string | null;
-  /** UniFi site name (slug), e.g. "default". Defaults to UNIFI_SITE_NAME env var. */
-  siteName?: string | null;
+  /** UniFi cloud console id — always explicit, never defaulted. */
+  consoleId: string;
+  /** UniFi site name (slug), e.g. "default". */
+  siteName: string;
 }
 
 /**
- * Build a SiteConfig from a location row.
- * Falls back to env-var defaults for unset fields — so existing code
- * with no location row still works without changes.
+ * Build a SiteConfig from a location row. Throws `UnifiConfigError` when the
+ * location has no `unifi_console_id` — there is no env-var fallback.
  */
 export function siteConfigFromLocation(location: {
   unifi_console_id?: string | null;
   unifi_site_id?: string | null;
+  code?: string | null;
 }): SiteConfig {
-  return {
-    consoleId: location.unifi_console_id || DEFAULT_CONSOLE_ID || undefined,
-    siteName:  location.unifi_site_id    || DEFAULT_SITE_NAME  || undefined,
-  };
+  const consoleId = location.unifi_console_id?.trim();
+  if (!consoleId) {
+    throw new UnifiConfigError(
+      `Location${location.code ? ` ${location.code}` : ""} has no UniFi console ID set. ` +
+      "Set it under Network → Configuration. (There is no default console, so nothing was sent to UniFi.)"
+    );
+  }
+  return { consoleId, siteName: location.unifi_site_id?.trim() || DEFAULT_SITE_NAME };
 }
 
 /**
  * Resolve a location id to its UniFi site config (service-role lookup, for
- * flows that only hold a location id — cron jobs, revocations, approvals).
- * Without this, a call that omits the config silently targets the default
- * (Nungambakkam) console, which is wrong for every other site.
+ * flows that only hold a location id — cron jobs, approvals, list endpoints).
+ * Throws `UnifiConfigError` for a missing id, an unknown location or a
+ * location without its own console.
  */
 export async function siteConfigForLocationId(
   locationId: string | null | undefined
-): Promise<SiteConfig | undefined> {
-  if (!locationId) return undefined;
-  const { data } = await createAdminClient()
+): Promise<SiteConfig> {
+  if (!locationId) {
+    throw new UnifiConfigError("A location is required to reach a UniFi console — none was given.");
+  }
+  const { data, error } = await createAdminClient()
     .from("locations")
-    .select("unifi_console_id, unifi_site_id")
+    .select("code, unifi_console_id, unifi_site_id")
     .eq("id", locationId)
     .maybeSingle();
-  return data ? siteConfigFromLocation(data) : undefined;
+  if (error) throw new UnifiConfigError(`Could not look up the location's UniFi console: ${error.message}`);
+  if (!data) throw new UnifiConfigError("Location not found, so its UniFi console is unknown.");
+  return siteConfigFromLocation(data);
 }
 
-function resolveBaseUrl(cfg?: SiteConfig): string {
-  const consoleId = cfg?.consoleId || DEFAULT_CONSOLE_ID;
-  const siteName  = cfg?.siteName  || DEFAULT_SITE_NAME;
-  if (!consoleId) {
-    throw new Error(
-      "[unifi] No console ID configured. Set UNIFI_CONSOLE_ID env var or location.unifi_console_id."
+/**
+ * Site config for something that was already issued (revoke / reveal / email).
+ * Uses the console recorded at issue time; only rows that predate the record
+ * fall back to the location's console. The site name comes from the location
+ * only while that location still points at the same console.
+ */
+export async function siteConfigForStoredVoucher(stored: {
+  consoleId?: string | null;
+  locationId?: string | null;
+}): Promise<SiteConfig> {
+  const consoleId = stored.consoleId?.trim();
+  if (!consoleId) return siteConfigForLocationId(stored.locationId);
+  let siteName = DEFAULT_SITE_NAME;
+  if (stored.locationId) {
+    const { data } = await createAdminClient()
+      .from("locations")
+      .select("unifi_console_id, unifi_site_id")
+      .eq("id", stored.locationId)
+      .maybeSingle();
+    if (data?.unifi_console_id === consoleId && data.unifi_site_id?.trim()) siteName = data.unifi_site_id.trim();
+  }
+  return { consoleId, siteName };
+}
+
+/** Fails loudly for a missing/blank config — the single choke point every request passes through. */
+function requireConfig(cfg: SiteConfig | null | undefined): SiteConfig {
+  if (!cfg?.consoleId?.trim()) {
+    throw new UnifiConfigError(
+      "No UniFi console specified for this request. Refusing to fall back to a default console."
     );
   }
+  return { consoleId: cfg.consoleId.trim(), siteName: cfg.siteName?.trim() || DEFAULT_SITE_NAME };
+}
+
+function resolveBaseUrl(cfg: SiteConfig): string {
+  const { consoleId, siteName } = requireConfig(cfg);
   return `${UNIFI_API_ROOT}/${consoleId}/proxy/network/api/s/${siteName}`;
+}
+
+// ─── Voucher notes (identify the location on the controller itself) ──────────
+
+/** "PGD | TWV-C-0123_seat1" — the location code leads, so a voucher is recognisable on the controller. */
+export function buildVoucherNote(locationCode: string | null | undefined, base: string): string {
+  const code = locationCode?.trim();
+  return code ? `${code} | ${base}` : base;
+}
+
+/** Inverse of buildVoucherNote: drops a leading "<location code> | ", leaves any other note untouched. */
+export function stripVoucherNotePrefix(note: string): string {
+  const m = note.match(/^[^|]{1,40}? \| (.+)$/);
+  return m ? m[1] : note;
 }
 
 // ─── API key resolution ───────────────────────────────────────────────────────
@@ -122,10 +186,10 @@ async function resolveApiKey(consoleId: string): Promise<string> {
 export async function unifiRequest<T>(
   path: string,
   options: RequestInit = {},
-  cfg?: SiteConfig
+  cfg: SiteConfig
 ): Promise<T> {
   const baseUrl = resolveBaseUrl(cfg);
-  const apiKey = await resolveApiKey(cfg?.consoleId || DEFAULT_CONSOLE_ID);
+  const apiKey = await resolveApiKey(requireConfig(cfg).consoleId);
   const url = `${baseUrl}${path}`;
   const res = await fetch(url, {
     ...options,
@@ -156,10 +220,9 @@ export function cachedUnifiRequest<T>(
   path: string,
   options: RequestInit = {},
   ttl = 60,
-  cfg?: SiteConfig
+  cfg: SiteConfig
 ): Promise<T> {
-  const consoleId = cfg?.consoleId || DEFAULT_CONSOLE_ID;
-  const siteName  = cfg?.siteName  || DEFAULT_SITE_NAME;
+  const { consoleId, siteName } = requireConfig(cfg);
   const cacheKey  = `unifi:${consoleId}:${siteName}:${path}:${JSON.stringify(options.body ?? "")}`;
   return unstable_cache(
     () => unifiRequest<T>(path, options, cfg),
@@ -210,11 +273,11 @@ export interface CreateVoucherOptions {
  * Returns the UniFi internal _id and code.
  *
  * @param opts   Voucher parameters
- * @param cfg    Site config (console + site). Omit to use env-var defaults.
+ * @param cfg    Site config (console + site) — required, there is no default.
  */
 export async function createUnifiVoucher(
   opts: CreateVoucherOptions,
-  cfg?: SiteConfig
+  cfg: SiteConfig
 ): Promise<{ id: string; code: string }> {
   const body: Record<string, unknown> = {
     cmd:          "create-voucher",
@@ -251,7 +314,88 @@ export async function createUnifiVoucher(
 
   if (!voucher) throw new Error("[unifi] createVoucher: could not find created voucher");
 
+  // Sanity check: the voucher must live on the site we meant to target. If it
+  // does not, delete it again and fail rather than hand out a code that works
+  // on the wrong site.
+  const expectedSiteId = await getUnifiSiteInternalId(cfg);
+  if (expectedSiteId && voucher.site_id && voucher.site_id !== expectedSiteId) {
+    await revokeUnifiVoucher(voucher._id, cfg);
+    throw new UnifiConfigError(
+      `UniFi created the voucher on a different site (${voucher.site_id}) than the one configured ` +
+      `(${cfg.siteName}, ${expectedSiteId}). The voucher was deleted again; check the console ID for this location.`
+    );
+  }
+
   return { id: voucher._id, code: voucher.code };
+}
+
+const siteIdCache = new Map<string, string>();
+
+/**
+ * The internal `_id` UniFi stamps on vouchers (`site_id`) for the configured
+ * site, looked up from the console's site list. Returns null when it cannot be
+ * determined (the check is then skipped, with a warning, rather than blocking).
+ */
+export async function getUnifiSiteInternalId(cfg: SiteConfig): Promise<string | null> {
+  const { consoleId, siteName } = requireConfig(cfg);
+  const cacheKey = `${consoleId}:${siteName}`;
+  const hit = siteIdCache.get(cacheKey);
+  if (hit) return hit;
+  try {
+    const res = await fetch(`${UNIFI_API_ROOT}/${consoleId}/proxy/network/api/self/sites`, {
+      headers: { "X-API-KEY": await resolveApiKey(consoleId), Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const json = await res.json() as { data?: Array<{ _id: string; name: string }> };
+    const site = res.ok ? json.data?.find((x) => x.name === siteName) : undefined;
+    if (!site?._id) {
+      console.warn(`[unifi] could not resolve the internal site id for ${siteName} (HTTP ${res.status}); post-issue site check skipped`);
+      return null;
+    }
+    siteIdCache.set(cacheKey, site._id);
+    return site._id;
+  } catch (err) {
+    console.warn("[unifi] site id lookup failed; post-issue site check skipped:", err);
+    return null;
+  }
+}
+
+export interface UnifiConsoleInfo {
+  /** The console id exists under the key that was used. */
+  found: boolean;
+  /** Human name of the console as set in UniFi (e.g. "MWP-TWV"). */
+  name: string | null;
+}
+
+/**
+ * Look a console up in UniFi's cloud host list (api.ui.com/v1/hosts) so an admin
+ * can see *which* console an id points at. `apiKey` overrides the stored key
+ * (used while saving a new one). Read-only. Throws on transport/auth failure.
+ */
+export async function getUnifiConsoleInfo(consoleId: string, apiKey?: string): Promise<UnifiConsoleInfo> {
+  const key = apiKey || (await resolveApiKey(consoleId));
+  let nextToken: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const url = new URL("https://api.ui.com/v1/hosts");
+    url.searchParams.set("pageSize", "100");
+    if (nextToken) url.searchParams.set("nextToken", nextToken);
+    const res = await fetch(url, {
+      headers: { "X-API-KEY": key, Accept: "application/json" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) throw new Error(`UniFi returned ${res.status} when listing consoles`);
+    const json = await res.json() as {
+      data?: Array<{ id: string; reportedState?: { name?: string; hostname?: string } | null; userData?: { name?: string } | null }>;
+      nextToken?: string;
+    };
+    const host = json.data?.find((h) => h.id === consoleId);
+    if (host) {
+      return { found: true, name: host.reportedState?.name || host.userData?.name || host.reportedState?.hostname || null };
+    }
+    if (!json.nextToken) break;
+    nextToken = json.nextToken;
+  }
+  return { found: false, name: null };
 }
 
 /**
@@ -259,9 +403,12 @@ export async function createUnifiVoucher(
  * Safe to call if the voucher is already expired or deleted — errors are logged, not thrown.
  *
  * @param voucherId  UniFi internal _id
- * @param cfg        Site config. Omit to use env-var defaults.
+ * @param cfg        Site config of the console that issued the voucher.
  */
-export async function revokeUnifiVoucher(voucherId: string, cfg?: SiteConfig): Promise<void> {
+export async function revokeUnifiVoucher(voucherId: string, cfg: SiteConfig): Promise<void> {
+  // Outside the try on purpose: a missing console is a config error to surface,
+  // not a "voucher already deleted" case to swallow.
+  requireConfig(cfg);
   try {
     // `DELETE /stat/voucher/{id}` is not a delete — UniFi answers 200 with the
     // voucher list and removes nothing, so revocations silently did nothing.
@@ -280,7 +427,7 @@ export async function revokeUnifiVoucher(voucherId: string, cfg?: SiteConfig): P
 /**
  * Fetch details of a specific voucher by _id.
  */
-export async function getUnifiVoucher(voucherId: string, cfg?: SiteConfig): Promise<UnifiVoucher | null> {
+export async function getUnifiVoucher(voucherId: string, cfg: SiteConfig): Promise<UnifiVoucher | null> {
   try {
     const vouchers = await unifiRequest<UnifiVoucher[]>(`/stat/voucher/${voucherId}`, {}, cfg);
     return vouchers[0] ?? null;
@@ -292,7 +439,7 @@ export async function getUnifiVoucher(voucherId: string, cfg?: SiteConfig): Prom
 /**
  * Fetch the SSID of the hotspot/captive-portal network (open security).
  */
-export async function getUnifiHotspotSsid(cfg?: SiteConfig): Promise<string | null> {
+export async function getUnifiHotspotSsid(cfg: SiteConfig): Promise<string | null> {
   try {
     const wlans = await unifiRequest<Array<{ name: string; security: string; enabled: boolean }>>(
       "/list/wlanconf",

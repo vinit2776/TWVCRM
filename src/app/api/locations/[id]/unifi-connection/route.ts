@@ -6,8 +6,12 @@
  * key encrypted in unifi_console_credentials. The key is verified against the
  * console before anything is saved, and is never returned to the browser.
  *
- *   GET    → { console_id, site_id, mode, has_own_key }
+ *   GET    → { console_id, site_id, mode, has_own_key, shared_with }
+ *          ?verify=1 also looks the console up in UniFi (api.ui.com/v1/hosts) and returns
+ *          { console: { found, name } } so the admin can confirm it is the right console.
  *   PUT    → { console_id, site_id?, api_key? }  (api_key omitted = keep stored key)
+ *          responds with the same `console` / `shared_with` confirmation. A console id that
+ *          another location already uses is a warning (`shared_with`), never a block.
  *   DELETE → removes the stored key (location falls back to the shared env key)
  *
  * admin / it_manager only: this controls who can issue guest Wi-Fi vouchers.
@@ -17,7 +21,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { encryptSecret } from "@/lib/crypto-secrets";
-import { clearUnifiKeyCache } from "@/lib/unifi";
+import { clearUnifiKeyCache, getUnifiConsoleInfo, type UnifiConsoleInfo } from "@/lib/unifi";
 
 const ALLOWED_ROLES = ["admin", "it_manager"];
 const API_ROOT = "https://api.ui.com/v1/connector/consoles";
@@ -40,8 +44,31 @@ async function authorize() {
   return { userId: dbUser.id as string };
 }
 
+/** Other locations pointing at the same console — usually a copy-paste mistake. */
+async function locationsSharingConsole(
+  admin: ReturnType<typeof createAdminClient>,
+  consoleId: string,
+  excludeLocationId: string
+) {
+  const { data } = await admin
+    .from("locations")
+    .select("id, name, code")
+    .eq("unifi_console_id", consoleId)
+    .neq("id", excludeLocationId);
+  return (data ?? []) as Array<{ id: string; name: string; code: string | null }>;
+}
+
+/** Console name from UniFi; a lookup failure is reported, not thrown (the save already succeeded). */
+async function lookupConsole(consoleId: string, apiKey?: string): Promise<{ console: UnifiConsoleInfo | null; console_error?: string }> {
+  try {
+    return { console: await getUnifiConsoleInfo(consoleId, apiKey) };
+  } catch (err) {
+    return { console: null, console_error: err instanceof Error ? err.message : "Could not look the console up" };
+  }
+}
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -58,7 +85,11 @@ export async function GET(
   if (!loc) return NextResponse.json({ error: "Location not found" }, { status: 404 });
 
   let hasOwnKey = false;
+  let shared_with: Awaited<ReturnType<typeof locationsSharingConsole>> = [];
+  let lookup: Awaited<ReturnType<typeof lookupConsole>> | null = null;
   if (loc.unifi_console_id) {
+    shared_with = await locationsSharingConsole(admin, loc.unifi_console_id, id);
+    if (request.nextUrl.searchParams.get("verify") === "1") lookup = await lookupConsole(loc.unifi_console_id);
     const { data: cred } = await admin
       .from("unifi_console_credentials")
       .select("console_id")
@@ -72,6 +103,8 @@ export async function GET(
       site_id: loc.unifi_site_id,
       mode: loc.wifi_voucher_mode,
       has_own_key: hasOwnKey,
+      shared_with,
+      ...(lookup ?? {}),
     },
   });
 }
@@ -160,7 +193,9 @@ export async function PUT(
     },
   });
 
-  return NextResponse.json({ data: { console_id, site_id, mode: "unifi_api" } });
+  const lookup = await lookupConsole(console_id, api_key);
+  const shared_with = await locationsSharingConsole(admin, console_id, id);
+  return NextResponse.json({ data: { console_id, site_id, mode: "unifi_api", shared_with, ...lookup } });
 }
 
 export async function DELETE(

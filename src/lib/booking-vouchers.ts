@@ -21,7 +21,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { logAudit } from "@/lib/audit";
-import { getUnifiVoucher, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { getUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 
 export type SendBookingVoucherEmailResult =
   | { ok: true; sent: number; recipient: string; emailedAt: string }
@@ -119,8 +119,6 @@ export async function sendBookingVoucherEmail(
 
   // Resolve each issuance's code, recovering legacy UniFi rows (no unifi_code
   // stored) from the controller and backfilling so future sends skip the round-trip.
-  let locationRow: { unifi_site_id?: string | null; unifi_console_id?: string | null; wifi_voucher_mode?: string | null } | null = null;
-
   const resolvedCodes: { issuanceId: string; code: string | null }[] = [];
   for (const issuance of issuances) {
     const row = issuance as Record<string, unknown>;
@@ -132,25 +130,19 @@ export async function sendBookingVoucherEmail(
 
     if (!code && row.unifi_voucher_id) {
       try {
-        if (locationRow === null) {
-          const { data } = await supabase
-            .from("locations")
-            .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
-            .eq("id", booking.location_id)
-            .single();
-          locationRow = data;
-        }
-        if (locationRow && isUnifiLocation(locationRow)) {
-          const siteConfig = siteConfigFromLocation(locationRow);
-          const unifiVoucher = await getUnifiVoucher(row.unifi_voucher_id as string, siteConfig);
-          if (unifiVoucher?.code) {
-            code = unifiVoucher.code;
-            // Backfill so future sends don't need the API call
-            await supabase
-              .from("voucher_issuances")
-              .update({ unifi_code: unifiVoucher.code })
-              .eq("id", issuance.id);
-          }
+        // Look the code up on the console that issued it (recorded at issue time).
+        const siteConfig = await siteConfigForStoredVoucher({
+          consoleId: row.unifi_console_id as string | null,
+          locationId: booking.location_id,
+        });
+        const unifiVoucher = await getUnifiVoucher(row.unifi_voucher_id as string, siteConfig);
+        if (unifiVoucher?.code) {
+          code = unifiVoucher.code;
+          // Backfill so future sends don't need the API call
+          await supabase
+            .from("voucher_issuances")
+            .update({ unifi_code: unifiVoucher.code })
+            .eq("id", issuance.id);
         }
       } catch (err) {
         console.error("[booking-voucher-email] UniFi code lookup failed:", err);

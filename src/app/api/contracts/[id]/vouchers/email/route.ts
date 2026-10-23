@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
-import { getUnifiVoucher, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { getUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
 
 export async function POST(
   request: NextRequest,
@@ -82,19 +82,16 @@ export async function POST(
     let voucherCode: string = issuance.voucher?.voucher_code || (issuance as Record<string, unknown>).unifi_code as string || "";
     if (!voucherCode && (issuance as Record<string, unknown>).unifi_voucher_id) {
       try {
-        const { data: locationRow } = await supabase
-          .from("locations")
-          .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
-          .eq("id", contract.location_id)
-          .single();
-        if (locationRow && isUnifiLocation(locationRow)) {
-          const siteConfig = siteConfigFromLocation(locationRow);
-          const unifiVoucher = await getUnifiVoucher((issuance as Record<string, unknown>).unifi_voucher_id as string, siteConfig);
-          if (unifiVoucher?.code) {
-            voucherCode = unifiVoucher.code;
-            // Backfill so future sends don't need the API call
-            await supabase.from("voucher_issuances").update({ unifi_code: unifiVoucher.code }).eq("id", issuance_id);
-          }
+        // Look the code up on the console that issued it (recorded at issue time).
+        const siteConfig = await siteConfigForStoredVoucher({
+          consoleId: (issuance as Record<string, unknown>).unifi_console_id as string | null,
+          locationId: contract.location_id,
+        });
+        const unifiVoucher = await getUnifiVoucher((issuance as Record<string, unknown>).unifi_voucher_id as string, siteConfig);
+        if (unifiVoucher?.code) {
+          voucherCode = unifiVoucher.code;
+          // Backfill so future sends don't need the API call
+          await supabase.from("voucher_issuances").update({ unifi_code: unifiVoucher.code }).eq("id", issuance_id);
         }
       } catch (err) {
         console.error("[voucher-email] UniFi code lookup failed:", err);
