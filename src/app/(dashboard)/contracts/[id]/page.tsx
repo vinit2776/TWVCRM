@@ -1951,6 +1951,9 @@ export default function ContractDetailPage({
                       <th className="px-4 py-3 text-right font-medium">Qty</th>
                       <th className="px-4 py-3 text-right font-medium">Unit Price</th>
                       <th className="px-4 py-3 text-right font-medium">Total</th>
+                      {contract.items.some((i) => i.escalates !== undefined) && (
+                        <th className="px-4 py-3 text-right font-medium">On renewal</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -1960,6 +1963,11 @@ export default function ContractDetailPage({
                         <td className="px-4 py-3 text-right">{item.quantity}</td>
                         <td className="px-4 py-3 text-right">{formatCurrency(item.unit_price)}</td>
                         <td className="px-4 py-3 text-right font-medium">{formatCurrency(item.total)}</td>
+                        {contract.items.some((i) => i.escalates !== undefined) && (
+                          <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                            {item.escalates === false ? "Stays fixed" : "Escalates"}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

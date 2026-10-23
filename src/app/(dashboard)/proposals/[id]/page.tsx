@@ -1205,6 +1205,9 @@ export default function ProposalDetailPage({
                       <th className="px-4 py-3 text-right font-medium">
                         Total
                       </th>
+                      {proposal.items.some((i) => i.escalates !== undefined) && (
+                        <th className="px-4 py-3 text-right font-medium">On renewal</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -1223,6 +1226,11 @@ export default function ProposalDetailPage({
                         <td className="px-4 py-3 text-right font-medium">
                           {formatCurrency(item.total)}
                         </td>
+                        {proposal.items.some((x) => x.escalates !== undefined) && (
+                          <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                            {item.escalates === false ? "Stays fixed" : "Escalates"}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

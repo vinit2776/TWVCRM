@@ -534,6 +534,21 @@ function generatePDF(options: PDFOptions): jsPDF {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   y = (doc as any).lastAutoTable.finalY + 8;
 
+  // Proposals with a rent/maintenance split say which lines escalate, so the
+  // customer reads the same terms the renewal will apply.
+  if (options.showServicesIncluded && options.items.some((i) => i.escalates === false)) {
+    ensureSpace(14);
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(80, 80, 80);
+    const note = doc.splitTextToSize(
+      "Annual escalation applies to rent only. Items listed as fixed, such as maintenance, do not escalate during the term.",
+      pageWidth - 28
+    );
+    doc.text(note, 14, y);
+    y += note.length * 4 + 4;
+  }
+
   // ── Totals Section ──
   ensureSpace(44);
   const totalsX = pageWidth - 85;

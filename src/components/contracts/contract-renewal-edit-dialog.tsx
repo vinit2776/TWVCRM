@@ -33,6 +33,8 @@ interface EditableItem {
   quantity: number;
   unit_price: number;
   unit?: string;
+  // Carried through unchanged so editing a renewal never loses the rent/maintenance split.
+  escalates?: boolean;
 }
 
 interface ContractRenewalEditDialogProps {
@@ -61,6 +63,7 @@ export function ContractRenewalEditDialog({
       quantity: item.quantity,
       unit_price: item.unit_price,
       unit: item.unit,
+      ...(item.escalates !== undefined ? { escalates: item.escalates } : {}),
     }))
   );
 
@@ -131,6 +134,7 @@ export function ContractRenewalEditDialog({
             unit_price: i.unit_price,
             unit: i.unit,
             total: i.quantity * i.unit_price,
+            ...(i.escalates !== undefined ? { escalates: i.escalates } : {}),
           })),
         }),
       });
@@ -290,6 +294,9 @@ export function ContractRenewalEditDialog({
                           placeholder="e.g. 8 Seater Conference Room"
                           className="h-8 text-sm"
                         />
+                        {item.escalates === false && (
+                          <p className="mt-1 text-[11px] text-amber-700">Fixed: not escalated on renewal</p>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <Input
