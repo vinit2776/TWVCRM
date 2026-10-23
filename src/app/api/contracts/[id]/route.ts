@@ -9,7 +9,7 @@ import { unbilledMonths, type RentCoverage } from "@/lib/billing-months";
 import { renewalChainContractIds } from "@/lib/renewal-chain";
 import { getRenewalProrataGate, PRORATA_UNSENT_ERROR } from "@/lib/renewal-prorata";
 import { setUserActive } from "@/lib/cosec";
-import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, siteConfigForLocationId, isUnifiLocation } from "@/lib/unifi";
 import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 import { resolveContractCommitment } from "@/lib/contract-commitment";
 import { hasCommitmentTerms } from "@/lib/proposal-terms";
@@ -718,11 +718,11 @@ export async function PATCH(
           // 1a. Revoke parent contract's UniFi API voucher (Nungambakkam LGF)
           const { data: parentContract } = await admin
             .from("contracts")
-            .select("unifi_voucher_id")
+            .select("unifi_voucher_id, location_id")
             .eq("id", oldContract.parent_contract_id)
             .single();
           if (parentContract?.unifi_voucher_id) {
-            revokeUnifiVoucher(parentContract.unifi_voucher_id)
+            revokeUnifiVoucher(parentContract.unifi_voucher_id, await siteConfigForLocationId(parentContract.location_id))
               .catch((err: unknown) => console.error("[renewal-activate] UniFi voucher revocation failed:", err));
           }
 
@@ -892,7 +892,9 @@ export async function PATCH(
 
   // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
   if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
-    revokeUnifiVoucher(oldContract.unifi_voucher_id)
+    // Revoke on the contract's own site console, not the default one.
+    siteConfigForLocationId(oldContract.location_id)
+      .then((cfg) => revokeUnifiVoucher(oldContract.unifi_voucher_id, cfg))
       .catch(err => console.error("[unifi] voucher revocation on termination failed:", err));
   }
 
@@ -927,11 +929,12 @@ export async function PATCH(
           }
 
           // Revoke Unifi live-API per-seat vouchers (fire-and-forget)
+          const terminatedSiteCfg = await siteConfigForLocationId(oldContract.location_id);
           for (const issuance of issuances) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const uid = (issuance as any).unifi_voucher_id as string | null;
             if (uid) {
-              revokeUnifiVoucher(uid).catch((err: unknown) =>
+              revokeUnifiVoucher(uid, terminatedSiteCfg).catch((err: unknown) =>
                 console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
               );
             }
