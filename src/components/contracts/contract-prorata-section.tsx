@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { HANDOFF_STATE_LABELS, type HandoffState } from "@/lib/tally-handoff";
+import { ProrataCorrectionBanner } from "@/components/contracts/prorata-correction-banner";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import type { Contract } from "@/types";
 
@@ -263,6 +264,14 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <p><span className="font-semibold">Not sent.</span> {dispatchError}</p>
             </div>
+          )}
+
+          {userRole === "admin" && (displayState === "gst_in_tally" || displayState === "pi_sent") && (
+            <ProrataCorrectionBanner
+              contractId={contract.id}
+              refreshKey={`${contract.subtotal}-${stmtState?.updated_at ?? ""}`}
+              onSuccess={() => { fetchStmtState(); onSuccess(); }}
+            />
           )}
 
           {displayState === "unsent" && (
