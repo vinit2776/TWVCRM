@@ -2,8 +2,8 @@
 /**
  * Adds role-specific test users to the STAGING Supabase project so permission
  * paths can be exercised (for example the accounts role paying an exit refund
- * that an admin approved). Idempotent: re-running leaves existing users alone
- * and re-asserts their role.
+ * that an admin approved). Idempotent: re-running resets each user's
+ * password and re-asserts their role.
  *
  *   node scripts/seed-staging-users.mjs
  *
@@ -36,9 +36,15 @@ if (env.NEXT_PUBLIC_SUPABASE_URL.includes(PRODUCTION_REF)) { console.error("Refu
 console.log(`Seeding users on ${env.NEXT_PUBLIC_SUPABASE_URL} ...`);
 const supa = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
-const USERS = [
-  { email: "accounts@staging.theworkvilla.test", password: "StagingAccounts!2026", full_name: "Staging Accounts", role: "accounts" },
-];
+// One login per role, all with the same password so nothing has to be remembered per account.
+const PASSWORD = "Staging#Login2026";
+const ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "it_manager", "it_technician"];
+const USERS = ROLES.map((role) => ({
+  email: `${role.replace(/_/g, "")}@staging.theworkvilla.test`,
+  password: PASSWORD,
+  full_name: `Staging ${role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}`,
+  role,
+}));
 
 for (const u of USERS) {
   const { data: list } = await supa.auth.admin.listUsers({ perPage: 1000 });
@@ -51,7 +57,10 @@ for (const u of USERS) {
     authUser = data.user;
     console.log(`Created auth user ${u.email}`);
   } else {
-    console.log(`Auth user ${u.email} already exists`);
+    // Reset so a login whose password drifted works again.
+    const { error } = await supa.auth.admin.updateUserById(authUser.id, { password: u.password, email_confirm: true, ban_duration: "none" });
+    if (error) throw error;
+    console.log(`Reset password for ${u.email}`);
   }
 
   // The on_auth_user_created trigger inserts the public.users row (default role sales_rep); set the role.
