@@ -27,6 +27,7 @@ import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-ear
 import { canOverridePiToGst, hasLivePi } from "@/lib/pi-override";
 import { CreditNoteUploadDialog } from "@/components/billing/credit-note-upload-dialog";
 import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
+import { parseReissueNote } from "@/lib/void-note";
 import { StatementTimeline } from "@/components/accounting/statement-timeline";
 import { CommunicationSentDialog } from "@/components/communications/communication-sent-dialog";
 import { RecentCommunicationsCard } from "@/components/communications/recent-communications-card";
@@ -1548,17 +1549,17 @@ export function ViewStatementDialog({
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Notes</p>
                 {(() => {
-                  // Re-issues from /void: "Replaces voided X.\nVoid reason: …" — show the
-                  // reason on demand so an old void message doesn't read as a live warning.
-                  const m = statement.notes.match(/^Replaces voided (.+?)\.\nVoid reason: ([\s\S]*)$/);
-                  if (!m) return <p className="text-sm">{statement.notes}</p>;
+                  // Re-issues from /void carry the voided statement's reason — show it on
+                  // demand so an old void message doesn't read as a live warning.
+                  const note = parseReissueNote(statement.notes);
+                  if (!note) return <p className="text-sm">{statement.notes}</p>;
                   return (
                     <details className="text-sm">
                       <summary className="cursor-pointer select-none">
-                        Replaces voided <span className="font-mono">{m[1]}</span>
+                        Replaces voided <span className="font-mono">{note.voidedNumber}</span>
                         <span className="text-xs text-muted-foreground"> · Why it was voided</span>
                       </summary>
-                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{m[2]}</p>
+                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">{note.reason}</p>
                     </details>
                   );
                 })()}
