@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { electricityWorkings, loadLandlordLines, SHOW_LANDLORD_RATE_ON_INVOICE } from "@/lib/electricity-workings";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { buildElectricityAnnexure } from "@/lib/electricity-annexure";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 
 interface CustomerBillRow {
@@ -16,7 +16,6 @@ interface CustomerBillRow {
   customer_utility_pct: number | null;
   customer_generator_pct: number | null;
   customer_units_billed: number | null;
-  landlord_bill_id: string | null;
   customer_utility_rate: number | null;
   customer_generator_rate: number | null;
   gst_rate: number | null;
@@ -62,7 +61,7 @@ export async function GET(
     .select(
       "id, bill_side, contract_id, bill_month, bill_year, customer_subtotal, customer_cgst, " +
         "customer_sgst, customer_total, customer_utility_pct, customer_generator_pct, " +
-        "customer_units_billed, customer_utility_rate, customer_generator_rate, gst_rate, landlord_bill_id",
+        "customer_units_billed, customer_utility_rate, customer_generator_rate, gst_rate",
     )
     .eq("id", id)
     .single();
@@ -104,12 +103,10 @@ export async function GET(
   const generatorUnits = round2((totalUnits * Number(bill.customer_generator_pct ?? 0)) / 100);
 
   const lineItems: GstInvoiceData["lineItems"] = [];
-  const landlordLines = await loadLandlordLines(supabase, bill.landlord_bill_id);
   if (utilityUnits > 0) {
     const rate = Number(bill.customer_utility_rate ?? 0);
     lineItems.push({
       description: `Electricity — Utility/Grid (${monthLabel})`,
-      workings: electricityWorkings({ landlordLines, type: "utility", customerPct: Number(bill.customer_utility_pct ?? 0), customerUnits: utilityUnits, customerRate: rate, showLandlordRate: SHOW_LANDLORD_RATE_ON_INVOICE }),
       hsnSac: "996912",
       qty: utilityUnits,
       rate,
@@ -120,7 +117,6 @@ export async function GET(
     const rate = Number(bill.customer_generator_rate ?? 0);
     lineItems.push({
       description: `Electricity — DG/Generator (${monthLabel})`,
-      workings: electricityWorkings({ landlordLines, type: "generator", customerPct: Number(bill.customer_generator_pct ?? 0), customerUnits: generatorUnits, customerRate: rate, showLandlordRate: SHOW_LANDLORD_RATE_ON_INVOICE }),
       hsnSac: "996912",
       qty: generatorUnits,
       rate,
@@ -143,6 +139,7 @@ export async function GET(
     contractNumber: (contract as { contract_number: string }).contract_number,
     poNumber: (contract as { po_number?: string | null }).po_number,
     lineItems,
+    annexure: buildElectricityAnnexure(bill, monthLabel),
     subtotal: Number(bill.customer_subtotal ?? 0),
     cgst: Number(bill.customer_cgst ?? 0),
     sgst: Number(bill.customer_sgst ?? 0),

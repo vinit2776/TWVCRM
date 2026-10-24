@@ -29,6 +29,7 @@ import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
@@ -186,6 +187,7 @@ export async function dispatchTallyInvoice(
       try { razorpayQrBase64 = await QRCode.toDataURL(razorpayLinkUrl, { width: 200, margin: 1, errorCorrectionLevel: "M" }); } catch { /* skip */ }
     }
     const invoiceData: GstInvoiceData = {
+      annexure: annexureFromSections(statement.line_items),
       invoiceNumber: ack.invoiceNumber,
       invoiceDate: issueDateYmd,
       isProforma: false,

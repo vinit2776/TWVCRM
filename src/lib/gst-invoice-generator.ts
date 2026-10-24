@@ -13,6 +13,7 @@ import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
 import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { sanitizeForPdf } from "@/lib/pdf-text";
+import type { ElectricityAnnexure } from "@/lib/electricity-annexure";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101];
@@ -210,6 +211,8 @@ export interface GstInvoiceData {
    * When set, a short note is printed so the merged PDF is self-explanatory.
    */
   supportingDocsCount?: number;
+  /** Electricity re-billing only: printed as "Annexure A — Calculation" on its own last page. */
+  annexure?: ElectricityAnnexure;
 }
 
 export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
@@ -630,5 +633,80 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text(`${SELLER.address.replace(/\n/g, " ")}  |  ${SELLER.phone}  |  ${SELLER.website}`, pageWidth / 2, footerY + 10, { align: "center" });
   doc.text(`GSTIN: ${SELLER.gstin}`, pageWidth / 2, footerY + 14, { align: "center" });
 
+  if (data.annexure) drawElectricityAnnexure(doc, data, pageWidth);
+
   return doc;
+}
+
+function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: number): void {
+  const a = data.annexure!;
+  doc.addPage();
+
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, 0, pageWidth, 22, "F");
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("Annexure A - Calculation of electricity charges", 14, 14);
+
+  let y = 32;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(60, 60, 60);
+  doc.text(sanitizeForPdf(`Invoice ${data.invoiceNumber}  |  Contract ${data.contractNumber}  |  ${a.monthLabel}`), 14, y);
+  y += 10;
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("1. Units billed for the premises", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [["Total units billed for the month", a.totalUnits.toFixed(2)]],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text(`2. Units split to your agreed ratio (${a.utilityPct} / ${a.generatorPct}), at your rate`, 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    head: [["Line", "Units", "Rate", "Amount"]],
+    body: a.lines.map((l) => [l.label, l.units.toFixed(2), `Rs. ${l.rate.toFixed(2)}`, `Rs. ${l.amount.toFixed(2)}`]),
+    theme: "grid",
+    headStyles: { fillColor: [1, 94, 101], textColor: [255, 255, 255], fontSize: 8, fontStyle: "bold" },
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" } },
+    didParseCell: (h) => { if (h.section === "head" && h.column.index > 0) h.cell.styles.halign = "right"; },
+    margin: { left: 14, right: 14 },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  const half = a.gstRate / 2;
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("3. Totals", 14, y);
+  y += 3;
+  autoTable(doc, {
+    startY: y,
+    body: [
+      ["Subtotal", `Rs. ${a.subtotal.toFixed(2)}`],
+      [`CGST @${half}%`, `Rs. ${a.cgst.toFixed(2)}`],
+      [`SGST @${half}%`, `Rs. ${a.sgst.toFixed(2)}`],
+      ["Round off", `${a.roundOff < 0 ? "-" : "+"} Rs. ${Math.abs(a.roundOff).toFixed(2)}`],
+      ["Total payable", `Rs. ${a.total.toFixed(2)}`],
+    ],
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, textColor: [60, 60, 60] },
+    columnStyles: { 1: { halign: "right", cellWidth: 40 } },
+    didParseCell: (h) => { if (h.row.index === 4) h.cell.styles.fontStyle = "bold"; },
+    margin: { left: 14, right: 14 },
+  });
 }

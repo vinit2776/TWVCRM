@@ -1009,6 +1009,10 @@ export default function ElectricityBillsPage() {
                                         <span className="font-medium shrink-0">{formatCurrency(p.customer_total)}</span>
                                       </div>
                                       <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>Annexure A — total units billed</span>
+                                          <span>{Math.round((p.customer_utility_units + p.customer_generator_units) * 100) / 100}</span>
+                                        </div>
                                         {p.customer_utility_units > 0 && (
                                           <div className="flex justify-between text-muted-foreground">
                                             <span>Utility/Grid: {p.customer_utility_units} units × {formatCurrency(p.customer_utility_rate)}</span>
@@ -1064,6 +1068,10 @@ export default function ElectricityBillsPage() {
                                     const b = customerBillBreakdown(cb);
                                     return (
                                       <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>Annexure A — total units billed</span>
+                                          <span>{Math.round((b.utilityUnits + b.generatorUnits) * 100) / 100}</span>
+                                        </div>
                                         {b.utilityUnits > 0 && (
                                           <div className="flex justify-between text-muted-foreground">
                                             <span>Utility/Grid: {b.utilityUnits} units × {formatCurrency(b.utilityRate)}</span>

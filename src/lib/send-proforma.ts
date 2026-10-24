@@ -13,6 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { logCommunication } from "@/lib/communications-log";
@@ -345,6 +346,7 @@ export async function dispatchProforma(
     : [];
 
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber: proformaRef,
     // Rent proformas: invoice date = 1st of the billed month (period_start).
     //   e.g. June rent sent May 30 → prints "1 June 2026"
@@ -802,6 +804,7 @@ export async function dispatchGstDirect(
     : [];
 
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber,
     invoiceDate: issueDateYmd,
     isProforma: false,
