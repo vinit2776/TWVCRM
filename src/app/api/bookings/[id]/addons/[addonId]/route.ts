@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { findAddonUsageCharge, isChargeAlreadyInvoiced } from "@/lib/booking-addon-charges";
 
 /**
  * DELETE /api/bookings/[id]/addons/[addonId]
@@ -57,9 +58,41 @@ export async function DELETE(
     .from("booking_addons").select("*").eq("id", addonId).eq("booking_id", id).single();
   if (!addon) return NextResponse.json({ error: "Add-on not found" }, { status: 404 });
 
+  // Contract-holder bookings get a linked usage_charges row per add-on (see
+  // src/lib/booking-addon-charges.ts). If that charge has already made it
+  // onto a billing statement (or is otherwise marked billed), the customer
+  // has already been invoiced for it — deleting the add-on here without
+  // touching billing history would silently desync the two. Block instead
+  // of mutating billed history.
+  const linkedCharge = await findAddonUsageCharge(supabase, id, addonId);
+  if (linkedCharge && isChargeAlreadyInvoiced(linkedCharge)) {
+    return NextResponse.json(
+      { error: "Cannot remove this add-on — it has already been invoiced on a billing statement. Void or credit the statement instead." },
+      { status: 400 }
+    );
+  }
+
   const { error } = await supabase
     .from("booking_addons").delete().eq("id", addonId).eq("booking_id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Keep the linked usage_charges row in sync — it's still pending (never
+  // billed, guarded above), so it's safe to remove along with the add-on.
+  if (linkedCharge) {
+    const { error: chargeDelErr } = await supabase
+      .from("usage_charges").delete().eq("id", linkedCharge.id);
+    if (chargeDelErr) {
+      console.error(`[addons] failed to delete linked usage charge ${linkedCharge.id} for addon ${addonId}:`, chargeDelErr.message);
+    } else {
+      logAudit(supabase, {
+        entityType: "usage_charge",
+        entityId: linkedCharge.id,
+        action: "delete",
+        performedBy: dbUser.id,
+        changes: { record: { old: { booking_addon_id: addonId, booking_id: id }, new: null } },
+      });
+    }
+  }
 
   // Recompute total
   const { data: remaining } = await supabase
