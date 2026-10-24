@@ -65,3 +65,23 @@ describe("computeSetupChecks", () => {
     expect(byKey({ ...good, autoApproveEnabled: false }).auto_approve.detail).toMatch(/by hand/);
   });
 });
+
+import { setupGaps } from "@/lib/electricity-setup-checks";
+
+describe("setupGaps", () => {
+  it("is empty when only optional things are missing", () => {
+    expect(setupGaps(computeSetupChecks({ ...good, activeConnections: 0, autoApproveEnabled: false }))).toEqual([]);
+  });
+
+  it("makes one chip per failing required check", () => {
+    const gaps = setupGaps(computeSetupChecks({ ...good, config: { ...good.config!, landlord_vendor_id: null }, contracts: [] }));
+    expect(gaps.map((g) => g.text)).toEqual(["No landlord set", "No contract billed"]);
+  });
+
+  it("names the contract for a missing billing profile and links it", () => {
+    const gaps = setupGaps(computeSetupChecks({ ...good, contracts: [{ ...good.contracts[0], billing_profile_id: null, profile_active: false }] }));
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].text).toBe("TWV-C-0028 has no billing profile");
+    expect(gaps[0].contracts).toEqual([{ id: "c1", number: "TWV-C-0028" }]);
+  });
+});
