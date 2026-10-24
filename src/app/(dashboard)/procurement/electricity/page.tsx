@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import Link from "next/link";
 import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -127,6 +128,9 @@ interface EbBill {
   landlord_gst_rate?: number | null;
   landlord_gst_amount?: number;
   vendor_bill_id?: string | null;
+  source_vendor_bill_id?: string | null;
+  /** Where the payable came from: made with this bill at capture, or uploaded under Procurement → Bills. */
+  vendor_bill_origin?: "created" | "uploaded" | null;
   notes?: string | null;
   created_at: string;
   electricity_bill_lines: EbLine[];
@@ -898,7 +902,7 @@ export default function ElectricityBillsPage() {
                         {bill.landlord_bill_number && `Bill# ${bill.landlord_bill_number} · `}
                         {bill.landlord_bill_date && `${formatDate(bill.landlord_bill_date)} · `}
                         {formatCurrency(bill.landlord_total_amount)}
-                        {bill.vendor_bill_id && " · Vendor bill linked"}
+                        {bill.vendor_bill && ` · ${bill.vendor_bill_origin === "uploaded" ? "Uploaded vendor bill linked" : "Vendor bill linked"}`}
                       </p>
                       {(() => {
                         const next = nextAction(bill);
@@ -1151,9 +1155,15 @@ export default function ElectricityBillsPage() {
                                   </Badge>
                                   <Badge variant="outline">{vb.approval_status}</Badge>
                                 </div>
+                                <p className="text-muted-foreground">
+                                  {bill.vendor_bill_origin === "uploaded" ? "Uploaded under Procurement → Bills" : "Created with this bill"}
+                                  {vb.invoice_number ? ` · Invoice ${vb.invoice_number}` : ""}
+                                  {" · "}
+                                  <Link href={`/procurement/bills/${vb.id}`} className="text-primary underline underline-offset-2">Open vendor bill</Link>
+                                </p>
                               </>
                             ) : (
-                              <p className="text-muted-foreground">No vendor bill is linked to this electricity bill. If the landlord invoice was entered under Procurement → Bills, check it there.</p>
+                              <p className="text-muted-foreground">No payable exists for this bill, so nothing is waiting in Acc Payables. Set the landlord for this location, or link the uploaded invoice from Procurement → Bills.</p>
                             )}
                           </div>
 
