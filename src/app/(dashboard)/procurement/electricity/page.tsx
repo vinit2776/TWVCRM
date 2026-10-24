@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import type { SetupGap } from "@/lib/electricity-setup-checks";
 import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -137,6 +138,8 @@ interface EbBill {
   locations?: { id: string; name: string; code: string };
   vendor_bill?: VendorBillInfo | null;
   customer_bills?: CustomerBillInfo[];
+  /** Required setup gaps at this bill's location (see electricity-setup-checks). */
+  setup_gaps?: SetupGap[];
 }
 
 interface LocationConfig {
@@ -165,7 +168,8 @@ export default function ElectricityBillsPage() {
   const { user } = useCurrentUser();
   const [bills, setBills] = useState<EbBill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"needs" | "waiting" | "done">("needs");
+  const [activeTab, setActiveTab] = useState<"problems" | "needs" | "waiting" | "done">("needs");
+  const [gapPanelBillId, setGapPanelBillId] = useState<string | null>(null);
   const [listLocationFilter, setListLocationFilter] = useState("");
   const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
   // Draft bills (awaiting approval) default to expanded — the full line-item
@@ -801,6 +805,9 @@ export default function ElectricityBillsPage() {
       needs: listFilteredBills.filter((b) => billBucket(b) === "needs"),
       waiting: listFilteredBills.filter((b) => billBucket(b) === "waiting"),
       done: listFilteredBills.filter((b) => billBucket(b) === "done"),
+      // A lens, not a bucket: open bills at a location with a required setup gap. They also sit in Needs action
+      // or Waiting on others, so nothing is hidden from the worklist by being listed here too.
+      problems: listFilteredBills.filter((b) => billBucket(b) !== "done" && (b.setup_gaps ?? []).length > 0),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [listFilteredBills, user?.role, tallyHandoffV2Enabled],
@@ -838,8 +845,11 @@ export default function ElectricityBillsPage() {
 
       {!loading && bills.length > 0 && (
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "needs" | "waiting" | "done")}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "problems" | "needs" | "waiting" | "done")}>
             <TabsList>
+              <TabsTrigger value="problems" className={bucketed.problems.length > 0 ? "text-red-700" : undefined}>
+                Problems to fix ({bucketed.problems.length})
+              </TabsTrigger>
               <TabsTrigger value="needs">Needs action ({bucketed.needs.length})</TabsTrigger>
               <TabsTrigger value="waiting">Waiting on others ({bucketed.waiting.length})</TabsTrigger>
               <TabsTrigger value="done">Done ({bucketed.done.length})</TabsTrigger>
@@ -870,13 +880,15 @@ export default function ElectricityBillsPage() {
       ) : visibleBills.length === 0 ? (
         <EmptyState
           icon={Zap}
-          title={activeTab === "needs" ? "Nothing needs your action" : activeTab === "waiting" ? "Nothing is waiting on others" : "No completed bills"}
+          title={activeTab === "problems" ? "No setup problems" : activeTab === "needs" ? "Nothing needs your action" : activeTab === "waiting" ? "Nothing is waiting on others" : "No completed bills"}
           description={
-            activeTab === "needs"
-              ? "Every open bill is with someone else or fully paid."
-              : activeTab === "waiting"
-                ? "No bill is waiting on the customer or another team."
-                : "Nothing has reached Paid yet for this view."
+            activeTab === "problems"
+              ? "Every open bill's location has what it needs to bill."
+              : activeTab === "needs"
+                ? "Every open bill is with someone else or fully paid."
+                : activeTab === "waiting"
+                  ? "No bill is waiting on the customer or another team."
+                  : "Nothing has reached Paid yet for this view."
           }
         />
       ) : (
@@ -929,6 +941,43 @@ export default function ElectricityBillsPage() {
                           </div>
                         );
                       })()}
+                      {activeTab !== "done" && (bill.setup_gaps ?? []).length > 0 && (
+                        <div className="mt-1.5">
+                          <div className="flex flex-wrap gap-1.5">
+                            {(bill.setup_gaps ?? []).map((gap) => (
+                              <button
+                                key={gap.key}
+                                type="button"
+                                aria-expanded={gapPanelBillId === bill.id}
+                                onClick={() => setGapPanelBillId(gapPanelBillId === bill.id ? null : bill.id)}
+                                className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100"
+                              >
+                                <span aria-hidden="true">●</span> {gap.text}
+                              </button>
+                            ))}
+                          </div>
+                          {gapPanelBillId === bill.id && (
+                            <div className="mt-2 rounded-md border bg-background p-3 text-xs space-y-2">
+                              {(bill.setup_gaps ?? []).map((gap) => (
+                                <div key={gap.key} className="flex gap-2">
+                                  <span className="text-red-600" aria-hidden="true">●</span>
+                                  <div>
+                                    <p className="font-medium">{gap.text}</p>
+                                    <p className="text-muted-foreground">{gap.detail}</p>
+                                    <p className="mt-0.5">
+                                      {gap.contracts?.map((ct) => (
+                                        <Link key={ct.id} href={`/contracts/${ct.id}`} className="mr-3 text-primary underline underline-offset-2">Open {ct.number}</Link>
+                                      ))}
+                                      <Link href={`/locations/${bill.location_id}`} className="text-primary underline underline-offset-2">Open {bill.locations?.name ?? "location"} → Electricity tab</Link>
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                              <p className="text-muted-foreground">Who fixes it: Admin</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
