@@ -671,10 +671,6 @@ function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: nu
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   y = (doc as any).lastAutoTable.finalY + 10;
 
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(...BRAND_TEAL);
-  doc.text(`2. Units split to your agreed ratio (${a.utilityPct} / ${a.generatorPct}), at your rate`, 14, y);
-  y += 3;
   autoTable(doc, {
     startY: y,
     head: [["Line", "Units", "Rate", "Amount"]],
@@ -692,7 +688,7 @@ function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: nu
   const half = a.gstRate / 2;
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("3. Totals", 14, y);
+  doc.text("2. Totals", 14, y);
   y += 3;
   autoTable(doc, {
     startY: y,
