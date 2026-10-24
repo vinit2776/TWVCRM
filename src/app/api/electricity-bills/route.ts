@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
+import { resolveVendorBillRef } from "@/lib/electricity-vendor-bill";
 import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
 import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
 import { setupGaps, type SetupGap } from "@/lib/electricity-setup-checks";
@@ -81,12 +82,17 @@ export async function GET(request: NextRequest) {
   // (outward receivable) so the UI can show both legs of the same transaction together.
   if (billSide === "landlord" && data && data.length > 0) {
     const landlordIds = data.map((b) => b.id);
-    const vendorBillIds = data.map((b) => b.vendor_bill_id).filter((id): id is string => !!id);
+    // A payable reaches the bill two ways: created with it at capture (vendor_bill_id), or an invoice
+    // someone uploaded under Procurement → Bills and then linked here (source_vendor_bill_id, kept in its
+    // own column on purpose so approving/editing this bill can never touch an uploaded payable). Both are real.
+    const vendorBillIds = data
+      .map((b) => b.vendor_bill_id ?? b.source_vendor_bill_id)
+      .filter((id): id is string => !!id);
 
     // A revised draft may not carry the link yet (bills revised before the link was carried over):
     // fall back to the payable that points at the bill it was revised from.
     const revisedFromIds = data
-      .filter((b) => !b.vendor_bill_id && b.revised_from_id)
+      .filter((b) => !b.vendor_bill_id && !b.source_vendor_bill_id && b.revised_from_id)
       .map((b) => b.revised_from_id as string);
     const fallbackVendorBillByBill = new Map<string, string>();
     if (revisedFromIds.length > 0) {
@@ -97,7 +103,7 @@ export async function GET(request: NextRequest) {
       const byOld = new Map((fallback ?? []).map((v) => [v.electricity_bill_id as string, v.id as string]));
       for (const b of data) {
         const vid = b.revised_from_id ? byOld.get(b.revised_from_id as string) : undefined;
-        if (!b.vendor_bill_id && vid) {
+        if (!b.vendor_bill_id && !b.source_vendor_bill_id && vid) {
           fallbackVendorBillByBill.set(b.id, vid);
           vendorBillIds.push(vid);
         }
@@ -117,9 +123,9 @@ export async function GET(request: NextRequest) {
           id, landlord_bill_id, contract_id, status, customer_total, billing_statement_id, created_by,
           customer_units_billed, customer_utility_pct, customer_generator_pct,
           customer_utility_rate, customer_generator_rate,
-          customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate,
+          customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate, confirmed_at, updated_at,
           contract:contracts(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
-          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state)
+          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state, finalized_at, due_date)
         `)
         .in("landlord_bill_id", landlordIds)
         .eq("bill_side", "customer"),
@@ -151,8 +157,13 @@ export async function GET(request: NextRequest) {
 
     for (const bill of data as Record<string, unknown>[]) {
       bill.setup_gaps = gapsByLocation.get(bill.location_id as string) ?? [];
-      const vbId = (bill.vendor_bill_id as string | null) ?? fallbackVendorBillByBill.get(bill.id as string) ?? null;
-      bill.vendor_bill = vbId ? vendorBillMap.get(vbId) ?? null : null;
+      const ref = resolveVendorBillRef(
+        bill as { vendor_bill_id?: string | null; source_vendor_bill_id?: string | null },
+        fallbackVendorBillByBill.get(bill.id as string),
+      );
+      bill.vendor_bill = ref.id ? vendorBillMap.get(ref.id) ?? null : null;
+      // Lets the screen say where the payable came from.
+      bill.vendor_bill_origin = bill.vendor_bill ? ref.origin : null;
       bill.customer_bills = customerBillsByLandlord.get(bill.id as string) ?? [];
     }
   }
