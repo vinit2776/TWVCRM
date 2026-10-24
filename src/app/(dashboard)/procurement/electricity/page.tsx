@@ -700,11 +700,45 @@ export default function ElectricityBillsPage() {
     if (rank === 3) return { text: "Statement was voided. Check before billing again", owner: "Admin", blocked: true };
     if (rank === 4) {
       const handoff = worst.billing_statement?.handoff_state ?? null;
+      // A proforma awaiting payment is the customer's step, not accounts'.
+      if (handoff === "pi_awaiting_payment") return { text: "Waiting for the customer to pay the proforma", owner: "Customer", blocked: false };
       return handoff && HANDOFF_PENDING_STATES.has(handoff)
         ? { text: "Issue the GST invoice in Tally and upload it", owner: "Accounts", blocked: false }
         : { text: "Waiting for the customer to pay", owner: "Customer", blocked: false };
     }
     return null;
+  };
+
+  // The list's step trail. Its steps follow the contract's route, so the Tally step sits where it
+  // really happens: before payment when GST Direct hands off to accounts, after payment on a
+  // proforma. `current` is the step in progress; `done` means everything is finished.
+  const listTrail = (bill: EbBill): { steps: string[]; current: number; done: boolean } => {
+    const cbs = bill.customer_bills ?? [];
+    const worst = cbs.length > 0 ? cbs.reduce((a, b) => (customerBillRank(b) < customerBillRank(a) ? b : a)) : null;
+    const handoffRoute = worst?.contract?.billing_mode === "gst_direct" && tallyHandoffV2Enabled;
+    const proformaRoute = !!worst && worst.contract?.billing_mode !== "gst_direct";
+    const steps = handoffRoute
+      ? ["Captured", "Approved", "Confirmed", "Handed off", "Tally invoice", "Paid"]
+      : proformaRoute
+        ? ["Captured", "Approved", "Confirmed", "Sent", "Paid", "Tally invoice"]
+        : ["Captured", "Approved", "Confirmed", "Sent", "Paid"];
+    if (bill.status === "draft") return { steps, current: 1, done: false };
+    if (!worst) return { steps, current: 2, done: false };
+    const rank = customerBillRank(worst);
+    if (rank === 0) return { steps, current: 2, done: false };
+    if (rank <= 3) return { steps, current: 3, done: false };
+    const handoff = worst.billing_statement?.handoff_state ?? null;
+    const paid = worst.billing_statement?.payment_status === "paid";
+    if (handoffRoute) {
+      if (handoff && HANDOFF_PENDING_STATES.has(handoff)) return { steps, current: 4, done: false };
+      return paid ? { steps, current: 5, done: true } : { steps, current: 5, done: false };
+    }
+    if (proformaRoute) {
+      if (handoff === "pi_awaiting_payment" || !paid) return { steps, current: 4, done: false };
+      if (handoff && HANDOFF_PENDING_STATES.has(handoff)) return { steps, current: 5, done: false };
+      return { steps, current: 5, done: true };
+    }
+    return paid ? { steps, current: 4, done: true } : { steps, current: 4, done: false };
   };
 
   // Location filter + Open/Completed bucketing — "Completed" reuses the same
@@ -822,14 +856,14 @@ export default function ElectricityBillsPage() {
                       {(() => {
                         const next = nextAction(bill);
                         if (!next) return null;
-                        const life = resolveLifecycle(bill);
+                        const trail = listTrail(bill);
                         return (
                           <div className="mt-1 space-y-0.5">
                             <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-1">
-                              {LIFECYCLE_STEPS.map((step, i) => (
+                              {trail.steps.map((step, i) => (
                                 <span key={step} className="flex items-center gap-x-1">
-                                  <span className={i === life.stepIndex && !life.complete ? "font-medium text-foreground" : i < life.stepIndex || life.complete ? "" : "opacity-60"}>{step}</span>
-                                  {i < LIFECYCLE_STEPS.length - 1 && <span aria-hidden="true">›</span>}
+                                  <span className={trail.done || i < trail.current ? "" : i === trail.current ? "font-medium text-foreground" : "opacity-60"}>{step}</span>
+                                  {i < trail.steps.length - 1 && <span aria-hidden="true">›</span>}
                                 </span>
                               ))}
                             </p>
