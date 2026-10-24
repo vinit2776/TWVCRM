@@ -4,6 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
 import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
+import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -337,5 +338,22 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return NextResponse.json({ data: { id: bill.id, vendor_bill_id: vendorBillId } }, { status: 201 });
+  const autoApprove = await autoApproveCapturedBill(supabase, {
+    landlordBillId: bill.id,
+    locationId: location_id,
+    performedBy: dbUser.id,
+  });
+
+  return NextResponse.json(
+    {
+      data: {
+        id: bill.id,
+        vendor_bill_id: vendorBillId,
+        auto_approved: autoApprove.approved,
+        customer_bills_generated: autoApprove.customerBillIds.length,
+        auto_approve_skipped_reason: autoApprove.skippedReason ?? null,
+      },
+    },
+    { status: 201 },
+  );
 }
