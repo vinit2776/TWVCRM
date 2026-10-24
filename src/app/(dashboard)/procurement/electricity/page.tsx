@@ -165,7 +165,7 @@ export default function ElectricityBillsPage() {
   const { user } = useCurrentUser();
   const [bills, setBills] = useState<EbBill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"needs" | "waiting" | "done">("needs");
+  const [activeTab, setActiveTab] = useState<"problems" | "needs" | "waiting" | "done">("needs");
   const [gapPanelBillId, setGapPanelBillId] = useState<string | null>(null);
   const [listLocationFilter, setListLocationFilter] = useState("");
   const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
@@ -802,6 +802,9 @@ export default function ElectricityBillsPage() {
       needs: listFilteredBills.filter((b) => billBucket(b) === "needs"),
       waiting: listFilteredBills.filter((b) => billBucket(b) === "waiting"),
       done: listFilteredBills.filter((b) => billBucket(b) === "done"),
+      // A lens, not a bucket: open bills at a location with a required setup gap. They also sit in Needs action
+      // or Waiting on others, so nothing is hidden from the worklist by being listed here too.
+      problems: listFilteredBills.filter((b) => billBucket(b) !== "done" && (b.setup_gaps ?? []).length > 0),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [listFilteredBills, user?.role, tallyHandoffV2Enabled],
@@ -839,8 +842,11 @@ export default function ElectricityBillsPage() {
 
       {!loading && bills.length > 0 && (
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "needs" | "waiting" | "done")}>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "problems" | "needs" | "waiting" | "done")}>
             <TabsList>
+              <TabsTrigger value="problems" className={bucketed.problems.length > 0 ? "text-red-700" : undefined}>
+                Problems to fix ({bucketed.problems.length})
+              </TabsTrigger>
               <TabsTrigger value="needs">Needs action ({bucketed.needs.length})</TabsTrigger>
               <TabsTrigger value="waiting">Waiting on others ({bucketed.waiting.length})</TabsTrigger>
               <TabsTrigger value="done">Done ({bucketed.done.length})</TabsTrigger>
@@ -871,13 +877,15 @@ export default function ElectricityBillsPage() {
       ) : visibleBills.length === 0 ? (
         <EmptyState
           icon={Zap}
-          title={activeTab === "needs" ? "Nothing needs your action" : activeTab === "waiting" ? "Nothing is waiting on others" : "No completed bills"}
+          title={activeTab === "problems" ? "No setup problems" : activeTab === "needs" ? "Nothing needs your action" : activeTab === "waiting" ? "Nothing is waiting on others" : "No completed bills"}
           description={
-            activeTab === "needs"
-              ? "Every open bill is with someone else or fully paid."
-              : activeTab === "waiting"
-                ? "No bill is waiting on the customer or another team."
-                : "Nothing has reached Paid yet for this view."
+            activeTab === "problems"
+              ? "Every open bill's location has what it needs to bill."
+              : activeTab === "needs"
+                ? "Every open bill is with someone else or fully paid."
+                : activeTab === "waiting"
+                  ? "No bill is waiting on the customer or another team."
+                  : "Nothing has reached Paid yet for this view."
           }
         />
       ) : (
@@ -930,7 +938,7 @@ export default function ElectricityBillsPage() {
                           </div>
                         );
                       })()}
-                      {activeTab === "open" && (bill.setup_gaps ?? []).length > 0 && (
+                      {activeTab !== "done" && (bill.setup_gaps ?? []).length > 0 && (
                         <div className="mt-1.5">
                           <div className="flex flex-wrap gap-1.5">
                             {(bill.setup_gaps ?? []).map((gap) => (
