@@ -417,7 +417,7 @@ A Nungambakkam voucher must never be issued, revoked or shown for Perungudi, or 
 
 **Network → Configuration** shows `Connected to: <console name>` after a save (and on open), from `api.ui.com/v1/hosts` (`getUnifiConsoleInfo`), so the admin can confirm the id is the right console. If another location already uses the same console id a warning is shown (saving is not blocked).
 
-Known gap (not changed here): `contract-expiry` and `revokeContractAccess` mark per-seat issuances inactive in the CRM but do not delete the per-seat UniFi vouchers on the controller; only the contract-level voucher is revoked there. Termination and booking cancel do revoke per-seat vouchers.
+Per-seat UniFi vouchers are deleted on the controller (on their recorded console) whenever a contract is terminated, expires (`/api/cron/contract-expiry`, `revokeContractAccess`) or a booking is cancelled, via `revokeUnifiIssuances` in `src/lib/contract-lifecycle.ts`.
 
 ### API base URL
 ```

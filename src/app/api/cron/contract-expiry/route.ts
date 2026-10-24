@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { revokeUnifiVoucher, siteConfigForStoredVoucher } from "@/lib/unifi";
+import { revokeUnifiIssuances } from "@/lib/contract-lifecycle";
 import { setUserActive } from "@/lib/cosec";
 import { withCronHealth } from "@/lib/cron-ping";
 
@@ -109,11 +110,11 @@ async function handler(request: NextRequest) {
   // Previously this was a per-contract query inside the loop (N+1).
   const { data: allIssuances } = await admin
     .from("voucher_issuances")
-    .select("id, voucher_id, contract_id")
+    .select("id, voucher_id, contract_id, unifi_voucher_id, unifi_console_id")
     .in("contract_id", expireIds)
     .eq("is_active", true);
 
-  type IssuanceRow = { id: string; voucher_id: string | null; contract_id: string };
+  type IssuanceRow = { id: string; voucher_id: string | null; contract_id: string; unifi_voucher_id: string | null; unifi_console_id: string | null };
   const issuancesByContractId = new Map<string, IssuanceRow[]>();
   for (const issuance of (allIssuances ?? []) as IssuanceRow[]) {
     const list = issuancesByContractId.get(issuance.contract_id) ?? [];
@@ -134,6 +135,11 @@ async function handler(request: NextRequest) {
       const issuances = issuancesByContractId.get(contract.id) ?? [];
 
       if (issuances.length > 0) {
+        // Per-seat UniFi vouchers must be deleted on the controller too, not
+        // just marked inactive here — otherwise the codes stay usable.
+        const unifiRevoked = await revokeUnifiIssuances(issuances, contract.location_id, contract.contract_number);
+        if (unifiRevoked > 0) console.log(`[contract-expiry] Revoked ${unifiRevoked} per-seat UniFi voucher(s) for ${contract.contract_number}`);
+
         const issuanceIds = issuances.map((i) => i.id);
         await admin
           .from("voucher_issuances")
