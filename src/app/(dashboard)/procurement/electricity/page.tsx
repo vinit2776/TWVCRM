@@ -391,7 +391,14 @@ export default function ElectricityBillsPage() {
         });
     const json = await res.json();
     if (res.ok) {
-      toast.success(editingBillId ? "Bill updated" : "Bill captured");
+      const captured = json.data as { auto_approved?: boolean; customer_bills_generated?: number } | undefined;
+      toast.success(
+        editingBillId
+          ? "Bill updated"
+          : captured?.auto_approved
+            ? `Bill captured and approved — ${captured.customer_bills_generated ?? 0} customer bill(s) ready to send`
+            : "Bill captured",
+      );
       closeDialog();
       fetchBills();
     } else {
