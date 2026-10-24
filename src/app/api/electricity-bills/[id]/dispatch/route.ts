@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { electricityWorkings, loadLandlordLines, SHOW_LANDLORD_RATE_ON_INVOICE } from "@/lib/electricity-workings";
+import { buildElectricityAnnexure } from "@/lib/electricity-annexure";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
@@ -19,7 +19,6 @@ interface EbBillRow {
   customer_utility_pct: number | null;
   customer_generator_pct: number | null;
   customer_units_billed: number | null;
-  landlord_bill_id: string | null;
   customer_utility_rate: number | null;
   customer_generator_rate: number | null;
   gst_rate: number | null;
@@ -80,7 +79,7 @@ export async function POST(
       "id, status, contract_id, location_id, bill_month, bill_year, " +
         "customer_subtotal, customer_cgst, customer_sgst, customer_total, " +
         "customer_utility_pct, customer_generator_pct, customer_units_billed, " +
-        "customer_utility_rate, customer_generator_rate, gst_rate, billing_statement_id, landlord_bill_id",
+        "customer_utility_rate, customer_generator_rate, gst_rate, billing_statement_id",
     )
     .eq("id", id)
     .single();
@@ -156,13 +155,11 @@ export async function POST(
   const utilityUnits = round2((totalUnits * Number(bill.customer_utility_pct ?? 0)) / 100);
   const generatorUnits = round2((totalUnits * Number(bill.customer_generator_pct ?? 0)) / 100);
 
-  const landlordLines = await loadLandlordLines(supabase, bill.landlord_bill_id);
-  const items: Array<{ description: string; workings?: string; qty: number; unit_price: number; amount: number; hsn_sac_code: string }> = [];
+  const items: Array<{ description: string; qty: number; unit_price: number; amount: number; hsn_sac_code: string }> = [];
   if (utilityUnits > 0) {
     const rate = Number(bill.customer_utility_rate ?? 0);
     items.push({
       description: `Electricity — Utility/Grid (${monthLabel})`,
-      workings: electricityWorkings({ landlordLines, type: "utility", customerPct: Number(bill.customer_utility_pct ?? 0), customerUnits: utilityUnits, customerRate: rate, showLandlordRate: SHOW_LANDLORD_RATE_ON_INVOICE }),
       qty: utilityUnits,
       unit_price: rate,
       amount: round2(utilityUnits * rate),
@@ -173,7 +170,6 @@ export async function POST(
     const rate = Number(bill.customer_generator_rate ?? 0);
     items.push({
       description: `Electricity — DG/Generator (${monthLabel})`,
-      workings: electricityWorkings({ landlordLines, type: "generator", customerPct: Number(bill.customer_generator_pct ?? 0), customerUnits: generatorUnits, customerRate: rate, showLandlordRate: SHOW_LANDLORD_RATE_ON_INVOICE }),
       qty: generatorUnits,
       unit_price: rate,
       amount: round2(generatorUnits * rate),
@@ -187,6 +183,8 @@ export async function POST(
       label: "Electricity Charges",
       subtotal: Number(bill.customer_subtotal ?? 0),
       items,
+      // Frozen here so every later render of this invoice prints the same Annexure A.
+      annexure: buildElectricityAnnexure(bill, monthLabel),
     },
   ];
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
@@ -214,6 +215,7 @@ export async function GET(
 
   const proformaRef = statement.statement_number as string;
   const invoiceData: GstInvoiceData = {
+    annexure: annexureFromSections(statement.line_items),
     invoiceNumber: proformaRef,
     // Rent: 1st of billed month. Usage: date PDF is downloaded (re-issued on demand).
     invoiceDate: (statement.statement_type as string) === "rent"
