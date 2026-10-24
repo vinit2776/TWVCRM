@@ -6,6 +6,8 @@ import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server"
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
+import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
+import { annexureFromSections } from "@/lib/electricity-annexure";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
@@ -104,7 +106,7 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
-      statement_number, period_start, period_end, statement_type, razorpay_payment_link_url,
+      statement_number, period_start, period_end, statement_type, line_items, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, billing_emails, mobile, phone)
@@ -140,6 +142,7 @@ export async function POST(
     period_start: string | null;
     period_end: string | null;
     statement_type: string | null;
+    line_items: unknown;
     razorpay_payment_link_url: string | null;
     contract: {
       id: string;
@@ -309,6 +312,17 @@ export async function POST(
       if (supportingDocs.length > 0) {
         normalized.buffer = await mergeSupportingDocuments(adminClient, Buffer.from(normalized.buffer), supportingDocs);
       }
+    }
+
+    // Electricity re-bills: the customer receives this Tally PDF, not a CRM
+    // one, so the frozen Annexure A page is appended here (once, before
+    // storing) rather than in the view/resend routes. Fails soft.
+    if (statement.statement_type === "electricity") {
+      normalized.buffer = await appendElectricityAnnexure(normalized.buffer, {
+        invoiceNumber: meta.tally_invoice_number,
+        contractNumber: statement.contract?.contract_number ?? "",
+        annexure: annexureFromSections(statement.line_items),
+      });
     }
   }
 
