@@ -171,6 +171,9 @@ export default function ElectricityBillsPage() {
   const [approving, setApproving] = useState<string | null>(null);
   const [revising, setRevising] = useState<string | null>(null);
   const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
+  // Approve and Revise confirm in an in-app dialog: a native window.confirm() is silently
+  // dismissed by some browsers (and embedded views), which made the buttons do nothing.
+  const [pendingAction, setPendingAction] = useState<{ kind: "approve" | "revise"; id: string; label: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; billSide: "landlord" | "customer"; label: string } | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
   const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
@@ -409,9 +412,6 @@ export default function ElectricityBillsPage() {
   };
 
   const handleApprove = async (billId: string) => {
-    if (!window.confirm("Approving will generate the customer bill from these numbers and lock this landlord bill from further edits. Continue?")) {
-      return;
-    }
     setApproving(billId);
     const res = await fetch(`/api/electricity-bills/${billId}/approve`, { method: "POST" });
     const json = await res.json();
@@ -426,14 +426,6 @@ export default function ElectricityBillsPage() {
   };
 
   const handleRevise = async (billId: string) => {
-    if (
-      !window.confirm(
-        "No customer bills were generated when this was approved (the contract wasn't enabled for electricity billing yet). " +
-          "Revising will mark this landlord bill as revised and create a fresh draft with the same numbers, which you can then re-approve. Continue?",
-      )
-    ) {
-      return;
-    }
     setRevising(billId);
     const res = await fetch(`/api/electricity-bills/${billId}/revise`, { method: "POST" });
     const json = await res.json();
@@ -803,7 +795,7 @@ export default function ElectricityBillsPage() {
                     {canApprove && bill.status === "draft" && (
                       <Button
                         size="sm"
-                        onClick={() => handleApprove(bill.id)}
+                        onClick={() => setPendingAction({ kind: "approve", id: bill.id, label: `${bill.locations?.name ?? "Bill"} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}` })}
                         disabled={approving === bill.id}
                       >
                         <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
@@ -814,7 +806,7 @@ export default function ElectricityBillsPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => handleRevise(bill.id)}
+                        onClick={() => setPendingAction({ kind: "revise", id: bill.id, label: `${bill.locations?.name ?? "Bill"} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}` })}
                         disabled={revising === bill.id}
                       >
                         <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -1423,6 +1415,36 @@ export default function ElectricityBillsPage() {
             <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Saving…" : editingBillId ? "Save Changes" : "Save as Draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingAction} onOpenChange={(open) => !open && setPendingAction(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{pendingAction?.kind === "approve" ? "Approve and generate customer bills?" : "Revise this bill?"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="font-medium">{pendingAction?.label}</p>
+            <p className="text-muted-foreground">
+              {pendingAction?.kind === "approve"
+                ? "This generates the customer bill from these numbers and locks the landlord bill from further edits. Nothing is sent to the customer until Bill & Send."
+                : "No customer bills were generated for this bill. Revising marks it as revised and creates a fresh draft with the same numbers, which you can then approve again."}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingAction(null)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                const action = pendingAction;
+                setPendingAction(null);
+                if (!action) return;
+                if (action.kind === "approve") void handleApprove(action.id);
+                else void handleRevise(action.id);
+              }}
+            >
+              {pendingAction?.kind === "approve" ? "Approve & Generate" : "Revise"}
             </Button>
           </DialogFooter>
         </DialogContent>
