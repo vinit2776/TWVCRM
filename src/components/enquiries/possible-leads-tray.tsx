@@ -107,7 +107,7 @@ export function PossibleLeadsTray({ onChanged }: { onChanged?: () => void }) {
               Not a lead
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setLabelling(labelling === h.id ? null : h.id)}>
-              Label number
+              Name this person
             </Button>
           </div>
           {labelling === h.id && (
