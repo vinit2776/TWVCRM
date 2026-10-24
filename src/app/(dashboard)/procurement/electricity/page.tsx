@@ -575,9 +575,15 @@ export default function ElectricityBillsPage() {
   };
 
   const overallStage = (bill: EbBill) => {
-    if (bill.status === "draft") return { label: "draft", className: STATUS_COLORS.draft };
+    // "invoiced" is the stored status for an approved landlord bill; nothing has been
+    // invoiced to a customer unless a customer bill exists, so say what it means.
+    if (bill.status === "draft") return { label: "Awaiting approval", className: STATUS_COLORS.draft };
     const cbs = bill.customer_bills ?? [];
-    if (cbs.length === 0) return { label: bill.status, className: STATUS_COLORS[bill.status] };
+    if (cbs.length === 0) {
+      return bill.status === "invoiced"
+        ? { label: "Approved — no customer bill", className: STATUS_COLORS.draft }
+        : { label: bill.status, className: STATUS_COLORS[bill.status] };
+    }
     const worst = Math.min(...cbs.map(customerBillRank));
     return OVERALL_STAGES[worst];
   };
