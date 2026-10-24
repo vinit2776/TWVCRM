@@ -5,6 +5,26 @@ import { logAudit } from "@/lib/audit";
 // Approve and Confirm clicks. A missing row means auto-approve is on.
 const SETTING_KEY = "electricity_auto_approve_enabled";
 
+/**
+ * Whether approving a landlord bill at this location would generate a customer bill. Same contract
+ * filter as approve_electricity_landlord_bill(). When it is false the RPC auto-approves the landlord
+ * payable instead, which stays with an admin or manager.
+ */
+export async function hasBillableContract(supabase: SupabaseClient, locationId: string): Promise<boolean | "error"> {
+  const { data, error } = await supabase
+    .from("contract_electricity_config")
+    .select("contract_id, contracts!inner(status)")
+    .eq("location_id", locationId)
+    .eq("enabled", true)
+    .in("contracts.status", ["active", "renewal_in_progress"])
+    .limit(1);
+  if (error) {
+    console.error("[eb] contract lookup failed:", error.message);
+    return "error";
+  }
+  return (data ?? []).length > 0;
+}
+
 export interface AutoApproveResult {
   approved: boolean;
   customerBillIds: string[];
@@ -34,21 +54,9 @@ export async function autoApproveCapturedBill(
     .maybeSingle();
   if (setting?.value === "false") return { approved: false, customerBillIds: [], skippedReason: "disabled" };
 
-  // Same contract filter as approve_electricity_landlord_bill().
-  const { data: mapped, error: mappedErr } = await supabase
-    .from("contract_electricity_config")
-    .select("contract_id, contracts!inner(status)")
-    .eq("location_id", locationId)
-    .eq("enabled", true)
-    .in("contracts.status", ["active", "renewal_in_progress"])
-    .limit(1);
-  if (mappedErr) {
-    console.error("[eb] auto-approve contract lookup failed:", mappedErr.message);
-    return { approved: false, customerBillIds: [], skippedReason: "lookup_failed" };
-  }
-  if (!mapped || mapped.length === 0) {
-    return { approved: false, customerBillIds: [], skippedReason: "no_contract_mapped" };
-  }
+  const mapped = await hasBillableContract(supabase, locationId);
+  if (mapped === "error") return { approved: false, customerBillIds: [], skippedReason: "lookup_failed" };
+  if (!mapped) return { approved: false, customerBillIds: [], skippedReason: "no_contract_mapped" };
 
   const { data: result, error } = await supabase.rpc("approve_electricity_landlord_bill", {
     p_landlord_bill_id: landlordBillId,

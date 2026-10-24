@@ -694,6 +694,8 @@ export default function ElectricityBillsPage() {
 
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
+  // Accounts may approve (the API refuses when no customer contract is billable); Revise stays admin/manager.
+  const canApproveBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
   // Edit/Delete are corrections tools for mis-entered data — admin only,
   // stricter than who's allowed to capture a bill in the first place.
@@ -798,7 +800,7 @@ export default function ElectricityBillsPage() {
                         Edit
                       </Button>
                     )}
-                    {canApprove && bill.status === "draft" && (
+                    {canApproveBill && bill.status === "draft" && (
                       <Button
                         size="sm"
                         onClick={() => setPendingAction({ kind: "approve", id: bill.id, label: `${bill.locations?.name ?? "Bill"} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}` })}
