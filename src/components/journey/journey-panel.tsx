@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import type { Journey, JourneyOwner, JourneyStep } from "@/lib/journey/types";
+import { DueBadge } from "@/components/journey/due-badge";
 
 interface Props {
   leadId: string;
@@ -141,7 +142,10 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
               <div className="text-xs text-blue-700">
                 {next.state === "blocked" ? "Waiting on" : "Next step"} · for {OWNER_LABEL[next.owner]}
               </div>
-              <div className="text-sm font-medium">{next.label}</div>
+              <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                {next.label}
+                <DueBadge due={next.due} />
+              </div>
               {next.hint && <div className="text-xs text-muted-foreground">{next.hint}</div>}
             </div>
             {next.action === "mark_welcome_done" && journey.contractId && next.state !== "blocked" && (
@@ -188,6 +192,7 @@ export function JourneyPanel({ leadId, proposalId, contractId }: Props) {
                       <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                         {OWNER_LABEL[s.owner]}
                       </span>
+                      <DueBadge due={s.due} className="ml-1" />
                       {s.state === "optional" && (
                         <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">optional</span>
                       )}
