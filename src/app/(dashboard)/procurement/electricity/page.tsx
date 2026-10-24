@@ -715,7 +715,11 @@ export default function ElectricityBillsPage() {
   const listTrail = (bill: EbBill): { steps: string[]; current: number; done: boolean } => {
     const cbs = bill.customer_bills ?? [];
     const worst = cbs.length > 0 ? cbs.reduce((a, b) => (customerBillRank(b) < customerBillRank(a) ? b : a)) : null;
-    const handoffRoute = worst?.contract?.billing_mode === "gst_direct" && tallyHandoffV2Enabled;
+    // A GST Direct statement already created with no handoff state was sent before the Tally
+    // handoff existed (or outside it), so it never handed off: don't show steps that never happened.
+    // Proforma bills are left alone: their handoff state only appears around payment.
+    const neverHandedOff = !!worst && customerBillRank(worst) >= 2 && !worst.billing_statement?.handoff_state;
+    const handoffRoute = worst?.contract?.billing_mode === "gst_direct" && tallyHandoffV2Enabled && !neverHandedOff;
     const proformaRoute = !!worst && worst.contract?.billing_mode !== "gst_direct";
     const steps = handoffRoute
       ? ["Captured", "Approved", "Confirmed", "Handed off", "Tally invoice", "Paid"]
