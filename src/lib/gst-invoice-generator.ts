@@ -638,6 +638,20 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   return doc;
 }
 
+/**
+ * Renders Annexure A on its own as a one-page PDF, using the same drawing code
+ * as the full invoice. Used to append the annexure to a Tally-issued PDF.
+ */
+export function generateElectricityAnnexurePDF(
+  data: Pick<GstInvoiceData, "invoiceNumber" | "contractNumber" | "annexure">,
+): Uint8Array {
+  const doc = new jsPDF("p", "mm", "a4");
+  const pageWidth = doc.internal.pageSize.getWidth();
+  drawElectricityAnnexure(doc, data as GstInvoiceData, pageWidth);
+  doc.deletePage(1); // drawElectricityAnnexure adds its own page; drop the blank first one
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
 function drawElectricityAnnexure(doc: jsPDF, data: GstInvoiceData, pageWidth: number): void {
   const a = data.annexure!;
   doc.addPage();
