@@ -5,6 +5,35 @@ import { setUserActive } from "@/lib/cosec";
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 /**
+ * Deletes per-seat UniFi vouchers on the controller, each on the console that
+ * issued it (recorded on the issuance). Awaited, not fire-and-forget: the
+ * callers run in serverless functions that can be frozen once they return.
+ * Never throws — failures are logged so a controller outage can't block the
+ * caller's status change. Returns how many vouchers it tried to revoke.
+ */
+export async function revokeUnifiIssuances(
+  issuances: Array<{ unifi_voucher_id?: string | null; unifi_console_id?: string | null }>,
+  locationId: string | null | undefined,
+  label: string
+): Promise<number> {
+  const live = issuances.filter((i): i is { unifi_voucher_id: string; unifi_console_id?: string | null } => !!i.unifi_voucher_id);
+  const results = await Promise.allSettled(
+    live.map(async (i) =>
+      revokeUnifiVoucher(
+        i.unifi_voucher_id,
+        await siteConfigForStoredVoucher({ consoleId: i.unifi_console_id, locationId })
+      )
+    )
+  );
+  results.forEach((r, idx) => {
+    if (r.status === "rejected") {
+      console.error(`[contract-lifecycle] per-seat UniFi revoke ${live[idx].unifi_voucher_id} failed for ${label}:`, r.reason);
+    }
+  });
+  return live.length;
+}
+
+/**
  * Revokes WiFi vouchers (UniFi live-API + import-based) and blocks COSEC
  * building-access accounts for one contract. Mirrors the per-contract steps
  * in /api/cron/contract-expiry, extracted so any code path that expires a
@@ -38,11 +67,15 @@ export async function revokeContractAccess(
   try {
     const { data: issuances } = await admin
       .from("voucher_issuances")
-      .select("id, voucher_id")
+      .select("id, voucher_id, unifi_voucher_id, unifi_console_id")
       .eq("contract_id", contract.id)
       .eq("is_active", true);
 
     if (issuances && issuances.length > 0) {
+      // Delete per-seat UniFi vouchers on the controller before marking them inactive.
+      const { data: loc } = await admin.from("contracts").select("location_id").eq("id", contract.id).maybeSingle();
+      await revokeUnifiIssuances(issuances, loc?.location_id, contract.contract_number);
+
       const revokeNow = new Date().toISOString();
       const issuanceIds = issuances.map((i) => i.id);
       await admin
