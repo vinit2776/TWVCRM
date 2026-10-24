@@ -977,7 +977,7 @@ export default function ElectricityBillsPage() {
                                 </div>
                               </>
                             ) : (
-                              <p className="text-muted-foreground">No vendor bill — landlord vendor not configured for this location.</p>
+                              <p className="text-muted-foreground">No vendor bill is linked to this electricity bill. If the landlord invoice was entered under Procurement → Bills, check it there.</p>
                             )}
                           </div>
 

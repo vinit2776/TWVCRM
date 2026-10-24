@@ -81,6 +81,27 @@ export async function GET(request: NextRequest) {
     const landlordIds = data.map((b) => b.id);
     const vendorBillIds = data.map((b) => b.vendor_bill_id).filter((id): id is string => !!id);
 
+    // A revised draft may not carry the link yet (bills revised before the link was carried over):
+    // fall back to the payable that points at the bill it was revised from.
+    const revisedFromIds = data
+      .filter((b) => !b.vendor_bill_id && b.revised_from_id)
+      .map((b) => b.revised_from_id as string);
+    const fallbackVendorBillByBill = new Map<string, string>();
+    if (revisedFromIds.length > 0) {
+      const { data: fallback } = await supabase
+        .from("vendor_bills")
+        .select("id, electricity_bill_id")
+        .in("electricity_bill_id", revisedFromIds);
+      const byOld = new Map((fallback ?? []).map((v) => [v.electricity_bill_id as string, v.id as string]));
+      for (const b of data) {
+        const vid = b.revised_from_id ? byOld.get(b.revised_from_id as string) : undefined;
+        if (!b.vendor_bill_id && vid) {
+          fallbackVendorBillByBill.set(b.id, vid);
+          vendorBillIds.push(vid);
+        }
+      }
+    }
+
     const [vendorBillsRes, customerBillsRes] = await Promise.all([
       vendorBillIds.length > 0
         ? supabase
@@ -112,7 +133,8 @@ export async function GET(request: NextRequest) {
     }
 
     for (const bill of data as Record<string, unknown>[]) {
-      bill.vendor_bill = bill.vendor_bill_id ? vendorBillMap.get(bill.vendor_bill_id as string) ?? null : null;
+      const vbId = (bill.vendor_bill_id as string | null) ?? fallbackVendorBillByBill.get(bill.id as string) ?? null;
+      bill.vendor_bill = vbId ? vendorBillMap.get(vbId) ?? null : null;
       bill.customer_bills = customerBillsByLandlord.get(bill.id as string) ?? [];
     }
   }
