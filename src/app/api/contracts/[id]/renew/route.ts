@@ -7,6 +7,7 @@ import { escalateUnitPrice } from "@/lib/line-item-escalation";
 import { firstBillingAnchor } from "@/lib/billing-months";
 import { normalizeRenewalNote } from "@/lib/renewal-note";
 import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
+import { carryElectricityConfigToRenewal } from "@/lib/electricity-renewal";
 
 /**
  * POST /api/contracts/[id]/renew
@@ -345,6 +346,13 @@ export async function POST(
     await admin.from("contract_service_quotas").insert(renewalQuotas);
   }
 
+  // 12a. Electricity re-billing settings (location, split, billing profile) ride
+  // along too — otherwise the renewed contract is skipped when the landlord's
+  // monthly bill is approved and the customer is never billed.
+  const electricityCarried = await carryElectricityConfigToRenewal(admin, {
+    sourceContractId: source.id, newContractId: newContract.id, actorId: dbUser.id,
+  });
+
   // 12b. An approved special clause rides along with a renewal (a new contract
   // after a gap goes through POST /api/contracts and needs fresh approval).
   const specialClauseCarried = await carrySpecialClauseToRenewal(admin, {
@@ -442,6 +450,7 @@ export async function POST(
       end_date: endDateStr,
       gap_days: gapDays,
       special_clause_carried: specialClauseCarried,
+      electricity_config_carried: electricityCarried,
       escalation_approval_status: approvalStatus,
     },
   }, { status: 201 });
