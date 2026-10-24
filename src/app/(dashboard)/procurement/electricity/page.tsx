@@ -655,7 +655,7 @@ export default function ElectricityBillsPage() {
   // issue by hand).
   const customerBillNextStepHint = (cb: CustomerBillInfo): string => {
     if (cb.status === "draft") {
-      return "Confirming will lock this amount in and enable Bill & Send.";
+      return "Confirming will lock this amount in and enable the send step.";
     }
     if (cb.status === "invoiced") {
       const isGstDirect = cb.contract?.billing_mode === "gst_direct";
@@ -672,6 +672,39 @@ export default function ElectricityBillsPage() {
       return "Paid — nothing further needed.";
     }
     return "Sent — awaiting customer payment.";
+  };
+
+  // What the send button really does for this contract. A GST Direct contract with the Tally
+  // handoff on does not email the customer: it hands the statement to accounts. Same test the
+  // hint above uses, so the label and the sentence under it can never disagree.
+  const sendActionLabel = (cb: CustomerBillInfo): { idle: string; busy: string } => {
+    const isGstDirect = cb.contract?.billing_mode === "gst_direct";
+    if (isGstDirect && tallyHandoffV2Enabled) return { idle: "Hand off to accounts", busy: "Handing off…" };
+    if (isGstDirect) return { idle: "Send invoice to customer", busy: "Sending…" };
+    return { idle: "Send proforma to customer", busy: "Sending…" };
+  };
+
+  // One line for the list: the single next step, who does it, and whether it is blocked.
+  const nextAction = (bill: EbBill): { text: string; owner: string; blocked: boolean } | null => {
+    if (bill.status === "revised") return null;
+    if (bill.status === "draft") return { text: "Approve the bill", owner: "Admin, manager or accounts", blocked: false };
+    const cbs = bill.customer_bills ?? [];
+    if (cbs.length === 0) {
+      return { text: "No customer bill was made. Use Revise to bill again once a contract has electricity billing on", owner: "Admin or manager", blocked: true };
+    }
+    const worst = cbs.reduce((a, b) => (customerBillRank(b) < customerBillRank(a) ? b : a));
+    const rank = customerBillRank(worst);
+    if (rank === 0) return { text: "Confirm the customer bill", owner: "Admin, manager or accounts", blocked: false };
+    if (rank === 1) return { text: sendActionLabel(worst).idle, owner: "Admin, manager or accounts", blocked: false };
+    if (rank === 2) return { text: "Finish sending", owner: "Admin, manager or accounts", blocked: true };
+    if (rank === 3) return { text: "Statement was voided. Check before billing again", owner: "Admin", blocked: true };
+    if (rank === 4) {
+      const handoff = worst.billing_statement?.handoff_state ?? null;
+      return handoff && HANDOFF_PENDING_STATES.has(handoff)
+        ? { text: "Issue the GST invoice in Tally and upload it", owner: "Accounts", blocked: false }
+        : { text: "Waiting for the customer to pay", owner: "Customer", blocked: false };
+    }
+    return null;
   };
 
   // Location filter + Open/Completed bucketing — "Completed" reuses the same
@@ -786,6 +819,26 @@ export default function ElectricityBillsPage() {
                         {formatCurrency(bill.landlord_total_amount)}
                         {bill.vendor_bill_id && " · Vendor bill linked"}
                       </p>
+                      {(() => {
+                        const next = nextAction(bill);
+                        if (!next) return null;
+                        const life = resolveLifecycle(bill);
+                        return (
+                          <div className="mt-1 space-y-0.5">
+                            <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-1">
+                              {LIFECYCLE_STEPS.map((step, i) => (
+                                <span key={step} className="flex items-center gap-x-1">
+                                  <span className={i === life.stepIndex && !life.complete ? "font-medium text-foreground" : i < life.stepIndex || life.complete ? "" : "opacity-60"}>{step}</span>
+                                  {i < LIFECYCLE_STEPS.length - 1 && <span aria-hidden="true">›</span>}
+                                </span>
+                              ))}
+                            </p>
+                            <p className={`text-xs ${next.blocked ? "text-amber-700" : "text-muted-foreground"}`}>
+                              <span className="font-medium">Next:</span> {next.text} · <span>{next.owner}</span>
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -1138,7 +1191,7 @@ export default function ElectricityBillsPage() {
                                         onClick={() => handleDispatchCustomerBill(cb.id)}
                                       >
                                         <Send className="mr-1 h-3 w-3" />
-                                        {actingOnCustomerBill === cb.id ? "Sending…" : "Bill & Send"}
+                                        {actingOnCustomerBill === cb.id ? sendActionLabel(cb).busy : sendActionLabel(cb).idle}
                                       </Button>
                                     )}
                                     {canDeleteBills && (
@@ -1437,7 +1490,7 @@ export default function ElectricityBillsPage() {
             <p className="font-medium">{pendingAction?.label}</p>
             <p className="text-muted-foreground">
               {pendingAction?.kind === "approve"
-                ? "This generates the customer bill from these numbers and locks the landlord bill from further edits. Nothing is sent to the customer until Bill & Send."
+                ? "This generates the customer bill from these numbers and locks the landlord bill from further edits. Nothing is sent to the customer until you use the send button."
                 : "No customer bills were generated for this bill. Revising marks it as revised and creates a fresh draft with the same numbers, which you can then approve again."}
             </p>
           </div>
