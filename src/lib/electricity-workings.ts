@@ -61,4 +61,4 @@ export async function loadLandlordLines(supabase: SupabaseClient, landlordBillId
 }
 
 /** Whether the invoice also prints the landlord's rate and our margin. */
-export const SHOW_LANDLORD_RATE_ON_INVOICE = true;
+export const SHOW_LANDLORD_RATE_ON_INVOICE = false;
