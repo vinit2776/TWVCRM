@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { queryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { fanOutQueryEvent, threadParticipantIds, entityLabel, loadEntity } from "@/lib/queries/server";
 import { logAudit } from "@/lib/audit";
+import { settleBookingPayment } from "@/lib/booking-payment-server";
 import {
   canReviewPaymentReport,
   isPaymentReportOutcome,
@@ -35,7 +36,8 @@ interface ReportRow {
   amount: number;
   paid_on: string;
   payment_mode: string;
-  target_kind: "invoice" | "deposit";
+  target_kind: "invoice" | "deposit" | "booking";
+  booking_payment_id: string | null;
   created_by: string;
   query: {
     id: string;
@@ -102,7 +104,7 @@ export async function PATCH(
   const { data: reportData, error: fetchErr } = await admin
     .from("query_payment_reports")
     .select(`
-      id, query_id, status, amount, paid_on, payment_mode, target_kind, created_by,
+      id, query_id, status, amount, paid_on, payment_mode, target_kind, booking_payment_id, created_by,
       query:queries!query_payment_reports_query_id_fkey(
         id, entity_type, entity_id, status, audience, audience_roles, audience_user_ids
       )
@@ -124,6 +126,26 @@ export async function PATCH(
 
   const def = queryEntityDef(report.query.entity_type);
   if (!def) return NextResponse.json({ error: "Report not found" }, { status: 404 });
+
+  // A booking report points at a pending booking_payments row from the day it
+  // is raised. Verifying or rejecting it settles that row (over-credit guard,
+  // booking → paid, GST task) through the same step the booking page uses, so
+  // the two entry points can't disagree. 'not_found' touches nothing.
+  if (report.target_kind === "booking" && outcome !== "not_found") {
+    if (!report.booking_payment_id) {
+      return NextResponse.json({ error: "This report has no payment attached" }, { status: 400 });
+    }
+    const settled = await settleBookingPayment(admin, {
+      paymentId: report.booking_payment_id,
+      outcome,
+      notes: note || null,
+      reviewer: dbUser as { id: string; role: string; full_name: string },
+      settleReport: false,
+    });
+    if (!settled.ok) {
+      return NextResponse.json({ error: settled.error }, { status: settled.status });
+    }
+  }
 
   // ── Verified: the money must actually have been recorded ─────────────────
   //
@@ -273,7 +295,9 @@ export async function PATCH(
     outcome === "verified"
       ? report.target_kind === "deposit"
         ? "Found in the bank and recorded against the deposit."
-        : "Found in the bank and recorded against the invoice."
+        : report.target_kind === "booking"
+          ? "Found in the bank and verified against the booking."
+          : "Found in the bank and recorded against the invoice."
       : "Not in the bank yet — will keep looking.";
 
   const { error: msgErr } = await admin.from("query_messages").insert({

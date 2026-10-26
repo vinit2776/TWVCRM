@@ -81,6 +81,10 @@ export function PaymentReportCard({
   // allocate to and no billing_payments row to link. Verification proves
   // itself differently — see the verify route.
   const isDeposit = report.target_kind === "deposit";
+  // A booking payment is already a pending row on the booking, so there is no
+  // invoice to allocate to and nothing to record: verifying just settles that
+  // row. See settleBookingPayment.
+  const isBooking = report.target_kind === "booking";
   const { user } = useCurrentUser();
   const canReview = canReviewPaymentReport(user?.role) && report.status === "reported";
 
@@ -376,17 +380,24 @@ export function PaymentReportCard({
                   <Button
                     size="sm"
                     className="h-7 text-xs bg-green-600 hover:bg-green-700"
-                    disabled={busy || (!isDeposit && !statementId)}
+                    disabled={busy || (!isDeposit && !isBooking && !statementId)}
                     title={
-                      isDeposit
-                        ? "Record this deposit against the proposal"
-                        : statementId
-                          ? "Record this payment against the invoice"
-                          : "Pick which invoice this pays first"
+                      isBooking
+                        ? "Mark this booking payment verified — the booking becomes paid"
+                        : isDeposit
+                          ? "Record this deposit against the proposal"
+                          : statementId
+                            ? "Record this payment against the invoice"
+                            : "Pick which invoice this pays first"
                     }
-                    onClick={() => setRecordOpen(true)}
+                    onClick={() => (isBooking ? void settle("verified") : setRecordOpen(true))}
                   >
-                    <Check className="h-3 w-3 mr-1" /> Verify and record
+                    {busy && isBooking ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Check className="h-3 w-3 mr-1" />
+                    )}
+                    {isBooking ? "Credit found — verify" : "Verify and record"}
                   </Button>
                   <Button
                     size="sm"
