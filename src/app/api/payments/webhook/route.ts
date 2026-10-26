@@ -10,6 +10,8 @@ import { computeSettlement } from "@/lib/settlement";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { classifyLinkPayment } from "@/lib/booking-payment-rules";
+import { raiseBookingPaymentReport } from "@/lib/booking-payment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -595,7 +597,7 @@ export async function POST(request: NextRequest) {
     // Find the booking by razorpay_payment_link_id
     const { data: booking } = await supabase
       .from("bookings")
-      .select("id, total_amount")
+      .select("id, booking_number, total_amount, total_amount_with_gst, created_by")
       .eq("razorpay_payment_link_id", paymentLinkId)
       .single();
 
@@ -617,28 +619,90 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create a verified payment record
-    await supabase
+    const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
+    const { data: verifiedBefore } = await supabase
+      .from("booking_payments")
+      .select("amount")
+      .eq("booking_id", booking.id)
+      .eq("status", "verified");
+    const verifiedTotal = (verifiedBefore || []).reduce((sum, p) => sum + Number(p.amount), 0);
+
+    // The customer's money has arrived whatever else happened to the booking,
+    // so the row is always kept. But if the booking was already paid another
+    // way (a manual UPI accounts verified, say), counting this as verified
+    // would double-count revenue and GST — hold it as pending for accounts to
+    // refund instead.
+    const { status: paymentStatus, excess } = classifyLinkPayment(grandTotal, verifiedTotal, amountPaid);
+
+    const { data: inserted, error: insertErr } = await supabase
       .from("booking_payments")
       .insert({
         booking_id: booking.id,
         amount: amountPaid,
         payment_mode: "razorpay",
-        status: "verified",
+        status: paymentStatus,
         razorpay_payment_id: razorpayPaymentId,
         payment_reference: razorpayPaymentId || paymentLinkId,
+        ...(paymentStatus === "pending"
+          ? { verification_notes: `Paid through the payment link after the booking was already covered (₹${excess.toLocaleString("en-IN")} over). Held for refund — not counted as revenue.` }
+          : {}),
+      })
+      .select("id, booking_id, amount, payment_mode, payment_reference, status")
+      .single();
+
+    if (insertErr || !inserted) {
+      // Fail the webhook so Razorpay retries rather than losing a real payment.
+      console.error("[webhook] booking payment insert failed:", insertErr?.message);
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "booking", outcome: "error", outcome_detail: insertErr?.message });
+      return NextResponse.json({ error: "Failed to record booking payment" }, { status: 500 });
+    }
+
+    if (paymentStatus === "pending") {
+      // The thread needs a human author; use whoever made the booking, else an admin.
+      let authorId = booking.created_by as string | null;
+      if (!authorId) {
+        const { data: adminUser } = await supabase
+          .from("users")
+          .select("id")
+          .eq("role", "admin")
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        authorId = adminUser?.id ?? null;
+      }
+      if (authorId) {
+        const { data: authorRow } = await supabase
+          .from("users")
+          .select("id, role, full_name")
+          .eq("id", authorId)
+          .maybeSingle();
+        if (authorRow) {
+          await raiseBookingPaymentReport(supabase, {
+            payment: inserted,
+            author: authorRow,
+            headline: "Booking paid twice — refund needed",
+            body: [
+              `Booking ${booking.booking_number} was already paid in full, then the customer also paid ₹${amountPaid.toLocaleString("en-IN")} through the Razorpay payment link (${razorpayPaymentId ?? paymentLinkId}).`,
+              `It is held here as pending and is not counted as revenue. Refund it from the Razorpay dashboard, then close this as a duplicate.`,
+            ].join("\n\n"),
+          });
+        }
+      }
+      void logAudit(supabase, {
+        entityType: "booking",
+        entityId: booking.id,
+        action: "update",
+        performedBy: null,
+        changes: {
+          link_overpayment_held: { old: null, new: `₹${amountPaid} via ${razorpayPaymentId ?? paymentLinkId}, ₹${excess} over total` },
+        },
       });
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "booking", outcome: "processed", outcome_detail: "over-credit held pending refund" });
+      return NextResponse.json({ status: "ok", held_for_refund: true });
+    }
 
     // Check if booking is now fully paid
-    const { data: verifiedPayments } = await supabase
-      .from("booking_payments")
-      .select("amount")
-      .eq("booking_id", booking.id)
-      .eq("status", "verified");
-
-    const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-
-    if (totalPaid >= Number(booking.total_amount)) {
+    if (verifiedTotal + amountPaid >= grandTotal) {
       await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode: "razorpay" })

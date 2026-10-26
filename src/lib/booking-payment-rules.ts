@@ -77,6 +77,23 @@ export function verifyExcess(grandTotal: number, verifiedTotal: number, amount: 
   return excess > BOOKING_PAYMENT_EPSILON ? Math.round(excess * 100) / 100 : 0;
 }
 
+/**
+ * What the Razorpay webhook should do with a payment-link payment that has
+ * just arrived. The money is real either way, so it is always recorded; the
+ * only question is whether it may count as verified revenue.
+ *
+ * `grandTotal` is total_amount_with_gst, falling back to total_amount.
+ * `verifiedTotal` is what other payments have already verified.
+ */
+export function classifyLinkPayment(
+  grandTotal: number,
+  verifiedTotal: number,
+  amount: number,
+): { status: "verified" | "pending"; excess: number } {
+  const excess = verifyExcess(grandTotal, verifiedTotal, amount);
+  return { status: excess > 0 ? "pending" : "verified", excess };
+}
+
 /** Another live payment on the same booking carrying the same reference. */
 export function findDuplicateReference(
   payments: Array<{ id?: string; status: string; payment_reference?: string | null }>,

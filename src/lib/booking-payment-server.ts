@@ -51,7 +51,7 @@ function istToday(): string {
 
 export async function raiseBookingPaymentReport(
   admin: SupabaseClient,
-  args: { payment: PaymentRow; author: Actor },
+  args: { payment: PaymentRow; author: Actor; body?: string; headline?: string },
 ): Promise<void> {
   const { payment, author } = args;
   try {
@@ -73,7 +73,7 @@ export async function raiseBookingPaymentReport(
       payment.payment_reference ? `ref ${payment.payment_reference}` : null,
     ].filter(Boolean).join(" · ");
 
-    const body = [
+    const body = args.body ?? [
       `Walk-in booking payment recorded at the counter — ${summary}.`,
       "The customer has been told it's paid. Check it against the bank credit, then verify here or from the booking.",
     ].join("\n\n");
@@ -143,7 +143,7 @@ export async function raiseBookingPaymentReport(
       entityId: payment.booking_id,
       author,
       participantIds: [author.id],
-      headline: "Booking payment reported — needs verification",
+      headline: args.headline ?? "Booking payment reported — needs verification",
       message: body,
       notificationType: "payment_reported",
     });
