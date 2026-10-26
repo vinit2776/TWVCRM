@@ -5,6 +5,7 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { daysPastBooking } from "@/lib/process-registry";
 import { checkInPaymentState } from "@/lib/booking-payment-rules";
 import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
 import { deleteUserFromDevice } from "@/lib/cosec";
@@ -678,6 +679,18 @@ export async function PATCH(
       case "checked_in": {
         if (booking.status !== "confirmed") {
           return NextResponse.json({ error: "Can only check in confirmed bookings" }, { status: 400 });
+        }
+
+        // A booking from an earlier day can't be checked in "now": the stamped
+        // time would be wrong and the staff member who allowed the customer in
+        // without it would never be seen. Close out completes it as booked and
+        // records the lapse. Contract bookings are billed monthly, so they are
+        // not offered Close out and keep their existing behaviour.
+        if (booking.customer_type !== "contract_holder" && daysPastBooking(booking.booking_date, new Date()) >= 1) {
+          return NextResponse.json({
+            error: `This booking was for ${booking.booking_date}. Use Close out so it is recorded as handled late.`,
+            close_out_required: true,
+          }, { status: 409 });
         }
 
         // Day-pass spaces: enforce that check-in happens during the centre's

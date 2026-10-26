@@ -57,6 +57,7 @@ import {
   FileSpreadsheet,
   BadgeIndianRupee,
   Flame,
+  Flag,
   Inbox,
   Zap,
   MessageCircleQuestion,
@@ -260,6 +261,7 @@ const navSections: NavSection[] = [
       { href: "/admin/customer-value",             label: "Customer Value",          icon: TrendingUp,     roles: ["admin"] },
       { href: "/admin/cost-parameters",             label: "Value Cost Settings",    icon: Calculator,     roles: ["admin"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
+      { href: "/admin/process-exceptions",         label: "Staff Exceptions",        icon: Flag,          roles: ["admin", "manager"] },
       // "Tally Sync" nav entry intentionally hidden — the automated bridge-sync
       // feature is shelved (superseded by Tally Inbox / tally_handoff_v2_enabled).
       // Page itself is NOT deleted — see docs/tally-integration-status.md before

@@ -5,7 +5,7 @@ import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
-  ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
+  ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2, CheckCircle2,
   IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
@@ -26,6 +26,7 @@ import dynamic from "next/dynamic";
 const CollectPaymentDialog   = dynamic(() => import("@/components/bookings/collect-payment-dialog").then(m => m.CollectPaymentDialog),      { ssr: false });
 const NoShowRefundDialog     = dynamic(() => import("@/components/bookings/no-show-refund-dialog").then(m => m.NoShowRefundDialog),         { ssr: false });
 const CheckoutFeedbackDialog = dynamic(() => import("@/components/bookings/checkout-feedback-dialog").then(m => m.CheckoutFeedbackDialog), { ssr: false });
+const CloseOutDialog         = dynamic(() => import("@/components/bookings/close-out-dialog").then(m => m.CloseOutDialog),                   { ssr: false });
 const RescheduleDialog       = dynamic(() => import("@/components/bookings/reschedule-dialog").then(m => m.RescheduleDialog),               { ssr: false });
 const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
 const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
@@ -57,6 +58,7 @@ import {
   FEEDBACK_DIMENSIONS,
 } from "@/lib/constants";
 import type { BookingFeedback, BookingPayment } from "@/types";
+import { closeOutDecision } from "@/lib/process-registry";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
 import { createClient } from "@/lib/supabase/client";
@@ -105,6 +107,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [refundDialogOpen, setRefundDialogOpen] = useState(false);
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
+  const [closeOutDialogOpen, setCloseOutDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
@@ -817,6 +820,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // so the two stay in sync. Exactly one region lights up at a time.
   const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
 
+  // A booking from an earlier day that was never checked in/out. It is closed
+  // out (billed as booked, lapse recorded) instead of being checked in "now".
+  const closeOut = closeOutDecision(booking, new Date());
+  const needsCloseOut = closeOut.allowed;
+  const closeOutGrandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0;
+  const closeOutVerifiedPaid = existingPayments
+    .filter((p) => p.status === "verified")
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+  const closeOutBalance = Math.max(0, closeOutGrandTotal - closeOutVerifiedPaid);
+
   // Pending contract-holder pooled-usage charge, if any (Model B — posted
   // at checkout from actual check-in/check-out time, no longer a separate
   // "overtime" charge type) — derived from the already-fetched
@@ -866,6 +879,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Badge variant="outline" className={BOOKING_CUSTOMER_TYPE_COLORS[booking.customer_type]}>
                 {BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type]}
               </Badge>
+              {needsCloseOut && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200">
+                  Needs closing · {closeOut.allowed ? closeOut.daysLate : 0}d past
+                </Badge>
+              )}
+              {booking.closed_out_late && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200">
+                  Closed late
+                </Badge>
+              )}
               {booking.series_id && (
                 <Badge variant="outline" className="bg-indigo-50 text-indigo-700 text-[10px]">
                   <Repeat className="h-3 w-3 mr-1" />Recurring
@@ -889,9 +912,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         <div className="flex flex-wrap gap-2 p-1">
           {booking.status === "confirmed" && (
             <>
-              <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
-                <LogIn className="mr-1 h-4 w-4" />Check In
-              </Button>
+              {needsCloseOut ? (
+                <Button size="sm" onClick={() => setCloseOutDialogOpen(true)} disabled={actionLoading}>
+                  <CheckCircle2 className="mr-1 h-4 w-4" />Close out
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
+                  <LogIn className="mr-1 h-4 w-4" />Check In
+                </Button>
+              )}
               <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
                 <Calendar className="mr-1 h-4 w-4" />Reschedule
               </Button>
@@ -938,7 +967,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           )}
           {booking.status === "checked_in" && (
             <>
-              <Button size="sm" onClick={() => handleStatusAction("check_out")} disabled={actionLoading}>
+              {needsCloseOut && (
+                <Button size="sm" onClick={() => setCloseOutDialogOpen(true)} disabled={actionLoading}>
+                  <CheckCircle2 className="mr-1 h-4 w-4" />Close out
+                </Button>
+              )}
+              <Button size="sm" variant={needsCloseOut ? "outline" : "default"} onClick={() => handleStatusAction("check_out")} disabled={actionLoading}>
                 <LogOut className="mr-1 h-4 w-4" />Check Out
               </Button>
               <Button variant="outline" size="sm" onClick={() => setExtendDialogOpen(true)}>
@@ -1312,7 +1346,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               )}
             </div>
-            {booking.status === "confirmed" && (
+            {booking.status === "confirmed" && !needsCloseOut && (
               <Button size="sm" className="flex-shrink-0" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
                 <LogIn className="mr-1 h-4 w-4" />Check In Now
               </Button>
@@ -2369,6 +2403,22 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         customerName={customerName}
         onSuccess={fetchBooking}
       />
+
+      {closeOut.allowed && (
+        <CloseOutDialog
+          open={closeOutDialogOpen}
+          onOpenChange={setCloseOutDialogOpen}
+          bookingId={booking.id}
+          bookingNumber={booking.booking_number || ""}
+          bookingDate={booking.booking_date}
+          daysLate={closeOut.daysLate}
+          status={booking.status as "confirmed" | "checked_in"}
+          grandTotal={closeOutGrandTotal}
+          balanceDue={closeOutBalance}
+          bookedById={booking.created_by ?? null}
+          onClosed={fetchBooking}
+        />
+      )}
 
       <RescheduleDialog
         open={rescheduleDialogOpen}
