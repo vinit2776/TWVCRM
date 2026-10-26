@@ -1377,6 +1377,8 @@ export interface Booking {
   gst_rate?: number;
   gst_amount?: number;
   total_amount_with_gst?: number;
+  /** Completed via Close out after its date: billed as booked, no real check-in/out times. */
+  closed_out_late?: boolean;
   payment_status: BookingPaymentStatus;
   payment_mode?: string;
   payment_reference?: string;
