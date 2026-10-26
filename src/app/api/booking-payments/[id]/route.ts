@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
-import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { settleBookingPayment } from "@/lib/booking-payment-server";
 
-// PATCH — verify or reject a payment (UPI screenshot verification)
+// PATCH — verify or reject a payment (UPI screenshot verification).
+// The same settle step backs the Tally Inbox "To verify" card, so both entry
+// points close the report thread and apply the over-credit guard identically.
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,7 +16,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -32,85 +33,13 @@ export async function PATCH(
     return NextResponse.json({ error: "Status must be 'verified' or 'rejected'" }, { status: 400 });
   }
 
-  // Fetch the payment
-  const { data: payment } = await supabase
-    .from("booking_payments")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  if (!payment) return NextResponse.json({ error: "Payment not found" }, { status: 404 });
-
-  if (payment.status !== "pending") {
-    return NextResponse.json({ error: "Only pending payments can be verified/rejected" }, { status: 400 });
-  }
-
-  const updates: Record<string, unknown> = {
-    status,
-    screenshot_verified: status === "verified",
-    verification_notes: verification_notes?.trim() || null,
-  };
-
-  const { data: updated, error } = await supabase
-    .from("booking_payments")
-    .update(updates)
-    .eq("id", id)
-    .select("*")
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  // If verified, check if booking is now fully paid. Compare against the
-  // GST-inclusive total — the displayed receipt amount — so a payment of
-  // exactly the displayed total flips the booking to "paid".
-  if (status === "verified") {
-    const { data: booking } = await supabase
-      .from("bookings")
-      .select("id, total_amount, total_amount_with_gst")
-      .eq("id", payment.booking_id)
-      .single();
-
-    if (booking) {
-      const { data: verifiedPayments } = await supabase
-        .from("booking_payments")
-        .select("amount")
-        .eq("booking_id", payment.booking_id)
-        .eq("status", "verified");
-
-      const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-      const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
-
-      if (totalPaid >= grandTotal) {
-        await supabase
-          .from("bookings")
-          .update({ payment_status: "paid", payment_mode: payment.payment_mode })
-          .eq("id", payment.booking_id);
-
-        // Create a Tally Inbox task if the booking is already checked out.
-        // The helper checks booking.status internally so this is safe to call
-        // even when the booking is still confirmed/checked_in.
-        void (async () => {
-          try {
-            const adminClient = await createAdminClient();
-            await maybeCreateBookingGstTask(adminClient, payment.booking_id as string);
-          } catch (err) {
-            console.error("[payment-verify] booking-gst-task creation failed:", err);
-          }
-        })();
-      }
-    }
-  }
-
-  logAudit(supabase, {
-    entityType: "booking_payment",
-    entityId: id,
-    action: "update",
-    performedBy: dbUser.id,
-    changes: {
-      status: { old: "pending", new: status },
-      screenshot_verified: { old: null, new: status === "verified" },
-    },
+  const result = await settleBookingPayment(createAdminClient(), {
+    paymentId: id,
+    outcome: status,
+    notes: typeof verification_notes === "string" ? verification_notes : null,
+    reviewer: dbUser as { id: string; role: string; full_name: string },
   });
 
-  return NextResponse.json({ data: updated });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+  return NextResponse.json({ data: result.payment });
 }
