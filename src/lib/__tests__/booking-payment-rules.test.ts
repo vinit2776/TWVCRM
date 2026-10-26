@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   checkInPaymentState,
+  closeOutPaymentState,
   findDuplicateReference,
   hasProof,
   verifyExcess,
@@ -98,5 +99,27 @@ describe("hasProof", () => {
   it("needs a screenshot or a non-blank reference", () => {
     expect(hasProof({ amount: 1, status: "pending", payment_mode: "upi" })).toBe(false);
     expect(hasProof({ amount: 1, status: "pending", payment_mode: "upi", screenshot_path: "p" })).toBe(true);
+  });
+});
+
+describe("closeOutPaymentState", () => {
+  it("is settled when the booking is already paid, waived or prepaid", () => {
+    for (const status of ["paid", "waived", "posted_to_bill", "prepaid"]) {
+      expect(closeOutPaymentState(2832, status, [])).toEqual({ settled: true, provisional: false, balance: 0 });
+    }
+  });
+  it("needs a choice when nothing is collected", () => {
+    expect(closeOutPaymentState(2832, "pending", [])).toEqual({ settled: false, provisional: false, balance: 2832 });
+  });
+  it("is settled provisionally on a full UPI with proof awaiting accounts", () => {
+    const r = closeOutPaymentState(2832, "pending", [upi(2832, { payment_reference: "UTR1" })]);
+    expect(r).toEqual({ settled: true, provisional: true, balance: 0 });
+  });
+  it("reports the uncovered balance after a part payment", () => {
+    const r = closeOutPaymentState(2832, "pending", [{ amount: 1000, status: "verified", payment_mode: "cash" }]);
+    expect(r).toEqual({ settled: false, provisional: false, balance: 1832 });
+  });
+  it("does not count UPI that has no proof", () => {
+    expect(closeOutPaymentState(2832, "pending", [upi(2832)]).settled).toBe(false);
   });
 });

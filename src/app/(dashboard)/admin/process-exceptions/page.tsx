@@ -43,7 +43,7 @@ interface Item {
   comment: string | null;
   counts_against_person: boolean;
   amount_at_stake: number | string | null;
-  details: { booking_number?: string; outcome?: string } | null;
+  details: { booking_number?: string; outcome?: string; closed_unpaid?: boolean; unpaid_note?: string | null } | null;
   accountable: { full_name: string; role: string } | null;
   recorder: { full_name: string; role: string } | null;
   location: { name: string } | null;
@@ -205,6 +205,7 @@ export default function ProcessExceptionsPage() {
                     ) : null}
                     <Badge variant="outline">{reasonLabel(i.reason_code)}</Badge>
                     {!i.counts_against_person && <Badge variant="outline" className="bg-gray-50">Not counted</Badge>}
+                    {i.details?.closed_unpaid && <Badge variant="outline" className="bg-red-50 text-red-800">Closed unpaid</Badge>}
                     {i.reviewed_at ? (
                       <Badge variant="outline" className="bg-green-50 text-green-800">
                         <Check className="h-3 w-3 mr-1" />{REVIEW_OUTCOMES.find((o) => o.value === i.review_outcome)?.label}
@@ -221,6 +222,9 @@ export default function ProcessExceptionsPage() {
                     {Number(i.amount_at_stake) > 0 ? ` · ${formatCurrency(Number(i.amount_at_stake))} unpaid then` : ""}
                   </p>
                   {i.comment && <p className="text-sm">&ldquo;{i.comment}&rdquo;</p>}
+                  {i.details?.closed_unpaid && i.details.unpaid_note && (
+                    <p className="text-sm">Closed without payment: &ldquo;{i.details.unpaid_note}&rdquo;</p>
+                  )}
                   {i.review_note && <p className="text-xs italic text-muted-foreground">Review: {i.review_note}</p>}
                   {!i.reviewed_at && (
                     reviewing === i.id ? (

@@ -825,10 +825,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const closeOut = closeOutDecision(booking, new Date());
   const needsCloseOut = closeOut.allowed;
   const closeOutGrandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0;
-  const closeOutVerifiedPaid = existingPayments
-    .filter((p) => p.status === "verified")
-    .reduce((sum, p) => sum + Number(p.amount), 0);
-  const closeOutBalance = Math.max(0, closeOutGrandTotal - closeOutVerifiedPaid);
 
   // Pending contract-holder pooled-usage charge, if any (Model B — posted
   // at checkout from actual check-in/check-out time, no longer a separate
@@ -2414,7 +2410,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           daysLate={closeOut.daysLate}
           status={booking.status as "confirmed" | "checked_in"}
           grandTotal={closeOutGrandTotal}
-          balanceDue={closeOutBalance}
+          paymentStatus={booking.payment_status}
+          payments={existingPayments}
+          onCollectPayment={() => setPaymentDialogOpen(true)}
           bookedById={booking.created_by ?? null}
           onClosed={fetchBooking}
         />

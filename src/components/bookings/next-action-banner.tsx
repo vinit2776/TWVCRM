@@ -28,6 +28,7 @@
 import { ArrowRight, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { checkInPaymentState } from "@/lib/booking-payment-rules";
+import { closeOutDecision } from "@/lib/process-registry";
 import type { Booking, BookingPayment } from "@/types";
 import type { CompRequestData } from "@/components/bookings/booking-lifecycle-timeline";
 
@@ -214,6 +215,16 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
 
   // confirmed → either collect payment or check in
   if (status === "confirmed") {
+    // From an earlier day: Check In is gone, Close out is the way to finish it.
+    if (closeOutDecision(b, new Date()).allowed) {
+      return {
+        label: "Close out this booking",
+        detail: "It was booked for an earlier day. Close out completes it as booked and records why.",
+        tone: "amber",
+        target: "actions",
+      };
+    }
+
     const SETTLED = new Set(["paid", "waived", "posted_to_bill", "prepaid"]);
     const grandTotal = Number(b.total_amount_with_gst) || Number(b.total_amount);
     const paidSoFar = payments

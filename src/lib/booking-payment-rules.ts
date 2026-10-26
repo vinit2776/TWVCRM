@@ -88,3 +88,34 @@ export function findDuplicateReference(
     (p) => p.status !== "rejected" && p.payment_reference?.trim().toLowerCase() === ref,
   );
 }
+
+/** payment_status values that mean nothing is left to collect. */
+export const SETTLED_PAYMENT_STATUSES = ["paid", "waived", "posted_to_bill", "prepaid"] as const;
+
+export interface CloseOutPaymentState {
+  /** Nothing left to collect, or a full UPI with proof is waiting on accounts. */
+  settled: boolean;
+  /** Awaiting accounts' verification, so settled only provisionally. */
+  provisional: boolean;
+  /** What is still uncovered. 0 when settled. */
+  balance: number;
+}
+
+/**
+ * Where a booking's money stands when it is being closed out. Close out makes
+ * the person choose: payment is already in hand, collect it now, or close
+ * without it and say why. This decides whether that choice is needed.
+ */
+export function closeOutPaymentState(
+  grandTotal: number,
+  paymentStatus: string,
+  payments: BookingPaymentLike[],
+): CloseOutPaymentState {
+  if ((SETTLED_PAYMENT_STATUSES as readonly string[]).includes(paymentStatus)) {
+    return { settled: true, provisional: false, balance: 0 };
+  }
+  const state = checkInPaymentState(grandTotal, payments);
+  if (state.covered) return { settled: true, provisional: state.isProvisional, balance: 0 };
+  const balance = Math.max(0, Math.round((grandTotal - state.verified - state.provisional) * 100) / 100);
+  return { settled: false, provisional: false, balance };
+}
