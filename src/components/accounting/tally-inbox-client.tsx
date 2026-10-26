@@ -408,6 +408,39 @@ export function TallyInboxClient() {
     return () => clearTimeout(handle);
   }, [data]);
 
+  // Honor ?open=<statement_id | booking task_id> — used by the role dashboards
+  // so "Handle" lands on the exact item, expanded and scrolled into view.
+  // Runs once per page load: after that the user is driving, and a later
+  // refresh of `data` must not re-open a row they closed.
+  const handledOpenParam = useRef(false);
+  const [openNotice, setOpenNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (handledOpenParam.current || !data || loading) return;
+    const openId = new URLSearchParams(window.location.search).get("open");
+    if (!openId) return;
+    handledOpenParam.current = true;
+    // Stops the first-awaiting-GST auto-expand above from replacing the row we were asked for.
+    hasAutoExpanded.current = true;
+    if (data.rows.some((r) => r.statement_id === openId)) {
+      setActiveType("contracts");
+      setExpandedId(openId);
+    } else if (data.booking_rows?.some((r) => r.task_id === openId)) {
+      setActiveType("bookings");
+      setExpandedBookingId(openId);
+    } else {
+      // Only the open list is loaded here, so a missing id usually means it was
+      // handled since the dashboard was drawn — say so rather than show nothing.
+      setOpenNotice("That item is no longer in the open list. It may already have been handled.");
+      return;
+    }
+    // No cleanup on purpose: this runs once, and a data refresh re-running the
+    // effect would cancel the scroll without ever scheduling it again.
+    setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-statement-id="${CSS.escape(openId)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 400);
+  }, [data, loading]);
+
   const handleSend = useCallback((statementId: string, row: InboxRow) => {
     const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
     const recipients = Array.from(new Set([
@@ -960,6 +993,13 @@ export function TallyInboxClient() {
           )}
         </div>
       </div>
+
+      {openNotice && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-start justify-between gap-3">
+          <span>{openNotice}</span>
+          <button type="button" className="text-xs underline" onClick={() => setOpenNotice(null)}>Dismiss</button>
+        </div>
+      )}
 
       {/* Worklist */}
       {tab === "to_verify" ? (
