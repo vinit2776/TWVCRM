@@ -159,6 +159,12 @@ export function PaymentReportCard({
   // report) and earns a one-click accept; zero or several fall back to the
   // list below, where a person chooses.
   const acceptable = matchingRecordedPayments(recorded, report.amount);
+  // One exact match is a single obvious answer: link it. Recording the report
+  // as a second payment is how receipts get double-counted, so that path sits
+  // behind a deliberate click instead of beside the safe one.
+  const exactMatch = acceptable.length === 1 ? acceptable[0] : null;
+  const [recordAsNew, setRecordAsNew] = useState(false);
+  const showVerifyAndRecord = !exactMatch || recordAsNew;
 
   const settle = useCallback(
     async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
@@ -304,31 +310,37 @@ export function PaymentReportCard({
               </div>
             )}
 
-            {mode === "idle" && acceptable.length === 1 && (
+            {mode === "idle" && exactMatch && (
               <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
                 <p className="text-[11px] font-medium text-green-900">
-                  This payment is already recorded on the invoice
+                  Matches a payment already recorded on this invoice
                 </p>
                 <p className="text-[11px] text-green-900/80">
-                  {formatCurrency(Number(acceptable[0].amount) + Number(acceptable[0].tds_amount ?? 0))}
+                  {Number(exactMatch.tds_amount ?? 0) > 0
+                    ? `${formatCurrency(Number(exactMatch.amount))} + ${formatCurrency(Number(exactMatch.tds_amount))} TDS = `
+                    : ""}
+                  {formatCurrency(Number(exactMatch.amount) + Number(exactMatch.tds_amount ?? 0))}
                   {" · "}
-                  {STATEMENT_PAYMENT_MODE_LABELS[acceptable[0].payment_mode] ?? acceptable[0].payment_mode}
-                  {acceptable[0].payment_reference ? ` · ${acceptable[0].payment_reference}` : ""}
+                  {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}
+                  {exactMatch.payment_reference ? ` · ref ${exactMatch.payment_reference}` : ""}
                   {" · received "}
-                  {formatDate(acceptable[0].payment_date)}
+                  {formatDate(exactMatch.payment_date)}
+                </p>
+                <p className="text-[11px] text-green-900/80">
+                  Matched on amount only. Check the bank credit is the same money.
                 </p>
                 <Button
                   size="sm"
                   className="h-7 text-xs bg-green-600 hover:bg-green-700"
                   disabled={busy}
-                  onClick={() => void settle("verified", acceptable[0].id)}
+                  onClick={() => void settle("verified", exactMatch.id)}
                 >
-                  <Check className="h-3 w-3 mr-1" /> Accept and link this payment
+                  <Link2 className="h-3 w-3 mr-1" /> Link and verify
                 </Button>
               </div>
             )}
 
-            {mode === "idle" && recorded.length > 0 && (
+            {mode === "idle" && recorded.length > 0 && !exactMatch && (
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
@@ -377,9 +389,11 @@ export function PaymentReportCard({
             <div className="flex flex-wrap gap-1.5">
               {mode === "idle" ? (
                 <>
+                  {showVerifyAndRecord && (
                   <Button
                     size="sm"
-                    className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                    variant={recorded.length > 0 ? "outline" : "default"}
+                    className={recorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
                     disabled={busy || (!isDeposit && !isBooking && !statementId)}
                     title={
                       isBooking
@@ -399,6 +413,7 @@ export function PaymentReportCard({
                     )}
                     {isBooking ? "Credit found — verify" : "Verify and record"}
                   </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="outline"
@@ -441,6 +456,16 @@ export function PaymentReportCard({
                 </>
               )}
             </div>
+
+            {mode === "idle" && exactMatch && !recordAsNew && (
+              <button
+                type="button"
+                className="text-[11px] underline underline-offset-2 opacity-80 hover:opacity-100"
+                onClick={() => setRecordAsNew(true)}
+              >
+                It isn&apos;t recorded yet. Record it as a new payment
+              </button>
+            )}
 
             {mode === "idle" && (
               <p className="text-[11px] opacity-80">
