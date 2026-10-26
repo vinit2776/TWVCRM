@@ -134,7 +134,13 @@ export interface CloseOutInput {
   reason_code: string;
   comment: string;
   accountable_user_id: string | null;
+  /** The person chose to close without collecting what is owed. */
+  close_unpaid: boolean;
+  /** Why, e.g. "customer left without paying". Required with close_unpaid. */
+  unpaid_note: string;
 }
+
+export const UNPAID_NOTE_MIN_LENGTH = 5;
 
 export function validateCloseOut(raw: Record<string, unknown>):
   | { ok: true; value: CloseOutInput }
@@ -155,5 +161,16 @@ export function validateCloseOut(raw: Record<string, unknown>):
     typeof raw.accountable_user_id === "string" && raw.accountable_user_id.trim()
       ? raw.accountable_user_id.trim()
       : null;
-  return { ok: true, value: { outcome, reason_code: reasonCode, comment, accountable_user_id: accountable } };
+  const closeUnpaid = raw.close_unpaid === true;
+  const unpaidNote = typeof raw.unpaid_note === "string" ? raw.unpaid_note.trim() : "";
+  if (closeUnpaid && unpaidNote.length < UNPAID_NOTE_MIN_LENGTH) {
+    return { ok: false, error: "Say why it's being closed without payment" };
+  }
+  return {
+    ok: true,
+    value: {
+      outcome, reason_code: reasonCode, comment, accountable_user_id: accountable,
+      close_unpaid: closeUnpaid, unpaid_note: unpaidNote,
+    },
+  };
 }

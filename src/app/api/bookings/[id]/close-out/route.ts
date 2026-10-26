@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { recordDeviation } from "@/lib/process-deviations";
+import { closeOutPaymentState } from "@/lib/booking-payment-rules";
 import {
   BOOKING_LATE_CLOSE_OUT,
   closeOutDecision,
@@ -28,8 +29,10 @@ const CLOSE_OUT_ROLES = ["admin", "manager", "floor_manager", "sales_rep", "acco
  *
  *   used     — billed as booked. check_in_at / check_out_at stay empty so
  *              reports can tell assumed usage from real usage. No overtime.
- *              Payment is untouched: an unpaid walk-in stays in Pending
- *              Collection, and the GST task follows once it is verified.
+ *              Payment can't be skipped silently: it is either in hand, or the
+ *              request says close_unpaid with a reason. An unpaid close stays
+ *              in Pending Collection, the GST task follows once it is verified,
+ *              and the deviation records it as closed unpaid.
  *   no_show  — the customer never came. Same effects as the No Show button.
  *
  * Extra charges are added before closing, from the booking's Add charge
@@ -76,6 +79,33 @@ export async function POST(
       { error: "This customer was checked in, so it can't be a no-show" },
       { status: 400 },
     );
+  }
+
+  // Money. Closing out must not quietly skip the payment: either it is in hand
+  // (collected, or a full UPI with proof waiting on accounts), or the person
+  // says in so many words that it is being closed without it. A customer who
+  // used the room and left can't be forced to pay by a button, so the second
+  // is allowed. It is recorded, and the booking stays in Pending Collection.
+  const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount) || 0;
+  let closedUnpaid = false;
+  let balanceAtClose = 0;
+  if (input.outcome === "used") {
+    const { data: payments } = await admin
+      .from("booking_payments")
+      .select("amount, status, payment_mode, payment_reference, screenshot_path")
+      .eq("booking_id", id);
+    const pay = closeOutPaymentState(grandTotal, booking.payment_status, payments || []);
+    balanceAtClose = pay.balance;
+    if (!pay.settled) {
+      if (!input.close_unpaid) {
+        return NextResponse.json({
+          error: `₹${pay.balance.toLocaleString("en-IN")} is still unpaid. Collect it, or choose to close without payment and say why.`,
+          payment_required: true,
+          balance_due: pay.balance,
+        }, { status: 400 });
+      }
+      closedUnpaid = true;
+    }
   }
 
   let accountableId = input.accountable_user_id ?? booking.created_by ?? dbUser.id;
@@ -132,7 +162,6 @@ export async function POST(
     await maybeCreateBookingGstTask(admin, id);
   }
 
-  const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount) || 0;
   const dev = await recordDeviation(admin, {
     key: BOOKING_LATE_CLOSE_OUT,
     entityType: "booking",
@@ -143,7 +172,7 @@ export async function POST(
     accountableUserId: accountableId,
     reasonCode: input.reason_code,
     comment: input.comment,
-    amountAtStake: booking.payment_status === "paid" ? 0 : grandTotal,
+    amountAtStake: closedUnpaid ? balanceAtClose : booking.payment_status === "paid" ? 0 : grandTotal,
     details: {
       booking_number: booking.booking_number,
       outcome: input.outcome,
@@ -151,6 +180,9 @@ export async function POST(
       booked_by: booking.created_by,
       previous_status: booking.status,
       payment_status: booking.payment_status,
+      closed_unpaid: closedUnpaid,
+      unpaid_note: closedUnpaid ? input.unpaid_note : null,
+      balance_at_close: balanceAtClose,
     },
   });
 
@@ -166,6 +198,7 @@ export async function POST(
       close_out_outcome: { old: null, new: input.outcome },
       accountable_user_id: { old: null, new: accountableId },
       days_late: { old: null, new: decision.daysLate },
+      ...(closedUnpaid ? { closed_unpaid: { old: null, new: input.unpaid_note } } : {}),
     },
   });
 
