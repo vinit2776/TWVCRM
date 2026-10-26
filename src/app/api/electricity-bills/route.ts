@@ -6,6 +6,8 @@ import { createVendorBill } from "@/lib/vendor-bills";
 import { resolveVendorBillRef } from "@/lib/electricity-vendor-bill";
 import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
 import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
+import { setupGaps, type SetupGap } from "@/lib/electricity-setup-checks";
+import { loadSetupChecks } from "@/lib/electricity-setup-server";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -138,7 +140,23 @@ export async function GET(request: NextRequest) {
       customerBillsByLandlord.set(key, arr);
     }
 
+    // Required setup gaps per location (one lookup each, however many bills share it), so a bill that will
+    // never reach Acc Payables or a customer says why on its row. A failed lookup shows no chips rather than
+    // a false claim either way.
+    const gapsByLocation = new Map<string, SetupGap[]>();
+    const locationIds = [...new Set((data as Record<string, unknown>[]).map((b) => b.location_id as string))];
+    await Promise.all(
+      locationIds.map(async (locId) => {
+        try {
+          gapsByLocation.set(locId, setupGaps(await loadSetupChecks(supabase, locId)));
+        } catch (err) {
+          console.error("[electricity-bills] setup lookup failed:", err instanceof Error ? err.message : "unknown error");
+        }
+      }),
+    );
+
     for (const bill of data as Record<string, unknown>[]) {
+      bill.setup_gaps = gapsByLocation.get(bill.location_id as string) ?? [];
       const ref = resolveVendorBillRef(
         bill as { vendor_bill_id?: string | null; source_vendor_bill_id?: string | null },
         fallbackVendorBillByBill.get(bill.id as string),
