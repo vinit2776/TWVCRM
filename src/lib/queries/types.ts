@@ -18,6 +18,7 @@ import type { UserRole } from "@/types";
 export const QUERY_ENTITY_TYPES = [
   "billing_statement",
   "booking_gst_task",
+  "booking",
   "proposal_deposit",
   "deposit_topup",
   "vendor_bill",
@@ -224,7 +225,7 @@ export interface QueryPaymentReport {
   id: string;
   status: "reported" | "verified" | "rejected";
   /** 'invoice' settles a statement; 'deposit' settles a proposal deposit. */
-  target_kind: "invoice" | "deposit";
+  target_kind: "invoice" | "deposit" | "booking";
   amount: number;
   paid_on: string;
   payment_mode: string;

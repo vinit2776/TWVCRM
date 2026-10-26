@@ -214,6 +214,42 @@ function bookingTaskSummary(raw: EntityRow): QueryEntitySummary | null {
   };
 }
 
+// ── booking ─────────────────────────────────────────────────────────────────
+// The booking itself, as the thing a manual-UPI payment report hangs off. Kept
+// apart from booking_gst_task: that one exists only after checkout and payment,
+// whereas a payment awaiting verification belongs to a booking that may not
+// have been used yet.
+
+const BOOKING_SELECT = `
+  id, booking_number, booking_date, total_amount_with_gst, total_amount,
+  guest_name, guest_company,
+  lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
+`;
+
+interface BookingRow {
+  id: string;
+  booking_number: string | null;
+  booking_date: string | null;
+  total_amount_with_gst: number | null;
+  total_amount: number | null;
+  guest_name: string | null;
+  guest_company: string | null;
+  lead: LeadLike;
+}
+
+function bookingSummary(raw: EntityRow): QueryEntitySummary | null {
+  const row = raw as unknown as BookingRow;
+  if (!row?.id) return null;
+  return {
+    id: row.id,
+    title: row.guest_company || leadName(row.lead) || row.guest_name || "(unknown)",
+    subtitle: row.booking_date ?? "",
+    amount: row.total_amount_with_gst ?? row.total_amount ?? null,
+    reference: row.booking_number ?? null,
+    href: `/bookings/${row.id}`,
+  };
+}
+
 // ── proposal_deposit ────────────────────────────────────────────────────────
 
 const PROPOSAL_DEPOSIT_SELECT = `
@@ -493,6 +529,38 @@ export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
         key: "amount_mismatch",
         label: "Amount doesn't match",
         body: "The amount collected doesn't match the booking total. Which figure should I invoice?",
+      },
+    ],
+  },
+
+  booking: {
+    type: "booking",
+    label: "Booking",
+    module: "tally_inbox",
+    table: "bookings",
+    select: BOOKING_SELECT,
+    // Everyone who can record a booking payment must be able to see the
+    // thread they raise, or "reported" would vanish from the reporter's view.
+    roles: Array.from(
+      new Set<UserRole>([
+        "floor_manager", "sales_rep", "fms", "office_admin",
+        ...(INBOX_ROLES as readonly UserRole[]),
+      ]),
+    ),
+    alertRoles: ["accounts", "manager", "floor_manager"],
+    auditEntityType: "booking",
+    auditEntityId: (row) => (typeof row?.id === "string" ? row.id : null),
+    toSummary: bookingSummary,
+    templates: [
+      {
+        key: "which_credit",
+        label: "Which bank credit is this?",
+        body: "I can't match this payment to a credit in the bank. Can you share the UTR, or the exact time it was paid?",
+      },
+      {
+        key: "screenshot_unclear",
+        label: "Screenshot unclear",
+        body: "The payment screenshot doesn't show the amount or the reference clearly. Can you attach a clearer one?",
       },
     ],
   },

@@ -5,6 +5,8 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { checkInPaymentState } from "@/lib/booking-payment-rules";
+import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
 import { deleteUserFromDevice } from "@/lib/cosec";
 import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
 import { getCachedSettings } from "@/lib/app-settings-cache";
@@ -433,7 +435,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -664,6 +666,9 @@ export async function PATCH(
     updates.notes = body.notes;
   }
 
+  // Set when a walk-in checks in on a UPI payment accounts haven't verified yet.
+  let provisionalCheckIn = false;
+
   // Status transitions
   if (body.status) {
     const { status: newStatus } = body;
@@ -701,27 +706,32 @@ export async function PATCH(
         // We compare against the GST-inclusive grand total, the same figure
         // the customer is told to pay — using ex-GST here would have let
         // walk-ins check in after paying only the pre-tax amount.
+        //
+        // Verified payments count in full. A manual UPI payment that is still
+        // waiting for accounts also counts, provided staff attached its proof
+        // (screenshot or UTR) — the customer is at the counter and accounts
+        // may not look at the bank for hours. That is a provisional check-in:
+        // it is logged, and the GST invoice still waits for verification
+        // because only a verified payment marks the booking paid.
         if (booking.customer_type === "walk_in") {
-          const { data: verifiedPayments } = await supabase
+          const { data: bookingPayments } = await supabase
             .from("booking_payments")
-            .select("amount")
-            .eq("booking_id", id)
-            .eq("status", "verified");
+            .select("amount, status, payment_mode, payment_reference, screenshot_path")
+            .eq("booking_id", id);
 
-          const totalPaid = (verifiedPayments || []).reduce(
-            (sum: number, p: { amount: number }) => sum + Number(p.amount), 0
-          );
           const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
+          const paymentState = checkInPaymentState(grandTotal, bookingPayments || []);
 
-          if (totalPaid < grandTotal) {
+          if (!paymentState.covered) {
             return NextResponse.json({
               error: "Payment required before check-in",
               payment_required: true,
               total_amount: grandTotal,
-              amount_paid: totalPaid,
-              balance_due: grandTotal - totalPaid,
+              amount_paid: paymentState.verified,
+              balance_due: Math.max(0, grandTotal - paymentState.verified - paymentState.provisional),
             }, { status: 402 });
           }
+          provisionalCheckIn = paymentState.isProvisional;
         }
 
         updates.status = "checked_in";
@@ -1009,6 +1019,14 @@ export async function PATCH(
     performedBy: dbUser.id,
     changes: diffChanges(booking, { ...booking, ...updates }),
   });
+
+  if (body.status === "checked_in" && provisionalCheckIn) {
+    void noteProvisionalCheckIn(createAdminClient(), {
+      bookingId: id,
+      bookingNumber: booking.booking_number as string,
+      actor: { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name ?? "Staff" },
+    });
+  }
 
   // Log activity on lead timeline for status changes
   if (booking.lead_id && body.status) {

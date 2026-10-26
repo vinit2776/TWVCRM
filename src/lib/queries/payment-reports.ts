@@ -36,13 +36,18 @@ export type PaymentReportEntityType = (typeof PAYMENT_REPORT_ENTITY_TYPES)[numbe
  *
  *   invoice — a billing statement. Proof is the billing_payments row created
  *             when accounts record it, stored in billing_payment_id.
+ *   booking — a manual UPI payment on a walk-in booking, already stored as a
+ *             pending booking_payments row. Proof is that row turning
+ *             verified, stored in booking_payment_id. Raised by the server
+ *             when staff record the payment, never through the public
+ *             POST /api/queries/payment-reports route.
  *   deposit — a proposal security deposit, or a deposit top-up. Neither has a
  *             payment row of its own — proof is the source row's own status
  *             flag (deposit_payment_status / deposit_topups.status) flipping
  *             to 'paid', re-checked server-side before a report may be
  *             marked verified.
  */
-export type PaymentReportTargetKind = "invoice" | "deposit";
+export type PaymentReportTargetKind = "invoice" | "deposit" | "booking";
 
 export function targetKindForEntity(entityType: PaymentReportEntityType): PaymentReportTargetKind {
   return entityType === "proposal_deposit" || entityType === "deposit_topup" ? "deposit" : "invoice";
@@ -62,6 +67,7 @@ export type PaymentReportStatus = "reported" | "verified" | "rejected";
 export const PAYMENT_REPORT_TARGET_LABELS: Record<PaymentReportTargetKind, string> = {
   invoice: "Invoice payment",
   deposit: "Security deposit",
+  booking: "Booking payment",
 };
 
 export const PAYMENT_REPORT_STATUS_LABELS: Record<PaymentReportStatus, string> = {
@@ -305,6 +311,9 @@ export function closedReportSummary(args: {
   }
   if (args.targetKind === "deposit") {
     return { headline: "Payment report closed", linkLine: "Recorded against the deposit" };
+  }
+  if (args.targetKind === "booking") {
+    return { headline: "Payment report closed", linkLine: "Verified against the booking" };
   }
   const p = args.linkedPayment;
   if (!p) return { headline: "Payment report closed", linkLine: "Linked to the recorded payment" };

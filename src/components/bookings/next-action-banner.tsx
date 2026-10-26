@@ -27,6 +27,7 @@
 
 import { ArrowRight, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+import { checkInPaymentState } from "@/lib/booking-payment-rules";
 import type { Booking, BookingPayment } from "@/types";
 import type { CompRequestData } from "@/components/bookings/booking-lifecycle-timeline";
 
@@ -219,6 +220,18 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);
     const settled = SETTLED.has(b.payment_status) || paidSoFar + 0.01 >= grandTotal;
+
+    // Mirrors the server's check-in gate: a full UPI payment staff have
+    // attached proof to is enough to let the customer in while accounts verify.
+    const cover = checkInPaymentState(grandTotal, payments);
+    if (!settled && b.customer_type === "walk_in" && cover.covered) {
+      return {
+        label: "Check the customer in",
+        detail: "Paid by UPI, waiting for accounts to verify — the GST invoice follows once it is verified",
+        tone: "blue",
+        target: "actions",
+      };
+    }
 
     if (!settled) {
       const balance = grandTotal - paidSoFar;
