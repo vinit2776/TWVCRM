@@ -27,6 +27,8 @@ import type { QueryListItem } from "@/lib/queries/types";
 interface Props {
   /** Fires after any outcome so the tab count and sidebar badge can refresh. */
   onChanged?: () => void;
+  /** The inbox search box. /api/queries has no text search, so this filters the loaded rows. */
+  search?: string;
 }
 
 function daysWaiting(createdAt: string): number {
@@ -43,7 +45,7 @@ const CHECKED_CHIP_CLASS: Record<LastCheckedTone, string> = {
   stale: "bg-muted text-muted-foreground",
 };
 
-export function ToVerifyPanel({ onChanged }: Props) {
+export function ToVerifyPanel({ onChanged, search = "" }: Props) {
   const [items, setItems] = useState<QueryListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,20 @@ export function ToVerifyPanel({ onChanged }: Props) {
 
   const today = new Date().toISOString().slice(0, 10);
 
+  const needle = search.trim().toLowerCase();
+  const visibleItems = needle
+    ? items.filter((item) =>
+        [
+          item.entity?.title,
+          item.entity?.reference,
+          item.entity?.subtitle,
+          item.created_by.full_name,
+          item.reported_payment?.payment_reference,
+          item.reported_amount != null ? String(item.reported_amount) : null,
+        ].some((v) => v?.toLowerCase().includes(needle)),
+      )
+    : items;
+
   if (loading && items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -128,6 +144,14 @@ export function ToVerifyPanel({ onChanged }: Props) {
     );
   }
 
+  if (visibleItems.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+        No reported payments match “{search.trim()}”.
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="rounded-lg border divide-y">
@@ -137,7 +161,7 @@ export function ToVerifyPanel({ onChanged }: Props) {
           <span>Reported by</span>
           <span />
         </div>
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const days = daysWaiting(item.created_at);
           const overdue = !!item.needed_by && item.needed_by < today;
           const checked = lastCheckedChip(item.last_checked_at, Date.now());

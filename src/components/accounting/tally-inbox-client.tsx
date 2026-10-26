@@ -963,7 +963,7 @@ export function TallyInboxClient() {
 
       {/* Worklist */}
       {tab === "to_verify" ? (
-        <ToVerifyPanel onChanged={() => void loadToVerifyCount()} />
+        <ToVerifyPanel onChanged={() => void loadToVerifyCount()} search={searchInput} />
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">Failed to load inbox</p>
