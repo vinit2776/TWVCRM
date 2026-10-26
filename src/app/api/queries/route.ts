@@ -27,6 +27,10 @@ import { QUERY_MODULE_LABELS, type QueryAuthor, type QueryKind, type QueryMessag
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 10;
+/** Candidate rows pulled for a text search. Entity names live in per-type tables, so
+ *  the match runs in memory over a capped set rather than in SQL. */
+const SEARCH_CANDIDATE_CAP = 500;
+const SEARCH_MAX_LENGTH = 100;
 
 type Tab = "awaiting_me" | "mine" | "open" | "overdue" | "resolved";
 
@@ -207,6 +211,32 @@ function sortByUrgency(items: QueryListItem[], today: string): QueryListItem[] {
   });
 }
 
+/**
+ * Text search over what a reader sees on a card: the customer/vendor and the
+ * transaction reference line, who raised it, the claimed amount and payment
+ * reference, and every message in the thread. Amounts match with or without
+ * thousands separators ("17,700" finds 17700).
+ */
+function matchesSearch(row: QueryRow, summary: QueryListItem["entity"], needle: string): boolean {
+  const report = Array.isArray(row.payment_report) ? row.payment_report[0] : row.payment_report;
+  const digits = needle.replace(/,/g, "");
+  const haystack = [
+    summary?.title,
+    summary?.reference,
+    summary?.subtitle,
+    summary?.amount != null ? String(summary.amount) : null,
+    row.created_by?.full_name,
+    report?.payment_reference,
+    report ? String(report.amount) : null,
+    ...row.messages.map((m) => m.body),
+  ];
+  return haystack.some((v) => {
+    if (!v) return false;
+    const lower = v.toLowerCase();
+    return lower.includes(needle) || (digits !== needle && lower.includes(digits));
+  });
+}
+
 /** Drop threads whose entity type this viewer's role isn't authorized on. */
 function visibleRows(rows: QueryRow[], viewer: Viewer): Array<{ row: QueryRow; def: QueryEntityDef }> {
   return rows.flatMap((row) => {
@@ -301,6 +331,7 @@ export async function GET(req: NextRequest) {
   const kindFilter = url.searchParams.get("kind");
   const entityType = url.searchParams.get("entity_type");
   const entityId = url.searchParams.get("entity_id");
+  const search = entityId ? "" : (url.searchParams.get("q") ?? "").trim().toLowerCase().slice(0, SEARCH_MAX_LENGTH);
   const today = new Date().toISOString().slice(0, 10);
 
   let q = admin.from("queries").select(THREAD_SELECT).order("updated_at", { ascending: false });
@@ -326,7 +357,7 @@ export async function GET(req: NextRequest) {
   // "Awaiting you" and the role-visibility filter are both post-filters, so
   // over-fetch and slice after — otherwise a page of ten could come back
   // near-empty. Capped so a large backlog can't pull the whole table.
-  const isPostFiltered = !entityId && tab === "awaiting_me";
+  const isPostFiltered = !entityId && (tab === "awaiting_me" || search.length > 0);
   // This tab is re-sorted by urgency below, not updated_at (see
   // sortByUrgency) — an updated_at cursor would cut rows out of the SQL
   // fetch before that reordering ever happens, silently skipping items on
@@ -334,7 +365,7 @@ export async function GET(req: NextRequest) {
   // every call here, so cursor is reinterpreted as a plain offset into the
   // sorted list instead.
   if (cursor && !isPostFiltered) q = q.lt("updated_at", cursor);
-  const { data, error } = await q.limit(isPostFiltered ? 200 : PAGE_SIZE + 1);
+  const { data, error } = await q.limit(search ? SEARCH_CANDIDATE_CAP : isPostFiltered ? 200 : PAGE_SIZE + 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const rows = (data ?? []) as unknown as QueryRow[];
@@ -345,12 +376,15 @@ export async function GET(req: NextRequest) {
     visible.map(({ row }) => ({ entity_type: row.entity_type, entity_id: row.entity_id })),
   );
 
-  let items = visible.map(({ row, def }) =>
-    toListItem(row, def, viewer, summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null),
-  );
+  const summaryFor = (row: QueryRow) => summaries.get(entityKey(row.entity_type, row.entity_id)) ?? null;
+  let items = visible
+    .filter(({ row }) => !search || matchesSearch(row, summaryFor(row), search))
+    .map(({ row, def }) => toListItem(row, def, viewer, summaryFor(row)));
 
   if (isPostFiltered) {
-    items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
+    // Only the Awaiting tab is urgency-sorted and awaiting-filtered; a search on
+    // any other tab keeps its recency order and pages by offset like this one.
+    if (tab === "awaiting_me") items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
     const offset = cursor ? Number(cursor) || 0 : 0;
     const slice = items.slice(offset, offset + PAGE_SIZE);
     return NextResponse.json({
