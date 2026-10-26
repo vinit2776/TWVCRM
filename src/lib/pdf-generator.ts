@@ -8,6 +8,7 @@ import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates"
 import { drawCompanyStamp } from "@/lib/company-stamp";
 import { composeProposalTerms } from "@/lib/proposal-terms";
 import { sanitizeForPdf } from "@/lib/pdf-text";
+import { COMPANY_LEGAL_NAME, TRADING_AS_LINE, TRADING_AS_PAREN } from "@/lib/pdf-utils";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -1304,9 +1305,10 @@ export function generateMembershipAgreementPDF(
   doc.setFontSize(7);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(255, 255, 255);
-  doc.text(COMPANY_NAME, pageWidth - marginRight, 10, { align: "right" });
-  doc.text(COMPANY_ADDRESS.join(" "), pageWidth - marginRight, 14, { align: "right" });
-  doc.text(`${COMPANY_PHONE} | ${COMPANY_WEBSITE}`, pageWidth - marginRight, 18, { align: "right" });
+  doc.text(COMPANY_LEGAL_NAME, pageWidth - marginRight, 8, { align: "right" });
+  doc.text(TRADING_AS_LINE, pageWidth - marginRight, 11.5, { align: "right" });
+  doc.text(COMPANY_ADDRESS.join(" "), pageWidth - marginRight, 15, { align: "right" });
+  doc.text(`${COMPANY_PHONE} | ${COMPANY_WEBSITE}`, pageWidth - marginRight, 18.5, { align: "right" });
 
   y = 38;
 
@@ -1345,7 +1347,7 @@ export function generateMembershipAgreementPDF(
   doc.text("PARTY OF THE FIRST PART (Operator):", marginLeft, y);
   y += 6;
 
-  const companyPartyText = `SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED, a company incorporated under the Companies Act, 2013, having its registered office at Prakash Presidium, 110, Mahatma Gandhi Road, Nungambakkam, Chennai - 600034 (PAN: AAACU4245J), hereinafter referred to as "The WorkVilla" or "Operator" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
+  const companyPartyText = `SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED, a company incorporated under the Companies Act, 2013, having its registered office at Prakash Presidium, 110, Mahatma Gandhi Road, Nungambakkam, Chennai - 600034 (PAN: AAACU4245J), carrying on the business of managed workspaces under the trade name and style "The WorkVilla", hereinafter referred to as the "Operator" and, where the context requires, "The WorkVilla" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
   addWrappedText(companyPartyText, marginLeft, contentWidth, 9, "normal", [50, 50, 50], 4.5);
   y += 4;
 
@@ -1671,6 +1673,11 @@ export function generateMembershipAgreementPDF(
   doc.setTextColor(...BRAND_TEAL);
   doc.text("For SREE DESIGN INFRASTRUCTURE", col1X, y);
   doc.text("PRIVATE LIMITED", col1X, y + 4);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.text(TRADING_AS_PAREN, col1X, y + 8);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
 
   // Member side
   const memberLines = doc.splitTextToSize(`For ${memberName}`, colWidth);
@@ -1827,7 +1834,7 @@ export function generateMembershipAgreementPDF(
     doc.setFontSize(6.5);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(255, 255, 255);
-    doc.text(`${BRAND_NAME}  |  ${COMPANY_NAME}`, pw / 2, ph - 8, { align: "center" });
+    doc.text(`${COMPANY_LEGAL_NAME}  |  ${TRADING_AS_LINE}`, pw / 2, ph - 8, { align: "center" });
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(6);

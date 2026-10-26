@@ -12,6 +12,10 @@ export const BRAND_DARK: [number, number, number] = [26, 27, 30];
 
 export const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED";
 export const BRAND_NAME = "The WorkVilla";
+// The contracting party is always the company; The WorkVilla is only its trade name.
+export const COMPANY_LEGAL_NAME = COMPANY_NAME;
+export const TRADING_AS_LINE = `Trading as "${BRAND_NAME}"`;
+export const TRADING_AS_PAREN = `(trading as "${BRAND_NAME}")`;
 export const COMPANY_ADDRESS = [
   "Prakash Presidium, 110, Mahatma Gandhi Road,",
   "Nungambakkam, Chennai - 600034",
