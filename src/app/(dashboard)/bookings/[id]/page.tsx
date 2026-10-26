@@ -772,6 +772,27 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  const [cancellingLink, setCancellingLink] = useState(false);
+  const handleCancelPaymentLink = async () => {
+    if (!window.confirm(
+      "Cancel this booking's payment link?\n\n" +
+      "The customer will no longer be able to pay through it. Use this when they have paid another way."
+    )) return;
+    setCancellingLink(true);
+    try {
+      const res = await fetch(`/api/bookings/${id}/cancel-payment-link`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to cancel payment link");
+        return;
+      }
+      toast.success("Payment link cancelled");
+      await fetchBooking();
+    } finally {
+      setCancellingLink(false);
+    }
+  };
+
   const handleNotesUpdate = async (newNotes: string) => {
     const res = await fetch(`/api/bookings/${id}`, {
       method: "PATCH",
@@ -1013,6 +1034,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 <IndianRupee className="mr-1 h-4 w-4" />Collect Payment
               </Button>
             </NextActionTarget>
+          )}
+          {booking.razorpay_payment_link_id
+            && (userRole === "admin" || userRole === "manager" || userRole === "floor_manager") && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCancelPaymentLink}
+              disabled={cancellingLink}
+              className="border-red-300 text-red-700 hover:bg-red-50"
+              title="Customer paid another way — stop the open Razorpay link being paid"
+            >
+              <XCircle className="mr-1 h-4 w-4" />{cancellingLink ? "Cancelling…" : "Cancel Payment Link"}
+            </Button>
           )}
           {/* Contract members can opt out of monthly invoicing for this
               one booking and pay on the spot. The button is intentionally

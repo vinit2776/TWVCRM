@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   checkInPaymentState,
+  classifyLinkPayment,
   findDuplicateReference,
   hasProof,
   verifyExcess,
@@ -98,5 +99,27 @@ describe("hasProof", () => {
   it("needs a screenshot or a non-blank reference", () => {
     expect(hasProof({ amount: 1, status: "pending", payment_mode: "upi" })).toBe(false);
     expect(hasProof({ amount: 1, status: "pending", payment_mode: "upi", screenshot_path: "p" })).toBe(true);
+  });
+});
+
+describe("classifyLinkPayment", () => {
+  it("verifies a link payment on an unpaid booking", () => {
+    expect(classifyLinkPayment(2832, 0, 2832)).toEqual({ status: "verified", excess: 0 });
+  });
+
+  it("verifies the balance of a part-paid booking", () => {
+    expect(classifyLinkPayment(2832, 1000, 1832).status).toBe("verified");
+  });
+
+  it("holds the whole payment as pending when the booking is already paid", () => {
+    expect(classifyLinkPayment(2832, 2832, 2832)).toEqual({ status: "pending", excess: 2832 });
+  });
+
+  it("reports only the part over the total", () => {
+    expect(classifyLinkPayment(2832, 2000, 2832)).toEqual({ status: "pending", excess: 2000 });
+  });
+
+  it("ignores sub-paisa rounding", () => {
+    expect(classifyLinkPayment(2832, 2831.995, 0.01).status).toBe("verified");
   });
 });
