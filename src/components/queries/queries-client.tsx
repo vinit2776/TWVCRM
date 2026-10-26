@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageCircleQuestion, Send } from "lucide-react";
+import { BadgeCheck, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageCircleQuestion, Search, Send, X } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
@@ -92,6 +92,16 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(openQueryId ?? null);
+  // searchInput is what's typed; searchTerm is what the list is fetched with,
+  // trailing it by a beat so each keystroke isn't a request.
+  const [searchInput, setSearchInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const firstPageRequest = useRef(0);
+
+  useEffect(() => {
+    const handle = setTimeout(() => setSearchTerm(searchInput.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -108,26 +118,31 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
       const params = new URLSearchParams({ tab: activeTab });
       if (moduleFilter) params.set("module", moduleFilter);
       if (kindFilter) params.set("kind", kindFilter);
+      if (searchTerm) params.set("q", searchTerm);
       if (cursor) params.set("cursor", cursor);
       return `/api/queries?${params.toString()}`;
     },
-    [moduleFilter, kindFilter],
+    [moduleFilter, kindFilter, searchTerm],
   );
 
   const loadFirstPage = useCallback(
     async (activeTab: Tab) => {
+      const requestId = ++firstPageRequest.current;
       setLoading(true);
       try {
         const res = await fetch(buildUrl(activeTab), { cache: "no-store" });
         if (!res.ok) throw new Error();
         const json = (await res.json()) as { items: QueryListItem[]; next_cursor: string | null };
+        // A slower earlier search must not overwrite a newer one.
+        if (requestId !== firstPageRequest.current) return;
         setItems(json.items);
         setNextCursor(json.next_cursor);
       } catch {
+        if (requestId !== firstPageRequest.current) return;
         setItems([]);
         setNextCursor(null);
       } finally {
-        setLoading(false);
+        if (requestId === firstPageRequest.current) setLoading(false);
       }
     },
     [buildUrl],
@@ -178,6 +193,22 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
     void loadFirstPage(tab);
   }, [loadStats, loadFirstPage, tab]);
 
+  const tabLabel = TABS.find((t) => t.key === tab)?.label ?? "this tab";
+
+  // While searching across every module, file results under their module so a
+  // hit in Billing isn't lost among Tally Inbox ones. Groups appear in the
+  // order their first result does, so the tab's own ordering still leads.
+  const groups: { key: string; label: string | null; items: QueryListItem[] }[] = (() => {
+    if (!searchTerm || moduleFilter || kindFilter) return [{ key: "all", label: null, items }];
+    const byModule = new Map<QueryModule, QueryListItem[]>();
+    for (const item of items) {
+      const mod = queryEntityDef(item.entity_type)?.module;
+      if (!mod) continue;
+      byModule.set(mod, [...(byModule.get(mod) ?? []), item]);
+    }
+    return [...byModule].map(([mod, list]) => ({ key: mod, label: QUERY_MODULE_LABELS[mod], items: list }));
+  })();
+
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -185,6 +216,28 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
         <StatCard label="Overdue" value={stats?.overdue} tone="warning" />
         <StatCard label="All open" value={stats?.open} />
         <StatCard label="Resolved this week" value={stats?.resolved_this_week} />
+      </div>
+
+      <div className="relative mb-3">
+        <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search customer, reference, amount, or message…"
+          aria-label="Search queries"
+          className="w-full text-sm rounded-md border pl-9 pr-9 py-2 focus:outline-none focus:ring-1 focus:ring-foreground/20"
+        />
+        {searchInput && (
+          <button
+            type="button"
+            onClick={() => setSearchInput("")}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       <div className="flex gap-1 border-b mb-3 overflow-x-auto">
@@ -247,18 +300,47 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
       ) : items.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 text-center border rounded-lg bg-muted/30">
           <MessageCircleQuestion className="h-5 w-5 mx-auto mb-2 opacity-50" />
-          {tab === "awaiting_me" ? "Nothing waiting on you right now." : "No queries here."}
+          {searchTerm ? (
+            <>
+              No queries in {tabLabel} match “{searchTerm}”.
+              {tab !== "open" && tab !== "resolved" && (
+                <span className="block text-xs mt-1">Try All open to search everything still unresolved.</span>
+              )}
+            </>
+          ) : tab === "awaiting_me" ? (
+            "Nothing waiting on you right now."
+          ) : (
+            "No queries here."
+          )}
         </div>
       ) : (
         <div className="space-y-3">
-          {items.map((item) => (
-            <QueryCard
-              key={item.id}
-              item={item}
-              expanded={expandedId === item.id}
-              onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)}
-              onChanged={refetch}
-            />
+          {searchTerm && (
+            <p className="text-xs text-muted-foreground">
+              {items.length}
+              {nextCursor ? "+" : ""} result{items.length === 1 && !nextCursor ? "" : "s"} in {tabLabel}
+            </p>
+          )}
+          {groups.map((group) => (
+            <div key={group.key} className="space-y-3">
+              {group.label && (
+                <div className="flex items-center gap-2 pt-1 text-xs font-medium text-muted-foreground">
+                  {group.label}
+                  <span className="rounded-full bg-muted px-2 py-px font-normal">{group.items.length}</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              )}
+              {group.items.map((item) => (
+                <QueryCard
+                  key={item.id}
+                  item={item}
+                  highlight={searchTerm}
+                  expanded={expandedId === item.id}
+                  onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                  onChanged={refetch}
+                />
+              ))}
+            </div>
           ))}
 
           {nextCursor && (
@@ -282,11 +364,13 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
 
 function QueryCard({
   item,
+  highlight,
   expanded,
   onToggle,
   onChanged,
 }: {
   item: QueryListItem;
+  highlight: string;
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
@@ -371,7 +455,9 @@ function QueryCard({
             )}
             {overdue > 0 && <Pill tone="warning">Overdue · {overdue}d</Pill>}
             {!isResolved && <Pill tone="muted">→ {audienceText}</Pill>}
-            <span className="font-medium text-sm">{item.entity?.title ?? "(transaction unavailable)"}</span>
+            <span className="font-medium text-sm">
+              <Highlighted text={item.entity?.title ?? "(transaction unavailable)"} term={highlight} />
+            </span>
             {item.kind === "payment_reported" ? (
               // The claim, never the contract value. Showing the entity's
               // amount here would put "₹59,000" on a card about a ₹100
@@ -396,7 +482,9 @@ function QueryCard({
             <span className="font-medium">{item.created_by.full_name}</span> · {timeAgo(item.created_at)}
           </div>
           {!expanded && item.last_message?.body && (
-            <p className="text-sm mt-2 line-clamp-2">{item.last_message.body}</p>
+            <p className="text-sm mt-2 line-clamp-2">
+              <Highlighted text={item.last_message.body} term={highlight} />
+            </p>
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -454,6 +542,20 @@ function QueryCard({
         </div>
       )}
     </div>
+  );
+}
+
+/** Marks the searched text inside a string, case-insensitively. */
+function Highlighted({ text, term }: { text: string; term: string }) {
+  if (!term) return <>{text}</>;
+  const at = text.toLowerCase().indexOf(term.toLowerCase());
+  if (at === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark className="bg-amber-100 text-amber-900 rounded-sm px-0.5">{text.slice(at, at + term.length)}</mark>
+      {text.slice(at + term.length)}
+    </>
   );
 }
 
