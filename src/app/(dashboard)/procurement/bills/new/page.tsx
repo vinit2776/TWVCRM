@@ -405,15 +405,15 @@ function NewVendorBillForm() {
     [invoiceNumber, invoiceDate, vendorNameForCheck, amountNum, gstNum],
   );
   const checkCeiling = effectiveCeiling ? effectiveCeiling * (1 + tolerancePercent / 100) : null;
-  // The invoice check's verdict on the amount, echoed on the field itself so it isn't missed
-  const amountCheckFinding = useMemo(
+  // The invoice check's findings, echoed on the amount field and the Save button so they aren't missed
+  const invoiceFindings = useMemo(
     () =>
       invoiceCheck.status === "ok"
         ? checkInvoice({ extracted: invoiceCheck.extracted, entered: enteredForCheck, poCeiling: checkCeiling })
-            .find((f) => f.code === "amount_looks_gst_inclusive" || f.code === "amount_differs_subtotal")
-        : undefined,
+        : [],
     [invoiceCheck, enteredForCheck, checkCeiling],
   );
+  const amountCheckFinding = invoiceFindings.find((f) => f.code === "amount_looks_gst_inclusive" || f.code === "amount_differs_subtotal");
 
   // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
@@ -1083,8 +1083,22 @@ function NewVendorBillForm() {
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <Button onClick={handleSubmit} disabled={submitting || !!amountError || hasExactDuplicate} size="lg">
+      <div className="flex flex-col items-end gap-2">
+        {invoiceFindings.length > 0 && (
+          <p className="flex items-start gap-1.5 text-xs text-amber-800 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 max-w-md">
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+            <span>
+              The uploaded invoice differs from what you entered in {invoiceFindings.length} {invoiceFindings.length === 1 ? "place" : "places"} — check the
+              invoice review above. This is a guide only; you can still save.
+            </span>
+          </p>
+        )}
+        <Button
+          onClick={handleSubmit}
+          disabled={submitting || !!amountError || hasExactDuplicate}
+          size="lg"
+          className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
+        >
           {submitting ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (
