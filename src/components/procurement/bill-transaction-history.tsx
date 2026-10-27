@@ -124,22 +124,20 @@ const EditGroup = memo(function EditGroup({
         <div className="w-px flex-1 bg-border mt-1" />
       </div>
       <div className="pb-4 flex-1 min-w-0">
-        <button onClick={() => setOpen(!open)} className="w-full text-left flex items-start justify-between gap-2">
-          <span className="text-sm text-muted-foreground min-w-0 break-words">
-            Edited by {summarizePeople(item.people)} · {item.entries.length} changes
-            <span className="text-xs ml-2 bg-muted px-1.5 py-0.5 rounded whitespace-nowrap">{entityLabel}</span>
-            {item.flagged && <span className="text-xs ml-1.5 text-amber-700 bg-amber-50 px-1 rounded">amount changed</span>}
+        <button onClick={() => setOpen(!open)} className="w-full text-left">
+          <span className="flex items-start justify-between gap-2">
+            <span className="text-sm text-muted-foreground min-w-0 break-words">
+              Edited by {summarizePeople(item.people)} · {item.entries.length} changes
+              <span className="text-xs ml-2 bg-muted px-1.5 py-0.5 rounded whitespace-nowrap">{entityLabel}</span>
+              {item.flagged && <span className="text-xs ml-1.5 text-amber-700 bg-amber-50 px-1 rounded">amount changed</span>}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0 mt-0.5 flex items-center gap-1">
+              {timeLabel(item.start)}
+              {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </span>
           </span>
-          <span className="text-xs text-muted-foreground shrink-0 mt-0.5 flex items-center gap-1">
-            {timeLabel(item.start)}
-            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-          </span>
+          {!open && <span className="block text-xs text-primary mt-0.5">Show the {item.entries.length} changes</span>}
         </button>
-        {!open && (
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Show the {item.entries.length} changes
-          </p>
-        )}
         {open && (
           <div className="mt-2 border-l pl-3">
             {item.entries.map((e) => (

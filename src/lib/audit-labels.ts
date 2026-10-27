@@ -321,7 +321,9 @@ function summarizeFieldEdit(c: AuditChanges): AuditSummary {
   }
   const items = anyKey(c, ITEM_KEYS);
   if (items) {
-    return { label: "Items changed", tone: "grey", kind: "edit", detail: arrow(c[items], plain) };
+    // Item edits often log only a count ("2 item(s)" both sides) — say nothing rather than a non-change.
+    const same = plain(c[items].old) === plain(c[items].new);
+    return { label: "Items changed", tone: "grey", kind: "edit", detail: same ? undefined : arrow(c[items], plain) };
   }
   const doc = anyKey(c, DOC_KEYS);
   if (doc && c[doc].new != null && c[doc].new !== c[doc].old) {

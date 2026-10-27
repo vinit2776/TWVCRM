@@ -30,6 +30,11 @@ describe("summarizeAuditEvent edits", () => {
     expect(summarizeAuditEvent({ entity_type: "purchase_order", action: "update", changes: { vendor_id: { old: "a", new: "b" } } }).label).toBe("Vendor changed");
     expect(summarizeAuditEvent({ entity_type: "purchase_request", action: "update", changes: { line_items: { old: "2 item(s)", new: "3 item(s)" } } }).label).toBe("Items changed");
   });
+  it("drops the detail when an items change shows the same count on both sides", () => {
+    const s = summarizeAuditEvent({ entity_type: "purchase_request", action: "update", changes: { line_items: { old: "2 item(s)", new: "2 item(s)" } } });
+    expect(s.label).toBe("Items changed");
+    expect(s.detail).toBeUndefined();
+  });
   it("keeps goods received as a milestone", () => {
     const s = summarizeAuditEvent({ entity_type: "purchase_order", action: "update", changes: { status: { old: "ordered", new: "received" } } });
     expect(s.label).toBe("Goods received");
