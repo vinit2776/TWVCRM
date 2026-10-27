@@ -26,7 +26,7 @@ interface StockRow {
   } | null;
 }
 
-const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin", "coordinator"];
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();

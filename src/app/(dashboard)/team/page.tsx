@@ -67,6 +67,7 @@ const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   accounts: Receipt,
   fms: Wrench,
   office_admin: Briefcase,
+  coordinator: Briefcase,
   it_team: Wrench,
 };
 
@@ -78,6 +79,7 @@ const ROLE_COLORS: Record<string, string> = {
   accounts:      "bg-amber-100 text-amber-800",
   fms:           "bg-purple-100 text-purple-800",
   office_admin:  "bg-orange-100 text-orange-800",
+  coordinator:   "bg-teal-100 text-teal-800",
   it_team:       "bg-cyan-100 text-cyan-800",
 };
 
@@ -89,6 +91,7 @@ const ROLE_ICON_COLORS: Record<string, string> = {
   accounts:      "text-amber-600",
   fms:           "text-purple-600",
   office_admin:  "text-orange-600",
+  coordinator:   "text-teal-600",
   it_team:       "text-cyan-600",
 };
 
@@ -100,6 +103,7 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   accounts:      "Billing statements, invoicing, and payment confirmation",
   fms:           "Procurement dashboard, purchase requests, and facility operations",
   office_admin:  "Vendor management, purchase requests, and reorder configuration",
+  coordinator:   "Sales, operations, procurement requests and facility — no finance, payroll or admin",
   it_team:       "IT support, technical coordination, and system access management",
 };
 
@@ -1058,6 +1062,7 @@ export default function TeamPage() {
                       <SelectItem value="office_admin">Office Administrator</SelectItem>
                       <SelectItem value="it_team">IT Team</SelectItem>
                       <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="coordinator">Coordinator</SelectItem>
                       <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1244,6 +1249,7 @@ export default function TeamPage() {
                   <SelectItem value="office_admin">Office Administrator</SelectItem>
                   <SelectItem value="it_team">IT Team</SelectItem>
                   <SelectItem value="viewer">Management Viewer</SelectItem>
+                      <SelectItem value="coordinator">Coordinator</SelectItem>
                       <SelectItem value="enquiry_viewer">Enquiry Log Viewer</SelectItem>
                 </SelectContent>
               </Select>

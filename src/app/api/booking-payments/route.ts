@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
   // We trust staff roles and skip the separate verification step so check-in
   // can proceed immediately. Restricted to roles that can run the floor.
   const verifyOnCreate = body.verify_on_create === true && [
-    "admin", "manager", "floor_manager", "fms", "office_admin",
+    "admin", "manager", "floor_manager", "fms", "office_admin", "coordinator",
   ].includes(dbUser.role);
 
   if (!booking_id || !amount || !payment_mode) {
