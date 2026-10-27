@@ -2730,6 +2730,10 @@ export interface PurchaseOrder {
 export interface VendorBill {
   id: string;
   cheque_signed_at?: string | null;
+  payment_hold_status?: "none" | "on_hold" | null;
+  payment_hold_reason?: string | null;
+  payment_hold_notes?: string | null;
+  payment_held_at?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
   bill_number: string;
