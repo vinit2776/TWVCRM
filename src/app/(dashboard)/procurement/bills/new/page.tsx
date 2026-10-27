@@ -20,7 +20,7 @@ import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } fro
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
-import type { SuggestionField } from "@/lib/procurement/invoice-check";
+import { checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
@@ -405,6 +405,15 @@ function NewVendorBillForm() {
     [invoiceNumber, invoiceDate, vendorNameForCheck, amountNum, gstNum],
   );
   const checkCeiling = effectiveCeiling ? effectiveCeiling * (1 + tolerancePercent / 100) : null;
+  // The invoice check's verdict on the amount, echoed on the field itself so it isn't missed
+  const amountCheckFinding = useMemo(
+    () =>
+      invoiceCheck.status === "ok"
+        ? checkInvoice({ extracted: invoiceCheck.extracted, entered: enteredForCheck, poCeiling: checkCeiling })
+            .find((f) => f.code === "amount_looks_gst_inclusive" || f.code === "amount_differs_subtotal")
+        : undefined,
+    [invoiceCheck, enteredForCheck, checkCeiling],
+  );
 
   // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
@@ -838,8 +847,29 @@ function NewVendorBillForm() {
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
-                className={amountError ? "border-red-500 focus-visible:ring-red-500" : ""}
+                className={amountError ? "border-red-500 focus-visible:ring-red-500" : amountCheckFinding ? "border-amber-400 bg-amber-50 focus-visible:ring-amber-400" : ""}
               />
+              {!amountError && amountCheckFinding && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="flex-1 min-w-[10rem]">
+                    {amountCheckFinding.code === "amount_looks_gst_inclusive"
+                      ? "Looks GST-inclusive — this field takes the amount before GST."
+                      : "Differs from the pre-GST amount on the uploaded invoice."}
+                  </span>
+                  {amountCheckFinding.suggestion && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 bg-white px-2 text-xs"
+                      onClick={() => applyInvoiceSuggestion("amount", amountCheckFinding.suggestion!.value)}
+                    >
+                      {amountCheckFinding.suggestion.label}
+                    </Button>
+                  )}
+                </div>
+              )}
               {amountError ? (
                 <p className="text-xs text-red-600 flex items-start gap-1">
                   <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
