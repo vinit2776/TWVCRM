@@ -47,12 +47,14 @@ import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
 import { BillEditDialog } from "@/components/procurement/bill-edit-dialog";
 import { billEditLockReason, canEditBill, PAYMENT_HOLD_REASON_LABELS } from "@/lib/procurement/bill-edit-rules";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type ChainData = {
   bill: {
     id: string; bill_number: string; invoice_number: string | null;
+    edit_count?: number | null; last_edited_at?: string | null; last_edit_summary?: string | null;
     invoice_date: string; due_date: string | null; total_amount: number;
     amount_paid: number; payment_status: string; approval_status: string;
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
@@ -546,6 +548,7 @@ export default function VendorBillDetailPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold font-mono">{bill.bill_number}</h1>
+              <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} />
               {bill.approval_status !== "withdrawn" && (
                 <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
                   {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
