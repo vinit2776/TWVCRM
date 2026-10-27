@@ -1432,7 +1432,7 @@ export async function PATCH(
           await replyOnOpenBillQueries({
             billId: id,
             author: { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name },
-            message: `Corrected ${bill.bill_number}: ${summary}.${changeReason ? ` Reason: ${changeReason}` : ""}${resetsApproval && wasApproved ? " The amount went up, so it is back with the approver." : ""}`,
+            message: `Corrected ${bill.bill_number}: ${summary}.${changeReason ? ` Reason: ${changeReason.replace(/[.\s]+$/, "")}.` : ""}${resetsApproval && wasApproved ? " The amount went up, so it is back with the approver." : ""}`,
           });
         }
       };

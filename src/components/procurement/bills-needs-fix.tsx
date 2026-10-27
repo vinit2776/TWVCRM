@@ -48,7 +48,7 @@ export function BillsNeedsFix() {
               </div>
               <div className="text-xs text-red-800 truncate">
                 {i.kind === "query" ? `Query${i.asker ? ` from ${i.asker}` : ""}` : "Payment on hold"}
-                {i.message ? `: “${i.message}”` : ""}
+                {i.message ? ` — latest: “${i.message}”` : ""}
               </div>
             </div>
             <div className="flex items-center gap-3 flex-shrink-0">

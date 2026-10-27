@@ -112,7 +112,7 @@ export function BillEditDialog({ bill, open, onOpenChange, onSaved, poValue = nu
           {pinnedAsk?.message && (
             <div className="rounded-md border-2 border-red-300 bg-red-50 px-3 py-2">
               <p className="text-sm font-medium text-red-800">
-                To fix: &ldquo;{pinnedAsk.message}&rdquo;{pinnedAsk.by ? ` — ${pinnedAsk.by}` : ""}
+                Open query{pinnedAsk.by ? ` from ${pinnedAsk.by}` : ""} — latest: &ldquo;{pinnedAsk.message}&rdquo;
               </p>
               {poValue !== null && <p className="text-xs text-red-800">Enter the pre-GST amount. Max allowed: {formatCurrency(poValue)}.</p>}
             </div>

@@ -761,8 +761,8 @@ export default function VendorBillDetailPage() {
                 <p key={q.id} className="flex items-start gap-1.5">
                   <MessageCircleQuestion className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <span>
-                    {q.created_by?.full_name ?? "Someone"} asked
-                    {q.last_message?.body ? <>: &ldquo;{q.last_message.body}&rdquo;</> : "."}
+                    Query from {q.created_by?.full_name ?? "someone"}
+                    {q.last_message?.body ? <> — latest: &ldquo;{q.last_message.body}&rdquo;</> : "."}
                   </span>
                 </p>
               ))}
