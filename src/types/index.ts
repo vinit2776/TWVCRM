@@ -2734,6 +2734,10 @@ export interface VendorBill {
   payment_hold_reason?: string | null;
   payment_hold_notes?: string | null;
   payment_held_at?: string | null;
+  edit_count?: number | null;
+  last_edited_at?: string | null;
+  last_edited_by?: string | null;
+  last_edit_summary?: string | null;
   withdrawn_at?: string | null;
   withdrawn_reason?: string | null;
   bill_number: string;

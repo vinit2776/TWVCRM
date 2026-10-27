@@ -16,6 +16,20 @@ export async function countStandingPayments(supabase: SupabaseClient, billId: st
   return count ?? 0;
 }
 
+/** Columns that mark a bill as corrected; merged into the update that makes the correction. */
+export function editedStamp(
+  bill: { edit_count?: number | null },
+  userId: string,
+  summary: string,
+) {
+  return {
+    edit_count: (bill.edit_count ?? 0) + 1,
+    last_edited_at: new Date().toISOString(),
+    last_edited_by: userId,
+    last_edit_summary: summary.slice(0, 500),
+  };
+}
+
 /** Checks a corrected pre-GST amount against the bill's PO (value or cycle cost, plus price tolerance). */
 export async function checkBillAmountAgainstPo(
   supabase: SupabaseClient,

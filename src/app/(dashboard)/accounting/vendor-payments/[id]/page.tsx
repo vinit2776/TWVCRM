@@ -42,6 +42,7 @@ import { VendorBillDocuments } from "@/components/procurement/vendor-bill-docume
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
 import type { VendorBillDocument } from "@/types";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 // ── GST slab validator ────────────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ type AuditRow = {
 type ChainData = {
   bill: {
     id: string; bill_number: string; invoice_number: string | null;
+    edit_count?: number | null; last_edited_at?: string | null; last_edit_summary?: string | null;
     invoice_date: string; due_date: string | null; total_amount: number;
     amount_paid: number; payment_status: string; approval_status: string;
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
@@ -913,6 +915,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold">{bill.bill_number}</h1>
+            <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} />
             <Badge className="bg-green-100 text-green-800 border-0">Approved</Badge>
             <Badge className={`${PAYMENT_STATUS_COLORS[bill.payment_status]} border-0`}>
               {bill.payment_status === "unpaid" ? "Unpaid" : bill.payment_status === "partially_paid" ? "Partially Paid" : "Paid"}
