@@ -19,6 +19,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { totalPaid as settlementTotalPaid, balanceDue as settlementBalanceDue, settlementAmount } from "@/lib/settlement";
+import { fetchInvoiceAttachment, type ReminderAttachment } from "@/lib/reminder-invoice-attachment";
+import { splitAttachable } from "@/lib/reminder-consolidation";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -272,6 +274,8 @@ function renderEmail(opts: {
   /** URL for the 1x1 tracking pixel. When loaded by the email client we mark
    *  the send row as opened. Omit to skip tracking (non-email channels). */
   trackingPixelUrl?: string | null;
+  /** Name of the attached invoice document ("tax invoice" / "proforma"); omit when nothing is attached. */
+  attachedDoc?: string | null;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
   const d = opts.daysOverdue;
@@ -309,6 +313,7 @@ function renderEmail(opts: {
           `}
         </table>
         ${opts.originalTotal ? `<p style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;color:#065f46;font-size:12px;margin:8px 0;">Thank you for the partial payment. The balance shown above is what remains outstanding.</p>` : ""}
+        ${opts.attachedDoc ? `<p style="color:#333;font-size:13px;">The ${opts.attachedDoc} is attached to this email for your reference.</p>` : ""}
         ${opts.payLinkUrl ? `
         <div style="text-align:center;margin:24px 0;">
           <a href="${opts.payLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
@@ -434,6 +439,8 @@ export async function sendOneReminder(
     const trackingId = crypto.randomUUID();
     const trackingPixelUrl = `${input.appUrl}/api/tracking/email-open?id=${trackingId}`;
 
+    const attachment = await fetchInvoiceAttachment(admin, s);
+
     const html = renderEmail({
       customerName, stmt: s.statement_number, contractNumber: partyRef,
       contractLabel: contract ? "Contract" : proposal ? "Proposal Ref" : "Invoice",
@@ -450,6 +457,7 @@ export async function sendOneReminder(
       gstInvoiceNumber,
       cancelledPiNumber,
       trackingPixelUrl,
+      attachedDoc: attachment ? docNoun : null,
     });
     try {
       const r = await resend.emails.send({
@@ -459,6 +467,7 @@ export async function sendOneReminder(
         cc: uniqCc.length > 0 ? uniqCc : undefined,
         subject: dynamicSubject,
         html,
+        ...(attachment ? { attachments: [attachment] } : {}),
       });
       emailSent = !r.error;
       if (r.error) errors.push(`email: ${r.error.message || JSON.stringify(r.error)}`);
@@ -517,6 +526,239 @@ export async function sendOneReminder(
     errors,
   };
 }
+
+/** One invoice inside a consolidated reminder, with everything the email shows. */
+export interface ConsolidatedItem {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  statement: any;
+  ref: string;
+  contractRef: string;
+  dueStr: string;
+  daysOverdue: number;
+  balance: number;
+  billed: number;
+  paid: number;
+  payLinkUrl: string | null;
+}
+
+export function renderConsolidatedEmail(opts: {
+  customerName: string; intro: string; toneLabel: string;
+  items: ConsolidatedItem[]; totalStr: string; oldestDays: number;
+  omittedAttachments: number; showContract: boolean; trackingPixelUrl: string | null;
+}): string {
+  const n = opts.items.length;
+  const rows = opts.items.map((it) => `
+          <tr>
+            <td style="padding:8px;border-bottom:1px solid #eee;">${it.ref}${opts.showContract ? `<br/><span style="color:#888;font-size:11px;">${it.contractRef}</span>` : ""}${it.paid > 0 ? `<br/><span style="color:#059669;font-size:11px;">Rs. ${fmtINR(it.billed)} billed, Rs. ${fmtINR(it.paid)} paid</span>` : ""}</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;white-space:nowrap;">${it.dueStr}</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${it.daysOverdue > 0 ? it.daysOverdue : "Today"}</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap;">Rs. ${fmtINR(it.balance)}</td>
+            <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${it.payLinkUrl ? `<a href="${it.payLinkUrl}" style="color:#015E65;font-weight:bold;">Pay</a>` : ""}</td>
+          </tr>`).join("");
+  const banner = opts.oldestDays > 0
+    ? `<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#991b1b;"><strong>Oldest invoice is ${opts.oldestDays} day${opts.oldestDays > 1 ? "s" : ""} past due.</strong></div>`
+    : `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;"><strong>Due today.</strong></div>`;
+  return `
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="background:#015E65;padding:20px 32px;">
+        <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+        <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">${opts.toneLabel}</p>
+      </div>
+      <div style="padding:28px;">
+        <p style="color:#333;font-size:14px;">Dear ${opts.customerName},</p>
+        <p style="color:#333;font-size:14px;">${opts.intro}</p>
+        ${banner}
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+          <tr><td style="padding:6px 0;color:#666;">Invoices outstanding</td><td style="padding:6px 0;">${n}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:700;color:#015E65;font-size:17px;">Rs. ${opts.totalStr}</td></tr>
+        </table>
+        <p style="color:#333;font-size:13px;margin:20px 0 6px;"><strong>Breakdown</strong>${opts.omittedAttachments > 0 ? "" : " (each invoice is attached)"}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <tr style="background:#f3f4f6;">
+            <th style="text-align:left;padding:7px 8px;">Invoice</th>
+            <th style="text-align:left;padding:7px 8px;">Due</th>
+            <th style="text-align:right;padding:7px 8px;">Days late</th>
+            <th style="text-align:right;padding:7px 8px;">Balance</th>
+            <th style="text-align:right;padding:7px 8px;">Pay</th>
+          </tr>${rows}
+          <tr><td colspan="3" style="padding:8px;font-weight:700;border-top:2px solid #015E65;">Total outstanding</td><td style="padding:8px;text-align:right;font-weight:700;border-top:2px solid #015E65;white-space:nowrap;">Rs. ${opts.totalStr}</td><td style="border-top:2px solid #015E65;"></td></tr>
+        </table>
+        ${opts.omittedAttachments > 0 ? `<p style="color:#666;font-size:12px;">The ${n - opts.omittedAttachments} oldest invoices are attached; reply to this email for a copy of the other ${opts.omittedAttachments}.</p>` : ""}
+        <p style="color:#666;font-size:12px;margin-top:20px;">Prefer a single transfer? Pay Rs. ${opts.totalStr} by bank transfer or UPI (details are on each invoice) and quote the invoice numbers. If you've already made the payment, please ignore this reminder. For any queries, reply to this email or contact our accounts team.</p>
+        <p style="color:#666;font-size:12px;">Regards,<br/>Accounts Team — The WorkVilla</p>
+      </div>
+      <div style="background:#f9fafb;padding:10px 28px;border-top:1px solid #e5e7eb;text-align:center;">
+        <p style="color:#9ca3af;margin:0;font-size:10px;">This is an automated payment reminder. SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
+      </div>
+      ${opts.trackingPixelUrl ? `<img src="${opts.trackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />` : ""}
+    </div>
+  `;
+}
+
+export interface ConsolidatedReminderInput {
+  /** Every due/overdue statement for the customer, oldest-overdue first. Index 0 sets tone, CC and WhatsApp. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  statements: any[];
+  appUrl: string;
+  triggeredBy: "cron" | "manual";
+  triggeredByUserId?: string | null;
+  ccPools: { accounts: string[]; managerAndAdmin: string[]; adminOnly: string[] };
+}
+
+/**
+ * One reminder for a customer with several due invoices: the TOTAL as the
+ * amount due, a per-invoice breakdown (each row with its own Pay link), and
+ * the invoice PDFs attached. Replaces N emails with one.
+ *
+ * The ladder stage comes from the most overdue invoice. On success every
+ * included statement is stamped so none of them sends its own reminder for a
+ * stage it has already been covered for. Callers pass only statements that are
+ * already due — never a pre-due one.
+ */
+export async function sendConsolidatedReminder(
+  admin: SupabaseClient,
+  input: ConsolidatedReminderInput,
+): Promise<ReminderSendResult & { statementIds: string[] }> {
+  const { statements, appUrl, triggeredBy, triggeredByUserId, ccPools } = input;
+  const primary = statements[0];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const leadOf = (st: any) => st.contract?.lead ?? st.proposal?.lead ?? st.invoice?.lead;
+  const lead = leadOf(primary);
+  const stageIdx = pickStageIndex(daysOverdueFromDueDate(primary.due_date as string));
+  const stage = STAGES[stageIdx];
+  const errors: string[] = [];
+  const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
+
+  const items: ConsolidatedItem[] = [];
+  for (const st of statements) {
+    const { data: pays } = await admin
+      .from("billing_payments").select("amount, tds_amount").eq("billing_statement_id", st.id);
+    const paid = Math.round(settlementTotalPaid(pays));
+    const balance = settlementBalanceDue(st.total_amount as number, paid);
+    // Settled between the query and now — nothing to chase.
+    if (balance <= 0) continue;
+    const contract = st.contract, proposal = st.proposal, invoice = st.invoice;
+    const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? "";
+    items.push({
+      statement: st,
+      ref: (st.gst_invoice_number as string | null) || (st.statement_number as string),
+      contractRef: partyRef,
+      dueStr: fmtDate(st.due_date as string),
+      daysOverdue: daysOverdueFromDueDate(st.due_date as string),
+      balance, paid,
+      billed: settlementAmount(st.total_amount as number),
+      payLinkUrl: await ensureLivePaymentLink(admin, st, contract, leadOf(st), appUrl, partyRef),
+    });
+  }
+  if (items.length === 0) {
+    return { stageIdx, toneLabel: stage.toneLabel, emailSent: false, whatsAppSent: false, recipient: { email: lead?.email || null, phone: null }, errors: ["nothing outstanding"], statementIds: [] };
+  }
+
+  const total = items.reduce((sum, it) => sum + it.balance, 0);
+  const totalStr = fmtINR(total);
+  const oldest = items[0];
+  const subjectRef = `${items.length} invoices`;
+  const subjectDue = oldest.daysOverdue > 0 ? `${oldest.daysOverdue}d` : "due today";
+  const subject = items.length === 1
+    ? stage.subject(oldest.ref, subjectDue, totalStr)
+    : stage.subject(subjectRef, subjectDue, totalStr);
+  const intro = resolveIntro(stage.intro, items.length === 1 ? "invoice" : "invoices");
+
+  const cc: string[] = [];
+  if (stage.ccAccounts) cc.push(...ccPools.accounts);
+  if (stage.ccManagerAndAdmin) cc.push(...ccPools.managerAndAdmin);
+  if (stageIdx >= 4) cc.push(...ccPools.adminOnly);
+  const uniqCc = Array.from(new Set(cc.filter((e) => e && e !== lead?.email)));
+
+  let emailSent = false;
+  if (lead?.email) {
+    const { attach, omitted } = splitAttachable(items);
+    const attachments: ReminderAttachment[] = [];
+    for (const it of attach) {
+      const a = await fetchInvoiceAttachment(admin, it.statement);
+      if (a) attachments.push(a);
+    }
+    const trackingPixelUrl = `${appUrl}/api/tracking/email-open?id=${crypto.randomUUID()}`;
+    const html = renderConsolidatedEmail({
+      customerName, intro, toneLabel: stage.toneLabel, items, totalStr,
+      oldestDays: oldest.daysOverdue,
+      omittedAttachments: omitted,
+      showContract: new Set(items.map((it) => it.contractRef)).size > 1,
+      trackingPixelUrl,
+    });
+    try {
+      const r = await resend.emails.send({
+        from: EMAIL_FROM,
+        replyTo: EMAIL_REPLY_TO,
+        to: [lead.email],
+        cc: uniqCc.length > 0 ? uniqCc : undefined,
+        subject, html,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      });
+      emailSent = !r.error;
+      if (r.error) errors.push(`email: ${r.error.message || JSON.stringify(r.error)}`);
+    } catch (err) {
+      errors.push(`email: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // One history row per invoice, so each statement's drawer shows it was covered.
+    await admin.from("billing_reminder_sends").insert(items.map((it) => ({
+      billing_statement_id: it.statement.id,
+      stage_index: stageIdx,
+      stage_label: stage.toneLabel,
+      channel: "email",
+      recipient: lead.email,
+      status: emailSent ? "sent" : "failed",
+      error: emailSent ? null : errors[errors.length - 1] || "unknown",
+      triggered_by: triggeredBy,
+      triggered_by_user_id: triggeredByUserId || null,
+    })));
+  }
+
+  let whatsAppSent = false;
+  const phone = lead?.mobile || lead?.phone || null;
+  if (stage.whatsApp && phone) {
+    const waRef = items.length === 1 ? oldest.ref : `${oldest.ref} and ${items.length - 1} more`;
+    try {
+      const r = await messaging.paymentReminder(phone, customerName, waRef, totalStr, oldest.dueStr, oldest.statement.id);
+      whatsAppSent = r?.success === true;
+      if (!whatsAppSent) errors.push(`whatsapp: ${r?.error || "unknown"}`);
+    } catch (err) {
+      errors.push(`whatsapp: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await admin.from("billing_reminder_sends").insert(items.map((it) => ({
+      billing_statement_id: it.statement.id,
+      stage_index: stageIdx,
+      stage_label: stage.toneLabel,
+      channel: "whatsapp",
+      recipient: phone,
+      status: whatsAppSent ? "sent" : "failed",
+      error: whatsAppSent ? null : errors[errors.length - 1] || "unknown",
+      triggered_by: triggeredBy,
+      triggered_by_user_id: triggeredByUserId || null,
+    })));
+  }
+
+  // Stamp every covered statement on at-least-one-channel success. Each keeps
+  // the higher of its own count and the stage it is at today, so a stage it
+  // has just been chased for does not fire again on its own.
+  if (emailSent || whatsAppSent) {
+    const now = new Date().toISOString();
+    for (const it of items) {
+      const own = pickStageIndex(it.daysOverdue) + 1;
+      await admin.from("billing_statements").update({
+        reminder_count: Math.max(Number(it.statement.reminder_count) || 0, own, it.statement.id === primary.id ? stageIdx + 1 : 0),
+        last_reminder_sent_at: now,
+      }).eq("id", it.statement.id);
+    }
+  }
+
+  return {
+    stageIdx, toneLabel: stage.toneLabel, emailSent, whatsAppSent,
+    recipient: { email: lead?.email || null, phone },
+    errors, statementIds: items.map((it) => it.statement.id as string),
+  };
+}
+
 
 /**
  * Fetch the CC pools once for the run. Shared between cron + manual endpoint.
