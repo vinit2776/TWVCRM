@@ -341,7 +341,7 @@ export function PaymentReportCard({
                   disabled={busy}
                   onClick={() => void settle("verified", exactMatch.id)}
                 >
-                  <Link2 className="h-3 w-3 mr-1" /> Link and verify
+                  <Link2 className="h-3 w-3 mr-1" /> Link to transaction
                 </Button>
               </div>
             )}
@@ -350,7 +350,7 @@ export function PaymentReportCard({
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
-                  If this is the same payment, link it here. &ldquo;Verify and record&rdquo; adds a second
+                  If this is the same payment, link it here. &ldquo;Record payment&rdquo; adds a second
                   payment, and is refused if it would over-credit the invoice.
                 </p>
                 {recorded.map((p) => (
@@ -371,7 +371,7 @@ export function PaymentReportCard({
                       disabled={busy}
                       onClick={() => void settle("verified", p.id)}
                     >
-                      Link and verify
+                      Link to transaction
                     </Button>
                   </div>
                 ))}
@@ -417,7 +417,7 @@ export function PaymentReportCard({
                     ) : (
                       <Check className="h-3 w-3 mr-1" />
                     )}
-                    {isBooking ? "Credit found — verify" : "Verify and record"}
+                    {isBooking ? "Credit found — verify" : "Record payment"}
                   </Button>
                   )}
                   <Button
