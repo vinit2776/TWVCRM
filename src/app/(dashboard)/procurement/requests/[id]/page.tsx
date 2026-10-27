@@ -437,7 +437,8 @@ export default function PurchaseRequestDetailPage() {
   // Everything on an MR stays editable until it's approved — see MR_EDITABLE_STATUSES.
   const canEditRequest =
     MR_EDITABLE_STATUSES.includes(pr.status) &&
-    ["admin", "manager", "office_admin"].includes(userRole);
+    (["admin", "manager", "office_admin"].includes(userRole) ||
+      (userRole === "coordinator" && pr.requested_by === user?.id));
   const isLargeAmount = pr.total_estimated_amount > approvalThreshold;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 

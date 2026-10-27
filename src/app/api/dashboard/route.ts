@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 
   // ── Self-scoped path: sales_rep and floor_manager see only their own data ──
   // Filter all lead/task/activity queries to records assigned to this user.
-  if (dbUser?.role === "sales_rep" || dbUser?.role === "floor_manager") {
+  if (dbUser?.role === "sales_rep" || dbUser?.role === "floor_manager" || dbUser?.role === "coordinator") {
     const { data: myLeads } = await supabase
       .from("leads")
       .select("id, status, created_at")

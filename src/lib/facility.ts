@@ -239,3 +239,23 @@ export const FACILITY_ROLES = {
 export function hasRole(userRole: string | undefined, allowed: readonly string[]): boolean {
   return !!userRole && allowed.includes(userRole);
 }
+
+/**
+ * Role gate for working on one specific ticket: passes for the workOnIssues
+ * roles, and also for whoever the ticket is currently assigned to. Assigning
+ * only checks the *assigner* (override tier or reporter), never the assignee's
+ * role, so without this a delegated ticket can land on someone the role list
+ * then blocks. The facility_issues UPDATE RLS policy already lets the assignee
+ * write; this keeps the API in line with it.
+ */
+export async function canWorkOnIssue(
+  supabase: SupabaseClient,
+  issueId: string,
+  user: { id: string; role?: string } | null | undefined,
+): Promise<boolean> {
+  if (!user) return false;
+  if (hasRole(user.role, FACILITY_ROLES.workOnIssues)) return true;
+  const { data } = await supabase
+    .from("facility_issues").select("assigned_to").eq("id", issueId).maybeSingle();
+  return !!data && data.assigned_to === user.id;
+}

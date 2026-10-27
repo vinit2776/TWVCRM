@@ -315,7 +315,7 @@ export function canOverrideBookingFacility(role: string | null | undefined): boo
   return !!role && (BOOKING_FACILITY_OVERRIDE_ROLES as readonly string[]).includes(role);
 }
 
-export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "coordinator"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -325,6 +325,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   accounts: "Accounts",
   fms: "Facility Manager",
   office_admin: "Office Administrator",
+  coordinator: "Coordinator",
   it_team: "IT Team",
   it_manager: "IT Manager",
   it_technician: "IT Technician",

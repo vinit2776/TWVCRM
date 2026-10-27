@@ -175,6 +175,19 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "booking_summary",
   ],
 
+  // Coordinator: sales-rep view plus the day-to-day ops and procurement signals.
+  // No finance widgets, matching the role's no-accounts rule.
+  coordinator: [
+    "schedule",
+    "live_enquiries",
+    "quick_charge",
+    "mtd_bookings",
+    "booking_summary",
+    "procurement_summary",
+    "sla_risk",
+    "followups",
+  ],
+
   // IT Manager
   it_manager: [
     "next_steps",

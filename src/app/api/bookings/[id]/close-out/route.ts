@@ -13,7 +13,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const CLOSE_OUT_ROLES = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"];
+const CLOSE_OUT_ROLES = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin", "coordinator"];
 
 /**
  * POST /api/bookings/[id]/close-out

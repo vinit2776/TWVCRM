@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     .limit(10);
 
   // Role-based scoping
-  if (dbUser.role === "sales_rep" || dbUser.role === "floor_manager") {
+  if (dbUser.role === "sales_rep" || dbUser.role === "floor_manager" || dbUser.role === "coordinator") {
     leadsQuery = leadsQuery.eq("assigned_to", dbUser.id);
   }
 

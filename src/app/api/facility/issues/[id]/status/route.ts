@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import {
-  hasRole, FACILITY_ROLES, canTransition, timestampsForStatus,
+  canWorkOnIssue, canTransition, timestampsForStatus,
   logIssueEvent, computeSlaTarget,
 } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
@@ -26,7 +26,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!hasRole(dbUser?.role, FACILITY_ROLES.workOnIssues)) {
+  if (!(await canWorkOnIssue(supabase, id, dbUser))) {
     return NextResponse.json({ error: "Insufficient role" }, { status: 403 });
   }
 
@@ -41,7 +41,7 @@ export async function PATCH(
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // Ownership gate: once a ticket is acknowledged, only the assignee or override tier can move it
-  const isOverrideTier = ["admin", "manager", "office_admin"].includes(dbUser?.role ?? "");
+  const isOverrideTier = ["admin", "manager", "office_admin", "coordinator"].includes(dbUser?.role ?? "");
   const isOwner = existing.assigned_to === dbUser?.id;
   const needsOwnershipCheck = !["new", "reopened"].includes(existing.status as string);
   if (needsOwnershipCheck && !isOwner && !isOverrideTier) {
