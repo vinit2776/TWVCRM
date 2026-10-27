@@ -184,7 +184,7 @@ export async function GET(
     .from("audit_trail")
     .select(`
       id, entity_type, entity_id, action, changes, created_at,
-      performer:users!audit_trail_performed_by_fkey(id, full_name)
+      performer:users!audit_trail_performed_by_fkey(id, full_name, role)
     `)
     .in("entity_id", entityIds)
     .order("created_at", { ascending: true });
