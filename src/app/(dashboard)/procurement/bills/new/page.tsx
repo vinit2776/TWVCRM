@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -443,6 +444,16 @@ function NewVendorBillForm() {
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
     if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
+  };
+
+  // Findings from the invoice check get one pause at Save — a guide, never a block ("Save anyway").
+  const [findingsConfirmOpen, setFindingsConfirmOpen] = useState(false);
+
+  const handleSave = () => {
+    const err = validate();
+    if (err) { toast.error(err, { duration: 6000 }); return; }
+    if (invoiceFindings.length > 0) { setFindingsConfirmOpen(true); return; }
+    void handleSubmit();
   };
 
   const handleSubmit = async () => {
@@ -1094,7 +1105,7 @@ function NewVendorBillForm() {
           </p>
         )}
         <Button
-          onClick={handleSubmit}
+          onClick={handleSave}
           disabled={submitting || !!amountError || hasExactDuplicate}
           size="lg"
           className={invoiceFindings.length > 0 ? "bg-amber-600 hover:bg-amber-700 text-white" : undefined}
@@ -1106,6 +1117,36 @@ function NewVendorBillForm() {
           )}
         </Button>
       </div>
+
+      <Dialog open={findingsConfirmOpen} onOpenChange={setFindingsConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-5 w-5" /> Check before saving
+            </DialogTitle>
+            <DialogDescription>
+              The uploaded invoice differs from what you entered. This is a guide only — you can still save.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-2 text-sm">
+            {invoiceFindings.map((f) => (
+              <li key={f.code} className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-900">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <span>{f.message}</span>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setFindingsConfirmOpen(false)}>Go back and review</Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => { setFindingsConfirmOpen(false); void handleSubmit(); }}
+            >
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
