@@ -19,7 +19,7 @@ import {
 } from "@/lib/procurement/bill-edit-rules";
 import {
   checkBillAmountAgainstPo,
-  countStandingPayments,
+  countStandingPayments, editedStamp,
   replyOnOpenBillQueries,
 } from "@/lib/procurement/bill-edit-server";
 
@@ -1214,6 +1214,11 @@ export async function PATCH(
       // gst_set_at IS NULL; numeric gst columns are NOT NULL with default 0 in the
       // DB, so we reset them to 0 (not null) to avoid a constraint violation.
       updatePayload = {
+        ...editedStamp(
+          bill,
+          dbUser.id,
+          `amount ₹${Number(bill.total_amount).toLocaleString("en-IN")} → ₹${newTotal.toLocaleString("en-IN")} (pre-GST), resubmitted`
+        ),
         total_amount: newTotal,
         approval_status: "pending",
         approved_by: null,
@@ -1383,6 +1388,7 @@ export async function PATCH(
       if ((parsed.data.due_date ?? null) !== (bill.due_date ?? null)) changedBits.push("due date");
       if (syncedInvoiceFileUrl) changedBits.push("invoice file");
       const summary = changedBits.length > 0 ? changedBits.join(", ") : "details re-saved";
+      if (changedBits.length > 0) Object.assign(updatePayload, editedStamp(bill, dbUser.id, summary));
 
       if (resetsApproval) {
         // Goods PO: approval had moved it to invoice_approved; put it back (mirrors unapprove).

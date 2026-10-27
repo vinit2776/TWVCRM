@@ -22,6 +22,7 @@ import { BillsNeedsFix } from "@/components/procurement/bills-needs-fix";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import { VendorBillsSummary, monthLabel } from "@/components/procurement/vendor-bills-summary";
 import { monthKey, type BillsMonthlySummary } from "@/lib/bills-monthly-summary";
+import { BillEditedBadge } from "@/components/procurement/bill-edited-badge";
 
 type MonthlyPayload = BillsMonthlySummary & { openQueriesByBill: Record<string, number> };
 
@@ -304,6 +305,7 @@ function VendorBillsPageInner() {
                     >
                       {bill.bill_number}
                     </Link>
+                    <BillEditedBadge editCount={bill.edit_count} editedAt={bill.last_edited_at} summary={bill.last_edit_summary} className="ml-1.5 align-middle" />
                     {isOverdue(bill) && (
                       <span className="ml-1.5 text-xs text-amber-700 font-normal">Overdue</span>
                     )}
