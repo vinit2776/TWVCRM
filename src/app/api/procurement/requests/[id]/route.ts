@@ -165,7 +165,7 @@ export async function GET(
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
   // Only procurement roles can access
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -703,7 +703,7 @@ export async function PUT(
   // A closed cycle is read-only until an admin reopens it (see chain-lock.ts).
   const lockedChain = await chainLockedResponse(supabase, { prId: id });
   if (lockedChain) return lockedChain;
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -713,6 +713,11 @@ export async function PUT(
     .eq("id", id)
     .single();
   if (fetchError || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+  // A coordinator raises and edits their own requests only.
+  if (dbUser.role === "coordinator" && pr.requested_by !== dbUser.id) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   if (!MR_EDITABLE_STATUSES.includes(pr.status)) {
     return NextResponse.json(

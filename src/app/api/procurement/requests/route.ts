@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
   query = fetchAll ? query.limit(ALL_ROWS_CAP) : query.range(offset, offset + limit - 1);
 
   // Only procurement roles can see all; others are blocked at the route level
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin", "coordinator"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
