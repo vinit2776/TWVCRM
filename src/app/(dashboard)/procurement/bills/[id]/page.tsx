@@ -35,7 +35,7 @@ import {
   BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audit-labels";
+import { BillTransactionHistory } from "@/components/procurement/bill-transaction-history";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
@@ -111,108 +111,11 @@ type ChainData = {
     id: string; entity_type: string; entity_id: string; action: string;
     changes: Record<string, { old: unknown; new: unknown }> | null;
     created_at: string;
-    performer: { id: string; full_name: string } | null;
+    performer: { id: string; full_name: string; role?: string | null } | null;
   }>;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  created: "Created",
-  updated: "Updated",
-  approved: "Approved",
-  rejected: "Rejected",
-  deleted: "Deleted",
-  status_changed: "Status Changed",
-};
-
-const ENTITY_TYPE_LABELS: Record<string, string> = {
-  vendor_bill: "Invoice",
-  purchase_order: "Purchase Order",
-  purchase_request: "Material Request",
-};
-
-const FIELD_LABELS: Record<string, string> = {
-  status: "Status",
-  payment_status: "Payment",
-  approval_status: "Approval",
-  amount_paid: "Amount Paid",
-};
-
-function AuditEntry({
-  row, billId, poId, mrId,
-}: {
-  row: ChainData["auditTrail"][number];
-  billId: string;
-  poId: string | null;
-  mrId: string | null;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const changes = row.changes ?? {};
-  const hasChanges = Object.keys(changes).length > 0;
-  const entityLabel = ENTITY_TYPE_LABELS[row.entity_type] ?? row.entity_type;
-
-  // Same human-label pipeline as the Acc Payables audit timeline.
-  const summary = summarizeAuditEvent(row);
-  const dotColor = AUDIT_TONE_DOT[summary.tone];
-  const headingColor = AUDIT_TONE_TEXT[summary.tone];
-  let sourceHint: string | null = null;
-  if (row.entity_id === poId) sourceHint = "from PO";
-  else if (row.entity_id === mrId) sourceHint = "from MR";
-
-  return (
-    <div className="flex gap-3">
-      <div className="flex flex-col items-center">
-        <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${dotColor}`} />
-        <div className="w-px flex-1 bg-border mt-1" />
-      </div>
-      <div className="pb-4 flex-1 min-w-0">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <span className={`text-sm font-medium ${headingColor}`}>{summary.label}</span>
-            <span className="text-xs text-muted-foreground ml-2 bg-muted px-1.5 py-0.5 rounded">{entityLabel}</span>
-            {sourceHint && (
-              <span className="text-[10px] text-muted-foreground ml-1.5 italic">{sourceHint}</span>
-            )}
-          </div>
-          <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
-            {new Date(row.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {row.performer?.full_name ?? "System"}
-          {summary.detail && (
-            <>
-              {" · "}
-              <span className={`font-medium ${headingColor}`}>{summary.detail}</span>
-            </>
-          )}
-        </p>
-        {hasChanges && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="mt-1 text-xs text-primary flex items-center gap-1 hover:underline"
-          >
-            {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            {expanded ? "Hide" : "Show"} changes
-          </button>
-        )}
-        {expanded && hasChanges && (
-          <div className="mt-2 space-y-1">
-            {Object.entries(changes).map(([field, { old: oldVal, new: newVal }]) => (
-              <div key={field} className="text-xs bg-muted/50 rounded px-2 py-1">
-                <span className="font-medium text-muted-foreground">{FIELD_LABELS[field] ?? field}:</span>{" "}
-                {oldVal != null ? <span className="line-through text-red-600">{String(oldVal)}</span> : <span className="text-muted-foreground italic">—</span>}
-                {" → "}
-                <span className="text-green-700 font-medium">{newVal != null ? String(newVal) : "—"}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -1397,43 +1300,7 @@ export default function VendorBillDetailPage() {
       )}
 
       {/* Transaction History */}
-      {chain && chain.auditTrail.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              Transaction History
-            </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-orange-400" />
-                Material Request
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-purple-400" />
-                Purchase Order
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-blue-400" />
-                Invoice / Bill
-              </span>
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div>
-              {chain.auditTrail.map((row) => (
-                <AuditEntry
-                  key={row.id}
-                  row={row}
-                  billId={chain.bill.id}
-                  poId={chain.po?.id ?? null}
-                  mrId={chain.mr?.id ?? null}
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {chain && <BillTransactionHistory auditTrail={chain.auditTrail} billId={chain.bill.id} poId={chain.po?.id ?? null} mrId={chain.mr?.id ?? null} />}
 
       {/* Payment summary card with resend option */}
       {bill.payment_status !== "unpaid" && (currentUserRole === "accounts" || currentUserRole === "admin") && (
