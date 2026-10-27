@@ -23,6 +23,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { STAGES, fmtINR, fmtDate, pickStageIndex, resolveIntro } from "@/lib/payment-reminder";
 import { ladderMaxStageFor, type ReceivableKind } from "@/lib/receivables";
+import { fetchReceivableAttachment } from "@/lib/reminder-receivable-attachment";
 
 /** Where each kind keeps its due date and reminder bookkeeping. */
 const TABLE_MAP: Record<Exclude<ReceivableKind, "statement">, {
@@ -130,6 +131,8 @@ function renderEmail(o: {
   customerName: string; reference: string; dueDate: string;
   amountStr: string; payLinkUrl: string | null; intro: string;
   toneLabel: string; daysOverdue: number;
+  /** Name of the attached document, or null when nothing is attached. */
+  attachedDoc: string | null;
 }): string {
   const d = o.daysOverdue;
   const banner = d > 0
@@ -151,7 +154,7 @@ function renderEmail(o: {
       </div>
       <div style="padding:28px;">
         <p style="color:#333;font-size:14px;">Dear ${o.customerName},</p>
-        <p style="color:#333;font-size:14px;">${o.intro}</p>
+        <p style="color:#333;font-size:14px;">${o.intro}${o.attachedDoc ? ` The ${o.attachedDoc} is attached.` : ""}</p>
         ${banner}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">${refLabel}</td><td style="padding:6px 0;font-weight:600;">${o.reference}</td></tr>
@@ -173,9 +176,10 @@ function renderEmail(o: {
 }
 
 /** Deposit copy differs from invoice copy — a deposit isn't an unpaid bill. */
-function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number): string {
-  // Ad-hoc PIs and deposits never carry a GST invoice — always "proforma".
-  if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, "proforma");
+function introFor(kind: Exclude<ReceivableKind, "statement">, stageIdx: number, taxInvoiceIssued = false): string {
+  // Deposits never carry a GST invoice. An ad-hoc invoice does once one is
+  // issued, and the wording follows the document the customer is chased for.
+  if (kind === "adhoc_invoice") return resolveIntro(STAGES[stageIdx].intro, taxInvoiceIssued ? "tax invoice" : "proforma");
 
   const what = kind === "deposit" ? "security deposit" : "additional security deposit";
   switch (stageIdx) {
@@ -246,10 +250,14 @@ export async function sendReceivableReminder(
 
   let emailSent = false;
   if (email) {
+    const attachment = await fetchReceivableAttachment(admin, {
+      kind, id, reference, partyName, amount, dueDate, payLinkUrl,
+    });
     const html = renderEmail({
       kind, customerName: partyName, reference, dueDate: dueStr,
-      amountStr, payLinkUrl, intro: introFor(kind, stageIdx),
+      amountStr, payLinkUrl, intro: introFor(kind, stageIdx, attachment?.docNoun === "tax invoice"),
       toneLabel: stage.toneLabel, daysOverdue,
+      attachedDoc: attachment?.docNoun ?? null,
     });
     try {
       const r = await resend.emails.send({
@@ -259,6 +267,9 @@ export async function sendReceivableReminder(
         cc: uniqCc.length > 0 ? uniqCc : undefined,
         subject: subjectFor(kind, reference, daysOverdue, amountStr, stageIdx),
         html,
+        ...(attachment
+          ? { attachments: [{ filename: attachment.filename, content: attachment.content, contentType: attachment.contentType }] }
+          : {}),
       });
       emailSent = !r.error;
       if (r.error) errors.push(`email: ${r.error.message || JSON.stringify(r.error)}`);
