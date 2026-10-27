@@ -2518,6 +2518,8 @@ export interface PurchaseRequest {
   approver?: { id: string; full_name?: string; email?: string } | null;
   purchase_request_items?: PurchaseRequestItem[];
   material_request_quotations?: MaterialRequestQuotation[];
+  /** Only on the list endpoint with include_summary=1 — vendor names for the row description. */
+  purchase_orders?: Array<{ id: string; procurement_vendors?: { name: string } | null }>;
   linked_asset?: { id: string; name: string; asset_code: string } | null;
   billable_contract?: {
     id: string;
