@@ -11,7 +11,7 @@ import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
   ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle, RefreshCcw,
-  AlertCircle,
+  AlertCircle, Pencil, Lock, MessageCircleQuestion,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +45,8 @@ import { VendorBillDocuments } from "@/components/procurement/vendor-bill-docume
 import type { VendorBill, PaymentBatchType } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { QueryButton } from "@/components/queries/query-button";
+import { BillEditDialog } from "@/components/procurement/bill-edit-dialog";
+import { billEditLockReason, canEditBill, PAYMENT_HOLD_REASON_LABELS } from "@/lib/procurement/bill-edit-rules";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -152,6 +154,8 @@ export default function VendorBillDetailPage() {
   const [rejectionReason, setRejectionReason] = useState("");
 
   // Edit-amount-and-resubmit dialog (rejected bills only)
+  const [editDialog, setEditDialog] = useState(false);
+  const [openQueries, setOpenQueries] = useState<Array<{ id: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>>([]);
   const [resubmitDialog, setResubmitDialog] = useState(false);
   const [resubmitAmount, setResubmitAmount] = useState<string>("");
   const [resubmitLoading, setResubmitLoading] = useState(false);
@@ -196,6 +200,20 @@ export default function VendorBillDetailPage() {
   }, [id, router]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Open queries on this bill (e.g. Accounts: "total doesn't match the PO") so the
+  // person who can fix it sees what was asked without leaving the page.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/queries?entity_type=vendor_bill&entity_id=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        setOpenQueries((json.items as Array<{ id: string; status: string; last_message: { body: string } | null; created_by: { full_name: string } | null }>).filter((q) => q.status === "open"));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, bill?.updated_at]);
 
   const handleResendConfirmation = async () => {
     setResendLoading(true);
@@ -426,6 +444,21 @@ export default function VendorBillDetailPage() {
   const billGst   = Number(bill.gst_amount ?? 0);
   const remaining = Number(bill.total_amount) + billGst - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
+  const standingPayments = ((bill.vendor_bill_payments ?? []) as Array<{ reversed_at?: string | null }>)
+    .filter((p) => !p.reversed_at).length;
+  const editLockReason = billEditLockReason({
+    approvalStatus: bill.approval_status,
+    standingPaymentCount: standingPayments,
+    paymentStatus: bill.payment_status,
+    chequeSigned: !!bill.cheque_signed_at,
+  });
+  const userCanEdit = canEditBill({ role: currentUserRole, userId: user?.id, createdBy: bill.created_by });
+  const onHold = bill.payment_hold_status === "on_hold";
+  const poRow = bill.purchase_orders as { po_type?: string; total_ordered_amount?: number | null; unit_cost_per_cycle?: number | null } | null;
+  const poValue = poRow
+    ? Number(poRow.po_type === "service" && poRow.unit_cost_per_cycle ? poRow.unit_cost_per_cycle : poRow.total_ordered_amount ?? 0) || null
+    : null;
+  const amountOverPo = poValue !== null && Number(bill.total_amount) > poValue + 0.01;
 
   const linkedPo = bill.purchase_orders as {
     id: string; po_number: string; status: string; po_type?: string;
@@ -550,6 +583,11 @@ export default function VendorBillDetailPage() {
             isAdmin={currentUserRole === "admin"}
             onDone={() => { fetchAll(); reloadChain(); }}
           />
+          {userCanEdit && !editLockReason && bill.approval_status !== "rejected" && (
+            <Button variant="outline" onClick={() => setEditDialog(true)}>
+              <Pencil className="h-4 w-4 mr-1" /> Correct amount / Edit invoice
+            </Button>
+          )}
           {bill.approval_status === "pending" && canApprove && (
             <>
               <Button
@@ -606,6 +644,53 @@ export default function VendorBillDetailPage() {
       </div>
 
       <ChainLockBanner chain={cycle} ref={{ billId: id }} isAdmin={currentUserRole === "admin"} onChanged={() => { fetchAll(); reloadChain(); }} />
+
+      {/* Loud call to action: someone is waiting on this bill and the viewer can fix it */}
+      {(onHold || openQueries.length > 0) && bill.approval_status !== "withdrawn" && (
+        <div className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3" data-testid="bill-needs-fix-banner">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-6 w-6 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-1.5 text-sm text-red-900">
+              <p className="text-base font-semibold text-red-800">
+                {editLockReason ? "Accounts is waiting on this bill" : "Accounts can't pay this bill until it's corrected"}
+              </p>
+              {onHold && (
+                <p>
+                  <span className="font-medium">Payment on hold — {PAYMENT_HOLD_REASON_LABELS[bill.payment_hold_reason ?? ""] ?? bill.payment_hold_reason ?? "reason not recorded"}.</span>
+                  {bill.payment_hold_notes ? ` ${bill.payment_hold_notes}` : ""}
+                </p>
+              )}
+              {openQueries.map((q) => (
+                <p key={q.id} className="flex items-start gap-1.5">
+                  <MessageCircleQuestion className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Query from {q.created_by?.full_name ?? "someone"}
+                    {q.last_message?.body ? <> — latest: &ldquo;{q.last_message.body}&rdquo;</> : "."}
+                  </span>
+                </p>
+              ))}
+              {amountOverPo && (
+                <p className="text-xs">
+                  Invoice {formatCurrency(Number(bill.total_amount))} is above the PO {formatCurrency(poValue ?? 0)} (pre-GST). If GST was included in the amount, enter the pre-GST figure.
+                </p>
+              )}
+            </div>
+            {userCanEdit && !editLockReason && bill.approval_status !== "rejected" && (
+              <Button className="bg-red-600 hover:bg-red-700 text-white flex-shrink-0" onClick={() => setEditDialog(true)}>
+                <Pencil className="h-4 w-4 mr-1" /> Correct amount / Edit invoice
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Locked once paid — say why, so nobody hunts for a missing button */}
+      {editLockReason && bill.approval_status !== "withdrawn" && userCanEdit && (
+        <div className="rounded-md border border-gray-300 bg-gray-50 px-4 py-2.5 flex items-start gap-2 text-sm text-gray-700">
+          <Lock className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>{editLockReason}</span>
+        </div>
+      )}
 
       {/* Withdrawn banner */}
       {bill.approval_status === "withdrawn" && (
@@ -841,7 +926,7 @@ export default function VendorBillDetailPage() {
           <CardContent className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Invoice Amount</span>
-              <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
+              <span className={`text-xl font-bold ${amountOverPo ? "text-red-700" : ""}`}>{formatCurrency(bill.total_amount)}{amountOverPo && <span className="ml-2 align-middle text-[11px] font-medium rounded-full bg-red-100 text-red-700 px-2 py-0.5">above PO</span>}</span>
             </div>
 
             {/* GST Breakdown — total_amount is base (pre-GST), gst_amount is additive */}
@@ -1829,6 +1914,15 @@ export default function VendorBillDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <BillEditDialog
+        bill={bill}
+        poValue={poValue}
+        pinnedAsk={openQueries[0] ? { by: openQueries[0].created_by?.full_name ?? null, message: openQueries[0].last_message?.body ?? null } : null}
+        open={editDialog}
+        onOpenChange={setEditDialog}
+        onSaved={async () => { await fetchAll(); reloadChain(); }}
+      />
 
       {/* Edit amount & resubmit — rejected bills only. Pre-GST base only. */}
       <Dialog open={resubmitDialog} onOpenChange={setResubmitDialog}>

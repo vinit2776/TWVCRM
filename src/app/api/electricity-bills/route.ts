@@ -8,6 +8,7 @@ import { findDuplicateVendorBill } from "@/lib/electricity-bill-context-server";
 import { autoApproveCapturedBill } from "@/lib/electricity-auto-approve";
 import { setupGaps, type SetupGap } from "@/lib/electricity-setup-checks";
 import { loadSetupChecks } from "@/lib/electricity-setup-server";
+import { canSeeElectricityRebilling, stripRebilling } from "@/lib/electricity-visibility";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -47,6 +48,10 @@ export async function GET(request: NextRequest) {
 
   const supabase = createAdminClient();
 
+  const { data: viewer } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
+  if (!viewer) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  const canSeeRebilling = canSeeElectricityRebilling(viewer.role);
+
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("location_id");
   const contractId = searchParams.get("contract_id");
@@ -69,7 +74,12 @@ export async function GET(request: NextRequest) {
 
   if (locationId) query = query.eq("location_id", locationId);
   if (contractId) query = query.eq("contract_id", contractId);
+  // Customer-side bills are the re-billing side; payables-only roles never get them.
+  if (!canSeeRebilling && billSide === "customer") {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
   if (billSide) query = query.eq("bill_side", billSide);
+  else if (!canSeeRebilling) query = query.eq("bill_side", "landlord");
   if (month) query = query.eq("bill_month", parseInt(month));
   if (year) query = query.eq("bill_year", parseInt(year));
   if (status) query = query.eq("status", status);
@@ -117,7 +127,9 @@ export async function GET(request: NextRequest) {
             .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, vendor:procurement_vendors(id, name)")
             .in("id", vendorBillIds)
         : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-      supabase
+      !canSeeRebilling
+        ? Promise.resolve({ data: [] as Record<string, unknown>[] })
+        : supabase
         .from("electricity_bills")
         .select(`
           id, landlord_bill_id, contract_id, status, customer_total, billing_statement_id, created_by,
@@ -168,7 +180,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ data });
+  return NextResponse.json({
+    data: canSeeRebilling || !data ? data : (data as Record<string, unknown>[]).map((b) => stripRebilling(b)),
+  });
 }
 
 export async function POST(request: NextRequest) {
