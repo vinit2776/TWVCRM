@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch, ShieldCheck, Clock } from "lucide-react";
 import Link from "next/link";
@@ -19,6 +19,8 @@ import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder, Company, RecurringBillRule } from "@/types";
 import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procurement/price-tolerance";
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
+import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import type { SuggestionField } from "@/lib/procurement/invoice-check";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -83,6 +85,9 @@ function NewVendorBillForm() {
 
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  // Advisory read of the uploaded invoice (never blocks, never overwrites typed values)
+  const [invoiceCheck, setInvoiceCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  const extractSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
@@ -334,9 +339,34 @@ function NewVendorBillForm() {
       return;
     }
     setInvoiceFile(file);
+    runInvoiceCheck(file);
   };
 
+  // One read per upload. Any failure just hides the card; manual entry carries on.
+  const runInvoiceCheck = (file: File) => {
+    const seq = ++extractSeq.current;
+    setInvoiceCheck({ status: "loading" });
+    const fd = new FormData();
+    fd.append("file", file);
+    fetch("/api/procurement/bills/extract", { method: "POST", body: fd })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (seq !== extractSeq.current) return;
+        setInvoiceCheck(j?.status === "ok" && j.extracted ? { status: "ok", extracted: j.extracted } : { status: "unavailable" });
+      })
+      .catch(() => { if (seq === extractSeq.current) setInvoiceCheck({ status: "unavailable" }); });
+  };
+
+  const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "amount") setTotalAmount(value);
+    else if (field === "gstAmount") setGstAmount(value);
+    else if (field === "invoiceNumber") setInvoiceNumber(value);
+    else setInvoiceDate(value);
+  }, []);
+
   const removeFile = () => {
+    extractSeq.current++;
+    setInvoiceCheck({ status: "idle" });
     setInvoiceFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -364,6 +394,21 @@ function NewVendorBillForm() {
         })
       : null;
   const needsToleranceReason = toleranceOutcome?.kind === "exception";
+
+  // Inputs for the advisory invoice check card
+  const vendorNameForCheck = vendors.find((v) => v.id === vendorId)?.name ?? null;
+  const gstNum = parseFloat(gstAmount);
+  const enteredForCheck = useMemo(
+    () => ({
+      invoiceNumber,
+      invoiceDate,
+      vendorName: vendorNameForCheck,
+      amount: isFinite(amountNum) && amountNum > 0 ? amountNum : null,
+      gstAmount: isFinite(gstNum) && gstNum > 0 ? gstNum : null,
+    }),
+    [invoiceNumber, invoiceDate, vendorNameForCheck, amountNum, gstNum],
+  );
+  const checkCeiling = effectiveCeiling ? effectiveCeiling * (1 + tolerancePercent / 100) : null;
 
   // Inline real-time error shown below the amount field
   const amountError: string | null = (() => {
@@ -961,6 +1006,7 @@ function NewVendorBillForm() {
               className="sr-only"
               onChange={handleFileChange}
             />
+            <InvoiceCheckCard state={invoiceCheck} entered={enteredForCheck} poCeiling={checkCeiling} onApply={applyInvoiceSuggestion} />
           </div>
 
           <div className="space-y-1.5">
