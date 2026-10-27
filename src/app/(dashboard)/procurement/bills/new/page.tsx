@@ -21,6 +21,7 @@ import { clampTolerancePercent, evaluateInvoiceTolerance } from "@/lib/procureme
 import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
 import type { SuggestionField } from "@/lib/procurement/invoice-check";
+import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -346,15 +347,10 @@ function NewVendorBillForm() {
   const runInvoiceCheck = (file: File) => {
     const seq = ++extractSeq.current;
     setInvoiceCheck({ status: "loading" });
-    const fd = new FormData();
-    fd.append("file", file);
-    fetch("/api/procurement/bills/extract", { method: "POST", body: fd })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (seq !== extractSeq.current) return;
-        setInvoiceCheck(j?.status === "ok" && j.extracted ? { status: "ok", extracted: j.extracted } : { status: "unavailable" });
-      })
-      .catch(() => { if (seq === extractSeq.current) setInvoiceCheck({ status: "unavailable" }); });
+    requestInvoiceExtraction(file).then((extracted) => {
+      if (seq !== extractSeq.current) return;
+      setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+    });
   };
 
   const applyInvoiceSuggestion = useCallback((field: SuggestionField, value: string) => {

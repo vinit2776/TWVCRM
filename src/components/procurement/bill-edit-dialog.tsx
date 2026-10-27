@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,9 @@ import { Loader2, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import { classifyAmountChange } from "@/lib/procurement/bill-edit-rules";
+import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
+import type { SuggestionField } from "@/lib/procurement/invoice-check";
 import type { VendorBill } from "@/types";
 
 interface Props {
@@ -36,6 +39,9 @@ export function BillEditDialog({ bill, open, onOpenChange, onSaved, poValue = nu
   const [reason, setReason] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  // Advisory read of a replacement invoice file (never blocks, never overwrites typed values)
+  const [invoiceCheck, setInvoiceCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  const extractSeq = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -46,10 +52,33 @@ export function BillEditDialog({ bill, open, onOpenChange, onSaved, poValue = nu
     setNotes(bill.notes ?? "");
     setReason("");
     setFile(null);
+    extractSeq.current++;
+    setInvoiceCheck({ status: "idle" });
   }, [open, bill]);
+
+  const onPickFile = (f: File | null) => {
+    setFile(f);
+    const seq = ++extractSeq.current;
+    if (!f) { setInvoiceCheck({ status: "idle" }); return; }
+    setInvoiceCheck({ status: "loading" });
+    requestInvoiceExtraction(f).then((extracted) => {
+      if (seq === extractSeq.current) setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+    });
+  };
+
+  const applySuggestion = useCallback((field: SuggestionField, value: string) => {
+    if (field === "amount") setAmount(value);
+    else if (field === "invoiceNumber") setInvoiceNumber(value);
+    else if (field === "invoiceDate") setInvoiceDate(value);
+  }, []);
 
   const parsedAmount = parseFloat(amount);
   const change = Number.isFinite(parsedAmount) ? classifyAmountChange(Number(bill.total_amount ?? 0), parsedAmount) : "unchanged";
+
+  const enteredForCheck = useMemo(
+    () => ({ invoiceNumber, invoiceDate, vendorName: null, amount: Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount : null, gstAmount: null }),
+    [invoiceNumber, invoiceDate, parsedAmount],
+  );
 
   const overBy = poValue !== null && Number.isFinite(parsedAmount) ? parsedAmount - poValue : 0;
   const amountProblem = overBy > 0.01;
@@ -148,8 +177,9 @@ export function BillEditDialog({ bill, open, onOpenChange, onSaved, poValue = nu
                 <Paperclip className="h-3 w-3" /> View current file
               </a>
             )}
-            <Input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <Input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => onPickFile(e.target.files?.[0] ?? null)} />
             <p className="text-[11px] text-muted-foreground">Leave empty to keep the current file. To add extra paperwork instead, use Supporting Documents.</p>
+            <InvoiceCheckCard state={invoiceCheck} entered={enteredForCheck} poCeiling={poValue} onApply={applySuggestion} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="edit-inv-notes">Notes</Label>
