@@ -18,6 +18,7 @@ import { poValidity, PO_VALIDITY_CLASS } from "@/lib/approval-display";
 import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } from "@/components/procurement/bill-search-bar";
 import type { VendorBill, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { BillsNeedsFix } from "@/components/procurement/bills-needs-fix";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import { VendorBillsSummary, monthLabel } from "@/components/procurement/vendor-bills-summary";
 import { monthKey, type BillsMonthlySummary } from "@/lib/bills-monthly-summary";
@@ -164,6 +165,8 @@ function VendorBillsPageInner() {
           <Plus className="h-4 w-4 mr-1" /> New Bill
         </Button>
       </div>
+
+      <BillsNeedsFix />
 
       {/* Search bar */}
       <BillSearchBar
