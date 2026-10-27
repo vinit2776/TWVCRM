@@ -41,6 +41,7 @@ export async function POST(
       id, statement_number, period_start, period_end, due_date, total_amount,
       payment_status, status, razorpay_payment_link_id, razorpay_payment_link_url,
       reminder_count, last_reminder_sent_at, voided_at,
+      gst_invoice_number, gst_invoice_path, pi_cancelled_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
