@@ -53,7 +53,7 @@ export async function POST(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  const allowed = ["admin", "manager", "fms", "accounts", "office_admin", "it_manager"];
+  const allowed = ["admin", "manager", "fms", "accounts", "office_admin", "coordinator", "it_manager"];
   if (!allowed.includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }

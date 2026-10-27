@@ -202,7 +202,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 
 ### Roles and Permissions
 
-`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`
+`UserRole`: `admin`, `manager`, `sales_rep`, `floor_manager`, `accounts`, `fms`, `office_admin`, `it_manager`, `it_technician`, `coordinator`
 
 | Action | Allowed Roles |
 |--------|--------------|
@@ -215,6 +215,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Terminate an **active** contract | `admin`, `manager` |
 | **Withdraw** a never-activated contract (draft/sent/viewed/accepted → stored as `terminated`) | `admin`, `manager`, `sales_rep` — not renewal drafts (use Cancel Renewal) |
 | Facility tickets | `fms`, `admin` |
+| `coordinator` scope | Sales + Operations + Procurement (create/edit **own** MRs, view everything, **no approvals**) + day-to-day Facility. **No** Finance, Payroll, Attendance or Admin — sidebar hides them, `isCoordinatorBlockedPath` (`src/lib/restricted-roles.ts`) redirects typed URLs, API role lists refuse writes |
 | Void billing statements | `admin` only |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 

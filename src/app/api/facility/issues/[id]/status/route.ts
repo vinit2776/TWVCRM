@@ -41,7 +41,7 @@ export async function PATCH(
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // Ownership gate: once a ticket is acknowledged, only the assignee or override tier can move it
-  const isOverrideTier = ["admin", "manager", "office_admin"].includes(dbUser?.role ?? "");
+  const isOverrideTier = ["admin", "manager", "office_admin", "coordinator"].includes(dbUser?.role ?? "");
   const isOwner = existing.assigned_to === dbUser?.id;
   const needsOwnershipCheck = !["new", "reopened"].includes(existing.status as string);
   if (needsOwnershipCheck && !isOwner && !isOverrideTier) {

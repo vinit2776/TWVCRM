@@ -4,7 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { logIssueEvent } from "@/lib/facility";
 import { notifyIssueAssignee } from "@/lib/facility-notifications";
 
-const OVERRIDE_ROLES = ["admin", "manager", "office_admin"] as const;
+const OVERRIDE_ROLES = ["admin", "manager", "office_admin", "coordinator"] as const;
 type OverrideRole = typeof OVERRIDE_ROLES[number];
 function isOverrideTier(role: string | undefined | null): role is OverrideRole {
   return OVERRIDE_ROLES.includes(role as OverrideRole);
