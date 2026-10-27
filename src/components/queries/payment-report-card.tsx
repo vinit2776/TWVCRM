@@ -329,6 +329,12 @@ export function PaymentReportCard({
                 <p className="text-[11px] text-green-900/80">
                   Matched on amount only. Check the bank credit is the same money.
                 </p>
+                {exactMatch.payment_mode !== report.payment_mode && (
+                  <p className="text-[11px] font-medium text-amber-800">
+                    Mode differs: reported {modeLabel}, recorded{" "}
+                    {STATEMENT_PAYMENT_MODE_LABELS[exactMatch.payment_mode] ?? exactMatch.payment_mode}.
+                  </p>
+                )}
                 <Button
                   size="sm"
                   className="h-7 text-xs bg-green-600 hover:bg-green-700"
