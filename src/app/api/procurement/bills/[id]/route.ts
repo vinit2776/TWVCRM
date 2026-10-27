@@ -11,6 +11,17 @@ import { z } from "zod";
 import { checkTieInvoiceToCycle } from "@/lib/procurement/tie-invoice";
 import { canRollback, rollbackReasonSchema } from "@/lib/procurement/admin-rollback";
 import { poStatusAfterWithdraw } from "@/lib/procurement/po-status-after-withdraw";
+import {
+  approvalAfterAmountChange,
+  billEditLockReason,
+  canEditBill,
+  classifyAmountChange,
+} from "@/lib/procurement/bill-edit-rules";
+import {
+  checkBillAmountAgainstPo,
+  countStandingPayments,
+  replyOnOpenBillQueries,
+} from "@/lib/procurement/bill-edit-server";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
 
@@ -150,9 +161,9 @@ const patchBillSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     /**
-     * Corrects a wrong invoice upload (wrong file, misread number/date/amount) on an
-     * in-progress bill. Allowed any time before payment approval — once approved the
-     * amount has already been sent to Finance, so it locks.
+     * Corrects a wrong invoice upload (wrong file, misread number/date/amount) at any
+     * point before a payment is recorded — including approved-but-unpaid. Once a
+     * payment stands the bill is locked (admin Correct menu only).
      */
     action: z.literal("edit_invoice_details"),
     invoice_number: z.string().nullish(),
@@ -161,6 +172,8 @@ const patchBillSchema = z.discriminatedUnion("action", [
     total_amount: z.number().positive("Total amount must be greater than 0"),
     notes: z.string().nullish(),
     invoice_file_url: z.string().url().nullish(),
+    /** Required when the bill is already approved — shown to Accounts and on the query thread. */
+    reason: z.string().trim().max(500).nullish(),
   }),
 ]);
 
@@ -180,7 +193,7 @@ export async function GET(
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
-       purchase_orders(id, po_number, status, po_type, tolerance_percent, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
+       purchase_orders(id, po_number, status, po_type, tolerance_percent, total_ordered_amount, unit_cost_per_cycle, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, reversed_at, reversal_reason, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
        vendor_bill_batch_changes(id, changed_at, old_batch_type, new_batch_type, old_batch_date, new_batch_date, reason, changer:users!vendor_bill_batch_changes_changed_by_fkey(id, full_name)),
@@ -1180,6 +1193,9 @@ export async function PATCH(
     case "update_amount_and_resubmit": {
       // Lets a rejected bill have its (pre-GST) total_amount corrected and routed back
       // to approval. Any procurement role can do this (no requester-only gate).
+      if (!canEditBill({ role: dbUser.role, userId: dbUser.id, createdBy: bill.created_by })) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
       if (bill.approval_status !== "rejected") {
         return NextResponse.json(
           { error: "Only rejected bills can be edited and resubmitted" },
@@ -1188,26 +1204,9 @@ export async function PATCH(
       }
       const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
 
-      // Re-validate against PO ceiling (mirrors creation rule). Skip when there is no PO.
-      if (bill.po_id) {
-        const { data: linkedPo } = await supabase
-          .from("purchase_orders")
-          .select("po_type, total_amount, unit_cost_per_cycle")
-          .eq("id", bill.po_id)
-          .single();
-        if (linkedPo) {
-          const ceiling = linkedPo.po_type === "service" && linkedPo.unit_cost_per_cycle
-            ? Number(linkedPo.unit_cost_per_cycle)
-            : Number(linkedPo.total_amount ?? 0);
-          if (ceiling > 0 && newTotal > ceiling) {
-            return NextResponse.json(
-              {
-                error: `Corrected amount (₹${newTotal.toLocaleString("en-IN")}) cannot exceed the ${linkedPo.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
-              },
-              { status: 422 }
-            );
-          }
-        }
+      const ceilingCheck = await checkBillAmountAgainstPo(supabase, bill, newTotal);
+      if (!ceilingCheck.ok) {
+        return NextResponse.json({ error: ceilingCheck.error }, { status: 422 });
       }
 
       // Clear stale GST fields — the previously-set GST (if any) was relative to the
@@ -1248,39 +1247,37 @@ export async function PATCH(
     }
 
     case "edit_invoice_details": {
-      // Same roles that can upload/create a bill in the first place.
-      if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+      // The bill's creator (any role), office_admin, manager and admin. Not accounts —
+      // they pay the bill and raise a query when something looks wrong.
+      if (!canEditBill({ role: dbUser.role, userId: dbUser.id, createdBy: bill.created_by })) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
-      if (bill.approval_status === "approved") {
+      const lockReason = billEditLockReason({
+        approvalStatus: bill.approval_status,
+        standingPaymentCount: await countStandingPayments(supabase, id),
+        paymentStatus: bill.payment_status,
+        chequeSigned: !!bill.cheque_signed_at,
+      });
+      if (lockReason) {
+        return NextResponse.json({ error: lockReason }, { status: 422 });
+      }
+
+      const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
+      const oldTotal = Number(bill.total_amount ?? 0);
+      const amountChange = classifyAmountChange(oldTotal, newTotal);
+      const wasApproved = bill.approval_status === "approved";
+      const changeReason = parsed.data.reason?.trim() || null;
+      if (wasApproved && (!changeReason || changeReason.length < 5)) {
         return NextResponse.json(
-          { error: "This invoice has already been approved for payment and can no longer be edited." },
+          { error: "This bill is already approved. Add a short reason for the correction (it is shown to Accounts)." },
           { status: 422 }
         );
       }
 
-      const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
-
-      // Re-validate against PO ceiling (mirrors creation rule). Skip when there is no PO.
-      if (bill.po_id) {
-        const { data: linkedPo } = await supabase
-          .from("purchase_orders")
-          .select("po_type, total_amount, unit_cost_per_cycle")
-          .eq("id", bill.po_id)
-          .single();
-        if (linkedPo) {
-          const ceiling = linkedPo.po_type === "service" && linkedPo.unit_cost_per_cycle
-            ? Number(linkedPo.unit_cost_per_cycle)
-            : Number(linkedPo.total_amount ?? 0);
-          if (ceiling > 0 && newTotal > ceiling) {
-            return NextResponse.json(
-              {
-                error: `Corrected amount (₹${newTotal.toLocaleString("en-IN")}) cannot exceed the ${linkedPo.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
-              },
-              { status: 422 }
-            );
-          }
-        }
+      // Re-validate against the PO (value or cycle cost, plus price tolerance). Skip when there is no PO.
+      const ceilingCheck = await checkBillAmountAgainstPo(supabase, bill, newTotal);
+      if (!ceilingCheck.ok) {
+        return NextResponse.json({ error: ceilingCheck.error }, { status: 422 });
       }
 
       // Duplicate invoice-number guard (mirrors creation), excluding this bill itself.
@@ -1304,6 +1301,9 @@ export async function PATCH(
       // A corrected upload on a previously rejected bill re-enters the approval
       // queue — otherwise it would sit "rejected" forever with nobody to review it.
       const wasRejected = bill.approval_status === "rejected";
+      // An approved bill whose amount goes UP needs the approver to look again;
+      // lowered or unchanged keeps the approval (the approver agreed to pay at least this much).
+      const resetsApproval = wasRejected || approvalAfterAmountChange(bill.approval_status, amountChange) === "reset";
 
       // A new file was actually uploaded (not just re-saving the same one) —
       // flag it so the vendor_bill_documents "invoice" row gets updated too,
@@ -1311,6 +1311,27 @@ export async function PATCH(
       if (parsed.data.invoice_file_url && parsed.data.invoice_file_url !== bill.invoice_file_url) {
         syncedInvoiceFileUrl = parsed.data.invoice_file_url;
       }
+
+      // The base amount changed, so GST that was captured against the old one is
+      // stale and must be re-entered. numeric gst columns are NOT NULL default 0.
+      const clearGst = {
+        gst_rate: 0,
+        gst_amount: 0,
+        gst_set_by: null,
+        gst_set_at: null,
+        gst_zero_confirmed: false,
+        gst_zero_confirmed_by: null,
+      };
+      const tolerance = ceilingCheck.outcome;
+      const toleranceFacts = tolerance.kind === "ok"
+        ? { variance_amount: null, variance_percent: null, out_of_tolerance: false }
+        : { variance_amount: tolerance.varianceAmount, variance_percent: tolerance.variancePercent, out_of_tolerance: tolerance.kind === "exception" };
+
+      const oldApproved = bill.approved_amount === null || bill.approved_amount === undefined ? null : Number(bill.approved_amount);
+      // A full approval follows the corrected figure; a partial one never exceeds it.
+      const keptApprovedAmount = oldApproved === null
+        ? null
+        : Math.abs(oldApproved - oldTotal) < 0.01 ? newTotal : Math.min(oldApproved, newTotal);
 
       updatePayload = {
         invoice_number: trimmedInvoiceNumber,
@@ -1320,7 +1341,9 @@ export async function PATCH(
         base_amount: newTotal,
         invoice_file_url: parsed.data.invoice_file_url ?? bill.invoice_file_url,
         notes: parsed.data.notes ?? null,
-        ...(wasRejected
+        ...(amountChange !== "unchanged" ? { ...clearGst, ...toleranceFacts } : {}),
+        ...(wasApproved && !resetsApproval ? { approved_amount: keptApprovedAmount } : {}),
+        ...(resetsApproval
           ? {
               approval_status: "pending",
               approved_by: null,
@@ -1328,30 +1351,91 @@ export async function PATCH(
               approval_code: null,
               approved_amount: null,
               approved_amount_note: null,
+              approved_amount_reason: null,
               rejection_reason: null,
               rejection_outcome: null,
               payment_batch_type: null,
               payment_batch_date: null,
               payment_batch_assigned_by: null,
               payment_batch_assigned_at: null,
-              gst_rate: 0,
-              gst_amount: 0,
-              gst_set_by: null,
-              gst_set_at: null,
-              gst_zero_confirmed: false,
-              gst_zero_confirmed_by: null,
+              payment_hold_status: "none",
+              ...clearGst,
             }
           : {}),
       };
 
-      if (wasRejected) {
+      if (changeReason) {
+        extraAuditChanges.correction_reason = { old: null, new: changeReason };
+      }
+      if (wasApproved) {
+        extraAuditChanges.correction_after_approval = {
+          old: oldTotal,
+          new: resetsApproval ? `${newTotal} (sent back for re-approval)` : newTotal,
+        };
+      }
+
+      const changedBits: string[] = [];
+      if (amountChange !== "unchanged") {
+        changedBits.push(`amount ₹${oldTotal.toLocaleString("en-IN")} → ₹${newTotal.toLocaleString("en-IN")} (pre-GST)`);
+      }
+      if ((trimmedInvoiceNumber ?? null) !== (bill.invoice_number ?? null)) changedBits.push("invoice number");
+      if (parsed.data.invoice_date !== bill.invoice_date) changedBits.push("invoice date");
+      if ((parsed.data.due_date ?? null) !== (bill.due_date ?? null)) changedBits.push("due date");
+      if (syncedInvoiceFileUrl) changedBits.push("invoice file");
+      const summary = changedBits.length > 0 ? changedBits.join(", ") : "details re-saved";
+
+      if (resetsApproval) {
+        // Goods PO: approval had moved it to invoice_approved; put it back (mirrors unapprove).
+        if (wasApproved && bill.po_id) {
+          const { data: linkedPo } = await supabase
+            .from("purchase_orders")
+            .select("po_type, status")
+            .eq("id", bill.po_id)
+            .single();
+          if (linkedPo?.po_type !== "service" && linkedPo?.status === "invoice_approved") {
+            await supabase.from("purchase_orders").update({ status: "invoice_received" }).eq("id", bill.po_id);
+          }
+        }
         sendPushToProcurementRoles({
-          title: "Invoice corrected — needs re-approval",
+          title: wasApproved ? "Bill amount raised — needs re-approval" : "Invoice corrected — needs re-approval",
           body: `${bill.bill_number} corrected and resubmitted for approval`,
           url: `/procurement/bills/${id}`,
           tag: `bill-approval-${id}`,
         }).catch((err) => console.error("[push] resubmit notification failed:", err));
       }
+
+      afterBillUpdate = async () => {
+        if (wasApproved && changedBits.length > 0) {
+          // Accounts pay from this bill, so tell them it moved under them.
+          const { data: accountsUsers } = await supabase
+            .from("users")
+            .select("id")
+            .eq("role", "accounts")
+            .eq("is_active", true);
+          if (accountsUsers && accountsUsers.length > 0) {
+            await supabase.from("notifications").insert(
+              accountsUsers
+                .filter((u: { id: string }) => u.id !== dbUser.id)
+                .map((u: { id: string }) => ({
+                  user_id: u.id,
+                  type: "bill_corrected",
+                  title: resetsApproval ? "Approved bill raised — back for approval" : "Approved bill corrected",
+                  body: `${bill.bill_number}: ${summary}${changeReason ? ` — ${changeReason}` : ""}`,
+                  url: `/accounting/vendor-payments/${id}`,
+                  entity_type: "vendor_bill",
+                  entity_id: id,
+                }))
+            );
+          }
+        }
+        if (changedBits.length > 0) {
+          await replyOnOpenBillQueries({
+            billId: id,
+            author: { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name },
+            message: `Corrected ${bill.bill_number}: ${summary}.${changeReason ? ` Reason: ${changeReason}` : ""}${resetsApproval && wasApproved ? " The amount went up, so it is back with the approver." : ""}`,
+          });
+        }
+      };
 
       break;
     }
