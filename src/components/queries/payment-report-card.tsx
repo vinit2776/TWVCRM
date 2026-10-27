@@ -327,7 +327,7 @@ export function PaymentReportCard({
                   {formatDate(exactMatch.payment_date)}
                 </p>
                 <p className="text-[11px] text-green-900/80">
-                  Matched on amount only. Check the bank credit is the same money.
+                  Matched on amount only. Check the bank statement before confirming.
                 </p>
                 {exactMatch.payment_mode !== report.payment_mode && (
                   <p className="text-[11px] font-medium text-amber-800">
@@ -341,7 +341,7 @@ export function PaymentReportCard({
                   disabled={busy}
                   onClick={() => void settle("verified", exactMatch.id)}
                 >
-                  <Link2 className="h-3 w-3 mr-1" /> Link to transaction
+                  <Link2 className="h-3 w-3 mr-1" /> Confirm payment already recorded
                 </Button>
               </div>
             )}
@@ -350,7 +350,7 @@ export function PaymentReportCard({
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
-                  If this is the same payment, link it here. &ldquo;Record payment&rdquo; adds a second
+                  If this is the same payment, confirm it here. &ldquo;Record payment&rdquo; adds a second
                   payment, and is refused if it would over-credit the invoice.
                 </p>
                 {recorded.map((p) => (
@@ -371,7 +371,7 @@ export function PaymentReportCard({
                       disabled={busy}
                       onClick={() => void settle("verified", p.id)}
                     >
-                      Link to transaction
+                      Confirm payment already recorded
                     </Button>
                   </div>
                 ))}
@@ -519,6 +519,7 @@ export function PaymentReportCard({
         statementId={statementId}
         balanceDue={null}
         partyLabel={`Verifying a payment reported by ${report.created_by.full_name}`}
+        requireDateEntry
         prefill={{
           amount: report.amount,
           date: report.paid_on,
