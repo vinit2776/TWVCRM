@@ -504,7 +504,7 @@ export const QUERY_ENTITIES: Record<QueryEntityType, QueryEntityDef> = {
     module: "tally_inbox",
     table: "booking_gst_tasks",
     select: BOOKING_TASK_SELECT,
-    roles: inboxRolesPlus("floor_manager"),
+    roles: inboxRolesPlus("floor_manager", "sales_rep"),
     // Floor managers took the booking and are the ones who can answer "whose
     // walk-in was this" — they're the point of asking, even though the Tally
     // Inbox itself isn't theirs to open.

@@ -224,7 +224,7 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
           type="text"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search customer, reference, amount, or message…"
+          placeholder="Search customer, person, role, amount, reference, or message…"
           aria-label="Search queries"
           className="w-full text-sm rounded-md border pl-9 pr-9 py-2 focus:outline-none focus:ring-1 focus:ring-foreground/20"
         />
@@ -362,6 +362,22 @@ export function QueriesClient({ openQueryId }: { openQueryId?: string }) {
   );
 }
 
+function nextStepFor(item: QueryListItem, audienceText: string): { text: string; className: string } {
+  switch (item.awaiting_reason) {
+    case "needs_answer":
+      return {
+        text: item.kind === "action_needed" ? "Needs your action" : "Needs your answer",
+        className: "bg-red-50 text-red-800",
+      };
+    case "verify_payment":
+      return { text: "Check the bank statement, then verify or reject this payment", className: "bg-amber-50 text-amber-800" };
+    case "awaiting_close":
+      return { text: "Answer received. Resolve it if this is settled", className: "bg-blue-50 text-blue-800" };
+    default:
+      return { text: `Waiting on ${audienceText}`, className: "bg-muted text-muted-foreground" };
+  }
+}
+
 function QueryCard({
   item,
   highlight,
@@ -426,6 +442,10 @@ function QueryCard({
         ? item.audience_roles.map((r) => USER_ROLE_LABELS[r] ?? r).join(", ")
         : "Anyone";
 
+  // One plain sentence saying what happens next, so nobody has to open the
+  // thread to learn whether the ball is in their court.
+  const nextStep = nextStepFor(item, audienceText);
+
   return (
     <div
       className={`border rounded-lg p-3.5 ${isResolved ? "opacity-60" : ""}`}
@@ -481,6 +501,9 @@ function QueryCard({
             {item.entity?.subtitle ? ` · ${item.entity.subtitle}` : ""} · raised by{" "}
             <span className="font-medium">{item.created_by.full_name}</span> · {timeAgo(item.created_at)}
           </div>
+          {!isResolved && (
+            <p className={`text-xs mt-2 inline-block rounded px-2 py-1 ${nextStep.className}`}>{nextStep.text}</p>
+          )}
           {!expanded && item.last_message?.body && (
             <p className="text-sm mt-2 line-clamp-2">
               <Highlighted text={item.last_message.body} term={highlight} />
