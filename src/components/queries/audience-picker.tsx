@@ -10,9 +10,10 @@ import type { UserRole } from "@/types";
 /**
  * Who to ask.
  *
- * "Anyone who can help" is preselected and spells out who that resolves to,
- * so the common case is zero clicks and the default is never a mystery.
- * Narrowing to roles or named people is one click when it matters.
+ * Nothing is preselected: a question sent to everyone who can see the record
+ * lands in a dozen inboxes and is answered by nobody, so the asker has to say
+ * who it's for. "Anyone who can help" is still there as an explicit choice and
+ * spells out who that resolves to.
  */
 
 interface Props {
@@ -23,6 +24,8 @@ interface Props {
   value: QueryTargeting;
   onChange: (value: QueryTargeting) => void;
   disabled?: boolean;
+  /** True until the asker has picked an option — no radio shows as selected. */
+  unset?: boolean;
 }
 
 interface DirectoryUser {
@@ -41,7 +44,7 @@ function roleLabel(role: string): string {
   return USER_ROLE_LABELS[role] ?? role;
 }
 
-export function AudiencePicker({ entityRoles, entityType, value, onChange, disabled }: Props) {
+export function AudiencePicker({ entityRoles, entityType, value, onChange, disabled, unset }: Props) {
   const [directory, setDirectory] = useState<DirectoryUser[] | null>(null);
   const [loadingDirectory, setLoadingDirectory] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -93,10 +96,10 @@ export function AudiencePicker({ entityRoles, entityType, value, onChange, disab
 
   return (
     <div className="space-y-1.5">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Ask</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Who should answer?</div>
 
       {OPTIONS.map((opt) => {
-        const active = value.audience === opt.key;
+        const active = !unset && value.audience === opt.key;
         return (
           <div key={opt.key}>
             <button
