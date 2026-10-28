@@ -415,6 +415,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
             );
           }
           const isAsker = m.created_by.id === thread.created_by.id;
+          // The first message of a payment report is what the reporter sent
+          // as evidence (their note and any screenshot), so accounts can tell
+          // it apart from later replies.
+          const isProof =
+            !!thread.payment_report && m.id === thread.messages.find((x) => x.event_type === "message")?.id;
           return (
             <div
               key={m.id}
@@ -428,6 +433,11 @@ export function QueryThreadPanel({ entityType, entityId, initialQueryId, onChang
                 </span>
                 <span className="font-normal opacity-75 flex-none">{timeAgo(m.created_at)}</span>
               </div>
+              {isProof && (
+                <div className="text-[10px] font-semibold uppercase tracking-wide mb-1 opacity-70">
+                  Proof of payment details
+                </div>
+              )}
               {m.body}
               {m.attachments && m.attachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">

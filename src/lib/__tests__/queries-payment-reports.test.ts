@@ -279,6 +279,14 @@ describe("closedReportSummary", () => {
     expect(r.linkLine).toBe("Linked to the payment recorded on the invoice (NEFT, ref 22317)");
   });
 
+  it("says a deposit adjustment settled it rather than naming a bank mode", () => {
+    const r = closedReportSummary({
+      ...base, status: "verified",
+      linkedPayment: { payment_mode: "deposit_adjustment", payment_reference: "9fc3e278-d441" },
+    });
+    expect(r.linkLine).toBe("Settled by deposit adjustment");
+  });
+
   it("leaves the reference out when the payment has none", () => {
     const r = closedReportSummary({
       ...base, status: "verified",
