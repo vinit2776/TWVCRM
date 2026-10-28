@@ -34,7 +34,7 @@ export interface ReportableBalance {
   reportable: number;
 }
 
-async function statementOutstanding(admin: SupabaseClient, statementId: string): Promise<number> {
+export async function statementOutstanding(admin: SupabaseClient, statementId: string): Promise<number> {
   const { data: stmt } = await admin
     .from("billing_statements").select("id, total_amount").eq("id", statementId).maybeSingle();
   if (!stmt) return 0;

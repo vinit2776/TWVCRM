@@ -2,21 +2,17 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { logAudit } from "@/lib/audit";
 import { queryEntityDef, type EntityRow } from "./registry";
 import { fanOutQueryEvent, threadParticipantIds, entityLabel, loadEntity } from "./server";
-import { pickReportToClose } from "./payment-reports";
 
 interface RecordedPayment {
   id: string;
-  amount: number | string | null;
-  tds_amount?: number | string | null;
-  payment_mode: string;
-  billing_statement_id: string;
 }
 
 /**
- * Accounts just recorded a payment on an invoice: close the payment report it
- * satisfies, if any. Matching is in pickReportToClose; the close itself is one
- * database function so the report, its history line and its thread move
- * together.
+ * Accounts just recorded a payment on an invoice: close the oldest open report
+ * the credit recorded on that invoice now covers, if any. A partial payment
+ * leaves the report open. Both the coverage test and the close are one database
+ * function (close_covered_payment_report, 00646) so the report, its history
+ * line and its thread move together and the rule lives in one place.
  *
  * Never throws. The payment is already in the ledger and must not be rolled
  * back or reported as failed because a report could not be closed; an
@@ -28,24 +24,12 @@ export async function closeReportForRecordedPayment(
   actor: { id: string; role: string; full_name: string },
 ): Promise<{ reportId: string } | null> {
   try {
-    const { data: open, error } = await admin
-      .from("query_payment_reports")
-      .select("id, status, target_kind, claimed_statement_id, amount, created_at")
-      .eq("claimed_statement_id", payment.billing_statement_id)
-      .eq("status", "reported")
-      .eq("target_kind", "invoice");
-    if (error || !open?.length) return null;
-
-    const report = pickReportToClose(open, payment);
-    if (!report) return null;
-
-    const { data: closed, error: closeErr } = await admin.rpc("close_payment_report", {
-      p_report_id: report.id,
+    const { data: closed, error: closeErr } = await admin.rpc("close_covered_payment_report", {
       p_payment_id: payment.id,
       p_actor: actor.id,
     });
     if (closeErr) {
-      console.error("[payment] could not close the matching payment report:", closeErr.message);
+      console.error("[payment] could not close the covered payment report:", closeErr.message);
       return null;
     }
     const row = (closed as Array<{
