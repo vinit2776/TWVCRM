@@ -41,6 +41,7 @@ import { WrittenOffStatementsPanel } from "@/components/billing/written-off-stat
 import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { InboxQueryButton } from "@/components/queries/inbox-query-button";
 import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import {
@@ -561,6 +562,10 @@ export default function AccountsReceivablePage() {
   // Which row's collapsed "reported paid" banner is expanded (one at a time,
   // matching the existing single-open pattern used for the query panel).
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+  // The report being reviewed in the side drawer. Reviewing happens here, on
+  // the receivables page, so the invoice row behind it visibly updates when
+  // accounts record the payment, instead of sending them to the Queries page.
+  const [reviewing, setReviewing] = useState<PendingPaymentReport | null>(null);
 
   // ── Ageing view: group filtered statements by contract (or proposal) ─────
   const agingRows = useMemo((): AgingRow[] => {
@@ -963,12 +968,13 @@ export default function AccountsReceivablePage() {
                                   {unverified.length > 1 && ` · +${unverified.length - 1} more`}
                                 </span>
                               </button>
-                              <a
-                                href={`/queries?open=${firstUnverified.query?.id}`}
+                              <button
+                                type="button"
+                                onClick={() => setReviewing(firstUnverified)}
                                 className="flex-none rounded-md border border-amber-400 bg-white px-2.5 py-1 font-medium hover:bg-amber-50"
                               >
                                 Review report
-                              </a>
+                              </button>
                             </div>
                           ) : reports.length > 0 ? (
                             <button
@@ -982,7 +988,7 @@ export default function AccountsReceivablePage() {
                           {reportOpen && (
                             <div className="px-3.5 py-2 border-b bg-amber-50/40 space-y-1.5">
                               {reports.map((rep) => (
-                                <ReportedPaymentLine key={rep.id} rep={rep} />
+                                <ReportedPaymentLine key={rep.id} rep={rep} onOpen={setReviewing} />
                               ))}
                             </div>
                           )}
@@ -1216,7 +1222,32 @@ export default function AccountsReceivablePage() {
         onReportDeposit={openReportForOtherRow}
         promotingId={promotingAdhocId}
         reportsForRow={reportsForOtherRow}
+        onReviewReport={setReviewing}
       />
+
+      <Sheet open={!!reviewing} onOpenChange={(o) => { if (!o) setReviewing(null); }}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto p-4">
+          <SheetHeader className="mb-3">
+            <SheetTitle className="text-base">
+              Payment reported{reviewing ? ` · ${formatCurrency(reviewing.amount)}` : ""}
+            </SheetTitle>
+            <p className="text-xs text-muted-foreground">
+              Check the bank statement, then record the payment, or tell the reporter it isn&apos;t there yet.
+            </p>
+          </SheetHeader>
+          {reviewing?.query && (
+            <QueryThreadPanel
+              // Remount per report so a stale thread never flashes while the next loads.
+              key={reviewing.id}
+              entityType={reviewing.query.entity_type}
+              entityId={reviewing.query.entity_id}
+              initialQueryId={reviewing.query.id}
+              // Refresh the list behind the drawer so the invoice row shows the effect.
+              onChanged={load}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
 
       <ReportPaymentDialog
         open={!!reportRow}
@@ -1430,7 +1461,7 @@ function waitingDays(createdAt: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000));
 }
 
-function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
+function ReportedPaymentLine({ rep, onOpen }: { rep: PendingPaymentReport; onOpen?: (rep: PendingPaymentReport) => void }) {
   const settled = rep.status !== "reported";
   const tone = rep.status === "reported"
     ? "text-amber-900"
@@ -1460,9 +1491,15 @@ function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
         )}
         {settled && rep.resolution_note && <span className="block italic">&ldquo;{rep.resolution_note}&rdquo;</span>}
         {" "}
-        <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
-          {settled ? "Open the thread" : "Open to verify"}
-        </a>
+        {onOpen ? (
+          <button type="button" onClick={() => onOpen(rep)} className="underline hover:no-underline">
+            {settled ? "Open the thread" : "Open to verify"}
+          </button>
+        ) : (
+          <a href={`/queries?open=${rep.query?.id}`} className="underline hover:no-underline">
+            {settled ? "Open the thread" : "Open to verify"}
+          </a>
+        )}
         {!settled && (
           <span className="opacity-80"> · Balance is unchanged until accounts confirm it.</span>
         )}
@@ -1496,7 +1533,7 @@ interface OtherSummary {
  * or search box, which was as good as invisible to anyone not already
  * looking for it.
  */
-function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, promotingId, reportsForRow }: {
+function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, onReportDeposit, promotingId, reportsForRow, onReviewReport }: {
   rows: OtherReceivableRow[];
   totalCount: number;
   canRecordPayment: boolean;
@@ -1505,6 +1542,8 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
   /** id of the row currently being promoted to "sent" before its report dialog opens — see openReportForOtherRow. */
   promotingId: string | null;
   reportsForRow: (row: OtherReceivableRow) => PendingPaymentReport[];
+  /** Open a report's review drawer on this page. */
+  onReviewReport: (rep: PendingPaymentReport) => void;
 }) {
   const [payRow, setPayRow] = useState<OtherReceivableRow | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -1698,7 +1737,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                     >
                       <td colSpan={6} className="px-4 py-2">
                         {reportsForRow(r).map((rep) => (
-                          <ReportedPaymentLine key={rep.id} rep={rep} />
+                          <ReportedPaymentLine key={rep.id} rep={rep} onOpen={onReviewReport} />
                         ))}
                       </td>
                     </tr>
