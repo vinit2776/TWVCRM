@@ -236,7 +236,7 @@ export function ToVerifyPanel({ onChanged, search = "" }: Props) {
           <SheetHeader className="mb-3">
             <SheetTitle className="text-base">{opened?.entity?.title ?? "Reported payment"}</SheetTitle>
             <p className="text-xs text-muted-foreground">
-              Check the bank statement, then verify and record, or tell the reporter it isn&apos;t there yet.
+              Check the bank statement, then record the payment, or tell the reporter it isn&apos;t there yet.
             </p>
           </SheetHeader>
           {opened && (
