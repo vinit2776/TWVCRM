@@ -163,7 +163,10 @@ export function ToVerifyPanel({ onChanged, search = "" }: Props) {
         </div>
         {visibleItems.map((item) => {
           const days = daysWaiting(item.created_at);
-          const overdue = !!item.needed_by && item.needed_by < today;
+          // Past a week, or past its own due date, the row turns red so the
+          // oldest claims are the first thing the eye lands on.
+          const overdue = (!!item.needed_by && item.needed_by < today) || days > 7;
+          const hasReference = !!item.reported_payment?.payment_reference;
           const checked = lastCheckedChip(item.last_checked_at, Date.now());
           const modeLabel = item.reported_payment
             ? (STATEMENT_PAYMENT_MODE_LABELS[item.reported_payment.payment_mode] ??
@@ -174,7 +177,7 @@ export function ToVerifyPanel({ onChanged, search = "" }: Props) {
               key={item.id}
               type="button"
               onClick={() => setOpened(item)}
-              className="w-full text-left grid grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_24px] gap-1 md:gap-3 items-center px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors"
+              className={`w-full text-left grid grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_24px] gap-1 md:gap-3 items-center px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors border-l-4 ${overdue ? "border-l-red-400" : "border-l-amber-400"}`}
             >
               <span className="min-w-0">
                 <span className="block truncate font-medium">{item.entity?.title ?? "Transaction no longer available"}</span>
@@ -188,15 +191,21 @@ export function ToVerifyPanel({ onChanged, search = "" }: Props) {
                   {modeLabel && <span className="text-muted-foreground"> · {modeLabel}</span>}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
-                  {item.reported_payment?.payment_reference
-                    ? `Ref ${item.reported_payment.payment_reference}`
-                    : "No reference given"}
+                  {hasReference ? `Ref ${item.reported_payment?.payment_reference}` : "No reference given"}
                   {item.reported_payment && ` · paid ${formatDate(item.reported_payment.paid_on)}`}
                 </span>
               </span>
               <span className="min-w-0">
                 <span className="block truncate">{item.created_by.full_name}</span>
                 <span className="flex flex-wrap gap-1 mt-0.5">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-800">
+                    Reported · unverified
+                  </span>
+                  {!hasReference && (
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted border-border text-muted-foreground">
+                      No reference
+                    </span>
+                  )}
                   <span
                     className={`text-[11px] px-2 py-0.5 rounded-full border ${
                       overdue
