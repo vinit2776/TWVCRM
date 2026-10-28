@@ -278,17 +278,70 @@ export function lastCheckedChip(
 }
 
 /**
+ * Does a recorded payment cover a reported amount? Reporters give whichever
+ * figure they were told: the bank credit (net of TDS) or the whole invoice
+ * credit (net plus TDS). Either counts, to within a rupee of rounding.
+ */
+export function paymentCoversReportedAmount(
+  payment: { amount: number | string | null; tds_amount?: number | string | null },
+  reportedAmount: number,
+): boolean {
+  const net = Number(payment.amount ?? 0);
+  const gross = net + Number(payment.tds_amount ?? 0);
+  return Math.abs(net - reportedAmount) <= 1 || Math.abs(gross - reportedAmount) <= 1;
+}
+
+/**
  * Which payments already recorded on an invoice are plausibly the one a report
- * is about: those whose credit (cash plus TDS) equals the reported amount to
- * within a rupee. Exactly one match earns the one-click "Accept and link";
- * none or several leave the choice to a person.
+ * is about (see paymentCoversReportedAmount). Exactly one match earns the
+ * one-click "Link and verify"; none or several leave the choice to a person.
  */
 export function matchingRecordedPayments<
   T extends { amount: number | string | null; tds_amount?: number | string | null },
 >(payments: T[], reportedAmount: number): T[] {
-  return payments.filter(
-    (p) => Math.abs(Number(p.amount ?? 0) + Number(p.tds_amount ?? 0) - reportedAmount) <= 1,
-  );
+  return payments.filter((p) => paymentCoversReportedAmount(p, reportedAmount));
+}
+
+/** Payment modes that never close a report by being recorded. */
+const NON_CLOSING_PAYMENT_MODES = ["deposit_adjustment", "razorpay"];
+
+/**
+ * When accounts records a payment, which open report does it settle? Only a
+ * report that names this invoice, is still open, is about an invoice (not a
+ * deposit or booking) and was for this amount. One payment settles one
+ * report: with several candidates the oldest wins and the rest stay open for
+ * accounts to reject as duplicates. Deposit adjustments and gateway payments
+ * never close a report; they have their own paths.
+ */
+export function pickReportToClose<
+  R extends {
+    id: string;
+    status: string;
+    target_kind: string;
+    claimed_statement_id: string | null;
+    amount: number | string;
+    created_at: string;
+  },
+>(
+  reports: R[],
+  payment: {
+    amount: number | string | null;
+    tds_amount?: number | string | null;
+    payment_mode: string;
+    billing_statement_id: string;
+  },
+): R | null {
+  if (NON_CLOSING_PAYMENT_MODES.includes(payment.payment_mode)) return null;
+  const candidates = reports
+    .filter(
+      (r) =>
+        r.status === "reported" &&
+        r.target_kind === "invoice" &&
+        r.claimed_statement_id === payment.billing_statement_id &&
+        paymentCoversReportedAmount(payment, Number(r.amount)),
+    )
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  return candidates[0] ?? null;
 }
 
 /**

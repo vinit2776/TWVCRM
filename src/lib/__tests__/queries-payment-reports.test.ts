@@ -10,6 +10,8 @@ import {
   validatePaymentReport,
   lastCheckedChip,
   matchingRecordedPayments,
+  paymentCoversReportedAmount,
+  pickReportToClose,
   closedReportSummary,
   MAX_AGE_DAYS,
   type PaymentReportFields,
@@ -299,5 +301,71 @@ describe("closedReportSummary", () => {
     const r = closedReportSummary({ ...base, status: "rejected", linkedPayment: null });
     expect(r.headline).toBe("Payment report closed — no such payment");
     expect(r.linkLine).toBeNull();
+  });
+});
+
+describe("paymentCoversReportedAmount", () => {
+  it("accepts the bank credit (net of TDS)", () => {
+    expect(paymentCoversReportedAmount({ amount: 70200, tds_amount: 6500 }, 70200)).toBe(true);
+  });
+  it("accepts the whole invoice credit (net plus TDS)", () => {
+    expect(paymentCoversReportedAmount({ amount: 11880, tds_amount: 1100 }, 12980)).toBe(true);
+  });
+  it("tolerates a rupee but not two", () => {
+    expect(paymentCoversReportedAmount({ amount: 8851 }, 8850)).toBe(true);
+    expect(paymentCoversReportedAmount({ amount: 8853 }, 8850)).toBe(false);
+  });
+  it("rejects a different amount, such as a part payment", () => {
+    expect(paymentCoversReportedAmount({ amount: 10894 }, 26447)).toBe(false);
+  });
+});
+
+describe("pickReportToClose", () => {
+  const rep = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    status: "reported",
+    target_kind: "invoice",
+    claimed_statement_id: "stmt-1",
+    amount: 7080,
+    created_at: "2026-10-01T10:00:00Z",
+    ...over,
+  });
+  const pay = (over: Record<string, unknown> = {}) => ({
+    amount: 7080,
+    tds_amount: 0,
+    payment_mode: "neft",
+    billing_statement_id: "stmt-1",
+    ...over,
+  });
+
+  it("closes the report that names the invoice and the amount", () => {
+    expect(pickReportToClose([rep("a")], pay())?.id).toBe("a");
+  });
+  it("leaves the report open when the amount differs", () => {
+    expect(pickReportToClose([rep("a", { amount: 26447 })], pay())).toBeNull();
+  });
+  it("ignores a report filed against another invoice or none", () => {
+    expect(pickReportToClose([rep("a", { claimed_statement_id: "stmt-2" })], pay())).toBeNull();
+    expect(pickReportToClose([rep("a", { claimed_statement_id: null })], pay())).toBeNull();
+  });
+  it("ignores reports already settled and deposit or booking reports", () => {
+    expect(pickReportToClose([rep("a", { status: "verified" })], pay())).toBeNull();
+    expect(pickReportToClose([rep("a", { target_kind: "deposit" })], pay())).toBeNull();
+    expect(pickReportToClose([rep("a", { target_kind: "booking" })], pay())).toBeNull();
+  });
+  it("closes only the oldest when two reports match, leaving the other to reject", () => {
+    const picked = pickReportToClose(
+      [rep("newer", { created_at: "2026-10-05T10:00:00Z" }), rep("older")],
+      pay(),
+    );
+    expect(picked?.id).toBe("older");
+  });
+  it("never closes a report from a deposit adjustment or a gateway payment", () => {
+    expect(pickReportToClose([rep("a")], pay({ payment_mode: "deposit_adjustment" }))).toBeNull();
+    expect(pickReportToClose([rep("a")], pay({ payment_mode: "razorpay" }))).toBeNull();
+  });
+  it("matches a gross report against net-plus-TDS", () => {
+    const r = rep("a", { amount: 12980 });
+    expect(pickReportToClose([r], pay({ amount: 11880, tds_amount: 1100 }))?.id).toBe("a");
   });
 });

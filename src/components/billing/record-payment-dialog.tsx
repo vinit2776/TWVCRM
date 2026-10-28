@@ -246,6 +246,7 @@ export function RecordPaymentDialog({
           ? "Invoice fully paid!"
           : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`
       );
+      if (json?.closed_report_id) toast.success("The payment report for this invoice was closed too.");
       onOpenChange(false);
       onSuccess(recordedPaymentId);
     } else {
