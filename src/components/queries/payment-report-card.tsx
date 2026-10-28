@@ -388,8 +388,9 @@ export function PaymentReportCard({
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
-                  If this is the same payment, confirm it here. &ldquo;Record payment&rdquo; adds a second
-                  payment, and is refused if it would over-credit the invoice.
+                  {acceptable.length > 0
+                    ? "More than one of these matches the amount reported. Confirm the one that is the same payment."
+                    : "None of these matches the amount reported, so this report stays open. Use Not found yet or No such payment."}
                 </p>
                 {bankRecorded.map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
@@ -402,15 +403,17 @@ export function PaymentReportCard({
                       {formatDate(p.payment_date)}
                       {p.created_at ? ` · recorded ${formatRecordedOn(p.created_at)}` : ""}
                     </span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 text-[11px] bg-background flex-none"
-                      disabled={busy}
-                      onClick={() => void settle("verified", p.id)}
-                    >
-                      Confirm payment already recorded
-                    </Button>
+                    {acceptable.some((a) => a.id === p.id) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-[11px] bg-background flex-none"
+                        disabled={busy}
+                        onClick={() => void settle("verified", p.id)}
+                      >
+                        Confirm payment already recorded
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>

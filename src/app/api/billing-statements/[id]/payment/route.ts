@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { closeReportForRecordedPayment } from "@/lib/queries/close-report-on-payment";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
@@ -66,7 +67,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase
-    .from("users").select("id, role").eq("auth_id", user.id).single();
+    .from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser || !canRecordPayments(dbUser.role)) {
     return NextResponse.json(
       { error: "Only admin or accounts can record payments. Use \"Report paid\" to tell accounts about one." },
@@ -215,6 +216,20 @@ export async function POST(
   });
   const newPaymentStatus = settlement.paymentStatus;
 
+  // Recording the payment is what accounts does to verify a reported one, so
+  // the report it satisfies closes here, in the same click.
+  const closedReport = await closeReportForRecordedPayment(
+    createAdminClient(),
+    {
+      id: payment.id,
+      amount: payment.amount as number | string,
+      tds_amount: payment.tds_amount as number | string | null,
+      payment_mode: String(payment.payment_mode),
+      billing_statement_id: id,
+    },
+    { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name ?? "Accounts" },
+  );
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: id,
@@ -234,5 +249,6 @@ export async function POST(
     payment_status: newPaymentStatus,
     total_paid: settlement.totalPaid,
     balance_due: settlement.balanceDue,
+    closed_report_id: closedReport?.reportId ?? null,
   });
 }

@@ -33,6 +33,7 @@ interface ReportRow {
   id: string;
   query_id: string;
   status: "reported" | "verified" | "rejected";
+  billing_payment_id: string | null;
   amount: number;
   paid_on: string;
   payment_mode: string;
@@ -104,7 +105,7 @@ export async function PATCH(
   const { data: reportData, error: fetchErr } = await admin
     .from("query_payment_reports")
     .select(`
-      id, query_id, status, amount, paid_on, payment_mode, target_kind, booking_payment_id, created_by,
+      id, query_id, status, billing_payment_id, amount, paid_on, payment_mode, target_kind, booking_payment_id, created_by,
       query:queries!query_payment_reports_query_id_fkey(
         id, entity_type, entity_id, status, audience, audience_roles, audience_user_ids
       )
@@ -116,6 +117,19 @@ export async function PATCH(
   if (!reportData) return NextResponse.json({ error: "Report not found" }, { status: 404 });
 
   const report = reportData as unknown as ReportRow;
+
+  // Recording the payment already closes the report it satisfies, so the card's
+  // follow-up "verify" lands on a report that is already verified against this
+  // very payment. That is the outcome asked for, not a conflict.
+  if (
+    outcome === "verified" &&
+    report.status === "verified" &&
+    typeof body.billing_payment_id === "string" &&
+    report.billing_payment_id === body.billing_payment_id.trim()
+  ) {
+    return NextResponse.json({ status: "verified", settled: true, already: true });
+  }
+
   if (report.status !== "reported") {
     return NextResponse.json(
       { error: `This report has already been settled as "${report.status}"` },
