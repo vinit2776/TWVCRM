@@ -42,7 +42,8 @@ export type WidgetId =
   | "network"
   | "week_in_review"
   | "quick_charge"
-  | "accounts_overview";
+  | "accounts_overview"
+  | "accounts_work_queue";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   week_in_review:         { id: "week_in_review",         title: "Last 7 Days" },
   quick_charge:           { id: "quick_charge",           title: "Log a Charge" },
   accounts_overview:      { id: "accounts_overview",      title: "Accounts Overview" },
+  accounts_work_queue:    { id: "accounts_work_queue",    title: "Accounts Work Queue" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -150,11 +152,12 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   //
   // Deliberately a single widget. The previous nine were inherited from the
   // admin/sales set — MTD totals, ROI, renewal pipeline — none of which is
-  // accounts work. AccountsOverviewWidget answers the two questions this role
-  // actually opens the dashboard for: what is queued on me, and where does the
-  // money stand.
+  // accounts work. AccountsWorkQueueWidget is the desk itself: one colour-coded
+  // queue of everything waiting on accounts, most late first, each row opening
+  // the item. accounts_overview (queued counts plus outstanding/payables) is
+  // still a valid widget id, just no longer in this role's default set.
   accounts: [
-    "accounts_overview",
+    "accounts_work_queue",
   ],
 
   // FMS: Facility Manager
