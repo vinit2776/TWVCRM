@@ -158,7 +158,13 @@ export function PaymentReportCard({
   // is the common case (the same receipt entered before anyone verified the
   // report) and earns a one-click accept; zero or several fall back to the
   // list below, where a person chooses.
-  const acceptable = matchingRecordedPayments(recorded, report.amount);
+  // A deposit adjustment moves money from the security deposit onto the
+  // invoice. There is no bank credit behind it to check or to match against
+  // the reported amount, so it is shown on its own rather than offered as a
+  // payment to confirm.
+  const adjustments = recorded.filter((p) => p.payment_mode === "deposit_adjustment");
+  const bankRecorded = recorded.filter((p) => p.payment_mode !== "deposit_adjustment");
+  const acceptable = matchingRecordedPayments(bankRecorded, report.amount);
   // One exact match is a single obvious answer: link it. Recording the report
   // as a second payment is how receipts get double-counted, so that path sits
   // behind a deliberate click instead of beside the safe one.
@@ -167,7 +173,7 @@ export function PaymentReportCard({
   const showVerifyAndRecord = !exactMatch || recordAsNew;
 
   const settle = useCallback(
-    async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string) => {
+    async (outcome: "verified" | "not_found" | "rejected", billingPaymentId?: string, noteOverride?: string) => {
       setBusy(true);
       const res = await fetch(`/api/queries/payment-reports/${report.id}`, {
         method: "PATCH",
@@ -175,7 +181,7 @@ export function PaymentReportCard({
         body: JSON.stringify({
           outcome,
           billing_payment_id: billingPaymentId,
-          note: note.trim() || undefined,
+          note: noteOverride ?? (note.trim() || undefined),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -310,6 +316,38 @@ export function PaymentReportCard({
               </div>
             )}
 
+            {mode === "idle" && adjustments.length > 0 && (
+              <div className="space-y-1.5 rounded border border-slate-300 bg-slate-50 p-2 text-slate-900">
+                <p className="text-[11px] font-medium">This invoice was settled by deposit adjustment</p>
+                <p className="text-[11px] text-slate-700">
+                  The security deposit was applied to it, so there is no bank credit to check. If this report was
+                  asking for that adjustment, close it here.
+                </p>
+                {adjustments.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span>
+                      {formatCurrency(Number(a.amount))} · deposit adjustment · {formatDate(a.payment_date)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[11px] bg-background flex-none"
+                      disabled={busy}
+                      onClick={() =>
+                        void settle(
+                          "verified",
+                          a.id,
+                          `Settled by deposit adjustment of ${formatCurrency(Number(a.amount))} (${formatDate(a.payment_date)}). No bank credit to verify.`,
+                        )
+                      }
+                    >
+                      Close: settled by deposit adjustment
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {mode === "idle" && exactMatch && (
               <div className="space-y-1.5 rounded border border-green-300 bg-green-50 p-2">
                 <p className="text-[11px] font-medium text-green-900">
@@ -346,14 +384,14 @@ export function PaymentReportCard({
               </div>
             )}
 
-            {mode === "idle" && recorded.length > 0 && !exactMatch && (
+            {mode === "idle" && bankRecorded.length > 0 && !exactMatch && (
               <div className="space-y-1.5 rounded border border-amber-300 bg-background p-2">
                 <p className="text-[11px] font-medium">Already recorded on this invoice</p>
                 <p className="text-[11px] opacity-80">
                   If this is the same payment, confirm it here. &ldquo;Record payment&rdquo; adds a second
                   payment, and is refused if it would over-credit the invoice.
                 </p>
-                {recorded.map((p) => (
+                {bankRecorded.map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-2 text-[11px]">
                     <span>
                       <span className="font-medium tabular-nums">{formatCurrency(Number(p.amount))}</span>
@@ -398,8 +436,8 @@ export function PaymentReportCard({
                   {showVerifyAndRecord && (
                   <Button
                     size="sm"
-                    variant={recorded.length > 0 ? "outline" : "default"}
-                    className={recorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
+                    variant={bankRecorded.length > 0 ? "outline" : "default"}
+                    className={bankRecorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
                     disabled={busy || (!isDeposit && !isBooking && !statementId)}
                     title={
                       isBooking

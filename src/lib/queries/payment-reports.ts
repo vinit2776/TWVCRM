@@ -317,6 +317,9 @@ export function closedReportSummary(args: {
   }
   const p = args.linkedPayment;
   if (!p) return { headline: "Payment report closed", linkLine: "Linked to the recorded payment" };
+  if (p.payment_mode === "deposit_adjustment") {
+    return { headline: "Payment report closed", linkLine: "Settled by deposit adjustment" };
+  }
   const ref = p.payment_reference ? `, ref ${p.payment_reference}` : "";
   return {
     headline: "Payment report closed",
