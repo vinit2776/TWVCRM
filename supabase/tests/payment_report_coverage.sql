@@ -130,6 +130,44 @@ BEGIN
   PERFORM pg_temp.pay(s, 6000, a, 'neft', 0, FALSE);
   res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open (recorded credit is less%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: partial stays open';
 
+  -- 13. Payments recorded earlier with no report must not stop a later report
+  -- from closing: 15,000 recorded, then 5,000 reported and 5,000 recorded.
+  s := pg_temp.mk_stmt();
+  p1 := pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
+  res := res || E'\n' || CASE WHEN (SELECT count(*) FROM close_covered_payment_report(p1, a)) = 0 THEN 'PASS' ELSE 'FAIL' END || ' the unreported 15,000 itself closes nothing';
+  r := pg_temp.mk_report(s, 5000, a);
+  p2 := pg_temp.pay(s, 5000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + report 5,000 + payment 5,000 closes: ' || pg_temp.st(r);
+
+  -- 14. ...but a 5,500 payment against that 5,000 report stays open.
+  s := pg_temp.mk_stmt();
+  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
+  r := pg_temp.mk_report(s, 5000, a);
+  PERFORM pg_temp.pay(s, 5500, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + 5,500 payment stays open: ' || pg_temp.st(r);
+
+  -- 15. Reversing the 5,000 payment reopens the report; reversing the earlier
+  -- 15,000 (which the report never relied on) does not.
+  s := pg_temp.mk_stmt();
+  p1 := pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
+  r := pg_temp.mk_report(s, 5000, a);
+  p2 := pg_temp.pay(s, 5000, a);
+  DELETE FROM billing_payments WHERE id = p1;
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' reversing the earlier 15,000 leaves it closed: ' || pg_temp.st(r);
+  DELETE FROM billing_payments WHERE id = p2;
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing the 5,000 payment reopens: ' || pg_temp.st(r);
+
+  -- 16. The sweep agrees: an exact payment among earlier ones would close; a
+  -- 5,500 one would not.
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
+  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
+  PERFORM pg_temp.pay(s, 5000, a, 'neft', 0, FALSE);
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + exact 5,000 would close';
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
+  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
+  PERFORM pg_temp.pay(s, 5500, a, 'neft', 0, FALSE);
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + 5,500 stays open';
+
   -- Raising here rolls the whole transaction back: no test data survives.
   RAISE EXCEPTION 'PAYMENT_REPORT_COVERAGE_RESULTS%', res;
 END $$;
