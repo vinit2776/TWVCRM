@@ -217,6 +217,7 @@ interface PendingPaymentReport {
   payer_differs: boolean;
   claimed_statement_id: string | null;
   status: "reported" | "verified" | "rejected";
+  created_at?: string;
   resolution_note: string | null;
   reviewed_at: string | null;
   reviewed_by: { full_name: string } | null;
@@ -934,21 +935,50 @@ export default function AccountsReceivablePage() {
                       const avg = avgDays[party.lead?.id ?? party.id];
                       const reports = reportsForRow(r);
                       const reportOpen = expandedReportId === r.id;
+                      // Only a report still waiting on accounts earns the loud
+                      // treatment; a closed one is history and stays quiet.
+                      const unverified = reports.filter((x) => x.status === "reported");
+                      const firstUnverified = unverified[0];
                       return (
-                        <div key={r.id} className={`rounded-xl border overflow-hidden ${bucket.borderClass} border-l-4`}>
-                          {reports.length > 0 && (
+                        <div
+                          key={r.id}
+                          className={`rounded-xl border overflow-hidden ${bucket.borderClass} border-l-4 ${
+                            unverified.length > 0 ? "ring-2 ring-amber-300" : ""
+                          }`}
+                        >
+                          {firstUnverified ? (
+                            <div className="flex items-center justify-between gap-3 flex-wrap px-3.5 py-2 text-xs bg-amber-100 text-amber-900 border-b border-amber-300">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedReportId(reportOpen ? null : r.id)}
+                                className="text-left flex items-start gap-1.5 min-w-0"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-none" />
+                                <span>
+                                  <span className="font-semibold">Payment reported, needs bank check:</span>{" "}
+                                  {formatCurrency(firstUnverified.amount)} ·{" "}
+                                  {STATEMENT_PAYMENT_MODE_LABELS[firstUnverified.payment_mode] ?? firstUnverified.payment_mode} ·{" "}
+                                  {formatDate(firstUnverified.paid_on)} · by {firstUnverified.created_by.full_name}
+                                  {firstUnverified.created_at && ` · ${waitingDays(firstUnverified.created_at)}d waiting`}
+                                  {unverified.length > 1 && ` · +${unverified.length - 1} more`}
+                                </span>
+                              </button>
+                              <a
+                                href={`/queries?open=${firstUnverified.query?.id}`}
+                                className="flex-none rounded-md border border-amber-400 bg-white px-2.5 py-1 font-medium hover:bg-amber-50"
+                              >
+                                Review report
+                              </a>
+                            </div>
+                          ) : reports.length > 0 ? (
                             <button
                               type="button"
                               onClick={() => setExpandedReportId(reportOpen ? null : r.id)}
-                              className={`block w-full text-left px-3.5 py-1.5 text-xs font-medium border-b ${
-                                reports.some((x) => x.status === "reported")
-                                  ? "bg-amber-50 text-amber-900 border-amber-200"
-                                  : "bg-muted/40 text-muted-foreground border-border"
-                              }`}
+                              className="block w-full text-left px-3.5 py-1.5 text-xs font-medium border-b bg-muted/40 text-muted-foreground border-border"
                             >
-                              ⚠ {reports.length} payment report{reports.length > 1 ? "s" : ""} on this statement — {reportOpen ? "hide" : "view"}
+                              Payment report closed — {reportOpen ? "hide" : "view"}
                             </button>
-                          )}
+                          ) : null}
                           {reportOpen && (
                             <div className="px-3.5 py-2 border-b bg-amber-50/40 space-y-1.5">
                               {reports.map((rep) => (
@@ -1135,15 +1165,17 @@ export default function AccountsReceivablePage() {
                               action that moves money, this is open to everyone
                               and moves nothing until accounts verify it.
                             */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-teal-200 text-teal-700 hover:bg-teal-50"
-                              onClick={() => setReportRow(r)}
-                              title="Customer says they've paid outside the CRM — tell accounts"
-                            >
-                              <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
-                            </Button>
+                            {unverified.length === 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-teal-200 text-teal-700 hover:bg-teal-50"
+                                onClick={() => setReportRow(r)}
+                                title="Customer says they've paid outside the CRM — tell accounts"
+                              >
+                                <BadgeIndianRupee className="h-3.5 w-3.5 mr-1" /> Report paid
+                              </Button>
+                            )}
                             {canRecordPayment && (
                               <Button size="sm" onClick={() => openPayDialog(r)} title="Record offline payment" className="bg-teal-700 hover:bg-teal-800">
                                 <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record payment
@@ -1393,6 +1425,11 @@ export default function AccountsReceivablePage() {
  * used to be written to the thread and then never surfaced anywhere the
  * reporter would look.
  */
+/** Whole days since a report was raised, for the "waiting" label. */
+function waitingDays(createdAt: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000));
+}
+
 function ReportedPaymentLine({ rep }: { rep: PendingPaymentReport }) {
   const settled = rep.status !== "reported";
   const tone = rep.status === "reported"
