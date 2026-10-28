@@ -1,6 +1,12 @@
--- Repeatable test of the payment-report coverage rule (migrations 00644-00646):
--- a report closes when the credit recorded on its invoice reaches the reported
--- amount (within one rupee). An overpayment closes it; an underpayment does not.
+-- Repeatable test of the payment-report closing rule (migrations 00644-00647).
+--
+-- Rule under test: a report is satisfied by NEW money. For an open report on an
+-- invoice, only payments recorded after the report was filed count (cash + TDS;
+-- a deposit adjustment approved after filing counts as credit but never
+-- triggers a close), minus what older reports on that invoice already used.
+-- The report closes when that credit reaches the reported amount within one
+-- rupee: an overpayment closes it, an underpayment does not. Payments recorded
+-- before the report was filed do not close it by themselves.
 --
 -- Run against STAGING only:
 --   npx supabase db query --linked -f supabase/tests/payment_report_coverage.sql
@@ -23,18 +29,21 @@ CREATE FUNCTION pg_temp.mk_stmt() RETURNS UUID LANGUAGE plpgsql AS $$
 DECLARE v UUID; d DATE := DATE '1990-01-01' + nextval('_fixture_seq')::INT;
 BEGIN
   INSERT INTO billing_statements (contract_id, period_start, period_end, total_amount, status)
-  VALUES ((SELECT id FROM contracts ORDER BY created_at LIMIT 1), d, d, 10000, 'finalized')
+  VALUES ((SELECT id FROM contracts ORDER BY created_at LIMIT 1), d, d, 100000, 'finalized')
   RETURNING id INTO v;
   RETURN v;
 END $$;
 
+-- Filed "now" (clock_timestamp, not the transaction's now(), so ordering against
+-- payments is real), optionally backdated so one report is older than another.
 CREATE FUNCTION pg_temp.mk_report(p_stmt UUID, p_amount NUMERIC, p_actor UUID, p_age INTERVAL DEFAULT '0') RETURNS UUID LANGUAGE plpgsql AS $$
 DECLARE q UUID; r UUID;
 BEGIN
+  PERFORM pg_sleep(0.003);
   INSERT INTO queries (created_by, entity_type, entity_id, kind)
   VALUES (p_actor, 'billing_statement', p_stmt, 'payment_reported') RETURNING id INTO q;
   INSERT INTO query_payment_reports (query_id, amount, paid_on, payment_mode, created_by, claimed_statement_id, created_at)
-  VALUES (q, p_amount, CURRENT_DATE, 'neft', p_actor, p_stmt, now() - p_age) RETURNING id INTO r;
+  VALUES (q, p_amount, CURRENT_DATE, 'neft', p_actor, p_stmt, clock_timestamp() - p_age) RETURNING id INTO r;
   RETURN r;
 END $$;
 
@@ -42,8 +51,9 @@ END $$;
 CREATE FUNCTION pg_temp.pay(p_stmt UUID, p_amount NUMERIC, p_actor UUID, p_mode TEXT DEFAULT 'neft', p_tds NUMERIC DEFAULT 0, p_close BOOLEAN DEFAULT TRUE) RETURNS UUID LANGUAGE plpgsql AS $$
 DECLARE p UUID;
 BEGIN
-  INSERT INTO billing_payments (billing_statement_id, amount, tds_amount, payment_date, payment_mode, recorded_by)
-  VALUES (p_stmt, p_amount, p_tds, CURRENT_DATE, p_mode, p_actor) RETURNING id INTO p;
+  PERFORM pg_sleep(0.003);
+  INSERT INTO billing_payments (billing_statement_id, amount, tds_amount, payment_date, payment_mode, recorded_by, created_at)
+  VALUES (p_stmt, p_amount, p_tds, CURRENT_DATE, p_mode, p_actor, clock_timestamp()) RETURNING id INTO p;
   IF p_close THEN PERFORM * FROM close_covered_payment_report(p, p_actor); END IF;
   RETURN p;
 END $$;
@@ -52,126 +62,122 @@ CREATE FUNCTION pg_temp.st(p_report UUID) RETURNS TEXT LANGUAGE sql AS $$
   SELECT r.status || '/' || q.status FROM query_payment_reports r JOIN queries q ON q.id = r.query_id WHERE r.id = p_report
 $$;
 
+CREATE FUNCTION pg_temp.pid(p_report UUID) RETURNS UUID LANGUAGE sql AS $$
+  SELECT billing_payment_id FROM query_payment_reports WHERE id = p_report
+$$;
+
 DO $$
 DECLARE
   a UUID := (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1);
-  s UUID; r UUID; r2 UUID; p1 UUID; p2 UUID;
+  s UUID; r UUID; r2 UUID; p0 UUID; p1 UUID; p2 UUID;
   res TEXT := '';
 BEGIN
   IF a IS NULL THEN RAISE EXCEPTION 'no admin user to act as'; END IF;
 
-  -- 1. One payment equal to the report closes it.
+  -- A. Payments recorded EARLIER with no report do not close a later report.
+  -- Invoice with 15,000 already recorded; Sales files a 3,000 report.
+  s := pg_temp.mk_stmt();
+  p0 := pg_temp.pay(s, 15000, a);
+  res := res || E'\n' || CASE WHEN (SELECT count(*) FROM close_covered_payment_report(p0, a)) = 0 THEN 'PASS' ELSE 'FAIL' END || ' A1 the unreported 15,000 itself closes nothing';
+  r := pg_temp.mk_report(s, 3000, a);
+  PERFORM pg_temp.pay(s, 100, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' A2 earlier 15,000 + 3,000 report + 100 payment stays open: ' || pg_temp.st(r);
+  PERFORM pg_temp.pay(s, 2900, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' A3 ...then 2,900 more (3,000 since filing) closes: ' || pg_temp.st(r);
+
+  s := pg_temp.mk_stmt();
+  PERFORM pg_temp.pay(s, 15000, a); r := pg_temp.mk_report(s, 3000, a);
+  PERFORM pg_temp.pay(s, 3000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' A4 earlier 15,000 + 3,000 report + 3,000 payment closes: ' || pg_temp.st(r);
+
+  s := pg_temp.mk_stmt();
+  PERFORM pg_temp.pay(s, 15000, a); r := pg_temp.mk_report(s, 3000, a);
+  PERFORM pg_temp.pay(s, 2000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' A5 2,000 of 3,000 stays open: ' || pg_temp.st(r);
+  PERFORM pg_temp.pay(s, 1000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' A6 2,000 then 1,000 closes: ' || pg_temp.st(r);
+
+  -- Payments before the report was filed cannot close it by themselves, however big.
+  s := pg_temp.mk_stmt();
+  p0 := pg_temp.pay(s, 10000, a);
+  r := pg_temp.mk_report(s, 10000, a);
+  res := res || E'\n' || CASE WHEN (SELECT count(*) FROM close_covered_payment_report(p0, a)) = 0 AND pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' A7 a 10,000 recorded before the 10,000 report was filed does not close it: ' || pg_temp.st(r);
+  PERFORM pg_temp.pay(s, 100, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' A8 ...and a later 100 does not either: ' || pg_temp.st(r);
+
+  -- B. The amount rule: overpayment closes, underpayment does not.
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 10000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' exact payment closes: ' || pg_temp.st(r);
-
-  -- 2. 6,000 then 4,000: open after the first, closed after the second.
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  p1 := pg_temp.pay(s, 6000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' 6,000 alone stays open: ' || pg_temp.st(r);
-  p2 := pg_temp.pay(s, 4000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' 6,000 then 4,000 closes: ' || pg_temp.st(r);
-
-  -- 3. Reversing the EARLIER part-payment (not the linked one) reopens it.
-  DELETE FROM billing_payments WHERE id = p1;
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing a part-payment reopens: ' || pg_temp.st(r);
-
-  -- 4. An overpayment closes it (an underpayment does not: see 2 and 11).
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' B1 exact payment closes: ' || pg_temp.st(r);
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 12000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' 12,000 overpayment closes: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' B2 12,000 against 10,000 (overpayment) closes: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
+  PERFORM pg_temp.pay(s, 6000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' B3 6,000 alone stays open: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
+  PERFORM pg_temp.pay(s, 9999, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' B4 one rupee short closes: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
+  PERFORM pg_temp.pay(s, 9998, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' B5 two rupees short stays open: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 12980, a);
+  PERFORM pg_temp.pay(s, 11880, a, 'neft', 1100);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' B6 net plus TDS closes: ' || pg_temp.st(r);
 
-  -- 5. Two reports, one payment: only the older closes.
+  -- C. Several reports on one invoice: older claim first, money never reused.
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 6000, a, '2 days'); r2 := pg_temp.mk_report(s, 4000, a, '1 day');
+  p1 := pg_temp.pay(s, 6000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' AND pg_temp.st(r2) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' C1 6,000 closes the older 6,000 report, not the 4,000: ' || pg_temp.st(r) || ' / ' || pg_temp.st(r2);
+  p2 := pg_temp.pay(s, 4000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r2) = 'verified/resolved' AND pg_temp.pid(r) = p1 AND pg_temp.pid(r2) = p2 THEN 'PASS' ELSE 'FAIL' END || ' C2 then 4,000 closes the 4,000 report; the 6,000 was not reused: ' || pg_temp.st(r2);
+
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a, '2 days'); r2 := pg_temp.mk_report(s, 10000, a, '1 day');
   PERFORM pg_temp.pay(s, 10000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' AND pg_temp.st(r2) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' oldest of two closes: older=' || pg_temp.st(r) || ' newer=' || pg_temp.st(r2);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' AND pg_temp.st(r2) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' C3 two equal reports, one payment: only the oldest closes: ' || pg_temp.st(r) || ' / ' || pg_temp.st(r2);
 
-  -- 6. A deposit adjustment alone does not trigger a close...
+  -- D. Deposit adjustments: credit after filing, never a trigger.
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  PERFORM pg_temp.pay(s, 10000, a, 'deposit_adjustment');
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' deposit adjustment alone does not close: ' || pg_temp.st(r);
-
-  -- 7. ...but it counts as credit: 4,000 adjustment + 6,000 bank closes.
+  p1 := pg_temp.pay(s, 10000, a, 'deposit_adjustment');
+  res := res || E'\n' || CASE WHEN (SELECT count(*) FROM close_covered_payment_report(p1, a)) = 0 AND pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' D1 a deposit adjustment alone does not trigger a close: ' || pg_temp.st(r);
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 4000, a, 'deposit_adjustment');
   PERFORM pg_temp.pay(s, 6000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' adjustment counts as credit: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' D2 adjustment after filing + bank payment satisfies it: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt();
+  PERFORM pg_temp.pay(s, 4000, a, 'deposit_adjustment');
+  r := pg_temp.mk_report(s, 10000, a);
+  PERFORM pg_temp.pay(s, 6000, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' D3 an adjustment recorded BEFORE filing does not count: ' || pg_temp.st(r);
 
-  -- 8. Reversing the linked payment reopens.
+  -- E. Reversal.
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   p1 := pg_temp.pay(s, 10000, a);
   DELETE FROM billing_payments WHERE id = p1;
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing the linked payment reopens: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' E1 reversing the linked payment reopens: ' || pg_temp.st(r);
 
-  -- 9. One rupee short is fine; anything over closes it, anything under a rupee short does not.
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  PERFORM pg_temp.pay(s, 10001, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' +1 rupee closes: ' || pg_temp.st(r);
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  PERFORM pg_temp.pay(s, 10002, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' +2 rupees (overpayment) closes: ' || pg_temp.st(r);
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  PERFORM pg_temp.pay(s, 9998, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' 2 rupees short stays open: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 3000, a);
+  p1 := pg_temp.pay(s, 2000, a); p2 := pg_temp.pay(s, 1000, a);
+  DELETE FROM billing_payments WHERE id = p1;
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' E2 reversing the earlier of 2,000 + 1,000 reopens: ' || pg_temp.st(r);
 
-  -- 10. Net plus TDS counts (12,980 reported; 11,880 + 1,100 TDS recorded).
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 12980, a);
-  PERFORM pg_temp.pay(s, 11880, a, 'neft', 1100);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' net plus TDS closes: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt();
+  p0 := pg_temp.pay(s, 15000, a); r := pg_temp.mk_report(s, 3000, a);
+  PERFORM pg_temp.pay(s, 3000, a);
+  DELETE FROM billing_payments WHERE id = p0;
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' E3 reversing the earlier unreported 15,000 leaves it closed: ' || pg_temp.st(r);
 
-  -- 11. A partial payment alone stays open.
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
-  PERFORM pg_temp.pay(s, 6000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' 6,000 only stays open: ' || pg_temp.st(r);
-
-  -- 12. The sweep agrees with the live rule (dry run, fixtures only).
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);   -- exact, recorded without trying to close
-  PERFORM pg_temp.pay(s, 10000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: exact would close';
+  -- F. The one-time sweep keeps the old basis: credit regardless of date.
+  s := pg_temp.mk_stmt();
+  PERFORM pg_temp.pay(s, 5000, a, 'neft', 0, FALSE);
+  r := pg_temp.mk_report(s, 5000, a);   -- the payment came BEFORE the report
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' F1 sweep (old basis): a payment recorded before filing would close it';
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 12000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: overpayment would close';
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' F2 sweep: overpayment would close';
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 6000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open (recorded credit is less%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: partial stays open';
-
-  -- 13. Payments recorded earlier with no report must not stop a later report
-  -- from closing: 15,000 recorded, then 5,000 reported and 5,000 recorded.
-  s := pg_temp.mk_stmt();
-  p1 := pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT count(*) FROM close_covered_payment_report(p1, a)) = 0 THEN 'PASS' ELSE 'FAIL' END || ' the unreported 15,000 itself closes nothing';
-  r := pg_temp.mk_report(s, 5000, a);
-  p2 := pg_temp.pay(s, 5000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + report 5,000 + payment 5,000 closes: ' || pg_temp.st(r);
-
-  -- 14. ...and a 5,500 payment against that 5,000 report closes it too (overpayment).
-  s := pg_temp.mk_stmt();
-  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
-  r := pg_temp.mk_report(s, 5000, a);
-  PERFORM pg_temp.pay(s, 5500, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + 5,500 payment closes: ' || pg_temp.st(r);
-
-  -- 15. Reversing the 5,000 payment reopens the report; reversing the earlier
-  -- 15,000 (which the report never relied on) does not.
-  s := pg_temp.mk_stmt();
-  p1 := pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
-  r := pg_temp.mk_report(s, 5000, a);
-  p2 := pg_temp.pay(s, 5000, a);
-  DELETE FROM billing_payments WHERE id = p1;
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' reversing the earlier 15,000 leaves it closed: ' || pg_temp.st(r);
-  DELETE FROM billing_payments WHERE id = p2;
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing the 5,000 payment reopens: ' || pg_temp.st(r);
-
-  -- 16. The sweep agrees: an exact payment among earlier ones would close; a
-  -- 5,500 one would too (overpayment closes).
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
-  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
-  PERFORM pg_temp.pay(s, 5000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + exact 5,000 would close';
-  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
-  PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
-  PERFORM pg_temp.pay(s, 5500, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + 5,500 would close';
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open (recorded credit is less%' THEN 'PASS' ELSE 'FAIL' END || ' F3 sweep: partial stays open';
 
   -- Raising here rolls the whole transaction back: no test data survives.
   RAISE EXCEPTION 'PAYMENT_REPORT_COVERAGE_RESULTS%', res;
