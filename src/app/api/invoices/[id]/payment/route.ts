@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { handleStatementPaid } from "@/lib/tally-handoff-server";
+import { closeReportForRecordedPayment } from "@/lib/queries/close-report-on-payment";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { canRecordPayments } from "@/lib/constants";
 import { OVERPAYMENT_CODE, overpaymentMessage } from "@/lib/overpayment-guard";
@@ -35,7 +36,7 @@ export async function POST(
   // Every other payment route gated on admin/manager/accounts; this one was
   // simply missed. Brought in line with the rest.
   const { data: actor } = await supabase
-    .from("users").select("id, role").eq("auth_id", user.id).maybeSingle();
+    .from("users").select("id, role, full_name").eq("auth_id", user.id).maybeSingle();
   if (!actor || !canRecordPayments(actor.role)) {
     return NextResponse.json(
       { error: "Only admin or accounts can record payments" },
@@ -136,6 +137,7 @@ export async function POST(
       error_code: string | null;
       outstanding: number | string | null;
       settled: number | string | null;
+      payment: { id: string } | null;
     }> | null)?.[0];
     if (!outcome?.success) {
       if (outcome?.error_code === OVERPAYMENT_CODE) {
@@ -156,6 +158,16 @@ export async function POST(
       .update({ payment_status: "paid" })
       .eq("id", statement.id);
     await handleStatementPaid(adminSupabase, statement.id, "invoice_payment_recorded", actor.id);
+
+    // Same as the statement payment route: recording the payment verifies any
+    // open payment report the credit now covers.
+    if (outcome.payment?.id) {
+      await closeReportForRecordedPayment(
+        adminSupabase,
+        { id: outcome.payment.id },
+        { id: actor.id, role: actor.role, full_name: actor.full_name ?? "Accounts" },
+      );
+    }
   }
 
   // Update invoice — no more self-generated GST invoice number/fields.

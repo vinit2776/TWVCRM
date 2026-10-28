@@ -302,48 +302,6 @@ export function matchingRecordedPayments<
   return payments.filter((p) => paymentCoversReportedAmount(p, reportedAmount));
 }
 
-/** Payment modes that never close a report by being recorded. */
-const NON_CLOSING_PAYMENT_MODES = ["deposit_adjustment", "razorpay"];
-
-/**
- * When accounts records a payment, which open report does it settle? Only a
- * report that names this invoice, is still open, is about an invoice (not a
- * deposit or booking) and was for this amount. One payment settles one
- * report: with several candidates the oldest wins and the rest stay open for
- * accounts to reject as duplicates. Deposit adjustments and gateway payments
- * never close a report; they have their own paths.
- */
-export function pickReportToClose<
-  R extends {
-    id: string;
-    status: string;
-    target_kind: string;
-    claimed_statement_id: string | null;
-    amount: number | string;
-    created_at: string;
-  },
->(
-  reports: R[],
-  payment: {
-    amount: number | string | null;
-    tds_amount?: number | string | null;
-    payment_mode: string;
-    billing_statement_id: string;
-  },
-): R | null {
-  if (NON_CLOSING_PAYMENT_MODES.includes(payment.payment_mode)) return null;
-  const candidates = reports
-    .filter(
-      (r) =>
-        r.status === "reported" &&
-        r.target_kind === "invoice" &&
-        r.claimed_statement_id === payment.billing_statement_id &&
-        paymentCoversReportedAmount(payment, Number(r.amount)),
-    )
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-  return candidates[0] ?? null;
-}
-
 /**
  * The wording of a closed report's note. A report is a record of who told
  * accounts about a payment, not a payment, so once settled it reads as a note

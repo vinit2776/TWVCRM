@@ -217,16 +217,10 @@ export async function POST(
   const newPaymentStatus = settlement.paymentStatus;
 
   // Recording the payment is what accounts does to verify a reported one, so
-  // the report it satisfies closes here, in the same click.
+  // any open report the credit now covers closes here, in the same click.
   const closedReport = await closeReportForRecordedPayment(
     createAdminClient(),
-    {
-      id: payment.id,
-      amount: payment.amount as number | string,
-      tds_amount: payment.tds_amount as number | string | null,
-      payment_mode: String(payment.payment_mode),
-      billing_statement_id: id,
-    },
+    { id: payment.id },
     { id: dbUser.id, role: dbUser.role, full_name: dbUser.full_name ?? "Accounts" },
   );
 
