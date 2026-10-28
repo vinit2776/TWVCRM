@@ -124,11 +124,15 @@ export function ReportPaymentDialog({
   const [balance, setBalance] = useState<Balance | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // The invoice picker stays tucked away when the dialog was opened from a
+  // specific invoice; "Wrong invoice?" reveals it.
+  const [pickingInvoice, setPickingInvoice] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setAmount(suggestedAmount && suggestedAmount > 0 ? String(Math.round(suggestedAmount)) : "");
     setSubmitAttempted(false);
+    setPickingInvoice(false);
     setPaidOn(new Date().toISOString().slice(0, 10));
     setMode("neft");
     setReference("");
@@ -176,6 +180,12 @@ export function ReportPaymentDialog({
       .catch(() => { if (!cancelled) setStatements(null); });
     return () => { cancelled = true; };
   }, [open, contractId]);
+
+  // The invoice the dialog was opened from, when it is still an open invoice of
+  // this contract. If it isn't in the list (or the list is unavailable) the
+  // picker behaves as before.
+  const knownStatement =
+    defaultStatementId ? statements?.find((st) => st.id === defaultStatementId) ?? null : null;
 
   async function submit() {
     if (!entityId) return;
@@ -382,26 +392,47 @@ export function ReportPaymentDialog({
           </div>
 
           {statements && statements.length > 0 && (
-            <div className="space-y-1">
-              <Label className="text-xs">Which invoice did they say this pays?</Label>
-              <Select
-                value={statementId ?? "unknown"}
-                onValueChange={(v) => setStatementId(v === "unknown" ? null : v)}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {statements.map((st) => (
-                    <SelectItem key={st.id} value={st.id}>
-                      {st.reference} · {formatCurrency(st.balance_due)} due
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="unknown">They didn&apos;t say</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-[11px] text-muted-foreground">
-                Accounts can&apos;t tell this from the bank credit — only you have the customer&apos;s message.
-              </p>
-            </div>
+            // Opened from an invoice row: the invoice is already known, so show
+            // it as fixed text and only offer the picker behind "Wrong invoice?".
+            // Reports should always name their invoice, so "They didn't say" is
+            // offered only when no invoice was known to begin with.
+            knownStatement && !pickingInvoice ? (
+              <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                <p className="text-sm">
+                  Reporting against <span className="font-medium">{knownStatement.reference}</span>
+                  {" · "}
+                  {formatCurrency(knownStatement.balance_due)} due
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setPickingInvoice(true)}
+                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground flex-none"
+                >
+                  Wrong invoice?
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs">Which invoice did they say this pays?</Label>
+                <Select
+                  value={statementId ?? "unknown"}
+                  onValueChange={(v) => setStatementId(v === "unknown" ? null : v)}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {statements.map((st) => (
+                      <SelectItem key={st.id} value={st.id}>
+                        {st.reference} · {formatCurrency(st.balance_due)} due
+                      </SelectItem>
+                    ))}
+                    {!knownStatement && <SelectItem value="unknown">They didn&apos;t say</SelectItem>}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Accounts can&apos;t tell this from the bank credit — only you have the customer&apos;s message.
+                </p>
+              </div>
+            )
           )}
 
           {/*
