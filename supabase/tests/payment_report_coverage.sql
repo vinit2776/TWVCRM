@@ -1,4 +1,6 @@
--- Repeatable test of the payment-report coverage rule (migrations 00644-00647).
+-- Repeatable test of the payment-report coverage rule (migrations 00644-00646):
+-- a report closes when the credit recorded on its invoice reaches the reported
+-- amount (within one rupee). An overpayment closes it; an underpayment does not.
 --
 -- Run against STAGING only:
 --   npx supabase db query --linked -f supabase/tests/payment_report_coverage.sql
@@ -74,10 +76,10 @@ BEGIN
   DELETE FROM billing_payments WHERE id = p1;
   res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing a part-payment reopens: ' || pg_temp.st(r);
 
-  -- 4. Overpayment does not close it.
+  -- 4. An overpayment closes it (an underpayment does not: see 2 and 11).
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 12000, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' 12,000 overpayment stays open: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' 12,000 overpayment closes: ' || pg_temp.st(r);
 
   -- 5. Two reports, one payment: only the older closes.
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a, '2 days'); r2 := pg_temp.mk_report(s, 10000, a, '1 day');
@@ -101,13 +103,16 @@ BEGIN
   DELETE FROM billing_payments WHERE id = p1;
   res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing the linked payment reopens: ' || pg_temp.st(r);
 
-  -- 9. One rupee of rounding is fine, two is not.
+  -- 9. One rupee short is fine; anything over closes it, anything under a rupee short does not.
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 10001, a);
   res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' +1 rupee closes: ' || pg_temp.st(r);
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 10002, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' +2 rupees stays open: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' +2 rupees (overpayment) closes: ' || pg_temp.st(r);
+  s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
+  PERFORM pg_temp.pay(s, 9998, a);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' 2 rupees short stays open: ' || pg_temp.st(r);
 
   -- 10. Net plus TDS counts (12,980 reported; 11,880 + 1,100 TDS recorded).
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 12980, a);
@@ -125,7 +130,7 @@ BEGIN
   res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: exact would close';
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 12000, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open (recorded credit is more%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: overpayment stays open';
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: overpayment would close';
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 10000, a);
   PERFORM pg_temp.pay(s, 6000, a, 'neft', 0, FALSE);
   res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open (recorded credit is less%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: partial stays open';
@@ -139,12 +144,12 @@ BEGIN
   p2 := pg_temp.pay(s, 5000, a);
   res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + report 5,000 + payment 5,000 closes: ' || pg_temp.st(r);
 
-  -- 14. ...but a 5,500 payment against that 5,000 report stays open.
+  -- 14. ...and a 5,500 payment against that 5,000 report closes it too (overpayment).
   s := pg_temp.mk_stmt();
   PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
   r := pg_temp.mk_report(s, 5000, a);
   PERFORM pg_temp.pay(s, 5500, a);
-  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + 5,500 payment stays open: ' || pg_temp.st(r);
+  res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'verified/resolved' THEN 'PASS' ELSE 'FAIL' END || ' earlier 15,000 + 5,500 payment closes: ' || pg_temp.st(r);
 
   -- 15. Reversing the 5,000 payment reopens the report; reversing the earlier
   -- 15,000 (which the report never relied on) does not.
@@ -158,7 +163,7 @@ BEGIN
   res := res || E'\n' || CASE WHEN pg_temp.st(r) = 'reported/open' THEN 'PASS' ELSE 'FAIL' END || ' reversing the 5,000 payment reopens: ' || pg_temp.st(r);
 
   -- 16. The sweep agrees: an exact payment among earlier ones would close; a
-  -- 5,500 one would not.
+  -- 5,500 one would too (overpayment closes).
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
   PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
   PERFORM pg_temp.pay(s, 5000, a, 'neft', 0, FALSE);
@@ -166,7 +171,7 @@ BEGIN
   s := pg_temp.mk_stmt(); r := pg_temp.mk_report(s, 5000, a);
   PERFORM pg_temp.pay(s, 15000, a, 'neft', 0, FALSE);
   PERFORM pg_temp.pay(s, 5500, a, 'neft', 0, FALSE);
-  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) LIKE 'stays open%' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + 5,500 stays open';
+  res := res || E'\n' || CASE WHEN (SELECT outcome FROM sweep_covered_payment_reports(a, TRUE) WHERE report_id = r) = 'would close' THEN 'PASS' ELSE 'FAIL' END || ' sweep: earlier 15,000 + 5,500 would close';
 
   -- Raising here rolls the whole transaction back: no test data survives.
   RAISE EXCEPTION 'PAYMENT_REPORT_COVERAGE_RESULTS%', res;
