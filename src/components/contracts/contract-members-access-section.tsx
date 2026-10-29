@@ -528,6 +528,7 @@ function MemberLifecycle({
 // ── Member status badge ────────────────────────────────────────────────────────
 
 const STATUS_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  not_issued:         { label: "Door access not issued", variant: "outline" },
   pending:            { label: "Pending",           variant: "secondary" },
   provisioned:        { label: "Awaiting Enroll",   variant: "outline" },
   biometric_enrolled: { label: "Biometric Active",  variant: "default" },
@@ -538,7 +539,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: "default" | "second
 };
 
 function overallStatus(access: DeviceAccess[]): string {
-  if (access.length === 0) return "pending";
+  if (access.length === 0) return "not_issued";
   const statuses = access.map(a => a.enrollment_status);
   if (statuses.some(s => s === "fully_enrolled")) return "fully_enrolled";
   if (statuses.some(s => s === "biometric_enrolled")) return "biometric_enrolled";
@@ -769,6 +770,9 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{member.name}</span>
                       <Badge variant={badge.variant} className="text-xs">{badge.label}</Badge>
+                      {status === "not_issued" && (
+                        <span className="text-xs text-amber-700">Issue it from People &amp; Access above</span>
+                      )}
                       {wizardGroup && currentStep(wizardGroup, false) === 5 && (
                         <Badge variant="outline" className="text-[10px] border-green-400 text-green-700 bg-green-50 gap-1">
                           <CheckCircle2 size={10} />
@@ -840,7 +844,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                       </Button>
                     )}
                     {/* Issue access PIN — available for any provisioned/enrolled status */}
-                    {wizardGroup && !isBlocked && !["pending", "deleted"].includes(status) && (
+                    {wizardGroup && !isBlocked && !["pending", "not_issued", "deleted"].includes(status) && (
                       <Button
                         size="sm" variant="outline" className="text-xs h-7 gap-1"
                         onClick={() => handleIssuePin(member, wizardGroup)}
@@ -854,7 +858,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                         Issue PIN
                       </Button>
                     )}
-                    {!isBlocked && status !== "provisioned" && status !== "pending" && (
+                    {!isBlocked && status !== "provisioned" && status !== "pending" && status !== "not_issued" && (
                       <Button
                         size="sm" variant="ghost" className="text-xs h-7 text-red-600 hover:text-red-700"
                         onClick={() => handleBlock(member)}
