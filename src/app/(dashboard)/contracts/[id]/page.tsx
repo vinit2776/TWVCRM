@@ -44,6 +44,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
+import { ContractPeopleAccessSection } from "@/components/contracts/contract-people-access-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
@@ -200,6 +201,9 @@ export default function ContractDetailPage({
 
   const { user } = useCurrentUser();
   const userRole = user?.role ?? null;
+  // Bumped when the People & Access panel changes something so the voucher and
+  // door-access detail sections below it reload their own data.
+  const [accessVersion, setAccessVersion] = useState(0);
   // Special clause not yet approved: nothing leaves the building, previews are watermarked.
   const clauseGate = specialClauseGate(contract?.special_clause_status);
   const { enabled: leegalityEnabled } = useLeegalityEnabled();
@@ -2002,12 +2006,23 @@ export default function ContractDetailPage({
           {/* Contract Contacts — each contract can have its own set of
               contact persons (finance, occupant, signatory, etc.) */}
           <ContractContactsPanel
+            key={`contacts-${accessVersion}`}
             contractId={id}
             leadId={contract.lead_id || undefined}
           />
 
+          {/* People & Access: the one place people are added and access is tracked.
+              The voucher and door-access sections below stay as per-person detail. */}
+          <ContractPeopleAccessSection
+            contractId={id}
+            contractStatus={contract.status}
+            signedDocumentId={contract.signed_document_id}
+            onChanged={() => setAccessVersion((v) => v + 1)}
+          />
+
           {/* Vouchers Section */}
           <ContractVouchersSection
+            key={`vouchers-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
@@ -2023,9 +2038,11 @@ export default function ContractDetailPage({
 
           {/* Members & Access Control (lifecycle steps shown inline per member) */}
           <ContractMembersAccessSection
+            key={`members-${accessVersion}`}
             contractId={id}
             seats={contract.seats}
             contractStatus={contract.status}
+            allowAdd={false}
           />
 
           {/* ── Quota sections ──────────────────────────────────────────────

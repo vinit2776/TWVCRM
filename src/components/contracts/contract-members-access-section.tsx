@@ -63,6 +63,13 @@ interface Props {
   contractId: string;
   seats: number;
   contractStatus: string;
+  /**
+   * Show the Add Member button. The People & Access panel is now the one place
+   * people are added, because adding here provisions door access and texts a
+   * PIN straight away, before IT has issued anything. Defaults to true so any
+   * other caller keeps today's behaviour.
+   */
+  allowAdd?: boolean;
 }
 
 // ── Wizard types ───────────────────────────────────────────────────────────────
@@ -543,7 +550,7 @@ function overallStatus(access: DeviceAccess[]): string {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function ContractMembersAccessSection({ contractId, seats, contractStatus }: Props) {
+export function ContractMembersAccessSection({ contractId, seats, contractStatus, allowAdd = true }: Props) {
   const [members, setMembers] = useState<Member[]>([]);
   const [wizardGroupMap, setWizardGroupMap] = useState<Map<string, PersonGroup>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -674,7 +681,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
   }
 
   const activeCount = members.length;
-  const canAdd = contractStatus === "active" || contractStatus === "draft";
+  const canAdd = allowAdd && (contractStatus === "active" || contractStatus === "draft");
 
   // Step legend — shown once at top when there are members with access
   const hasWizardData = wizardGroupMap.size > 0;
