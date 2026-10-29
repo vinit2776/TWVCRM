@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
     type: string;
   };
 
-  const [billingPmts, bookingPmts, contractPmts, depositPmts, proRataPmts] = await Promise.all([
+  const [billingPmts, bookingPmts, contractPmts, depositPmts, proRataPmts, partPmts] = await Promise.all([
     // 1. Invoice payments (monthly rent, usage, ad hoc)
     admin.from("billing_payments").select(`
       amount, payment_mode, payment_reference,
@@ -145,7 +145,7 @@ export async function GET(request: NextRequest) {
 
     // 4. Security deposits from proposals
     admin.from("proposals").select(`
-      deposit_payment_amount, deposit_payment_medium, deposit_payment_reference,
+      id, deposit_payment_amount, deposit_payment_medium, deposit_payment_reference,
       lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
     `).eq("deposit_payment_status", "paid")
       .gte("deposit_payment_received_at", ydayStartUTC)
@@ -158,7 +158,30 @@ export async function GET(request: NextRequest) {
     `).eq("payment_status", "paid")
       .gte("payment_received_at", ydayStartUTC)
       .lt("payment_received_at", ydayEndUTC),
+
+    // 6. Deposit parts received yesterday — each part counts on the day it
+    // arrives (a deposit collected in parts only flips the proposal to paid on
+    // the last one, with the combined amount, so the proposal row above would
+    // otherwise report the whole deposit on that day).
+    admin.from("proposal_deposit_instalments").select(`
+      proposal_id, seq, paid_amount, payment_medium, payment_reference,
+      proposal:proposals!proposal_deposit_instalments_proposal_id_fkey(
+        proposal_number,
+        lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
+      )
+    `).eq("status", "paid")
+      .gte("paid_at", ydayStartUTC)
+      .lt("paid_at", ydayEndUTC),
   ]);
+
+  // Proposals that collected their deposit in parts are reported per part only.
+  const partProposalIds = new Set((partPmts.data || []).map((r: { proposal_id: string }) => r.proposal_id));
+  const { data: anyPartProposals } = (depositPmts.data || []).length > 0
+    ? await admin.from("proposal_deposit_instalments").select("proposal_id")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .in("proposal_id", (depositPmts.data as any[]).map((p) => p.id).filter(Boolean))
+    : { data: [] as { proposal_id: string }[] };
+  (anyPartProposals || []).forEach((r) => partProposalIds.add(r.proposal_id));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function leadName(lead: any): string {
@@ -186,8 +209,12 @@ export async function GET(request: NextRequest) {
       return { customerName: leadName(contract?.lead), company: contract?.lead?.company || null, ref: contract?.contract_number || "—", amount: Number(p.amount || 0), mode: p.payment_mode || "—", reference: p.payment_reference || null, type: "Contract" };
     }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...(depositPmts.data || []).map((p: any) => ({
+    ...(depositPmts.data || []).filter((p: any) => !partProposalIds.has(p.id)).map((p: any) => ({
       customerName: leadName(p.lead), company: p.lead?.company || null, ref: "—", amount: Number(p.deposit_payment_amount || 0), mode: p.deposit_payment_medium || "—", reference: p.deposit_payment_reference || null, type: "Deposit",
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(partPmts.data || []).map((p: any) => ({
+      customerName: leadName(p.proposal?.lead), company: p.proposal?.lead?.company || null, ref: p.proposal?.proposal_number || "—", amount: Number(p.paid_amount || 0), mode: p.payment_medium || "—", reference: p.payment_reference || null, type: `Deposit part ${p.seq}`,
     })),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ...(proRataPmts.data || []).map((p: any) => ({

@@ -10,6 +10,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { depositIsChaseable } from "@/lib/receivables";
+import { loadPartReceivableState } from "@/lib/deposit-instalment-server";
 import { invoiceParty } from "@/lib/invoice-party";
 
 export type DunnableKind = "deposit" | "topup" | "adhoc_invoice";
@@ -55,8 +56,13 @@ export async function fetchDunnableReceivables(
       .gt("security_deposit_amount", 0);
     if (only) q = q.eq("id", only.id);
     const { data } = await q;
+    // A deposit collected in parts is not on the automatic ladder: every reminder
+    // names the whole deposit and the proposal's single link. Parts are followed
+    // up from the proposal (and show on the Receivables screen).
+    const inParts = await loadPartReceivableState(admin, (data || []).map((d) => d.id as string));
 
     for (const d of data || []) {
+      if (inParts.has(d.id as string)) continue;
       // Accepted, or asked for concretely with a payment link that is still live.
       if (!depositIsChaseable({
         status: d.status as string,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
+import { loadPartReceivableState } from "@/lib/deposit-instalment-server";
 import {
   daysOverdue, isStale, depositIsChaseable, todayIst, type ReceivableRow,
 } from "@/lib/receivables";
@@ -329,6 +330,8 @@ export async function fetchOtherReceivables(
     .eq("deposit_payment_status", "pending")
     .gt("security_deposit_amount", 0);
 
+  const partState = await loadPartReceivableState(supabase, (deposits || []).map((d) => d.id as string));
+
   for (const d of deposits || []) {
     if (!depositIsChaseable({
       status: d.status as string,
@@ -339,6 +342,9 @@ export async function fetchOtherReceivables(
     const lead = d.lead as any;
     const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
     if (owed <= 0) continue; // fully covered by a carried-forward deposit
+    // Collected in parts: show what is received and the part that is out. The
+    // reminder ladder stays off — it would chase the whole amount.
+    const parts = partState.get(d.id as string);
     out.push(finish({
       id: d.id,
       kind: "deposit",
@@ -347,10 +353,10 @@ export async function fetchOtherReceivables(
       lead_id: lead?.id ?? null,
       lead_email: lead?.email ?? null,
       total_amount: owed,
-      amount_paid: 0,
-      due_date: d.deposit_due_date,
-      payment_link_url: d.deposit_razorpay_link_url,
-      followup_enabled: true,
+      amount_paid: parts?.paid ?? 0,
+      due_date: parts ? parts.open?.due_date ?? null : d.deposit_due_date,
+      payment_link_url: parts ? parts.open?.link_url ?? null : d.deposit_razorpay_link_url,
+      followup_enabled: !parts,
       reminder_count: d.deposit_reminder_count || 0,
       last_reminder_sent_at: d.deposit_last_reminder_sent_at,
       href: `/proposals/${d.id}`,

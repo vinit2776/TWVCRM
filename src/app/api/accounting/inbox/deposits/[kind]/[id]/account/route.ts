@@ -14,10 +14,10 @@ import { logAudit } from "@/lib/audit";
  * DELETE reopens a mistakenly-accounted row — admin only, requires a reason.
  */
 
-type Kind = "deposit" | "topup";
+type Kind = "deposit" | "topup" | "part";
 
 function isKind(v: string): v is Kind {
-  return v === "deposit" || v === "topup";
+  return v === "deposit" || v === "topup" || v === "part";
 }
 
 export async function POST(
@@ -87,6 +87,31 @@ export async function POST(
       performedBy: actor.id,
       changes: { deposit_accounted: { old: false, new: true }, proof_path: { old: null, new: proofPath } },
     });
+  } else if (kind === "part") {
+    // One Tally receipt per part received.
+    const { data: part, error } = await admin
+      .from("proposal_deposit_instalments")
+      .update({
+        accounted: true,
+        accounted_at: now,
+        accounted_by: actor.id,
+        accounted_proof_path: proofPath,
+      })
+      .eq("id", id)
+      .eq("status", "paid")
+      .eq("accounted", false)
+      .select("id, proposal_id, seq")
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!part) return NextResponse.json({ error: "Deposit part not found, not paid, or already accounted" }, { status: 404 });
+
+    await logAudit(admin, {
+      entityType: "proposal",
+      entityId: part.proposal_id,
+      action: "deposit_accounted",
+      performedBy: actor.id,
+      changes: { deposit_part_accounted: { old: null, new: { seq: part.seq, instalment_id: id } }, proof_path: { old: null, new: proofPath } },
+    });
   } else {
     const { data: topup, error } = await admin
       .from("deposit_topups")
@@ -137,11 +162,19 @@ export async function DELETE(
   if (!reason) return NextResponse.json({ error: "A reason is required" }, { status: 400 });
 
   const admin = createAdminClient();
-  const table = kind === "deposit" ? "proposals" : "deposit_topups";
+  const table = kind === "deposit" ? "proposals" : kind === "part" ? "proposal_deposit_instalments" : "deposit_topups";
   const accountedField = kind === "deposit" ? "deposit_accounted" : "accounted";
   const accountedAtField = kind === "deposit" ? "deposit_accounted_at" : "accounted_at";
   const accountedByField = kind === "deposit" ? "deposit_accounted_by" : "accounted_by";
   const proofField = kind === "deposit" ? "deposit_accounted_proof_path" : "accounted_proof_path";
+
+  // A part's audit trail lives on its proposal, like every other deposit event.
+  let auditEntityId = id;
+  if (kind === "part") {
+    const { data: part } = await admin.from("proposal_deposit_instalments").select("proposal_id").eq("id", id).maybeSingle();
+    if (!part) return NextResponse.json({ error: "Deposit part not found" }, { status: 404 });
+    auditEntityId = part.proposal_id;
+  }
 
   const { error } = await admin
     .from(table)
@@ -155,8 +188,8 @@ export async function DELETE(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   await logAudit(admin, {
-    entityType: kind === "deposit" ? "proposal" : "deposit_topup",
-    entityId: id,
+    entityType: kind === "topup" ? "deposit_topup" : "proposal",
+    entityId: auditEntityId,
     action: "deposit_accounting_reopened",
     performedBy: actor.id,
     changes: { [accountedField]: { old: true, new: false }, reason: { old: null, new: reason } },
