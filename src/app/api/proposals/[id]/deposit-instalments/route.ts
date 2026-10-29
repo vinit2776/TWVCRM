@@ -22,7 +22,7 @@ import {
  * POST /api/proposals/[id]/deposit-instalments — ask the customer for a part of
  *      the deposit: a fresh Razorpay link for exactly that amount.
  *
- * POST creates the link but does NOT message the customer (notify is off);
+ * POST creates the link (when Razorpay is on) but does NOT message the customer (notify is off);
  * sending the request is a separate, deliberate step.
  */
 
@@ -96,8 +96,9 @@ export async function POST(
     return NextResponse.json({ error: "Part payment of the deposit is not switched on yet" }, { status: 403 });
   }
 
+  // Without Razorpay the ask is still valid: the customer pays by bank transfer
+  // and accounts records it against this part.
   const creds = await getRazorpayCreds(admin);
-  if (!creds) return NextResponse.json({ error: "Razorpay is not enabled" }, { status: 400 });
 
   const { data: proposal } = await admin
     .from("proposals")
@@ -133,7 +134,7 @@ export async function POST(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = proposal.lead as any;
-  const link = await createInstalmentPaymentLink(creds, {
+  const link = creds ? await createInstalmentPaymentLink(creds, {
     amount: body.amount,
     proposalId: id,
     proposalNumber: proposal.proposal_number,
@@ -144,9 +145,9 @@ export async function POST(
       email: lead?.email,
       phone: lead?.phone || lead?.mobile,
     },
-  });
+  }) : null;
 
-  if ("error" in link) {
+  if (link && "error" in link) {
     // No link, no ask: withdraw the row so it doesn't block the next attempt.
     await admin.rpc("cancel_deposit_instalment", {
       p_instalment_id: res.instalment_id, p_actor: actor.id, p_reason: "Payment link could not be created",
@@ -154,11 +155,13 @@ export async function POST(
     return NextResponse.json({ error: link.error }, { status: 502 });
   }
 
-  const { error: linkSaveErr } = await admin
-    .from("proposal_deposit_instalments")
-    .update({ razorpay_link_id: link.id, razorpay_link_url: link.url, updated_at: new Date().toISOString() })
-    .eq("id", res.instalment_id);
-  if (linkSaveErr) {
+  const { error: linkSaveErr } = link
+    ? await admin
+        .from("proposal_deposit_instalments")
+        .update({ razorpay_link_id: link.id, razorpay_link_url: link.url, updated_at: new Date().toISOString() })
+        .eq("id", res.instalment_id)
+    : { error: null };
+  if (linkSaveErr && link) {
     await cancelRazorpayLink(admin, link.id);
     await admin.rpc("cancel_deposit_instalment", {
       p_instalment_id: res.instalment_id, p_actor: actor.id, p_reason: "Payment link could not be saved",
@@ -191,6 +194,6 @@ export async function POST(
   });
 
   return NextResponse.json({
-    data: { instalment_id: res.instalment_id, seq: res.seq, amount: body.amount, razorpay_link_url: link.url },
+    data: { instalment_id: res.instalment_id, seq: res.seq, amount: body.amount, razorpay_link_url: link?.url ?? null },
   });
 }
