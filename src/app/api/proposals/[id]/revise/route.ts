@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createProposalSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { revisionBlockedReason, revisionProposalNumber, revisionTotals } from "@/lib/proposal-revision";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 const REVISE_ROLES = ["admin", "manager", "sales_rep"];
 
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { data: old } = await admin.from("proposals").select("*").eq("id", id).single();
   if (!old) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
 
-  const blocked = revisionBlockedReason(old);
+  const blocked = revisionBlockedReason({ ...old, deposit_parts_active: await hasLiveInstalments(admin, id) });
   if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
 
   // The pro-rata invoice is its own record; a payment against it also locks the terms.
