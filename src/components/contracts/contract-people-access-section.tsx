@@ -169,6 +169,8 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
   const inactivePeople = data.people.filter((p) => !p.isActive && p.memberId);
   const shown = tab === "active" ? activePeople : inactivePeople;
   const seatsFull = setup.seatsOpen === 0;
+  // Nobody holds a seat yet: the wizard is the way in. After that, people are added one at a time.
+  const noMembers = setup.seatsUsed === 0;
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -303,12 +305,16 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                 </button>
               ))}
             </div>
-            <Button size="sm" variant="outline" onClick={() => setWizardOpen(true)} disabled={seatsFull && setup.seatsUsed > 0}>
-              <Wand2 size={14} className="mr-1.5" /> Set up access
-            </Button>
-            <Button size="sm" onClick={() => setShowAdd((v) => !v)}>
-              <UserPlus size={14} className="mr-1.5" /> Add person
-            </Button>
+            {/* One obvious next action: the wizard until the first person holds a seat, then single adds. */}
+            {noMembers ? (
+              <Button size="sm" onClick={() => setWizardOpen(true)}>
+                <Wand2 size={14} className="mr-1.5" /> Set up access
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => setShowAdd((v) => !v)}>
+                <UserPlus size={14} className="mr-1.5" /> Add person
+              </Button>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -319,11 +325,10 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
             <span className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                <b>Access setup needs review.</b> {seats} seats are paid for but no people are recorded here. Add them
-                to set up WiFi and door access.
+                <b>Access setup needs review.</b> {seats} seats are paid for but no people are recorded here. Use
+                Set up access to add them and arrange WiFi and door access.
               </span>
             </span>
-            <Button size="sm" onClick={() => setWizardOpen(true)}>Set up access</Button>
           </div>
         )}
         {isActiveContract && setup.state === "pending" && (
@@ -399,7 +404,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
 
         {shown.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            {tab === "active" ? "No one added yet. Use Add person or Set up access." : "No one has left this contract."}
+            {tab === "active" ? "No one added yet. Use Set up access to add people." : "No one has left this contract."}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -493,7 +498,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                     </tr>
                   );
                 })}
-                {tab === "active" && setup.seatsOpen > 0 && (
+                {tab === "active" && setup.seatsOpen > 0 && !noMembers && (
                   <tr className="bg-muted/40">
                     <td className="py-3 pr-3">
                       <div className="font-medium">{setup.seatsOpen === 1 ? "Open seat" : `${setup.seatsOpen} open seats`}</div>
