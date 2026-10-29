@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Banknote, Copy, Layers, Loader2, Mail, X } from "lucide-react";
+import { Banknote, Copy, Download, Layers, Loader2, Mail, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -70,6 +70,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   const [recordFor, setRecordFor] = useState<DepositInstalment | null>(null);
   const [cancelFor, setCancelFor] = useState<DepositInstalment | null>(null);
   const [sendFor, setSendFor] = useState<DepositInstalment | null>(null);
+  const [pdfFor, setPdfFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +85,29 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   }, [proposalId, onPartsActive]);
 
   useEffect(() => { load(); }, [load]);
+
+  // PDF to share by hand (WhatsApp etc.). Built in the browser — jsPDF loads only on click.
+  async function downloadPdf(part: DepositInstalment) {
+    setPdfFor(part.id);
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}/deposit-instalments/${part.id}/send`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "download" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(json.error || "Could not prepare the PDF"); return; }
+      const { generateDepositRequestPDF } = await import("@/lib/deposit-request-pdf");
+      const doc = await generateDepositRequestPDF({
+        proposal_number: json.proposal_number, amount: json.amount, security_deposit_months: 0,
+        customer_name: json.customer_name, company: json.company, customer_message: json.customer_message,
+        deposit_link_url: json.deposit_link_url, due_date: json.due_date,
+        variant: { title: `Security Deposit — Part ${json.seq}`, intro: json.intro, rows: json.rows, paymentReference: json.proposal_number },
+      });
+      doc.save(`Security-Deposit-${json.proposal_number}-Part-${json.seq}.pdf`);
+      toast.success("PDF downloaded — share it with the customer");
+    } finally {
+      setPdfFor(null);
+    }
+  }
 
   const refreshed = useCallback(() => { load(); onChanged(); }, [load, onChanged]);
 
@@ -167,6 +191,11 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
                       {canRequestDepositInstalment(role) && (
                         <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setSendFor(i)}>
                           <Mail className="mr-1 h-3 w-3" /> Email customer
+                        </Button>
+                      )}
+                      {canRequestDepositInstalment(role) && (
+                        <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={pdfFor === i.id} onClick={() => downloadPdf(i)}>
+                          {pdfFor === i.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Download className="mr-1 h-3 w-3" />} Download PDF
                         </Button>
                       )}
                       {canRecordPayments(role) && (
