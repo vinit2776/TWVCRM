@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Banknote, Copy, Layers, Loader2, X } from "lucide-react";
+import { Banknote, Copy, Layers, Loader2, Mail, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,6 +69,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   const [requestOpen, setRequestOpen] = useState(false);
   const [recordFor, setRecordFor] = useState<DepositInstalment | null>(null);
   const [cancelFor, setCancelFor] = useState<DepositInstalment | null>(null);
+  const [sendFor, setSendFor] = useState<DepositInstalment | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -163,6 +164,11 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
                           <Copy className="mr-1 h-3 w-3" /> Copy link
                         </Button>
                       )}
+                      {canRequestDepositInstalment(role) && (
+                        <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setSendFor(i)}>
+                          <Mail className="mr-1 h-3 w-3" /> Email customer
+                        </Button>
+                      )}
                       {canRecordPayments(role) && (
                         <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setRecordFor(i)}>
                           <Banknote className="mr-1 h-3 w-3" /> Record bank transfer
@@ -195,6 +201,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
         onDone={() => { setRequestOpen(false); refreshed(); }}
       />
       <RecordPartDialog part={recordFor} proposalId={proposalId} onClose={() => setRecordFor(null)} onDone={() => { setRecordFor(null); refreshed(); }} />
+      <SendPartDialog part={sendFor} proposalId={proposalId} onClose={() => setSendFor(null)} onDone={() => { setSendFor(null); refreshed(); }} />
       <CancelPartDialog part={cancelFor} proposalId={proposalId} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refreshed(); }} />
     </div>
   );
@@ -433,6 +440,75 @@ function CancelPartDialog({ part, proposalId, onClose, onDone }: {
           <Button variant="outline" onClick={onClose} disabled={saving}>Keep it</Button>
           <Button variant="destructive" onClick={submit} disabled={saving || reason.trim().length < 10}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Cancel request
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SendPartDialog({ part, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+}) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [subject, setSubject] = useState("");
+  const [to, setTo] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (!part) return;
+    setHtml(null);
+    setLoading(true);
+    fetch(`/api/proposals/${proposalId}/deposit-instalments/${part.id}/send`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preview: true }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { toast.error(json.error || "Could not build the email"); onClose(); return; }
+        setHtml(json.html); setSubject(json.subject); setTo(json.to || []);
+      })
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when a different part is opened
+  }, [part?.id, proposalId]);
+
+  async function send() {
+    if (!part) return;
+    setSending(true);
+    try {
+      const res = await fetch(`/api/proposals/${proposalId}/deposit-instalments/${part.id}/send`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(json.error || "Could not send the email"); return; }
+      toast.success(`Request emailed to ${json.data?.sent_to}`);
+      onDone();
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <Dialog open={!!part} onOpenChange={(o) => { if (!o && !sending) onClose(); }}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Email Part {part?.seq} to the customer</DialogTitle>
+          <DialogDescription>
+            {to.length > 0 ? <>To <b>{to.join(", ")}</b>. </> : "No customer email on the lead. "}
+            The email shows the total deposit, what is paid, this part and the balance after it.
+          </DialogDescription>
+        </DialogHeader>
+        {loading && <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin" /></div>}
+        {html && (
+          <div className="space-y-1.5">
+            <p className="text-xs"><span className="text-muted-foreground">Subject:</span> {subject}</p>
+            <iframe title="Email preview" srcDoc={html} sandbox="" className="h-[360px] w-full rounded-md border bg-white" />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={sending}>Close</Button>
+          <Button onClick={send} disabled={sending || !html || to.length === 0}>
+            {sending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Send email
           </Button>
         </DialogFooter>
       </DialogContent>

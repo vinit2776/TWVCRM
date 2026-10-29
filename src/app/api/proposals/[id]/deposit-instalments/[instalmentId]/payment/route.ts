@@ -4,6 +4,7 @@ import { canRecordPayments } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { instalmentErrorMessage } from "@/lib/deposit-instalments";
 import { cancelRazorpayLink } from "@/lib/deposit-instalment-server";
+import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
 
 /**
  * POST /api/proposals/[id]/deposit-instalments/[instalmentId]/payment
@@ -118,5 +119,9 @@ export async function POST(
     },
   });
 
-  return NextResponse.json({ data: { instalment_id: instalmentId, paid: res.paid, required: res.required, complete: !!res.complete } });
+  // Confirm to the customer with the running breakup. Best effort: the payment is
+  // already recorded, so a failed email is logged (communications_log) not surfaced as an error.
+  const receipt = await sendPartEmail(admin, { instalmentId, kind: "received", sentBy: actor.id }).catch(() => null);
+
+  return NextResponse.json({ data: { instalment_id: instalmentId, receipt_emailed: !!receipt?.ok, paid: res.paid, required: res.required, complete: !!res.complete } });
 }
