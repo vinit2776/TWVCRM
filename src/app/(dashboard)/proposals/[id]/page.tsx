@@ -64,6 +64,7 @@ import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
+import { DepositPartsPanel } from "@/components/proposals/deposit-parts-panel";
 import { CheckAccountingNoteButton } from "@/components/accounting/check-accounting-note-button";
 import dynamic from "next/dynamic";
 
@@ -113,6 +114,8 @@ export default function ProposalDetailPage({
   const [manualPayAmount, setManualPayAmount] = useState("");
   const [manualPayRef, setManualPayRef] = useState("");
   const [manualPayMedium, setManualPayMedium] = useState("");
+  // True once any part of the deposit has been asked for or paid: the single-deposit controls stand down.
+  const [depositPartsActive, setDepositPartsActive] = useState(false);
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -1035,7 +1038,7 @@ export default function ProposalDetailPage({
               Edit
             </Button>
           )}
-          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason(proposal) && (
+          {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && !revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
             <Button variant="outline" size="sm" onClick={() => setReviseOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               Revise
@@ -1092,10 +1095,10 @@ export default function ProposalDetailPage({
           </CardContent>
         </Card>
       )}
-      {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && revisionBlockedReason(proposal) && (
+      {(PROPOSAL_REVISABLE_STATUSES as readonly string[]).includes(proposal.status) && revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive }) && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="pt-6 text-sm text-amber-900">
-            This proposal has been sent, so its terms are locked. {revisionBlockedReason(proposal)}
+            This proposal has been sent, so its terms are locked. {revisionBlockedReason({ ...proposal, deposit_parts_active: depositPartsActive })}
           </CardContent>
         </Card>
       )}
@@ -1412,7 +1415,7 @@ export default function ProposalDetailPage({
                   </div>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && (
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {["admin", "manager", "sales_rep"].includes(currentUser?.role || "") && (
                       <button
@@ -1436,6 +1439,16 @@ export default function ProposalDetailPage({
                     )}
                   </div>
                 )}
+
+                <DepositPartsPanel
+                  proposalId={id}
+                  proposalStatus={proposal.status}
+                  depositPaymentStatus={proposal.deposit_payment_status}
+                  userId={currentUser?.id ?? null}
+                  role={currentUser?.role ?? null}
+                  onChanged={fetchProposal}
+                  onPartsActive={setDepositPartsActive}
+                />
 
                 {proposal.deposit_payment_status === "paid" && (
                   <>
@@ -1489,13 +1502,13 @@ export default function ProposalDetailPage({
                   </>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && proposal.deposit_email_sent_at && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && proposal.deposit_email_sent_at && (
                   <p className="text-xs text-amber-700/80">
                     Last sent: {formatDateTime(proposal.deposit_email_sent_at)}
                   </p>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
+                {proposal.deposit_payment_status === "pending" && !depositPartsActive && ["sent", "viewed", "accepted"].includes(proposal.status) && (
                   <Button
                     size="sm"
                     className="w-full mt-2"
@@ -1510,6 +1523,7 @@ export default function ProposalDetailPage({
                     the API rejected the wrong roles, but the button was
                     visible to anyone who could open the proposal. */}
                 {proposal.deposit_payment_status === "pending" &&
+                  !depositPartsActive &&
                   ["sent", "viewed", "accepted"].includes(proposal.status) &&
                   canRecordPayments(currentUser?.role) && (
                   <Button
@@ -1523,7 +1537,7 @@ export default function ProposalDetailPage({
                   </Button>
                 )}
 
-                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && (() => {
+                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && !depositPartsActive && (() => {
                   const linkCreated = proposal.sent_at ? new Date(proposal.sent_at) : new Date();
                   const expiresAt = new Date(linkCreated.getTime() + 30 * 24 * 60 * 60 * 1000);
                   const now = new Date();

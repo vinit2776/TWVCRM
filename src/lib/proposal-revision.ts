@@ -44,7 +44,7 @@ export function revisionBlockedReason(p: RevisableProposal): string | null {
     return "Money has already been collected (or credited) on this proposal, so its terms are locked. Talk to accounts before changing anything.";
   }
   if (p.deposit_parts_active) {
-    return "The deposit is being collected in parts, so this proposal's terms are locked. Cancel the open part request, or talk to accounts, before changing anything.";
+    return "The deposit is being collected in parts. Cancel the open part request, or talk to accounts, before changing anything.";
   }
   return null;
 }

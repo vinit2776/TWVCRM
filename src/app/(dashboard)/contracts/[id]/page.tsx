@@ -236,6 +236,22 @@ export default function ContractDetailPage({
     Number(linkedProposal.security_deposit_months || 0) > 0 &&
     (linkedProposal.deposit_payment_status !== "paid" ||
       (!!linkedProposal.deposit_claimed_by_contract_id && linkedProposal.deposit_claimed_by_contract_id !== contract.id));
+  // Deposit taken in parts: how much of the required amount is in, shown while the proposal's deposit is still pending.
+  const [depositParts, setDepositParts] = useState<{ paid: number; required: number; balance: number } | null>(null);
+  const partsProposalId: string | null = linkedProposal?.deposit_payment_status === "pending" ? linkedProposal.id : null;
+  useEffect(() => {
+    if (!partsProposalId) { setDepositParts(null); return; }
+    let cancelled = false;
+    fetch(`/api/proposals/${partsProposalId}/deposit-instalments`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json?.data) return;
+        const pos = json.data.position;
+        setDepositParts(pos.paid > 0 ? { paid: pos.paid, required: pos.required, balance: pos.balance } : null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [partsProposalId]);
   useEffect(() => {
     if (!depositGateBlocked || !canApplyPooledDeposit) { setPoolDeposit(null); return; }
     let cancelled = false;
@@ -1705,6 +1721,11 @@ export default function ContractDetailPage({
                         {formatCurrency(Number(linkedProposal?.security_deposit_amount || securityDeposit))}
                       </p>
                       <p className="text-[10px] text-amber-600 mt-0.5">Pending</p>
+                      {depositParts && linkedProposal && (
+                        <Link href={`/proposals/${linkedProposal.id}#security-deposit`} className="block text-[10px] text-amber-700 underline mt-0.5">
+                          Partly paid: {formatCurrency(depositParts.paid)} of {formatCurrency(depositParts.required)} received · {formatCurrency(depositParts.balance)} still to collect
+                        </Link>
+                      )}
                     </>
                   )}
                   {poolDepositApplied > 0 && (
