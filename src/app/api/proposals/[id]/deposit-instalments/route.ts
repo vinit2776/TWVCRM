@@ -96,6 +96,14 @@ export async function POST(
     return NextResponse.json({ error: "Part payment of the deposit is not switched on yet" }, { status: 403 });
   }
 
+  // A walk-away refund in progress freezes the deposit: no new asks until it is rejected.
+  const { count: liveRefunds } = await admin
+    .from("proposal_deposit_refunds").select("id", { count: "exact", head: true })
+    .eq("proposal_id", id).in("status", ["pending_approval", "approved", "paid"]);
+  if ((liveRefunds ?? 0) > 0) {
+    return NextResponse.json({ error: "A refund is in progress for this deposit, so no further part can be requested." }, { status: 409 });
+  }
+
   // Without Razorpay the ask is still valid: the customer pays by bank transfer
   // and accounts records it against this part.
   const creds = await getRazorpayCreds(admin);

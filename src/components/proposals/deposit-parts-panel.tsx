@@ -27,6 +27,7 @@ import {
   type DepositPosition,
 } from "@/lib/deposit-instalments";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { DepositRefundSection, type DepositRefund } from "@/components/proposals/deposit-refund-section";
 import type { DepositInstalment } from "@/types";
 
 interface PanelData {
@@ -70,6 +71,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   const [recordFor, setRecordFor] = useState<DepositInstalment | null>(null);
   const [cancelFor, setCancelFor] = useState<DepositInstalment | null>(null);
   const [sendFor, setSendFor] = useState<DepositInstalment | null>(null);
+  const [refund, setRefund] = useState<DepositRefund | null>(null);
   const [pdfFor, setPdfFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -79,6 +81,8 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
       const json = await res.json();
       setData(json.data);
       onPartsActive((json.data.instalments as DepositInstalment[]).some((i) => i.status !== "cancelled"));
+      const r = await fetch(`/api/proposals/${proposalId}/deposit-refund`);
+      if (r.ok) setRefund((await r.json()).data);
     } catch {
       // The panel is additive; the single-deposit card still works without it.
     }
@@ -117,7 +121,8 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   if (!enabled && !anyParts) return null;
 
   const open = ["sent", "viewed", "accepted"].includes(proposalStatus);
-  const canAsk = enabled && open && depositPaymentStatus === "pending" && !hasOpenAsk && position.balance > 0 && canRequestDepositInstalment(role);
+  const refundLive = !!refund && refund.status !== "rejected";
+  const canAsk = enabled && open && !refundLive && depositPaymentStatus === "pending" && !hasOpenAsk && position.balance > 0 && canRequestDepositInstalment(role);
   const canCancel = (i: DepositInstalment) => i.status === "requested" && (i.requested_by === userId || canOverrideDepositFloor(role));
   const barPct = (n: number) => (position.required > 0 ? Math.min(100, (n / position.required) * 100) : 0);
 
@@ -217,6 +222,12 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
         </>
       )}
 
+      {anyParts && depositPaymentStatus === "pending" && !hasOpenAsk && (
+        <DepositRefundSection
+          proposalId={proposalId} refund={refund} paidSoFar={position.paid} onChanged={refreshed}
+          canRequest={canRequestDepositInstalment(role) && position.paid > 0}
+        />
+      )}
       {canAsk && (
         <Button type="button" size="sm" className="w-full" onClick={() => setRequestOpen(true)}>
           {anyParts ? "Request next part" : "Collect deposit in parts"}
