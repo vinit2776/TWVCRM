@@ -10,6 +10,7 @@ import { computeSettlement } from "@/lib/settlement";
 import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
 
 export const dynamic = "force-dynamic";
 
@@ -251,6 +252,11 @@ export async function POST(request: NextRequest) {
             ...(partPayment.complete ? { deposit_complete: { old: false, new: true } } : {}),
           },
         }).catch(() => {});
+      }
+      // Receipt with the running breakup — once per part (a repeat delivery is already_paid).
+      if (partPayment.success && !partPayment.already_paid && partPayment.instalment_id) {
+        await sendPartEmail(supabase, { instalmentId: partPayment.instalment_id, kind: "received" }).catch((e) =>
+          console.error("[webhook] deposit part receipt email failed:", e instanceof Error ? e.message : e));
       }
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: partPayment.success ? "processed" : "error", outcome_detail: partPayment.success ? null : partPayment.error });
       return NextResponse.json({ status: "ok", entity: "proposal_deposit_part" });
