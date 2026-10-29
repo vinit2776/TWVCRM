@@ -133,3 +133,36 @@ export async function cancelRazorpayLink(admin: SupabaseClient, linkId: string |
     console.warn("[deposit-instalment] Razorpay cancel failed:", err);
   }
 }
+
+export interface PartReceivableState {
+  /** Money received across paid parts. */
+  paid: number;
+  /** The one open (unpaid) ask, if any. */
+  open: { amount: number; due_date: string | null; link_url: string | null } | null;
+}
+
+/**
+ * For proposals whose deposit is collected in parts: what has been received and
+ * which ask is still out. Receivables show this instead of one all-or-nothing
+ * deposit line; the automatic reminder ladder skips these proposals (it would
+ * chase the whole amount) and each part is followed up from the proposal.
+ */
+export async function loadPartReceivableState(
+  client: SupabaseClient,
+  proposalIds: string[],
+): Promise<Map<string, PartReceivableState>> {
+  const out = new Map<string, PartReceivableState>();
+  if (proposalIds.length === 0) return out;
+  const { data } = await client
+    .from("proposal_deposit_instalments")
+    .select("proposal_id, amount, status, paid_amount, due_date, razorpay_link_url")
+    .in("proposal_id", proposalIds)
+    .in("status", ["paid", "requested"]);
+  for (const r of data || []) {
+    const s = out.get(r.proposal_id) ?? { paid: 0, open: null };
+    if (r.status === "paid") s.paid = Math.round((s.paid + Number(r.paid_amount ?? r.amount)) * 100) / 100;
+    else s.open = { amount: Number(r.amount), due_date: r.due_date, link_url: r.razorpay_link_url };
+    out.set(r.proposal_id, s);
+  }
+  return out;
+}

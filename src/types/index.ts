@@ -921,7 +921,18 @@ export interface DepositTopup {
  * proposal-stage security deposits and later top-ups into one worklist. */
 export interface DepositInboxRow {
   id: string;
-  kind: "deposit" | "topup";
+  /** "part" = one instalment of a deposit collected in parts (proposal_deposit_instalments). */
+  kind: "deposit" | "topup" | "part";
+  /** Staged deposit only (kind "part"): which proposal, and where this part sits in the total. */
+  proposal_id?: string | null;
+  part_seq?: number | null;
+  /** Parts asked for so far, cancelled ones excluded — "Part 2 of 3" can grow until the deposit is complete. */
+  parts_known?: number | null;
+  /** Deposit paid up to and including this part. */
+  received_to_date?: number | null;
+  balance_after?: number | null;
+  /** This part completed the deposit. */
+  is_final?: boolean;
   /** Open query thread count — drives the "Query" button badge. Set by
    *  /api/accounting/inbox/deposits; see src/lib/queries/registry.ts. */
   open_query_count?: number;
