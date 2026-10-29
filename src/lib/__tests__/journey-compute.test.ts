@@ -88,6 +88,15 @@ describe("computeJourney", () => {
     expect(step(j, "proposal_sent").hint).toMatch(/rejected/i);
   });
 
+  it("says the customer withdrew, not rejected, when a deposit refund closed the proposal", () => {
+    const j = computeJourney(
+      input({ leadStatus: "negotiating", proposal: { ...baseProposal, status: "rejected", depositStatus: "pending", paymentStatus: "pending", rejectionReason: "Customer withdrew — deposit refunded (UTR X1)" } }),
+    );
+    const hint = step(j, "proposal_sent").hint ?? "";
+    expect(hint).toMatch(/withdrew/i);
+    expect(hint).not.toMatch(/rejected/i);
+  });
+
   it("blocks the pro-rata invoice until the deposit is paid", () => {
     const j = computeJourney(
       input({
