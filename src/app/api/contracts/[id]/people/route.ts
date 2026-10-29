@@ -57,29 +57,37 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     memberIds.length
       ? admin
           .from("voucher_issuances")
-          .select("id, member_id, seat_number, valid_until")
+          .select("id, member_id, seat_number, valid_until, issued_at, emailed_at, is_active, revoked_at")
           .in("member_id", memberIds)
-          .eq("is_active", true)
       : Promise.resolve({ data: [] as never[] }),
     memberIds.length
       ? admin
           .from("cosec_access_users")
-          .select("entity_id, enrollment_status")
+          .select("entity_id, enrollment_status, provisioned_at, blocked_at")
           .eq("user_type", "member")
           .in("entity_id", memberIds)
       : Promise.resolve({ data: [] as never[] }),
   ]);
 
   const memberById = new Map((membersRes.data ?? []).map((m: { id: string }) => [m.id, m]));
-  type Issuance = { member_id: string; seat_number: number; valid_until: string | null };
-  const issuanceByMember = new Map<string, Issuance>(
-    (issuancesRes.data ?? []).map((i: Issuance) => [i.member_id, i])
-  );
+  type Issuance = {
+    member_id: string; seat_number: number; valid_until: string | null;
+    issued_at: string | null; emailed_at: string | null; is_active: boolean; revoked_at: string | null;
+  };
+  const issuanceByMember = new Map<string, Issuance>();
+  const revokedAtByMember = new Map<string, string>();
+  for (const i of (issuancesRes.data ?? []) as Issuance[]) {
+    if (i.is_active) issuanceByMember.set(i.member_id, i);
+    else if (i.revoked_at) revokedAtByMember.set(i.member_id, i.revoked_at);
+  }
   const doorStatuses = new Map<string, string[]>();
-  for (const a of (accessRes.data ?? []) as { entity_id: string; enrollment_status: string }[]) {
+  const doorAt = new Map<string, string>();
+  for (const a of (accessRes.data ?? []) as { entity_id: string; enrollment_status: string; provisioned_at: string | null; blocked_at: string | null }[]) {
     const list = doorStatuses.get(a.entity_id) ?? [];
     list.push(a.enrollment_status);
     doorStatuses.set(a.entity_id, list);
+    if (a.provisioned_at && (!doorAt.has(a.entity_id) || a.provisioned_at < doorAt.get(a.entity_id)!)) doorAt.set(a.entity_id, a.provisioned_at);
+    if (a.blocked_at && !revokedAtByMember.has(a.entity_id)) revokedAtByMember.set(a.entity_id, a.blocked_at);
   }
 
   type MemberRow = {
@@ -107,7 +115,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       needsVoucher: member?.needs_voucher ?? false,
       needsDoor: member?.needs_door ?? false,
       voucherIssued: !!issuance,
-      voucher: issuance ? { seatNumber: issuance.seat_number, validUntil: issuance.valid_until } : null,
+      voucher: issuance
+        ? { seatNumber: issuance.seat_number, validUntil: issuance.valid_until, issuedAt: issuance.issued_at, emailedAt: issuance.emailed_at }
+        : null,
+      doorIssuedAt: c.source_member_id ? (doorAt.get(c.source_member_id) ?? null) : null,
+      accessEndedAt: c.source_member_id ? (revokedAtByMember.get(c.source_member_id) ?? null) : null,
       doorEnrolled: liveStatuses.length > 0,
       doorStatuses: liveStatuses,
       leftOn: member?.left_on ?? null,

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { AlertTriangle, Loader2, UserPlus, Users, Wand2 } from "lucide-react";
 import { toast } from "sonner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import { DEFAULT_ACCESS_ROLES, PERSON_ROLES, type AccessSetup, type PersonRole, type PersonSetup } from "@/lib/contract-people";
 import { ContractAccessSetupWizard } from "./contract-access-setup-wizard";
 
@@ -34,7 +34,9 @@ interface Person {
   needsVoucher: boolean;
   needsDoor: boolean;
   voucherIssued: boolean;
-  voucher: { seatNumber: number; validUntil: string | null } | null;
+  voucher: { seatNumber: number; validUntil: string | null; issuedAt: string | null; emailedAt: string | null } | null;
+  doorIssuedAt: string | null;
+  accessEndedAt: string | null;
   doorEnrolled: boolean;
   doorStatuses: string[];
   leftOn: string | null;
@@ -85,8 +87,14 @@ function VoucherCell({ p, s }: { p: Person; s?: PersonSetup }) {
     return (
       <div>
         <Badge variant="secondary" className="bg-green-100 text-green-800">Issued</Badge>
+        {p.voucher?.issuedAt && (
+          <div className="text-xs text-muted-foreground mt-0.5">Issued {formatDateTime(p.voucher.issuedAt)}</div>
+        )}
+        <div className="text-xs text-muted-foreground">
+          {p.voucher?.emailedAt ? `Emailed ${formatDateTime(p.voucher.emailedAt)}` : "Not emailed yet"}
+        </div>
         {p.voucher?.validUntil && (
-          <div className="text-xs text-muted-foreground mt-0.5">Valid to {formatDate(p.voucher.validUntil)}</div>
+          <div className="text-xs text-muted-foreground">Valid to {formatDate(p.voucher.validUntil)}</div>
         )}
       </div>
     );
@@ -102,10 +110,15 @@ function DoorCell({ p }: { p: Person }) {
   if (!p.memberId || !p.needsDoor) return <Badge variant="secondary" className="bg-gray-100 text-gray-700">None</Badge>;
   if (!p.doorEnrolled) return <Badge variant="secondary" className="bg-amber-100 text-amber-800">Not enrolled</Badge>;
   const fullyEnrolled = p.doorStatuses.some((x) => ["fully_enrolled", "card_enrolled", "biometric_enrolled"].includes(x));
-  return fullyEnrolled ? (
-    <Badge variant="secondary" className="bg-green-100 text-green-800">Enrolled</Badge>
-  ) : (
-    <Badge variant="secondary" className="bg-blue-100 text-blue-800">Awaiting enrolment</Badge>
+  return (
+    <div>
+      {fullyEnrolled ? (
+        <Badge variant="secondary" className="bg-green-100 text-green-800">Enrolled</Badge>
+      ) : (
+        <Badge variant="secondary" className="bg-blue-100 text-blue-800">Awaiting enrolment</Badge>
+      )}
+      {p.doorIssuedAt && <div className="text-xs text-muted-foreground mt-0.5">Issued {formatDateTime(p.doorIssuedAt)}</div>}
+    </div>
   );
 }
 
@@ -522,6 +535,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                         {tab === "active" ? <WaitingCell p={p} s={s} /> : (
                           <span className="text-xs text-muted-foreground">
                             {p.leftOn ? formatDate(p.leftOn) : "—"}{p.leftReason ? ` · ${p.leftReason}` : ""}
+                            {p.accessEndedAt && <div className="text-xs text-muted-foreground">Access ended {formatDateTime(p.accessEndedAt)}</div>}
                           </span>
                         )}
                       </td>
@@ -583,10 +597,23 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Mark {leaving?.name} as left</DialogTitle>
-            <DialogDescription>
-              Their WiFi voucher is revoked, their door access is blocked, and the seat is freed. The record is kept.
-            </DialogDescription>
+            <DialogDescription>Please confirm what will happen:</DialogDescription>
           </DialogHeader>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            <li>
+              {leaving?.voucherIssued
+                ? "Their WiFi voucher is revoked straight away and stops working. It cannot be handed to anyone else."
+                : "They have no WiFi voucher issued, so there is nothing to revoke."}
+            </li>
+            <li>
+              {leaving?.doorEnrolled
+                ? "Their door access is blocked on the door devices."
+                : "They have no door access issued, so there is nothing to block."}
+            </li>
+            <li>Their seat is freed so someone else can take it.</li>
+            <li>They move to the Inactive tab and the record is kept. If they come back, use Reactivate and issue access again.</li>
+          </ul>
+          <p className="text-xs text-muted-foreground">No message is sent to the person.</p>
           <div className="space-y-3">
             <div className="space-y-1">
               <Label>Left on</Label>
@@ -599,7 +626,7 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setLeaving(null)}>Cancel</Button>
-            <Button onClick={submitLeave} disabled={!!leaving && busy[`leave_${leaving.contactId}`]}>Mark as left</Button>
+            <Button variant="destructive" onClick={submitLeave} disabled={!!leaving && busy[`leave_${leaving.contactId}`]}>Yes, mark as left</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
