@@ -132,6 +132,8 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
   const [leaving, setLeaving] = useState<Person | null>(null);
   const [leaveForm, setLeaveForm] = useState({ date: "", reason: "" });
   const [fixing, setFixing] = useState<Person | null>(null);
+  const [doorConfirm, setDoorConfirm] = useState<Person | null>(null);
+  const [emailPrompt, setEmailPrompt] = useState<{ issuanceId: string; name: string; email: string } | null>(null);
   const [fixForm, setFixForm] = useState({ email: "", phone: "" });
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -238,15 +240,38 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
       const json = await res.json();
       if (!res.ok) { toast.error(json.error ?? "Failed to issue voucher"); return; }
       toast.success(`Voucher issued for ${p.name}`);
+      const issuanceId = json.data?.[0]?.id as string | undefined;
+      if (issuanceId) setEmailPrompt({ issuanceId, name: p.name, email: p.email });
       await refresh();
     } finally {
       setBusyFor(`voucher_${p.contactId}`, false);
     }
   }
 
-  async function issueDoor(p: Person) {
-    if (!confirm(`Issue door access for ${p.name}? This texts an enrolment PIN to ${p.phone}.`)) return;
-    await personAction(p, { action: "issue_door" }, `Door access issued for ${p.name}`);
+  async function sendVoucherEmail() {
+    if (!emailPrompt) return;
+    setBusyFor("voucher_email", true);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/vouchers/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issuance_id: emailPrompt.issuanceId, email: emailPrompt.email }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { toast.error(json.error ?? "Could not send the email"); return; }
+      toast.success(`Voucher emailed to ${emailPrompt.email}`);
+      setEmailPrompt(null);
+      await refresh();
+    } finally {
+      setBusyFor("voucher_email", false);
+    }
+  }
+
+  async function issueDoor() {
+    const p = doorConfirm;
+    if (!p) return;
+    const ok = await personAction(p, { action: "issue_door" }, `Door access issued for ${p.name}`);
+    if (ok) setDoorConfirm(null);
   }
 
   async function submitLeave() {
@@ -458,11 +483,16 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
                           {tab === "active" && p.memberId && s?.doorPending && (
                             <Button
                               size="sm" variant="outline" disabled={!isActiveContract || busy[`issue_door_${p.contactId}`]}
-                              onClick={() => issueDoor(p)}
+                              onClick={() => setDoorConfirm(p)}
                             >
                               {busy[`issue_door_${p.contactId}`] && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                               Issue door access
                             </Button>
+                          )}
+                          {tab === "active" && p.memberId && s?.voucherPending && !!p.email && !canIssueVoucher && (
+                            <p className="w-full text-xs text-amber-700">
+                              Voucher can be issued once the contract is active and its signed agreement is attached.
+                            </p>
                           )}
                           {tab === "active" && p.memberId && (
                             <Button
@@ -515,6 +545,39 @@ export function ContractPeopleAccessSection({ contractId, contractStatus, signed
           </div>
         )}
       </CardContent>
+
+      <Dialog open={!!emailPrompt} onOpenChange={(o) => !o && setEmailPrompt(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Email the voucher?</DialogTitle>
+            <DialogDescription>
+              The voucher for {emailPrompt?.name} is issued. Send the code to <b>{emailPrompt?.email}</b> now?
+              If you skip this, nothing is sent and the voucher can be emailed later from the Vouchers section.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailPrompt(null)}>Not now</Button>
+            <Button onClick={sendVoucherEmail} disabled={busy["voucher_email"]}>
+              {busy["voucher_email"] && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Send email
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!doorConfirm} onOpenChange={(o) => !o && setDoorConfirm(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Issue door access for {doorConfirm?.name}?</DialogTitle>
+            <DialogDescription>
+              This adds them to the door devices at this location and texts an enrolment PIN to <b>{doorConfirm?.phone}</b>.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDoorConfirm(null)}>Cancel</Button>
+            <Button onClick={issueDoor} disabled={!!doorConfirm && busy[`issue_door_${doorConfirm.contactId}`]}>Issue and text PIN</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!leaving} onOpenChange={(o) => !o && setLeaving(null)}>
         <DialogContent className="max-w-md">
