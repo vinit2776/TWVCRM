@@ -2016,7 +2016,7 @@ export default function ProposalDetailPage({
 
               {!depositEmailPreview.to.length && (
                 <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                  This lead has no email address, so the email can&apos;t be sent. Use <strong>Download to share</strong> to send the request manually.
+                  This lead has no email address, so the email can&apos;t be sent. Use <strong>Download</strong> to send the request manually.
                 </div>
               )}
 
@@ -2092,7 +2092,7 @@ export default function ProposalDetailPage({
                   title="Creates the payment link, marks the deposit as requested and downloads a PDF to share manually — no email is sent"
                 >
                   {depositDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                  {depositDownloading ? "Preparing…" : "Download to share"}
+                  {depositDownloading ? "Preparing…" : "Download"}
                 </Button>
                 <Button
                   onClick={handleSendDepositEmail}
