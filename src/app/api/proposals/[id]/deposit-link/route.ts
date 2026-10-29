@@ -7,6 +7,7 @@ import { logAudit, logWhatsAppActivity } from "@/lib/audit";
 import { DEPOSIT_DUE_DAYS } from "@/lib/receivables";
 import { escapeHtml } from "@/lib/html";
 import { logCommunication } from "@/lib/communications-log";
+import { hasLiveInstalments } from "@/lib/deposit-instalment-server";
 
 const CUSTOMER_MESSAGE_MAX_LENGTH = 500;
 const MAX_CC = 10;
@@ -101,6 +102,12 @@ export async function POST(
 
   if (proposal.deposit_payment_status !== "pending") {
     return NextResponse.json({ error: proposal.deposit_payment_status === "paid" ? "Deposit already paid" : "No deposit required for this proposal" }, { status: 400 });
+  }
+
+  // Collected in parts: the whole-deposit request would let the customer pay the
+  // full amount alongside a part. Requests go through the part-request flow.
+  if (await hasLiveInstalments(createAdminClient(), id)) {
+    return NextResponse.json({ error: "This deposit is being collected in parts — request the next part instead of sending the full deposit." }, { status: 409 });
   }
 
   const requiredDeposit = Number(proposal.security_deposit_amount || 0);

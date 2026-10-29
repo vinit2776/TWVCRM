@@ -270,6 +270,16 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
 
+### Staged security deposit (parts)
+
+Sales can take a proposal's deposit in parts (e.g. ₹20k of ₹60k now). **Activation is unchanged — the deposit must still be paid in full.** Ships dark: `app_settings.deposit_instalments_enabled` (`false` by default); `deposit_min_first_part_percent` (default 25) is the smallest first part without a manager.
+
+- Each ask is a row in `proposal_deposit_instalments` (`00649`) with its **own fresh Razorpay link** for exactly that amount, one open (unpaid) ask at a time. Admin / manager / sales rep may ask (`POST /api/proposals/[id]/deposit-instalments`); a first part below the minimum needs an admin/manager override with a reason; recording a bank payment against a part stays admin/accounts only.
+- The proposal's completed-deposit fields (`deposit_payment_status = paid`, amount, reference, medium, received-at) are written **only when parts paid ≥ required** (`_rollup_proposal_deposit`). Anything that needs *cash received* must read the instalments; anything that means "complete" keeps reading the proposal. The first paid part accepts the proposal and locks its terms.
+- All money changes go through RPCs (service role only): `request_deposit_instalment`, `record_deposit_instalment_paid`, `record_deposit_payment_for_link` (webhook; also records a late payment on the original full-deposit link once parts exist), `cancel_deposit_instalment`.
+- Once any part is asked for or paid, the single-deposit paths stand down (`hasLiveInstalments`): `deposit-link`, `deposit-payment`, `deposit-payment-link`, `accept` and `revise` refuse or skip.
+- Rules and figures: `src/lib/deposit-instalments.ts` (Required / Requested / Paid / Awaiting / Not yet asked / Balance).
+
 ### Contract Lifecycle
 
 Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Extension / Cancellation.

@@ -220,6 +220,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "proposal" });
     }
 
+    // Staged deposit: a payment on one of a proposal's part links, or a late
+    // payment on its original full-deposit link once parts exist. Only that part
+    // is marked paid; the proposal's deposit flips to paid when the parts add up.
+    // A proposal with no parts is not matched here and takes the path below.
+    const { data: partPayment, error: partError } = await supabase.rpc("record_deposit_payment_for_link", {
+      p_link_id: paymentLinkId,
+      p_payment_id: razorpayPaymentId,
+      p_amount: amountPaid,
+    });
+    // PGRST202 = function not deployed in this database yet; anything else is a
+    // real failure and must not fall through to "unmatched" — return 500 so
+    // Razorpay retries instead of the payment going unrecorded.
+    if (partError && partError.code !== "PGRST202") {
+      console.error("[webhook] deposit part recording failed:", partError.message);
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: "error", outcome_detail: partError.message });
+      return NextResponse.json({ error: "Failed to record deposit part" }, { status: 500 });
+    }
+    if (partPayment?.matched) {
+      if (partPayment.success && !partPayment.already_paid) {
+        logAudit(supabase, {
+          entityType: "proposal",
+          entityId: partPayment.proposal_id,
+          action: "update",
+          performedBy: "system",
+          changes: {
+            deposit_part_paid: { old: null, new: { amount: amountPaid, reference: razorpayPaymentId, ...(partPayment.via_original_link ? { via_original_link: true } : {}) } },
+            deposit_total_paid: { old: null, new: partPayment.paid },
+            ...(partPayment.accepted_now ? { status: { old: partPayment.proposal_status_before, new: "accepted" } } : {}),
+            ...(partPayment.complete ? { deposit_complete: { old: false, new: true } } : {}),
+          },
+        }).catch(() => {});
+      }
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit_part", outcome: partPayment.success ? "processed" : "error", outcome_detail: partPayment.success ? null : partPayment.error });
+      return NextResponse.json({ status: "ok", entity: "proposal_deposit_part" });
+    }
+
     // Check if this payment link belongs to a proposal security deposit
     const { data: depositProposal } = await supabase
       .from("proposals")

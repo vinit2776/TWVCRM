@@ -445,6 +445,38 @@ export interface Proposal {
   deposit_waiver_requested_at?: string;
 }
 
+/** One ask for a part of a proposal's security deposit (proposal_deposit_instalments, migration 00649). */
+export interface DepositInstalment {
+  id: string;
+  proposal_id: string;
+  seq: number;
+  amount: number;
+  status: "requested" | "paid" | "cancelled";
+  due_date: string | null;
+  razorpay_link_id: string | null;
+  razorpay_link_url: string | null;
+  internal_note: string | null;
+  customer_message: string | null;
+  requested_by: string | null;
+  requested_at: string;
+  floor_override_by: string | null;
+  floor_override_reason: string | null;
+  paid_amount: number | null;
+  paid_at: string | null;
+  payment_reference: string | null;
+  payment_medium: string | null;
+  payment_screenshot_url: string | null;
+  payment_notes: string | null;
+  recorded_by: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+  settled_at: string | null;
+  settlement_id: string | null;
+  accounted: boolean;
+  accounted_at: string | null;
+}
+
 // ==========================================
 // Invoice Types
 // ==========================================

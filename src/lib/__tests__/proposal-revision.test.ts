@@ -42,6 +42,9 @@ describe("revisionBlockedReason", () => {
     expect(revisionBlockedReason({ ...sent, payment_status: "paid" })).toMatch(/money/i);
   });
 
+  it("blocks while the deposit is being collected in parts", () => {
+    expect(revisionBlockedReason({ ...sent, deposit_parts_active: true })).toMatch(/in parts/i);
+  });
   it("blocks when a deposit credit has been applied", () => {
     expect(revisionBlockedReason({ ...sent, deposit_credit_amount: 5000 })).toMatch(/credited/i);
     expect(revisionBlockedReason({ ...sent, deposit_credit_amount: "0" })).toBeNull();

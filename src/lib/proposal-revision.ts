@@ -21,6 +21,8 @@ export interface RevisableProposal {
   deposit_payment_status?: string | null;
   payment_status?: string | null;
   deposit_credit_amount?: number | string | null;
+  /** A part of the deposit has been asked for or paid (proposal_deposit_instalments). */
+  deposit_parts_active?: boolean;
 }
 
 /**
@@ -40,6 +42,9 @@ export function revisionBlockedReason(p: RevisableProposal): string | null {
   }
   if (p.deposit_payment_status === "paid" || p.payment_status === "paid" || Number(p.deposit_credit_amount ?? 0) > 0) {
     return "Money has already been collected (or credited) on this proposal, so its terms are locked. Talk to accounts before changing anything.";
+  }
+  if (p.deposit_parts_active) {
+    return "The deposit is being collected in parts, so this proposal's terms are locked. Cancel the open part request, or talk to accounts, before changing anything.";
   }
   return null;
 }
