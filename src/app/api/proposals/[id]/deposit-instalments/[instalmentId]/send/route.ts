@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { canRequestDepositInstalment } from "@/lib/deposit-instalments";
-import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
+import { downloadPartRequest, sendPartEmail } from "@/lib/deposit-instalment-email-server";
 
 const MAX_CC = 10;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
@@ -11,6 +11,7 @@ const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
  * POST /api/proposals/[id]/deposit-instalments/[instalmentId]/send
  *
  *   { preview: true }            → the email as the customer would see it; sends nothing.
+ *   { mode: "download" }          → the details for a PDF to share by hand; sends nothing.
  *   { additional_cc?: string[] } → emails the customer this part's request with the
  *                                  four-line breakup (required / paid / this part / balance).
  *
@@ -31,7 +32,7 @@ export async function POST(
     return NextResponse.json({ error: "Only an admin, manager or sales rep can send a deposit request" }, { status: 403 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { preview?: unknown; additional_cc?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { preview?: unknown; additional_cc?: unknown; mode?: unknown };
   const preview = body.preview === true;
   const cc = Array.isArray(body.additional_cc)
     ? Array.from(new Set(body.additional_cc.filter((e): e is string => typeof e === "string").map((e) => e.trim().toLowerCase()).filter(Boolean)))
@@ -45,6 +46,17 @@ export async function POST(
   const { data: part } = await admin
     .from("proposal_deposit_instalments").select("id, seq").eq("id", instalmentId).eq("proposal_id", id).maybeSingle();
   if (!part) return NextResponse.json({ error: "Deposit part not found" }, { status: 404 });
+
+  // Download: the details for a PDF to share by hand. Nothing is sent.
+  if (body.mode === "download") {
+    const dl = await downloadPartRequest(admin, { instalmentId, sentBy: actor.id });
+    if (!dl.ok) return NextResponse.json({ error: dl.error }, { status: dl.status });
+    void logAudit(admin, {
+      entityType: "proposal", entityId: id, action: "update", performedBy: actor.id,
+      changes: { deposit_part_request_shared_manually: { old: null, new: { seq: part.seq } } },
+    });
+    return NextResponse.json({ mode: "download", ...dl.details });
+  }
 
   const res = await sendPartEmail(admin, { instalmentId, kind: "request", preview, cc, sentBy: actor.id });
   if (!res.ok) return NextResponse.json({ error: res.error }, { status: res.status ?? 500 });

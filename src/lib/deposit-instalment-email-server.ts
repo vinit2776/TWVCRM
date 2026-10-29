@@ -3,6 +3,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logCommunication } from "@/lib/communications-log";
 import { requiredDeposit } from "@/lib/deposit-instalments";
 import {
+  requestFigures,
   buildPartReceivedEmail,
   buildPartRequestEmail,
   type PartEmailFigures,
@@ -116,4 +117,66 @@ export async function sendPartEmail(
   });
 
   return emailError ? { ok: false, error: "The email could not be sent", status: 502 } : { ok: true, sentTo: loaded.to };
+}
+
+export interface PartPdfDetails {
+  proposal_number: string;
+  amount: number;
+  customer_name: string;
+  company: string | null;
+  customer_message: string;
+  deposit_link_url: string | null;
+  due_date: string;
+  rows: [string, string][];
+  intro: string;
+  seq: number;
+}
+
+/**
+ * Details for the PDF staff share by hand (WhatsApp, the customer's own inbox)
+ * when the CRM email isn't used. Sends nothing; writes a "manual" entry to
+ * communications_log so the proposal still shows the request went out.
+ */
+export async function downloadPartRequest(
+  admin: SupabaseClient,
+  opts: { instalmentId: string; sentBy?: string | null },
+): Promise<{ ok: true; details: PartPdfDetails } | { ok: false; error: string; status: number }> {
+  const loaded = await load(admin, opts.instalmentId, "request");
+  if ("error" in loaded) return { ok: false, error: loaded.error, status: loaded.status };
+  const f = requestFigures(loaded.input);
+  const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+  const { data: lead } = await admin
+    .from("proposals").select("lead:leads!proposals_lead_id_fkey(company)").eq("id", loaded.proposalId).maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const company = ((lead as any)?.lead?.company as string | null) ?? null;
+  const due = loaded.input.dueDate ?? new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+  const details: PartPdfDetails = {
+    proposal_number: loaded.input.proposalNumber,
+    amount: f.thisPart,
+    customer_name: loaded.input.customerName,
+    company,
+    customer_message: loaded.input.customerMessage ?? "",
+    deposit_link_url: loaded.input.payLinkUrl ?? null,
+    due_date: due,
+    seq: loaded.input.seq,
+    intro: `As agreed, the refundable security deposit for proposal ${loaded.input.proposalNumber} is being collected in parts. Please pay ${f.partLabel} of ${inr(f.thisPart)}.`,
+    rows: [
+      ["Total security deposit", inr(f.required)],
+      ["Paid so far", inr(f.paidBefore)],
+      [`Requested now (${f.partLabel})`, inr(f.thisPart)],
+      ["Balance after this payment", inr(f.balanceAfter)],
+    ],
+  };
+  await logCommunication(admin, {
+    entityType: "proposal",
+    entityId: loaded.proposalId,
+    channel: "manual",
+    recipient: "PDF downloaded to share outside the CRM",
+    subject: `Security Deposit ${f.partLabel} — ${inr(f.thisPart)} — ${loaded.input.proposalNumber}`,
+    body: `${details.intro}\n${details.rows.map(([a, b]) => `${a}: ${b}`).join("\n")}`,
+    attachmentName: `Security-Deposit-${loaded.input.proposalNumber}-Part-${f.partLabel.replace("Part ", "")}.pdf`,
+    sentBy: opts.sentBy ?? null,
+  });
+  return { ok: true, details };
 }
