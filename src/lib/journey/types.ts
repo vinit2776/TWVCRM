@@ -69,6 +69,8 @@ export interface JourneyInput {
     depositMonths: number;
     depositStatus: string | null;
     paymentStatus: string | null;
+    /** Why a rejected proposal was closed (the walk-away refund writes "Customer withdrew …"). */
+    rejectionReason?: string | null;
     waiverVerified: boolean;
     /** A non-voided first-month PI statement exists for this proposal. */
     prorataInvoiceSent: boolean;

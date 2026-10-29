@@ -39,7 +39,7 @@ export async function loadJourney(
     admin
       .from("proposals")
       .select(
-        "id, proposal_number, status, superseded_by, security_deposit_months, deposit_payment_status, payment_status, deposit_waiver_verified_at, created_at",
+        "id, proposal_number, status, superseded_by, security_deposit_months, deposit_payment_status, payment_status, rejection_reason, deposit_waiver_verified_at, created_at",
       )
       .eq("lead_id", leadId)
       .order("created_at", { ascending: false }),
@@ -107,6 +107,7 @@ export async function loadJourney(
       depositMonths: Number(proposal.security_deposit_months ?? 0),
       depositStatus: (proposal.deposit_payment_status as string) ?? null,
       paymentStatus: (proposal.payment_status as string) ?? null,
+      rejectionReason: (proposal.rejection_reason as string) ?? null,
       waiverVerified: !!proposal.deposit_waiver_verified_at,
       prorataInvoiceSent: !!pi,
     };
