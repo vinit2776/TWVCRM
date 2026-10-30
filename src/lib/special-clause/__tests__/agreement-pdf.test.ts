@@ -28,3 +28,13 @@ describe("membership agreement special clause", () => {
     expect(text(base)).not.toContain("Cabin 4");
   });
 });
+
+describe("membership agreement trade name", () => {
+  it("names the company as the party and shows The WorkVilla as its trade name", () => {
+    const out = text(base);
+    expect(out).toContain("PRIVATE LIMITED");
+    expect(out).toContain('under the trade name and style');
+    expect(out).toContain('Trading as');
+    expect(out).toContain('(trading as');
+  });
+});
