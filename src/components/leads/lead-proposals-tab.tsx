@@ -1,5 +1,6 @@
 "use client";
 
+import { canCancelInvoice as canCancelInvoiceRole } from "@/lib/invoice-cancel";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban, Loader2, Pencil, RefreshCw } from "lucide-react";
@@ -135,14 +136,14 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   // Lead info for PDF generation
   const [lead, setLead] = useState<Lead | null>(null);
 
-  // Cancelling an invoice is restricted to admin/manager/accounts server-side
+  // Cancelling an invoice is restricted to admin/manager server-side
   // (api/invoices/[id]/cancel) — mirror that here so the action isn't offered
   // to roles that would only get a 403.
   const [userRole, setUserRole] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? null)).catch(() => {});
   }, []);
-  const canCancelInvoice = ["admin", "manager", "accounts"].includes(userRole ?? "");
+  const canCancelInvoice = canCancelInvoiceRole(userRole);
 
   // Newest non-terminal proposal — where the deposit link lives. Proposals
   // come back newest-first, so this is just the first one that isn't

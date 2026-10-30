@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle, Wallet } from "lucide-react";
+import { Loader2, IndianRupee, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, RotateCcw, AlertTriangle, BadgeIndianRupee, CheckCircle2, XCircle, Wallet, Ban } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
@@ -38,6 +38,9 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
 import { PaidStatementsPanel } from "@/components/billing/paid-statements-panel";
 import { WrittenOffStatementsPanel } from "@/components/billing/written-off-statements-panel";
+import { CancelledStatementsPanel } from "@/components/billing/cancelled-statements-panel";
+import { CancelInvoiceDialog } from "@/components/billing/cancel-invoice-dialog";
+import { canCancelInvoice, classifyForCancel } from "@/lib/invoice-cancel";
 import { PaymentDetailDialog, type PaymentDetail } from "@/components/billing/payment-detail-dialog";
 import { StatementTimelineDialog } from "@/components/billing/statement-timeline-dialog";
 import { QueryThreadPanel } from "@/components/queries/query-thread-panel";
@@ -194,6 +197,11 @@ interface ReceivableRow {
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
+  tally_invoice_number?: string | null;
+  issuance_channel?: string | null;
+  proposal_id?: string | null;
+  case_id?: string | null;
+  aggregator_id?: string | null;
   payments: PaymentDetail[];
   contract: Contract | null;
   proposal?: ProposalRef | null;
@@ -235,7 +243,7 @@ interface Summary {
   oldest_days: number;
 }
 
-type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid" | "written_off";
+type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial" | "reported" | "paid" | "written_off" | "cancelled";
 type ViewMode = "detail" | "ageing";
 
 /** One row in the Ageing view — aggregates all statements for a contract. */
@@ -262,6 +270,7 @@ const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "reported",   label: "Reported",       hint: "Payments reported by customers, not yet verified" },
   { key: "paid",       label: "Paid",           hint: "Finalized statements settled in full" },
   { key: "written_off", label: "Written Off",   hint: "Uncollectible statements — excluded from active AR chasing" },
+  { key: "cancelled",  label: "Cancelled",     hint: "Invoices cancelled, with the reason" },
 ];
 
 function customerName(lead?: Lead): string {
@@ -331,6 +340,8 @@ export default function AccountsReceivablePage() {
   const [canRecordPayment, setCanRecordPayment] = useState(false);
   const [canConvertPi, setCanConvertPi] = useState(false);
   const [convertRow, setConvertRow] = useState<ReceivableRow | null>(null);
+  const [canCancel, setCanCancel] = useState(false);
+  const [cancelRow, setCancelRow] = useState<ReceivableRow | null>(null);
   // Which row has its query thread expanded (one at a time).
   const [queryRowId, setQueryRowId] = useState<string | null>(null);
 
@@ -409,10 +420,12 @@ export default function AccountsReceivablePage() {
       .then((me) => {
         setCanRecordPayment(canRecordPayments(me.role));
         setCanConvertPi(canOverridePiToGst(me.role));
+        setCanCancel(canCancelInvoice(me.role));
       })
       .catch(() => {
         setCanRecordPayment(false);
         setCanConvertPi(false);
+        setCanCancel(false);
       });
   }, []);
 
@@ -817,7 +830,7 @@ export default function AccountsReceivablePage() {
               className="pl-8 w-72"
             />
           </div>
-          {filter !== "paid" && filter !== "written_off" && (
+          {filter !== "paid" && filter !== "written_off" && filter !== "cancelled" && (
             <div className="flex items-center border rounded-md overflow-hidden">
               <button
                 onClick={() => setViewMode("detail")}
@@ -835,7 +848,7 @@ export default function AccountsReceivablePage() {
               </button>
             </div>
           )}
-          {filter !== "paid" && filter !== "written_off" && (
+          {filter !== "paid" && filter !== "written_off" && filter !== "cancelled" && (
             <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
               <Download className="h-4 w-4 mr-1" /> Export CSV
             </Button>
@@ -849,6 +862,8 @@ export default function AccountsReceivablePage() {
             <PaidStatementsPanel search={search} onOpenHistory={openHistory} />
           ) : filter === "written_off" ? (
             <WrittenOffStatementsPanel search={search} onOpenHistory={openHistory} />
+          ) : filter === "cancelled" ? (
+            <CancelledStatementsPanel search={search} onOpenHistory={openHistory} />
           ) : loading ? (
             <div className="p-8 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
           ) : filtered.length === 0 ? (
@@ -1166,6 +1181,17 @@ export default function AccountsReceivablePage() {
                                 <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Convert to GST
                               </Button>
                             )}
+                            {canCancel && classifyForCancel(r).kind === "pi" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-200 text-red-700 hover:bg-red-50"
+                                onClick={() => setCancelRow(r)}
+                                title="Cancel this proforma and stop its reminders"
+                              >
+                                <Ban className="h-3.5 w-3.5 mr-1" /> Cancel
+                              </Button>
+                            )}
                             {/*
                               Distinct from Record: that is the accounts-only
                               action that moves money, this is open to everyone
@@ -1336,6 +1362,19 @@ export default function AccountsReceivablePage() {
           totalAmount={convertRow.total_amount}
           hasExistingPaymentLink={!!convertRow.razorpay_payment_link_url}
           onSuccess={() => { setConvertRow(null); load(); }}
+        />
+      )}
+
+      {cancelRow && (
+        <CancelInvoiceDialog
+          open
+          onOpenChange={(o) => { if (!o) setCancelRow(null); }}
+          statementId={cancelRow.id}
+          statementNumber={cancelRow.statement_number}
+          customerName={customerName(partyOf(cancelRow).lead)}
+          amountLabel={formatCurrency(cancelRow.balance_due)}
+          hasPaymentLink={!!cancelRow.razorpay_payment_link_url}
+          onSuccess={() => { setCancelRow(null); load(); }}
         />
       )}
 
