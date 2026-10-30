@@ -158,10 +158,15 @@ export async function POST(
 
   // Release usage so it can be billed again (same four tables void releases;
   // missing one silently loses revenue).
-  await admin.from("usage_charges").update({ billing_statement_id: null, status: "pending" }).eq("billing_statement_id", id);
-  await admin.from("bookings").update({ billing_statement_id: null }).eq("billing_statement_id", id);
-  await admin.from("service_usage_records").update({ billing_statement_id: null, is_billed: false }).eq("billing_statement_id", id);
-  await admin.from("facility_usage_records").update({ billing_statement_id: null }).eq("billing_statement_id", id);
+  const released: Record<string, number> = {};
+  const release = async (table: string, patch: Record<string, unknown>) => {
+    const { data } = await admin.from(table).update(patch).eq("billing_statement_id", id).select("id");
+    released[table] = data?.length ?? 0;
+  };
+  await release("usage_charges", { billing_statement_id: null, status: "pending" });
+  await release("bookings", { billing_statement_id: null });
+  await release("service_usage_records", { billing_statement_id: null, is_billed: false });
+  await release("facility_usage_records", { billing_statement_id: null });
 
   // An ad-hoc invoice carries its own status; keep it in step.
   if (s.invoice_id) {
@@ -176,6 +181,7 @@ export async function POST(
     changes: {
       status: { old: s.status, new: "voided" },
       cancel_reason: { old: null, new: reason },
+      ...(Object.values(released).some((n) => n > 0) ? { released_usage: { old: null, new: released } } : {}),
     },
   });
 
