@@ -384,12 +384,17 @@ export default function ProcurementDashboard() {
       .then((j) => { if (j.data) setReimbursementByCenter(j.data); });
   };
 
-  // Companies — default filter is "All companies" (combined view), so no
-  // auto-select here, unlike the budget page which requires exactly one.
+  // Companies — the page opens on Workvilla (so the company-specific budget
+  // widgets show something); "All companies" stays selectable for the combined view.
   useEffect(() => {
     fetch("/api/companies")
       .then((r) => r.json())
-      .then((j) => setCompanies(j.data || []))
+      .then((j) => {
+        const list: Company[] = j.data || [];
+        setCompanies(list);
+        const workvilla = list.find((c) => c.brand_name?.toLowerCase() === "workvilla");
+        if (workvilla) setCompanyId((current) => current || workvilla.id);
+      })
       .catch(() => setCompanies([]));
   }, []);
 
@@ -536,8 +541,11 @@ export default function ProcurementDashboard() {
                         className="rounded-xl border bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer p-3 pt-4"
                         onClick={() => {
                           const now = new Date();
-                          const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-                          const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+                          // Local date parts, not toISOString(): in IST that shifts month-start back to the previous month's last day.
+                          const pad = (n: number) => String(n).padStart(2, "0");
+                          const ym = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+                          const monthStart = `${ym}-01`;
+                          const monthEnd = `${ym}-${pad(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate())}`;
                           router.push(`/procurement/requests?department=${dept}&status=committed&from_date=${monthStart}&to_date=${monthEnd}&expenditure_type=operational&budget_view=1`);
                         }}
                       >

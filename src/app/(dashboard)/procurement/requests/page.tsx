@@ -4,7 +4,7 @@ import { Fragment, Suspense, useState, useEffect, useCallback, useMemo } from "r
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ClipboardList, Plus, ChevronLeft, ChevronRight, Search, X, PieChart } from "lucide-react";
+import { CalendarDays, ClipboardList, NotebookText, Plus, ChevronLeft, ChevronRight, Search, X, PieChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -15,11 +15,11 @@ import { MonthPicker } from "@/components/accounting/month-picker";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
-  PR_STATUSES, PR_STATUS_LABELS, PR_STATUS_COLORS,
+  ITEM_UNIT_LABELS, PR_STATUSES, PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, getMonthDateRange } from "@/lib/utils";
-import type { PurchaseRequest, Company } from "@/types";
+import type { PurchaseRequest, PurchaseRequestItem, Company } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -38,6 +38,35 @@ interface ComparisonRow {
   amountB: number;
   deltaAmount: number;
   deltaPct: number | null; // null = new spend this period (no baseline)
+}
+
+// One-glance description of a request for the list: item summary, vendor, and the requester's note
+// (AMC requests describe the service and contract period instead).
+function describeRequest(pr: PurchaseRequest) {
+  const items = pr.purchase_request_items ?? [];
+  const isAmc = pr.department === "amc";
+  const vendors = Array.from(
+    new Set((pr.purchase_orders ?? []).map((po) => po.procurement_vendors?.name).filter((n): n is string => !!n)),
+  );
+  const fmtQty = (i: { quantity: number; unit: PurchaseRequestItem["unit"] }) =>
+    i.unit === "piece" || i.unit === "nos" ? `×${i.quantity}` : `×${i.quantity} ${ITEM_UNIT_LABELS[i.unit]?.toLowerCase() ?? i.unit}`;
+  const MAX_SHOWN = 3;
+
+  const tag = isAmc
+    ? ["AMC", pr.amc_coverage_type === "labour_only" ? "Labour only" : pr.amc_coverage_type === "comprehensive" ? "Comprehensive" : null,
+        pr.amc_visits_covered ? `${pr.amc_visits_covered} visits` : null].filter(Boolean).join(" · ")
+    : [`${items.length} ${items.length === 1 ? "item" : "items"}`, vendors.length ? `Vendor: ${vendors.slice(0, 2).join(", ")}${vendors.length > 2 ? ` +${vendors.length - 2}` : ""}` : null]
+        .filter(Boolean).join(" · ");
+
+  const headline = isAmc && pr.service_item_name
+    ? `${pr.service_item_name}${items.length > 1 ? ` (${items.length} assets)` : ""}`
+    : items.slice(0, MAX_SHOWN).map((i) => `${i.item_name} ${fmtQty(i)}`).join(", ");
+  const more = !isAmc && items.length > MAX_SHOWN ? items.length - MAX_SHOWN : 0;
+
+  const period = isAmc && pr.amc_start_date && pr.amc_end_date
+    ? `${formatDate(pr.amc_start_date)} to ${formatDate(pr.amc_end_date)}`
+    : null;
+  return { tag, headline, more, note: pr.notes?.trim() || null, period };
 }
 
 function groupByLocation(items: PurchaseRequest[]): LocationGroup[] {
@@ -171,7 +200,7 @@ function PurchaseRequestsContent() {
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams({ page: String(page), limit: "25" });
+    const params = new URLSearchParams({ page: String(page), limit: "25", include_summary: "1" });
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
     if (companyFilter) params.set("company_id", companyFilter);
@@ -189,7 +218,7 @@ function PurchaseRequestsContent() {
   }, [page, statusFilter, deptFilter, companyFilter, search, flatFromDate, flatToDate, expenditureType]);
 
   const fetchAllForRange = useCallback(async (from: string, to: string): Promise<PurchaseRequest[]> => {
-    const params = new URLSearchParams({ all: "1", from_date: from, to_date: to });
+    const params = new URLSearchParams({ all: "1", from_date: from, to_date: to, include_summary: "1" });
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
     if (companyFilter) params.set("company_id", companyFilter);
@@ -550,7 +579,7 @@ function PurchaseRequestsContent() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium">PR #</th>
+                <th className="px-4 py-3 text-left font-medium">Request</th>
                 <th className="px-4 py-3 text-left font-medium">Department</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
                 {canSeePrices && <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Est. Amount</th>}
@@ -581,17 +610,45 @@ function PurchaseRequestsContent() {
                         router.push(`/procurement/requests/${pr.id}`);
                       }}
                     >
-                      <td className="px-4 py-3 font-mono text-xs font-medium">
-                        <Link
-                          href={`/procurement/requests/${pr.id}`}
-                          className="text-primary hover:underline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
-                          }}
-                        >
-                          {pr.pr_number}
-                        </Link>
+                      <td className="px-4 py-3 max-w-[28rem]">
+                        {(() => {
+                          const d = describeRequest(pr);
+                          return (
+                            <div className="space-y-0.5">
+                              <div className="flex items-baseline gap-2 flex-wrap">
+                                <Link
+                                  href={`/procurement/requests/${pr.id}`}
+                                  className="font-mono text-xs font-medium text-primary hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    pushTrailEntry({ href: `/procurement/requests/${pr.id}`, label: pr.pr_number });
+                                  }}
+                                >
+                                  {pr.pr_number}
+                                </Link>
+                                {d.tag && <span className="text-[11px] text-muted-foreground">{d.tag}</span>}
+                              </div>
+                              {d.headline && (
+                                <div className="font-medium">
+                                  {d.headline}
+                                  {d.more > 0 && <span className="font-normal text-muted-foreground"> +{d.more} more</span>}
+                                </div>
+                              )}
+                              {d.period ? (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  <CalendarDays className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{d.period}
+                                </div>
+                              ) : d.note ? (
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  <NotebookText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                  <span className="truncate">{d.note}</span>
+                                </div>
+                              ) : (
+                                <div className="text-xs italic text-muted-foreground/70">No note added</div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 flex-wrap">

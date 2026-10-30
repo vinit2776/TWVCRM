@@ -88,11 +88,13 @@ export async function GET(request: NextRequest) {
 
   // Opt-in so the many other callers of this list don't pay for the extra join.
   const includeQuotations = searchParams.get("include_quotations") === "1";
+  // Opt-in too: line items + vendor so list rows can say what the request is for.
+  const includeSummary = searchParams.get("include_summary") === "1";
 
   let query = supabase
     .from("purchase_requests")
     .select(
-      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)${includeQuotations ? ", material_request_quotations(id, vendor_name, amount)" : ""}`,
+      `*, locations(id, name), companies(id, name, brand_name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)${includeQuotations ? ", material_request_quotations(id, vendor_name, amount)" : ""}${includeSummary ? ", purchase_request_items(id, item_name, quantity, unit), purchase_orders(id, procurement_vendors(name))" : ""}`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false });
