@@ -18,11 +18,13 @@ interface CancelInvoiceDialogProps {
   customerName: string;
   amountLabel: string;
   hasPaymentLink: boolean;
+  /** pi = cancel now; gst = ask Accounts to issue a credit note. */
+  kind: "pi" | "gst";
   onSuccess: () => void;
 }
 
 export function CancelInvoiceDialog({
-  open, onOpenChange, statementId, statementNumber, customerName, amountLabel, hasPaymentLink, onSuccess,
+  open, onOpenChange, statementId, statementNumber, customerName, amountLabel, hasPaymentLink, kind, onSuccess,
 }: CancelInvoiceDialogProps) {
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
@@ -41,7 +43,11 @@ export function CancelInvoiceDialog({
         toast.error(json.error || "Failed to cancel the invoice");
         return;
       }
-      toast.success(`${statementNumber} cancelled. Reminders have stopped.`);
+      toast.success(
+        kind === "gst"
+          ? `Cancellation requested. Reminders have stopped and Accounts has a credit note to issue.`
+          : `${statementNumber} cancelled. Reminders have stopped.`,
+      );
       onOpenChange(false);
       setReason("");
       onSuccess();
@@ -57,7 +63,7 @@ export function CancelInvoiceDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-red-700">
-            <Ban className="h-5 w-5 shrink-0" /> Cancel {statementNumber}?
+            <Ban className="h-5 w-5 shrink-0" /> {kind === "gst" ? "Request cancellation of" : "Cancel"} {statementNumber}?
           </DialogTitle>
           <DialogDescription>{customerName} · {amountLabel}</DialogDescription>
         </DialogHeader>
@@ -67,8 +73,18 @@ export function CancelInvoiceDialog({
           {hasPaymentLink && (
             <div className="flex items-start gap-2"><X className="h-4 w-4 text-destructive mt-0.5 shrink-0" /><span>The payment link is cancelled</span></div>
           )}
-          <div className="flex items-start gap-2"><X className="h-4 w-4 text-destructive mt-0.5 shrink-0" /><span>The proforma is marked cancelled and leaves Receivables</span></div>
-          <p className="text-xs text-muted-foreground pt-1">Nothing is sent to the customer. No Tally action is needed for a proforma.</p>
+          {kind === "gst" ? (
+            <>
+              <div className="flex items-start gap-2"><X className="h-4 w-4 text-destructive mt-0.5 shrink-0" /><span>Accounts gets a task in the <b>Tally Inbox</b> to issue a credit note and cancel the GST invoice</span></div>
+              <div className="flex items-start gap-2"><X className="h-4 w-4 text-destructive mt-0.5 shrink-0" /><span>The invoice stays on Receivables as <b>Cancellation requested</b> until the credit note is uploaded</span></div>
+              <p className="text-xs text-amber-700 pt-1">A GST invoice is a legal document. It is not cancelled until Accounts uploads the credit note. Nothing is sent to the customer.</p>
+            </>
+          ) : (
+            <>
+              <div className="flex items-start gap-2"><X className="h-4 w-4 text-destructive mt-0.5 shrink-0" /><span>The proforma is marked cancelled and leaves Receivables</span></div>
+              <p className="text-xs text-muted-foreground pt-1">Nothing is sent to the customer. No Tally action is needed for a proforma.</p>
+            </>
+          )}
         </div>
 
         <div className="space-y-1.5">
@@ -86,7 +102,7 @@ export function CancelInvoiceDialog({
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={loading}>Keep invoice</Button>
           <Button variant="destructive" onClick={handleConfirm} disabled={!reasonValid || loading}>
-            {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />} Cancel invoice
+            {loading && <Loader2 className="h-4 w-4 animate-spin mr-1" />} {kind === "gst" ? "Request cancellation" : "Cancel invoice"}
           </Button>
         </DialogFooter>
       </DialogContent>

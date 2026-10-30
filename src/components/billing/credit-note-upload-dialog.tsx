@@ -37,12 +37,14 @@ interface Props {
   statement: CreditNoteStatementInfo;
   onCancelled: () => void;
   onClose: () => void;
+  /** Prefills the reason, e.g. from a cancellation request. */
+  defaultReason?: string;
 }
 
-export function CreditNoteUploadDialog({ statement, onCancelled, onClose }: Props) {
+export function CreditNoteUploadDialog({ statement, onCancelled, onClose, defaultReason = "" }: Props) {
   const [creditNoteNumber, setCreditNoteNumber] = useState("");
   const [creditNoteDate, setCreditNoteDate] = useState(new Date().toISOString().slice(0, 10));
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(defaultReason);
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);

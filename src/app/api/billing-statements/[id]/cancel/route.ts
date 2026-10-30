@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { canCancelInvoice, classifyForCancel } from "@/lib/invoice-cancel";
+import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 
 /**
  * POST /api/billing-statements/[id]/cancel
@@ -12,12 +13,39 @@ import { canCancelInvoice, classifyForCancel } from "@/lib/invoice-cancel";
  * the person asked for it to go away, not to be corrected and re-issued.
  *
  * Roles: admin, manager. Accounts cannot cancel.
- * Blocked when any payment is recorded (reverse it first), and for GST
- * invoices (those need a credit note — see classifyForCancel).
+ * Blocked when any payment is recorded (reverse it first).
+ *
+ * A Tally-issued GST invoice cannot just be voided — Accounts must issue a
+ * credit note in Tally. For those this route only *requests* the cancellation:
+ * reminders stop, the payment link is cancelled, and a task appears in the
+ * Tally Inbox. The invoice is voided later by upload-credit-note.
  *
  * Body (JSON): { reason: string } — at least 10 characters, audited.
  */
 export const dynamic = "force-dynamic";
+
+/** Best-effort: a link that is already expired/paid fails here and that is
+ *  fine — the payments webhook also refuses voided statements. */
+async function cancelPaymentLink(admin: ReturnType<typeof createAdminClient>, linkId: string | null) {
+  if (!linkId) return;
+  try {
+    const { data: rzpSettings } = await admin
+      .from("app_settings").select("key, value")
+      .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+    const rzp: Record<string, string> = {};
+    (rzpSettings || []).forEach((r: { key: string; value: string }) => { rzp[r.key] = r.value; });
+    if (rzp.razorpay_enabled === "true" && rzp.razorpay_key_id && rzp.razorpay_key_secret) {
+      const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+      const res = await fetch(
+        `https://api.razorpay.com/v1/payment_links/${linkId}/cancel`,
+        { method: "POST", headers: { Authorization: `Basic ${auth}` } },
+      );
+      if (!res.ok) console.warn("[statement cancel] Razorpay link cancel failed (non-fatal)");
+    }
+  } catch {
+    console.warn("[statement cancel] Razorpay cancel error (non-fatal)");
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -45,7 +73,7 @@ export async function POST(
     .from("billing_statements")
     .select(
       "id, status, payment_status, voided_at, statement_number, notes, gst_invoice_number, tally_invoice_number, " +
-      "issuance_channel, proposal_id, case_id, aggregator_id, invoice_id, razorpay_payment_link_id",
+      "issuance_channel, cancellation_requested_at, statement_number, proposal_id, case_id, aggregator_id, invoice_id, razorpay_payment_link_id",
     )
     .eq("id", id)
     .maybeSingle();
@@ -54,7 +82,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- select() string is dynamic, so the row type is untyped
   const s = statement as any;
   const verdict = classifyForCancel(s);
-  if (verdict.kind !== "pi") {
+  if (verdict.kind !== "pi" && verdict.kind !== "gst") {
     return NextResponse.json({ error: verdict.reason }, { status: 409 });
   }
 
@@ -67,6 +95,47 @@ export async function POST(
       { error: "A payment is already recorded on this invoice. Reverse it first, then cancel." },
       { status: 409 },
     );
+  }
+
+  if (verdict.kind === "gst") {
+    const { error: reqErr } = await admin
+      .from("billing_statements")
+      .update({
+        cancellation_requested_at: new Date().toISOString(),
+        cancellation_requested_by: dbUser.id,
+        cancellation_reason: reason,
+      })
+      .eq("id", id)
+      .is("cancellation_requested_at", null)
+      .is("voided_at", null);
+    if (reqErr) return NextResponse.json({ error: reqErr.message }, { status: 500 });
+
+    await cancelPaymentLink(admin, s.razorpay_payment_link_id);
+
+    // Tell Accounts there is a credit note to issue. Failure to notify must
+    // not undo the request — the Tally Inbox lists it either way.
+    try {
+      const { data: accounts } = await admin.from("users").select("id").eq("role", "accounts").eq("is_active", true);
+      await createNotificationsForUsers((accounts || []).map((u: { id: string }) => u.id), {
+        type: "invoice_cancellation_requested",
+        title: `Credit note needed: ${s.tally_invoice_number}`,
+        body: `${s.statement_number} must be cancelled. Reason: ${reason}`,
+        url: "/accounting/inbox",
+        entityType: "billing_statement",
+        entityId: id,
+      });
+    } catch {
+      console.warn("[statement cancel] accounts notification failed (non-fatal)");
+    }
+
+    logAudit(supabase, {
+      entityType: "billing_statement",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: { cancellation_requested: { old: null, new: reason } },
+    });
+    return NextResponse.json({ success: true, requested: true });
   }
 
   const now = new Date().toISOString();
@@ -85,28 +154,7 @@ export async function POST(
     .is("voided_at", null);
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
 
-  // Kill the payment link so the customer can't pay a cancelled invoice.
-  // Best-effort: a link that is already expired/paid fails here and that is
-  // fine — the payments webhook also refuses voided statements.
-  if (s.razorpay_payment_link_id) {
-    try {
-      const { data: rzpSettings } = await admin
-        .from("app_settings").select("key, value")
-        .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-      const rzp: Record<string, string> = {};
-      (rzpSettings || []).forEach((r: { key: string; value: string }) => { rzp[r.key] = r.value; });
-      if (rzp.razorpay_enabled === "true" && rzp.razorpay_key_id && rzp.razorpay_key_secret) {
-        const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
-        const res = await fetch(
-          `https://api.razorpay.com/v1/payment_links/${s.razorpay_payment_link_id}/cancel`,
-          { method: "POST", headers: { Authorization: `Basic ${auth}` } },
-        );
-        if (!res.ok) console.warn("[statement cancel] Razorpay link cancel failed (non-fatal)");
-      }
-    } catch {
-      console.warn("[statement cancel] Razorpay cancel error (non-fatal)");
-    }
-  }
+  await cancelPaymentLink(admin, s.razorpay_payment_link_id);
 
   // Release usage so it can be billed again (same four tables void releases;
   // missing one silently loses revenue).

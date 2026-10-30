@@ -27,7 +27,12 @@ describe("classifyForCancel", () => {
     expect(classifyForCancel({ ...base, voided_at: "2026-10-01" }).kind).toBe("unavailable");
     expect(classifyForCancel({ ...base, payment_status: "paid" }).kind).toBe("unavailable");
   });
-  it("refuses GST and Tally-channel invoices", () => {
+  it("sends a Tally-issued GST invoice down the credit-note route", () => {
+    const gst = { ...base, gst_invoice_number: "SDIPL-REG/1", tally_invoice_number: "SDIPL-REG/1", issuance_channel: "tally" };
+    expect(classifyForCancel(gst).kind).toBe("gst");
+    expect(classifyForCancel({ ...gst, cancellation_requested_at: "2026-10-30" }).kind).toBe("unavailable");
+  });
+  it("refuses GST that is not yet recorded in Tally", () => {
     expect(classifyForCancel({ ...base, gst_invoice_number: "SDIPL-REG/1" }).kind).toBe("unavailable");
     expect(classifyForCancel({ ...base, issuance_channel: "tally" }).kind).toBe("unavailable");
   });
