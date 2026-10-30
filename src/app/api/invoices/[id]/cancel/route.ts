@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { canCancelInvoice } from "@/lib/invoice-cancel";
 
 /**
  * POST /api/invoices/[id]/cancel
@@ -17,11 +18,9 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
  *
  * Body (JSON): { reason?: string }
  *
- * Roles: admin, manager, accounts — cancelling withdraws a document the client
- * has already received, so it sits with the same people who can void a billing
- * statement rather than with anyone who can create the invoice.
+ * Roles: admin, manager — cancelling withdraws a document the client has
+ * already received. Accounts only acts on credit notes, never starts a cancel.
  */
-const CANCEL_ROLES = ["admin", "manager", "accounts"];
 
 export async function POST(
   request: NextRequest,
@@ -34,9 +33,9 @@ export async function POST(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
 
-  if (!dbUser || !CANCEL_ROLES.includes(dbUser.role)) {
+  if (!dbUser || !canCancelInvoice(dbUser.role)) {
     return NextResponse.json(
-      { error: "Only admin, manager or accounts can cancel an invoice" },
+      { error: "Only admin or manager can cancel an invoice" },
       { status: 403 }
     );
   }
