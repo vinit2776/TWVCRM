@@ -2276,10 +2276,16 @@ export const PO_ADVANCE_STATUS_COLORS: Record<string, string> = {
 export const PO_ADVANCE_PAYMENT_MODES = ["cash", "upi", "bank_transfer"] as const;
 export type PoAdvancePaymentMode = (typeof PO_ADVANCE_PAYMENT_MODES)[number];
 
+// Includes every mode the Process Advance dialog accepts (neft/rtgs/imps/cheque as
+// well as the original three) — a missing key renders as a blank "Mode".
 export const PO_ADVANCE_PAYMENT_MODE_LABELS: Record<string, string> = {
   cash: "Cash",
   upi: "UPI",
   bank_transfer: "Bank Transfer",
+  neft: "NEFT",
+  rtgs: "RTGS",
+  imps: "IMPS",
+  cheque: "Cheque",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
