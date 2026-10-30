@@ -197,6 +197,9 @@ interface ReceivableRow {
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
+  cancellation_requested_at?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_requested_by_user?: { full_name: string } | null;
   tally_invoice_number?: string | null;
   issuance_channel?: string | null;
   proposal_id?: string | null;
@@ -413,6 +416,20 @@ export default function AccountsReceivablePage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const withdrawCancellation = useCallback(async (row: ReceivableRow) => {
+    if (!window.confirm(`Withdraw the cancellation request for ${row.statement_number}? Reminders will resume.`)) return;
+    try {
+      const res = await fetch(`/api/billing-statements/${row.id}/withdraw-cancellation`, { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Failed to withdraw");
+      toast.success("Cancellation withdrawn. Reminders have resumed; reissue the payment link if the customer needs one.");
+      load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to withdraw");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     fetch("/api/me")
@@ -1120,6 +1137,17 @@ export default function AccountsReceivablePage() {
                                     <Link href={`/contracts/${r.contract.id}`}>{badge}</Link>
                                   ) : badge;
                                 })()}
+                                {r.cancellation_requested_at && (
+                                  <div className="mt-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-800">
+                                    <Badge variant="outline" className="text-[10px] gap-1 border-red-300 bg-white text-red-700 mr-1.5">
+                                      <Ban className="h-3 w-3" /> Cancellation requested
+                                    </Badge>
+                                    {formatDate(r.cancellation_requested_at)}
+                                    {r.cancellation_requested_by_user?.full_name ? ` · ${r.cancellation_requested_by_user.full_name}` : ""}
+                                    {r.cancellation_reason ? ` — “${r.cancellation_reason}”` : ""}
+                                    <div className="text-[11px] text-red-700/80">Reminders stopped. Waiting for Accounts to upload the credit note.</div>
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -1154,7 +1182,7 @@ export default function AccountsReceivablePage() {
                           </div>
 
                           <div className="flex items-center justify-start sm:justify-end gap-1 px-3.5 py-2 border-t bg-gray-50/50 flex-wrap">
-                            <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
+                            <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id || !!r.cancellation_requested_at} title="Send next reminder now (bypasses 48h throttle)">
                               {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Bell className="h-3.5 w-3.5 mr-1" />} Remind
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View send history (reminders, proforma, GST invoice)">
@@ -1181,13 +1209,23 @@ export default function AccountsReceivablePage() {
                                 <AlertTriangle className="h-3.5 w-3.5 mr-1" /> Convert to GST
                               </Button>
                             )}
-                            {canCancel && classifyForCancel(r).kind === "pi" && (
+                            {canCancel && r.cancellation_requested_at && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => withdrawCancellation(r)}
+                                title="Take back the cancellation request"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 mr-1" /> Withdraw cancellation
+                              </Button>
+                            )}
+                            {canCancel && ["pi", "gst"].includes(classifyForCancel(r).kind) && (
                               <Button
                                 size="sm"
                                 variant="outline"
                                 className="border-red-200 text-red-700 hover:bg-red-50"
                                 onClick={() => setCancelRow(r)}
-                                title="Cancel this proforma and stop its reminders"
+                                title={classifyForCancel(r).kind === "gst" ? "Ask Accounts to cancel this GST invoice with a credit note" : "Cancel this proforma and stop its reminders"}
                               >
                                 <Ban className="h-3.5 w-3.5 mr-1" /> Cancel
                               </Button>
@@ -1374,6 +1412,7 @@ export default function AccountsReceivablePage() {
           customerName={customerName(partyOf(cancelRow).lead)}
           amountLabel={formatCurrency(cancelRow.balance_due)}
           hasPaymentLink={!!cancelRow.razorpay_payment_link_url}
+          kind={classifyForCancel(cancelRow).kind === "gst" ? "gst" : "pi"}
           onSuccess={() => { setCancelRow(null); load(); }}
         />
       )}

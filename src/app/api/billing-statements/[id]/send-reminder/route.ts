@@ -40,7 +40,7 @@ export async function POST(
     .select(`
       id, statement_number, period_start, period_end, due_date, total_amount,
       payment_status, status, razorpay_payment_link_id, razorpay_payment_link_url,
-      reminder_count, last_reminder_sent_at, voided_at,
+      reminder_count, last_reminder_sent_at, voided_at, cancellation_requested_at,
       gst_invoice_number, gst_invoice_path, pi_cancelled_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
@@ -60,6 +60,7 @@ export async function POST(
 
   if (error || !statement) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
   if (statement.voided_at) return NextResponse.json({ error: "Cannot send reminder for a voided statement" }, { status: 400 });
+  if (statement.cancellation_requested_at) return NextResponse.json({ error: "A cancellation has been requested for this invoice, so reminders are stopped" }, { status: 400 });
   if (statement.payment_status === "paid") return NextResponse.json({ error: "Statement is already paid" }, { status: 400 });
   if (!["finalized", "exported"].includes(statement.status as string)) {
     return NextResponse.json({ error: "Statement must be finalized before sending a reminder" }, { status: 400 });

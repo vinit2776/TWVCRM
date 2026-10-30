@@ -130,6 +130,8 @@ export async function GET(_req: NextRequest) {
       razorpay_payment_link_url, razorpay_payment_link_id,
       last_reminder_sent_at, reminder_count, voided_at, created_at,
       gst_invoice_number, pi_cancelled_at, accounted,
+      cancellation_requested_at, cancellation_reason,
+      cancellation_requested_by_user:users!billing_statements_cancellation_requested_by_fkey(full_name),
       tally_invoice_number, issuance_channel, proposal_id, case_id, aggregator_id,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,

@@ -89,6 +89,8 @@ export async function GET(request: NextRequest) {
     .in("status", ["finalized", "exported"])
     .in("payment_status", ["unpaid", "partially_paid"])
     .is("voided_at", null)
+    // A GST invoice awaiting its credit note is being withdrawn — never dun it.
+    .is("cancellation_requested_at", null)
     .not("due_date", "is", null);
 
   if (error) {
