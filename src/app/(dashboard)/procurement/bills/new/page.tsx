@@ -344,13 +344,13 @@ function NewVendorBillForm() {
     runInvoiceCheck(file);
   };
 
-  // One read per upload. Any failure just hides the card; manual entry carries on.
+  // One read per upload. A failure shows a short reason; manual entry carries on.
   const runInvoiceCheck = (file: File) => {
     const seq = ++extractSeq.current;
     setInvoiceCheck({ status: "loading" });
-    requestInvoiceExtraction(file).then((extracted) => {
+    requestInvoiceExtraction(file).then((result) => {
       if (seq !== extractSeq.current) return;
-      setInvoiceCheck(extracted ? { status: "ok", extracted } : { status: "unavailable" });
+      setInvoiceCheck(result.ok ? { status: "ok", extracted: result.extracted } : { status: "unavailable", reason: result.reason });
     });
   };
 
