@@ -4,7 +4,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { entityTypesForModule, queryEntityDef, type QueryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { buildSearchBlob, matchesSearchTokens, searchTokens } from "@/lib/queries/search";
 import { USER_ROLE_LABELS } from "@/lib/constants";
-import { canSeeQuery, isAwaitingUser, validateTargeting, type Viewer } from "@/lib/queries/audience";
+import { canSeeQuery, isAwaitingUser, isThreadUnread, isWaitingOnOthers, validateTargeting, type Viewer } from "@/lib/queries/audience";
 import {
   requireQueryUser,
   loadEntitySummaries,
@@ -34,7 +34,10 @@ const PAGE_SIZE = 10;
 const SEARCH_CANDIDATE_CAP = 500;
 const SEARCH_MAX_LENGTH = 100;
 
-type Tab = "awaiting_me" | "mine" | "open" | "overdue" | "resolved";
+/** Closed threads older than this leave the Closed tab (search and "show older" still find them). */
+const CLOSED_RECENT_DAYS = 30;
+
+type Tab = "awaiting_me" | "waiting" | "mine" | "open" | "overdue" | "resolved";
 
 const THREAD_SELECT = `
   id, entity_type, entity_id, status, kind, audience, audience_roles, audience_user_ids,
@@ -111,6 +114,40 @@ function computeAwaiting(row: QueryRow, def: QueryEntityDef, viewer: Viewer): bo
   );
 }
 
+function computeWaitingOnOthers(row: QueryRow, def: QueryEntityDef, viewer: Viewer): boolean {
+  const messages = sortedMessages(row);
+  const last = messages[messages.length - 1] ?? null;
+  return isWaitingOnOthers(
+    {
+      ...targetingOf(row),
+      status: row.status,
+      created_by_id: row.created_by.id,
+      last_message_author_id: last?.created_by ?? null,
+      message_author_ids: messages.map((m) => m.created_by).filter((id): id is string => !!id),
+    },
+    def,
+    viewer,
+  );
+}
+
+interface ReadState {
+  reads: Map<string, string>;
+  effectiveFrom: string | null;
+}
+
+/** What this viewer has opened, and the cutoff before which nothing counts as new. */
+async function loadReadState(admin: SupabaseClient, viewerId: string): Promise<ReadState> {
+  const [readsRes, settingRes] = await Promise.all([
+    admin.from("query_reads").select("query_id, last_read_at").eq("user_id", viewerId).limit(5000),
+    admin.from("app_settings").select("value").eq("key", "queries_unread_effective_from").maybeSingle(),
+  ]);
+  const raw = typeof settingRes.data?.value === "string" ? settingRes.data.value : null;
+  const effectiveFrom = raw && !Number.isNaN(Date.parse(raw)) ? new Date(raw).toISOString() : null;
+  const reads = new Map<string, string>();
+  for (const r of readsRes.data ?? []) reads.set(r.query_id as string, r.last_read_at as string);
+  return { reads, effectiveFrom };
+}
+
 /**
  * Why a thread is awaiting this viewer, not just that it is.
  *
@@ -134,6 +171,7 @@ function toListItem(
   def: QueryEntityDef,
   viewer: Viewer,
   entitySummary: QueryListItem["entity"],
+  readState: ReadState,
 ): QueryListItem {
   const messages = sortedMessages(row);
   const last = messages[messages.length - 1] ?? null;
@@ -173,6 +211,13 @@ function toListItem(
       : null,
     awaiting_viewer: isAwaiting,
     awaiting_reason: awaitingReasonFor(row, viewer, isAwaiting),
+    unread: isThreadUnread({
+      lastMessageAt: last?.created_at ?? null,
+      lastMessageAuthorId: last?.created_by ?? null,
+      viewerId: viewer.id,
+      lastReadAt: readState.reads.get(row.id) ?? null,
+      effectiveFrom: readState.effectiveFrom,
+    }),
   };
 }
 
@@ -208,6 +253,9 @@ function sortByUrgency(items: QueryListItem[], today: string): QueryListItem[] {
     const rankA = a.awaiting_reason ? AWAITING_REASON_RANK[a.awaiting_reason] : 3;
     const rankB = b.awaiting_reason ? AWAITING_REASON_RANK[b.awaiting_reason] : 3;
     if (rankA !== rankB) return rankA - rankB;
+
+    // A reply you haven't seen outranks a quiet old thread of the same kind.
+    if (a.unread !== b.unread) return a.unread ? -1 : 1;
 
     return a.updated_at.localeCompare(b.updated_at);
   });
@@ -304,6 +352,7 @@ async function loadStats(
     stats: {
       open: open.length,
       awaiting_you: open.filter(({ row, def }) => computeAwaiting(row, def, viewer)).length,
+      waiting_others: open.filter(({ row, def }) => computeWaitingOnOthers(row, def, viewer)).length,
       overdue: open.filter(({ row }) => !!row.needed_by && row.needed_by < today).length,
       resolved_this_week: resolvedRes.count,
       new_24h: open.filter(({ row }) => row.created_at >= dayAgo).length,
@@ -346,6 +395,7 @@ export async function GET(req: NextRequest) {
   const entityId = url.searchParams.get("entity_id");
   const search = entityId ? "" : (url.searchParams.get("q") ?? "").trim().toLowerCase().slice(0, SEARCH_MAX_LENGTH);
   const today = new Date().toISOString().slice(0, 10);
+  const includeOlderClosed = url.searchParams.get("older") === "true";
 
   let q = admin.from("queries").select(THREAD_SELECT).order("updated_at", { ascending: false });
 
@@ -354,8 +404,15 @@ export async function GET(req: NextRequest) {
   if (entityType && entityId) {
     q = q.eq("entity_type", entityType).eq("entity_id", entityId);
   } else {
-    if (tab === "resolved") q = q.eq("status", "resolved");
-    else q = q.eq("status", "open");
+    if (tab === "resolved") {
+      q = q.eq("status", "resolved");
+      // Searching or asking for older ones lifts the window; otherwise the
+      // Closed tab is just the last month so it can't bury what's live.
+      if (!search && !includeOlderClosed) {
+        const since = new Date(Date.now() - CLOSED_RECENT_DAYS * 86_400_000).toISOString();
+        q = q.gte("resolved_at", since);
+      }
+    } else q = q.eq("status", "open");
     if (tab === "mine") q = q.eq("created_by", auth.dbUser.id);
     if (tab === "overdue") q = q.not("needed_by", "is", null).lt("needed_by", today);
   }
@@ -370,7 +427,7 @@ export async function GET(req: NextRequest) {
   // "Awaiting you" and the role-visibility filter are both post-filters, so
   // over-fetch and slice after — otherwise a page of ten could come back
   // near-empty. Capped so a large backlog can't pull the whole table.
-  const isPostFiltered = !entityId && (tab === "awaiting_me" || search.length > 0);
+  const isPostFiltered = !entityId && (tab === "awaiting_me" || tab === "waiting" || search.length > 0);
   // This tab is re-sorted by urgency below, not updated_at (see
   // sortByUrgency) — an updated_at cursor would cut rows out of the SQL
   // fetch before that reordering ever happens, silently skipping items on
@@ -399,17 +456,24 @@ export async function GET(req: NextRequest) {
       for (const p of people ?? []) userNames.set(p.id as string, p.full_name as string);
     }
   }
+  const readState = await loadReadState(admin, viewer.id);
   let items = visible
     .filter(
       ({ row, def }) =>
         tokens.length === 0 || matchesSearchTokens(threadSearchBlob(row, def, summaryFor(row), userNames), tokens),
     )
-    .map(({ row, def }) => toListItem(row, def, viewer, summaryFor(row)));
+    .map(({ row, def }) => toListItem(row, def, viewer, summaryFor(row), readState));
 
   if (isPostFiltered) {
     // Only the Awaiting tab is urgency-sorted and awaiting-filtered; a search on
     // any other tab keeps its recency order and pages by offset like this one.
     if (tab === "awaiting_me") items = sortByUrgency(items.filter((i) => i.awaiting_viewer), today);
+    if (tab === "waiting") {
+      const waitingIds = new Set(
+        visible.filter(({ row, def }) => computeWaitingOnOthers(row, def, viewer)).map(({ row }) => row.id),
+      );
+      items = items.filter((i) => waitingIds.has(i.id));
+    }
     const offset = cursor ? Number(cursor) || 0 : 0;
     const slice = items.slice(offset, offset + PAGE_SIZE);
     return NextResponse.json({

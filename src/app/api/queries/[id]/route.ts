@@ -160,6 +160,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const admin = createAdminClient();
   const result = await fetchThread(admin, id, { id: auth.dbUser.id, role: auth.dbUser.role });
   if (!result.thread) return NextResponse.json({ error: result.error }, { status: result.status });
+
+  // Opening a thread is what clears its "New reply" tag. Best-effort: a failed
+  // marker must never stop someone reading the thread.
+  const { error: readErr } = await admin
+    .from("query_reads")
+    .upsert({ query_id: id, user_id: auth.dbUser.id, last_read_at: new Date().toISOString() });
+  if (readErr) console.error("query_reads upsert failed:", readErr.message);
+
   return NextResponse.json({ thread: result.thread });
 }
 
