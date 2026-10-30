@@ -174,8 +174,8 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      // it_technician manages each contract's vouchers and door access from the detail page.
-      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts", "it_technician"] },
+      // IT roles manage each contract's vouchers and door access from the detail page.
+      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts", "it_manager", "it_technician"] },
       { href: "/bookings",  label: "Bookings",  icon: CalendarClock, roles: OPERATIONS_ROLES },
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
