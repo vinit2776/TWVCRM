@@ -1,3 +1,4 @@
+import { ONBOARDING_DUE_KEYS, dueDateFor } from "./due";
 import type {
   Journey,
   JourneyInput,
@@ -383,6 +384,11 @@ export function computeJourney(input: JourneyInput): Journey {
         action: d.action,
         actionable: state === "current" || (state === "upcoming" && PARALLEL_PHASES.has(phase.key)),
       };
+      // A step blocked behind something else is not its owner's to chase, so
+      // it carries no due date (and so never shows as late).
+      if (!d.done && state !== "blocked" && ONBOARDING_DUE_KEYS.has(d.key) && input.contract?.activatedAt) {
+        step.due = dueDateFor(input.contract.activatedAt);
+      }
       if (d.key === currentKey) nextStep = step;
       return step;
     });
