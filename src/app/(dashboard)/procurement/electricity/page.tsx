@@ -428,8 +428,13 @@ export default function ElectricityBillsPage() {
     const res = await fetch(`/api/electricity-bills/${billId}/approve`, { method: "POST" });
     const json = await res.json();
     if (res.ok) {
-      const count = (json.data as { customer_bills_generated: number }).customer_bills_generated ?? 0;
-      toast.success(`Approved — ${count} customer bill${count !== 1 ? "s" : ""} generated`);
+      const data = json.data as { customer_bills_generated: number; vendor_bill_awaiting_admin?: boolean };
+      const count = data.customer_bills_generated ?? 0;
+      toast.success(
+        data.vendor_bill_awaiting_admin
+          ? "Approved — the vendor bill is waiting for admin approval in Procurement"
+          : `Approved — ${count} customer bill${count !== 1 ? "s" : ""} generated`,
+      );
       fetchBills();
     } else {
       toast.error(json.error || "Approval failed");
@@ -1448,7 +1453,7 @@ export default function ElectricityBillsPage() {
                   </p>
                 )}
                 {mappedContracts && mappedContracts.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No contract mapped — will route to Accounts Payable on approval.</p>
+                  <p className="text-xs text-muted-foreground">No contract mapped — the vendor bill goes to Accounts Payable once an admin approves it.</p>
                 )}
                 {editingBillId && (
                   <p className="text-xs text-muted-foreground">Location, month, and year can&apos;t be changed once captured.</p>
