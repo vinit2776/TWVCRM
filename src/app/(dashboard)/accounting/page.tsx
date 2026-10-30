@@ -73,6 +73,8 @@ type VendorBillItem = {
   gst_amount: number | null;
   amount_paid: number;
   payment_status: string;
+  payment_hold_status?: string | null;
+  payment_hold_reason?: string | null;
   approval_status: string;
   approved_amount: number | null;
   approved_amount_note: string | null;
@@ -497,7 +499,7 @@ export default function AccountingPage() {
 
   // Batch multiselect derived values
   const selectedBills = useMemo(
-    () => allPendingBills.filter((b) => selectedBillIds.has(b.id)),
+    () => allPendingBills.filter((b) => selectedBillIds.has(b.id) && b.payment_hold_status !== "on_hold"),
     [allPendingBills, selectedBillIds]
   );
   const selectedTotal = useMemo(
@@ -694,13 +696,13 @@ export default function AccountingPage() {
                     placeholder="Search by bill #, invoice #, vendor, PO, notes…"
                   />
                 </div>
-                {canRecordPayment && selectedBillIds.size >= 2 && (
+                {canRecordPayment && selectedBills.length >= 2 && (
                   <button
                     onClick={openBatchWizard}
                     className="shrink-0 h-9 inline-flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-3 transition-colors"
                   >
                     <Layers className="h-4 w-4" />
-                    Pay {selectedBillIds.size} bills · {formatCurrency(selectedTotal)}
+                    Pay {selectedBills.length} bills · {formatCurrency(selectedTotal)}
                   </button>
                 )}
               </div>
@@ -1120,15 +1122,22 @@ export default function AccountingPage() {
                               <input
                                 type="checkbox"
                                 className="rounded border-gray-300"
-                                checked={visiblePendingBills.length > 0 && visiblePendingBills.every((b) => selectedBillIds.has(b.id))}
+                                checked={
+                                  visiblePendingBills.some((b) => b.payment_hold_status !== "on_hold") &&
+                                  visiblePendingBills.filter((b) => b.payment_hold_status !== "on_hold").every((b) => selectedBillIds.has(b.id))
+                                }
                                 onChange={(e) => {
                                   setSelectedBillIds((prev) => {
                                     const next = new Set(prev);
-                                    visiblePendingBills.forEach((b) => e.target.checked ? next.add(b.id) : next.delete(b.id));
+                                    visiblePendingBills.forEach((b) => {
+                                      if (b.payment_hold_status === "on_hold") return;
+                                      if (e.target.checked) next.add(b.id);
+                                      else next.delete(b.id);
+                                    });
                                     return next;
                                   });
                                 }}
-                                title="Select all visible bills"
+                                title="Select all visible bills (bills on hold are skipped)"
                               />
                             </th>
                           )}
@@ -1154,7 +1163,8 @@ export default function AccountingPage() {
                           const approvedOutstanding = Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0));
                           const isPartialApproval  = bill.approved_amount !== null && Number(bill.approved_amount) < baseAmt - 0.01;
                           const isOverdue          = !!(bill.due_date && bill.due_date < today);
-                          const isSelected         = selectedBillIds.has(bill.id);
+                          const isOnHold           = bill.payment_hold_status === "on_hold";
+                          const isSelected         = selectedBillIds.has(bill.id) && !isOnHold;
                           return (
                             <tr
                               key={bill.id}
@@ -1173,6 +1183,8 @@ export default function AccountingPage() {
                                     type="checkbox"
                                     className="rounded border-gray-300"
                                     checked={isSelected}
+                                    disabled={isOnHold}
+                                    title={isOnHold ? "On hold — release the hold before paying" : undefined}
                                     onChange={(e) => {
                                       setSelectedBillIds((prev) => {
                                         const next = new Set(prev);
@@ -1321,6 +1333,14 @@ export default function AccountingPage() {
                                       }
                                     >
                                       Part Approved
+                                    </span>
+                                  )}
+                                  {isOnHold && (
+                                    <span
+                                      className="text-[10px] font-medium bg-orange-100 text-orange-800 px-1.5 py-0.5 rounded-full w-fit cursor-help"
+                                      title={bill.payment_hold_reason ? bill.payment_hold_reason.replace(/_/g, " ") : "Payment on hold"}
+                                    >
+                                      On hold
                                     </span>
                                   )}
                                   {isOverdue && (
