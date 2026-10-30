@@ -6,6 +6,8 @@
     { "source": "/(.*)", "destination": "/api" }
   ],
   "crons": [
-    { "path": "/internal/auto-checkout", "schedule": "30 13 * * *" }
+    { "path": "/internal/auto-checkout", "schedule": "30 13 * * *" },
+    { "path": "/internal/daily-report?kind=morning", "schedule": "30 4 * * *" },
+    { "path": "/internal/daily-report?kind=evening", "schedule": "30 13 * * *" }
   ]
 }
