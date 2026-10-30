@@ -31,6 +31,13 @@ export async function POST(
   }
 
   const admin = createAdminClient();
+  // Read the request first: clearing the columns would otherwise erase what
+  // the audit row needs to say was withdrawn.
+  const { data: pending } = await admin
+    .from("billing_statements")
+    .select("cancellation_requested_at, cancellation_requested_by, cancellation_reason")
+    .eq("id", id)
+    .maybeSingle();
   const { data: updated, error } = await admin
     .from("billing_statements")
     .update({ cancellation_requested_at: null, cancellation_requested_by: null, cancellation_reason: null })
@@ -51,7 +58,12 @@ export async function POST(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
-    changes: { cancellation_requested: { old: "requested", new: "withdrawn" } },
+    changes: {
+      cancellation_requested: { old: "requested", new: "withdrawn" },
+      ...(pending?.cancellation_reason ? { cancellation_reason: { old: pending.cancellation_reason, new: null } } : {}),
+      ...(pending?.cancellation_requested_by ? { cancellation_requested_by: { old: pending.cancellation_requested_by, new: null } } : {}),
+      ...(pending?.cancellation_requested_at ? { cancellation_requested_at: { old: pending.cancellation_requested_at, new: null } } : {}),
+    },
   });
 
   return NextResponse.json({ success: true });
