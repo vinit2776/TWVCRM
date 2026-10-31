@@ -6,7 +6,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 import { daysPastBooking } from "@/lib/process-registry";
-import { checkInPaymentState } from "@/lib/booking-payment-rules";
+import { checkInPaymentState, roundToRupee } from "@/lib/booking-payment-rules";
 import { noteProvisionalCheckIn } from "@/lib/booking-payment-server";
 import { deleteUserFromDevice } from "@/lib/cosec";
 import { computeVoucherSeatCap } from "@/lib/booking-vouchers";
@@ -277,7 +277,7 @@ async function computeBookingTotalsWithAddons(
     0
   );
 
-  const totalWithGst = parseFloat((newSubtotal + baseGstAmount + addonTotal).toFixed(2));
+  const totalWithGst = roundToRupee(newSubtotal + baseGstAmount + addonTotal);
   return {
     total_amount: newSubtotal,
     gst_amount: baseGstAmount,

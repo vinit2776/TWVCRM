@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { isBookingPaymentMethodLocked } from "@/lib/booking-payment-method";
-import { findDuplicateReference } from "@/lib/booking-payment-rules";
+import { bookingPaymentTolerance, findDuplicateReference } from "@/lib/booking-payment-rules";
 import { raiseBookingPaymentReport } from "@/lib/booking-payment-server";
 
 const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name), collector:users!booking_payments_collected_by_fkey(id, full_name), handover_receiver:users!booking_payments_handed_over_to_fkey(id, full_name), handover_confirmer:users!booking_payments_handover_confirmed_by_fkey(id, full_name)";
@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
   if (status === "verified") {
     const newTotal = Number(rpcResult.new_total);
     const grandTotal = Number(rpcResult.grand_total);
-    if (newTotal >= grandTotal) {
+    if (newTotal >= grandTotal - bookingPaymentTolerance(grandTotal)) {
       await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode })

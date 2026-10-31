@@ -1,5 +1,6 @@
 "use client";
 
+import { amountLeftToCollect } from "@/lib/booking-payment-rules";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -1974,7 +1975,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 .filter((p) => p.status === "pending")
                 .reduce((sum, p) => sum + Number(p.amount), 0);
               const chargeableTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal);
+              // Money already reported (pending verification) is not left to collect.
+              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal - pendingTotal);
 
               return (
                 <>
@@ -1993,7 +1995,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       )}
                       {balanceDue > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Balance Due</span>
+                          <span className="text-muted-foreground">
+                            {pendingTotal > 0 ? "Balance to Receive" : "Balance Due"}
+                          </span>
                           <span className="font-medium text-red-600">{formatCurrency(balanceDue)}</span>
                         </div>
                       )}
@@ -2483,8 +2487,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onOpenChange={setGetPaymentChooserOpen}
         amountDue={(() => {
           const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-          const paid = existingPayments.filter((p) => p.status === "verified").reduce((s, p) => s + Number(p.amount), 0);
-          return Math.max(0, grandTotal - paid);
+          return amountLeftToCollect(grandTotal, existingPayments);
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
