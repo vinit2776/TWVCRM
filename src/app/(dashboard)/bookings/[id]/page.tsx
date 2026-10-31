@@ -1983,6 +1983,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                     <>
                       <Separator />
                       <div className="flex justify-between">
+                        <span className="text-muted-foreground">Grand Total</span>
+                        <span className="font-medium">{formatCurrency(chargeableTotal)}</span>
+                      </div>
+                      <div className="flex justify-between">
                         <span className="text-muted-foreground">Amount Paid</span>
                         <span className="font-medium text-green-700">{formatCurrency(verifiedTotal)}</span>
                       </div>
