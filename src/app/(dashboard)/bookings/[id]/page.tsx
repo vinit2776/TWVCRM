@@ -1974,7 +1974,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 .filter((p) => p.status === "pending")
                 .reduce((sum, p) => sum + Number(p.amount), 0);
               const chargeableTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal);
+              // Money already reported (pending verification) is not left to collect.
+              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal - pendingTotal);
 
               return (
                 <>
@@ -1993,7 +1994,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       )}
                       {balanceDue > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Balance Due</span>
+                          <span className="text-muted-foreground">
+                            {pendingTotal > 0 ? "Balance to Receive" : "Balance Due"}
+                          </span>
                           <span className="font-medium text-red-600">{formatCurrency(balanceDue)}</span>
                         </div>
                       )}
