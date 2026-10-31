@@ -100,6 +100,19 @@ export function verifyExcess(grandTotal: number, verifiedTotal: number, amount: 
   return excess > bookingPaymentTolerance(grandTotal) ? Math.round(excess * 100) / 100 : 0;
 }
 
+/**
+ * What staff can still take from the customer: the total less verified money
+ * and manual UPI already reported (the server counts that as claimed too).
+ * Razorpay pending is not counted — a link may never be paid.
+ */
+export function amountLeftToCollect(grandTotal: number, payments: BookingPaymentLike[]): number {
+  const verified = sumByStatus(payments, "verified");
+  const pendingUpi = payments
+    .filter((p) => p.status === "pending" && p.payment_mode === "upi")
+    .reduce((sum, p) => sum + toNumber(p.amount), 0);
+  return Math.max(0, Math.round((grandTotal - verified - pendingUpi) * 100) / 100);
+}
+
 /** Another live payment on the same booking carrying the same reference. */
 export function findDuplicateReference(
   payments: Array<{ id?: string; status: string; payment_reference?: string | null }>,

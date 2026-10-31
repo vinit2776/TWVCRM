@@ -5,6 +5,7 @@ import {
   findDuplicateReference,
   hasProof,
   verifyExcess,
+  amountLeftToCollect,
   bookingPaymentTolerance,
   roundToRupee,
 } from "../booking-payment-rules";
@@ -148,5 +149,24 @@ describe("roundToRupee", () => {
   it("rounds to the nearest whole rupee", () => {
     expect(roundToRupee(8634.06)).toBe(8634);
     expect(roundToRupee(8634.5)).toBe(8635);
+  });
+});
+
+describe("amountLeftToCollect", () => {
+  it("takes verified and pending UPI off the total", () => {
+    expect(
+      amountLeftToCollect(8634, [{ amount: 7674.72, status: "pending", payment_mode: "upi" }]),
+    ).toBe(959.28);
+  });
+  it("ignores pending Razorpay and rejected rows", () => {
+    expect(
+      amountLeftToCollect(1000, [
+        { amount: 400, status: "pending", payment_mode: "razorpay" },
+        { amount: 300, status: "rejected", payment_mode: "upi" },
+      ]),
+    ).toBe(1000);
+  });
+  it("never goes negative", () => {
+    expect(amountLeftToCollect(100, [{ amount: 150, status: "verified", payment_mode: "cash" }])).toBe(0);
   });
 });

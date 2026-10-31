@@ -1,5 +1,6 @@
 "use client";
 
+import { amountLeftToCollect } from "@/lib/booking-payment-rules";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -2486,8 +2487,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onOpenChange={setGetPaymentChooserOpen}
         amountDue={(() => {
           const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
-          const paid = existingPayments.filter((p) => p.status === "verified").reduce((s, p) => s + Number(p.amount), 0);
-          return Math.max(0, grandTotal - paid);
+          return amountLeftToCollect(grandTotal, existingPayments);
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
