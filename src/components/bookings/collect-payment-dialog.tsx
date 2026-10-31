@@ -19,6 +19,7 @@ import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
+import { bookingPaymentTolerance } from "@/lib/booking-payment-rules";
 import {
   BOOKING_PAYMENT_RECORD_STATUS_LABELS,
   BOOKING_PAYMENT_RECORD_STATUS_COLORS,
@@ -152,14 +153,25 @@ export function CollectPaymentDialog({
   const pendingTotal = payments
     .filter((p) => p.status === "pending")
     .reduce((sum, p) => sum + Number(p.amount), 0);
+  // Pending manual UPI is already claimed against the balance (the server
+  // counts it too), so it is not left to collect. Razorpay pending is not.
+  const pendingUpiTotal = payments
+    .filter((p) => p.status === "pending" && p.payment_mode === "upi")
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+  const tolerance = bookingPaymentTolerance(totalAmount);
   const balanceDue = Math.max(0, totalAmount - verifiedTotal);
+  // What staff can still take now. Several collections are fine until this
+  // is within tolerance of nothing.
+  const collectable = Math.max(0, totalAmount - verifiedTotal - pendingUpiTotal);
+  const canCollectMore = collectable > tolerance;
+  const fullyVerified = balanceDue <= tolerance;
 
-  // Default amount to balance due
+  // Default amount to what is left to collect, in whole rupees.
   useEffect(() => {
-    if (open && balanceDue > 0) {
-      setAmount(balanceDue.toFixed(2));
+    if (open && collectable > 0) {
+      setAmount(String(Math.round(collectable)));
     }
-  }, [open, balanceDue]);
+  }, [open, collectable]);
 
   const handleFileSelect = (file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -178,8 +190,12 @@ export function CollectPaymentDialog({
       toast.error("Please enter a valid amount");
       return;
     }
-    if (amt > balanceDue + 0.01) {
-      toast.error(`Amount exceeds balance due (${formatCurrency(balanceDue)})`);
+    if (amt > collectable + tolerance) {
+      toast.error(
+        pendingUpiTotal > 0
+          ? `Only ${formatCurrency(collectable)} is left to collect — ${formatCurrency(pendingUpiTotal)} is already reported and waiting for accounts`
+          : `Amount exceeds balance due (${formatCurrency(collectable)})`,
+      );
       return;
     }
 
@@ -260,7 +276,7 @@ export function CollectPaymentDialog({
       const wasVerified = paymentMode === "cash" || paymentMode === "card" ||
         (paymentMode === "upi" && !!screenshotFile);
       const newVerified = verifiedTotal + (wasVerified ? amt : 0);
-      if (newVerified >= totalAmount) {
+      if (newVerified >= totalAmount - tolerance) {
         onSuccess();
         onOpenChange(false);
       }
@@ -293,7 +309,7 @@ export function CollectPaymentDialog({
           const payment = payments.find((p) => p.id === paymentId);
           if (payment) {
             const newVerified = verifiedTotal + Number(payment.amount);
-            if (newVerified >= totalAmount) {
+            if (newVerified >= totalAmount - tolerance) {
               onSuccess();
               onOpenChange(false);
             }
@@ -407,7 +423,7 @@ export function CollectPaymentDialog({
           )}
 
           {/* Add Payment Form */}
-          {balanceDue > 0 && (
+          {canCollectMore && (
             <>
               <Separator />
 
@@ -416,12 +432,12 @@ export function CollectPaymentDialog({
                   <Label>Amount</Label>
                   <Input
                     type="number"
-                    step="0.01"
+                    step="1"
                     min="1"
-                    max={balanceDue}
+                    max={Math.round(collectable + tolerance)}
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    placeholder={`Max ${formatCurrency(balanceDue)}`}
+                    placeholder={`Max ${formatCurrency(collectable)}`}
                   />
                 </div>
 
@@ -631,7 +647,16 @@ export function CollectPaymentDialog({
             </>
           )}
 
-          {balanceDue <= 0 && !loading && (
+          {!canCollectMore && !fullyVerified && !loading && (
+            <div className="text-center py-4">
+              <p className="text-sm font-medium text-amber-700">Everything is reported</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatCurrency(pendingUpiTotal)} is waiting for accounts to verify it. Nothing more to collect.
+              </p>
+            </div>
+          )}
+
+          {fullyVerified && !loading && (
             <div className="text-center py-4">
               <CheckCircle className="h-8 w-8 text-green-500 mx-auto mb-2" />
               <p className="text-sm font-medium text-green-700">Payment Complete</p>

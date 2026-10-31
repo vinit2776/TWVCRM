@@ -5,6 +5,8 @@ import {
   findDuplicateReference,
   hasProof,
   verifyExcess,
+  bookingPaymentTolerance,
+  roundToRupee,
 } from "../booking-payment-rules";
 
 const upi = (amount: number, extra: Record<string, unknown> = {}) => ({
@@ -121,5 +123,30 @@ describe("closeOutPaymentState", () => {
   });
   it("does not count UPI that has no proof", () => {
     expect(closeOutPaymentState(2832, "pending", [upi(2832)]).settled).toBe(false);
+  });
+});
+
+describe("bookingPaymentTolerance", () => {
+  it("is ₹10 for small totals", () => {
+    expect(bookingPaymentTolerance(500)).toBe(10);
+    expect(bookingPaymentTolerance(0)).toBe(10);
+  });
+  it("is 2% once that exceeds ₹10", () => {
+    expect(bookingPaymentTolerance(8634)).toBeCloseTo(172.68, 2);
+  });
+  it("lets a booking count as covered a few rupees short", () => {
+    expect(checkInPaymentState(100, [{ amount: 91, status: "verified", payment_mode: "cash" }]).covered).toBe(true);
+    expect(checkInPaymentState(100, [{ amount: 89, status: "verified", payment_mode: "cash" }]).covered).toBe(false);
+  });
+  it("allows a verify to overshoot by the tolerance but no more", () => {
+    expect(verifyExcess(100, 0, 108)).toBe(0);
+    expect(verifyExcess(100, 0, 115)).toBe(15);
+  });
+});
+
+describe("roundToRupee", () => {
+  it("rounds to the nearest whole rupee", () => {
+    expect(roundToRupee(8634.06)).toBe(8634);
+    expect(roundToRupee(8634.5)).toBe(8635);
   });
 });

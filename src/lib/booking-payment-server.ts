@@ -26,7 +26,7 @@ import {
   PAYMENT_REPORT_AUDIENCE_ROLES,
   defaultNeededBy,
 } from "@/lib/queries/payment-reports";
-import { verifyExcess } from "@/lib/booking-payment-rules";
+import { bookingPaymentTolerance, verifyExcess } from "@/lib/booking-payment-rules";
 import { STATEMENT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 
 interface Actor {
@@ -249,7 +249,7 @@ export async function settleBookingPayment(
       .eq("status", "verified");
     const totalPaid = (verifiedNow || []).reduce((s, p) => s + Number(p.amount), 0);
 
-    if (totalPaid >= grandTotal) {
+    if (totalPaid >= grandTotal - bookingPaymentTolerance(grandTotal)) {
       await admin
         .from("bookings")
         .update({ payment_status: "paid", payment_mode: payment.payment_mode })

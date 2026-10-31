@@ -1,3 +1,4 @@
+import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -70,8 +71,8 @@ export async function DELETE(
     (a: number, r: { total_with_gst: number }) => a + Number(r.total_with_gst), 0
   );
   await supabase.from("bookings").update({
-    total_amount_with_gst: parseFloat(
-      (Number(booking.total_amount) + Number(booking.gst_amount) + sum).toFixed(2)
+    total_amount_with_gst: roundToRupee(
+      Number(booking.total_amount) + Number(booking.gst_amount) + sum
     ),
   }).eq("id", id);
 

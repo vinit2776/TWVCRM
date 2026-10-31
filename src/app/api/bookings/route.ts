@@ -1,3 +1,4 @@
+import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
@@ -415,7 +416,8 @@ export async function POST(request: NextRequest) {
   // portion. Keeps the receipt aligned with what's actually collected.
   const gstRate = 18;
   const gstAmount = parseFloat((totalAmount * gstRate / 100).toFixed(2));
-  const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
+  // Whole rupees: nobody pays paise, and the leftover would otherwise block "fully paid".
+  const totalAmountWithGst = roundToRupee(totalAmount + gstAmount);
 
   // 3b. Prepaid purchase validation (if caller passes prepaid_purchase_id in body)
   let prepaidPurchaseId: string | undefined;

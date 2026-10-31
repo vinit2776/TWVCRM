@@ -18,6 +18,28 @@
 /** Rupee tolerance, the same epsilon insert_booking_payment_atomic uses. */
 export const BOOKING_PAYMENT_EPSILON = 0.01;
 
+/** Flat rupee allowance, and the share of the total that replaces it when larger. */
+export const BOOKING_PAYMENT_TOLERANCE_FLAT = 10;
+export const BOOKING_PAYMENT_TOLERANCE_PERCENT = 2;
+
+/**
+ * How far a booking's collected money may sit over or under its total and still
+ * count as settled: ₹10 or 2% of the total, whichever is higher. Customers pay
+ * round UPI amounts, so chasing paise (or a few rupees) is not worth a second
+ * collection. insert_booking_payment_atomic (migration 00653) uses the same rule.
+ */
+export function bookingPaymentTolerance(grandTotal: number): number {
+  return Math.max(
+    BOOKING_PAYMENT_TOLERANCE_FLAT,
+    Math.round(grandTotal * BOOKING_PAYMENT_TOLERANCE_PERCENT) / 100,
+  );
+}
+
+/** Nearest whole rupee — what a booking's payable total is stored as. */
+export function roundToRupee(amount: number): number {
+  return Math.round(amount);
+}
+
 export interface BookingPaymentLike {
   amount: number | string;
   status: string;
@@ -63,18 +85,19 @@ export function checkInPaymentState(
     .filter((p) => p.status === "pending" && p.payment_mode === "upi" && hasProof(p))
     .reduce((sum, p) => sum + toNumber(p.amount), 0);
 
-  const covered = verified + provisional >= grandTotal - BOOKING_PAYMENT_EPSILON;
-  const verifiedCovers = verified >= grandTotal - BOOKING_PAYMENT_EPSILON;
+  const floor = grandTotal - bookingPaymentTolerance(grandTotal);
+  const covered = verified + provisional >= floor;
+  const verifiedCovers = verified >= floor;
   return { grandTotal, verified, provisional, covered, isProvisional: covered && !verifiedCovers };
 }
 
 /**
  * Whether verifying `amount` on top of what is already verified would exceed
- * the booking total. Returns the excess (0 when it fits).
+ * the booking total by more than the tolerance. Returns the excess (0 when it fits).
  */
 export function verifyExcess(grandTotal: number, verifiedTotal: number, amount: number): number {
   const excess = verifiedTotal + amount - grandTotal;
-  return excess > BOOKING_PAYMENT_EPSILON ? Math.round(excess * 100) / 100 : 0;
+  return excess > bookingPaymentTolerance(grandTotal) ? Math.round(excess * 100) / 100 : 0;
 }
 
 /** Another live payment on the same booking carrying the same reference. */
