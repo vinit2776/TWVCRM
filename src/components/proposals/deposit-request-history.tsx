@@ -34,6 +34,8 @@ function titleFor(item: DepositHistoryItem): string {
 export function DepositRequestHistory({ proposalId, refreshKey }: { proposalId: string; refreshKey: string }) {
   const [items, setItems] = useState<DepositHistoryItem[] | null>(null);
   const [error, setError] = useState(false);
+  // Collapsed by default: a busy proposal can carry many requests and reminders.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,12 +68,26 @@ export function DepositRequestHistory({ proposalId, refreshKey }: { proposalId: 
 
   return (
     <div className="mt-3 border-t border-amber-200 pt-3">
-      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-amber-800">
-        <History className="h-3.5 w-3.5" /> Request history ({items.length})
-      </p>
-      <div className="divide-y divide-amber-100 overflow-hidden rounded-md border border-amber-200 bg-white">
-        {items.map((item) => <HistoryRow key={item.id} item={item} />)}
-      </div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-left text-xs font-medium text-amber-800 hover:text-amber-900"
+      >
+        <History className="h-3.5 w-3.5 shrink-0" />
+        <span>Request history ({items.length})</span>
+        {!open && (
+          <span className="min-w-0 flex-1 truncate font-normal text-amber-700/80">
+            · latest: {titleFor(items[0])}, {formatDateTime(items[0].created_at)}
+          </span>
+        )}
+        {open ? <ChevronUp className="ml-auto h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />}
+      </button>
+      {open && (
+        <div className="mt-2 divide-y divide-amber-100 overflow-hidden rounded-md border border-amber-200 bg-white">
+          {items.map((item) => <HistoryRow key={item.id} item={item} />)}
+        </div>
+      )}
     </div>
   );
 }
