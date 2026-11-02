@@ -1846,6 +1846,7 @@ export default function PurchaseOrderDetailPage() {
           billingCycle={po.billing_cycle ?? null}
           cycleCount={po.cycle_count ?? null}
           unitCostPerCycle={po.unit_cost_per_cycle ?? null}
+          serviceStartDate={po.service_start_date ?? null}
           reports={(po.po_service_reports as PoServiceReport[] | undefined) ?? []}
           bills={(po.vendor_bills ?? []) as CycleBill[]}
           onRecordReport={() => {

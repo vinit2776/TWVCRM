@@ -205,3 +205,33 @@ export function partitionBillsByCycle<T extends { service_report_id?: string | n
   }
   return { cycleBills, untiedBills };
 }
+
+/** First day of cycle `n` (1-based) of a service contract that started on `start`. */
+export function cycleStartDate(
+  start: string | null | undefined,
+  cycle: ServicePoBillingCycle | null | undefined,
+  n: number
+): string | null {
+  const p = start ? parseDateParts(start) : null;
+  if (!p || !cycle || !Number.isInteger(n) || n < 1) return null;
+  const d = new Date(Date.UTC(p.y, p.m - 1 + (n - 1) * (BILLING_CYCLE_MONTHS[cycle] ?? 12), p.d));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Where a cycle's start sits relative to today: how many whole days since it began
+ * (`started`), or until it begins (`upcoming`). Plain facts only; the page decides how
+ * to word them, so there is no hidden "overdue" threshold.
+ */
+export function cycleTiming(
+  startsOn: string | null | undefined,
+  today: string
+): { kind: "started" | "today" | "upcoming"; days: number } | null {
+  const s = startsOn ? parseDateParts(startsOn) : null;
+  const t = parseDateParts(today);
+  if (!s || !t) return null;
+  const days = Math.round((Date.UTC(t.y, t.m - 1, t.d) - Date.UTC(s.y, s.m - 1, s.d)) / 86_400_000);
+  if (days > 0) return { kind: "started", days };
+  if (days === 0) return { kind: "today", days: 0 };
+  return { kind: "upcoming", days: -days };
+}

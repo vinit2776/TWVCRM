@@ -208,3 +208,37 @@ describe("partitionBillsByCycle", () => {
       .toEqual({ kind: "log_report", cycle: 2 });
   });
 });
+
+import { cycleStartDate, cycleTiming } from "../procurement/amc-billing";
+
+describe("cycleStartDate", () => {
+  it("steps a half-yearly contract by six months", () => {
+    expect(cycleStartDate("2026-03-30", "half_yearly", 1)).toBe("2026-03-30");
+    expect(cycleStartDate("2026-03-30", "half_yearly", 2)).toBe("2026-09-30");
+  });
+  it("handles monthly and yearly", () => {
+    expect(cycleStartDate("2026-03-30", "monthly", 3)).toBe("2026-05-30");
+    expect(cycleStartDate("2026-03-30", "yearly", 2)).toBe("2027-03-30");
+  });
+  it("is null without a start date, cycle or valid number", () => {
+    expect(cycleStartDate(null, "yearly", 1)).toBeNull();
+    expect(cycleStartDate("2026-03-30", null, 1)).toBeNull();
+    expect(cycleStartDate("2026-03-30", "yearly", 0)).toBeNull();
+  });
+});
+
+describe("cycleTiming", () => {
+  it("counts days since a cycle began", () => {
+    expect(cycleTiming("2026-09-30", "2026-10-12")).toEqual({ kind: "started", days: 12 });
+  });
+  it("says today on the first day", () => {
+    expect(cycleTiming("2026-09-30", "2026-09-30")).toEqual({ kind: "today", days: 0 });
+  });
+  it("counts days until a future cycle", () => {
+    expect(cycleTiming("2027-03-30", "2027-03-01")).toEqual({ kind: "upcoming", days: 29 });
+  });
+  it("is null for a missing or bad date", () => {
+    expect(cycleTiming(null, "2026-10-12")).toBeNull();
+    expect(cycleTiming("2026-09-30", "bad")).toBeNull();
+  });
+});
