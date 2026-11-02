@@ -1,6 +1,6 @@
 import { BILLING_CYCLE_MONTHS, type ServicePoBillingCycle } from "@/lib/constants";
 import { cyclesBetween } from "@/lib/procurement/amc-billing";
-import { invoiceFitsCycle, GST_SLABS } from "@/lib/procurement/invoice-fits-cycle";
+import { invoiceFitsCycle, GST_SLABS, GST_ROUNDING_TOLERANCE } from "@/lib/procurement/invoice-fits-cycle";
 
 export const CONVERTIBLE_STATUSES = ["ordered", "partially_received", "received", "invoice_received", "invoice_approved"] as const;
 
@@ -105,7 +105,7 @@ export function suggestConversion(input: {
   const total = round2(input.total);
   const equalShare = (a: number, k: number) =>
     Math.abs(a - total / k) <= 0.01 ||
-    GST_SLABS.some((r) => Math.abs(a - round2((total / k) * (1 + r / 100))) <= 0.05);
+    GST_SLABS.some((r) => Math.abs(a - round2((total / k) * (1 + r / 100))) <= GST_ROUNDING_TOLERANCE);
   if (n > 0 && CYCLE_BY_COUNT[n] && input.liveBillAmounts.every((a) => equalShare(a, n))) {
     return { billingCycle: CYCLE_BY_COUNT[n], cycleCount: n, reason: "invoices" };
   }

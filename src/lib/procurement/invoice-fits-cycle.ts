@@ -1,6 +1,9 @@
 /** GST slabs a vendor invoice can carry on top of a PO's pre-GST cycle cost. */
 export const GST_SLABS = [5, 12, 18, 28] as const;
 
+/** Vendors round the GST-inclusive total to the rupee (PO-2604-047: ₹15,611 against 13,230 + 18% = 15,611.40). */
+export const GST_ROUNDING_TOLERANCE = 1;
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export type InvoiceCycleFit =
@@ -25,7 +28,7 @@ export function invoiceFitsCycle(
   // Pre-GST amount fits (the bill's recorded base, or its total when no GST was recorded).
   if (base <= unitCost + 0.01) return { fits: true, basis: "base", gstRate: null };
   for (const rate of GST_SLABS) {
-    if (Math.abs(total - round2(unitCost * (1 + rate / 100))) <= 0.05) {
+    if (Math.abs(total - round2(unitCost * (1 + rate / 100))) <= GST_ROUNDING_TOLERANCE) {
       return { fits: true, basis: "gst_inclusive", gstRate: rate };
     }
   }

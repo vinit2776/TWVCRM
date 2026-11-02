@@ -61,11 +61,12 @@ BEGIN
     IF bill.service_report_id IS NOT NULL THEN RAISE EXCEPTION 'That invoice is already tied to a cycle'; END IF;
     -- POs are pre-GST; vendors invoice each instalment with GST on top (a 20,790 PO paid
     -- half-yearly is billed 10,395 + 18% = 12,266.10). So the invoice fits when its pre-GST
-    -- amount is within the cycle cost, or its total is the cycle cost plus a standard slab.
+    -- amount is within the cycle cost, or its total is the cycle cost plus a standard slab
+    -- (within Rs 1: vendors round to the rupee, e.g. 15,611 for 13,230 + 18%).
     IF COALESCE(NULLIF(bill.base_amount, 0), bill.total_amount) > p_unit_cost + 0.01
        AND NOT EXISTS (
          SELECT 1 FROM unnest(ARRAY[5, 12, 18, 28]) AS r
-          WHERE abs(bill.total_amount - round(p_unit_cost * (1 + r / 100.0), 2)) <= 0.05)
+          WHERE abs(bill.total_amount - round(p_unit_cost * (1 + r / 100.0), 2)) <= 1)
     THEN
       RAISE EXCEPTION 'That invoice (%) is more than one cycle''s cost (%)', bill.total_amount, p_unit_cost;
     END IF;

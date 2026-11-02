@@ -10,20 +10,18 @@ order to use it in.
 What the vendor documents show: contract 30 Mar 2026 – 29 Mar 2027, billed **half-yearly
 in advance**, 4 preventive visits a year, amounts **before GST** with 18% added per invoice.
 The PO is ₹20,790 before GST, so one instalment is ₹10,395; ₹10,395 + 18% = **₹12,266.10**,
-which is exactly the invoice already on the PO (vendor invoice 1033015258).
+which is the size of the later invoice on the PO.
 
 Steps (admin, after migration 00654 is on production):
 
 1. Open the PO → **Set up as AMC**.
-2. Billing: **Half-Yearly, 2 cycles** (the wizard suggests this from the payment terms
-   and the invoice). Check the table: cycle 1 30 Mar – 29 Sep 2026, cycle 2 30 Sep 2026 – 29 Mar 2027,
-   ₹10,395 each before GST.
-3. Invoice: pick **Invoice 1033015258** for cycle 1 (it should read "matches one cycle plus 18% GST").
+2. Billing: **Half-Yearly, 2 cycles** (the wizard suggests this from the payment terms). Check the table: cycle 1 30 Mar – 29 Sep 2026, cycle 2 30 Sep 2026 – 29 Mar 2027, ₹10,395 each before GST.
+3. Invoice step: pick the invoice that belongs to **cycle 1** (the first instalment, dated near the start of the contract), not the latest one. Later instalments are tied to their own cycle afterwards with the existing "tie invoice to cycle" action.
 4. Review → **Set up AMC**. Nothing about amounts, payments or the advance changes.
 5. Afterwards check on the PO: type is Service, cycle 2 is due, the approved invoice
    keeps its approval and payment status.
 
-Before step 1 on production, confirm the PO's payment terms still read "Half-Yearly".
+Before step 1 on production, check the PO for duplicate invoice entries, and confirm the PO's payment terms still read "Half-Yearly".
 
 ## 2. Other AMCs that are set up badly
 

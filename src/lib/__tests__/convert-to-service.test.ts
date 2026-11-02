@@ -99,3 +99,17 @@ describe("bills with base_amount 0 (rows from before GST tracking)", () => {
     expect(v).toMatchObject({ ok: false });
   });
 });
+
+describe("vendor rounding to the rupee (PO-2604-047 shape)", () => {
+  it("accepts ₹15,611 for a ₹13,230 cycle plus 18% GST", () => {
+    const v = checkConvertToService(w({ po: { ...base.po, total_ordered_amount: 26460 }, bill: { ...base.bill!, total_amount: 15611 } }));
+    expect(v).toEqual({ ok: true, unitCost: 13230 });
+  });
+});
+
+describe("vendor rounding to the rupee", () => {
+  it("accepts ₹15,611 for a ₹13,230 cycle plus 18% GST", () => {
+    const v = checkConvertToService(w({ po: { ...base.po, total_ordered_amount: 26460 }, bill: { ...base.bill!, total_amount: 15611 } }));
+    expect(v).toEqual({ ok: true, unitCost: 13230 });
+  });
+});
