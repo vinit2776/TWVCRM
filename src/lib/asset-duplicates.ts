@@ -83,3 +83,44 @@ export function describeUnitMismatch(
   if (uc !== null && ac !== null && Math.abs(uc - ac) > 0.05) out.push(`it looks like a ${ac} TR unit, but the proposal unit is ${uc} TR`);
   return out;
 }
+
+export interface RankableAsset {
+  id: string;
+  name: string;
+  model?: string | null;
+  serial_number?: string | null;
+  notes?: string | null;
+  category?: { name?: string | null; slug?: string | null } | null;
+}
+
+const isHvac = (a: RankableAsset) => /hvac|air.?con|cooling/i.test(`${a.category?.slug ?? ""} ${a.category?.name ?? ""}`);
+
+/** Points for how likely an asset is to be the unit: serial, then model, then capacity, then being an air-conditioning asset. */
+export function matchScore(unit: { serial: string | null; model: string | null; capacity: string | null }, a: RankableAsset): number {
+  let score = 0;
+  const us = normaliseSerial(unit.serial);
+  const as = normaliseSerial(a.serial_number);
+  if (us && as && contains(us, as)) score += 100;
+  const um = normaliseModel(unit.model);
+  const am = normaliseModel(a.model);
+  if (um && am && contains(um, am)) score += 50;
+  const uc = parseTonnage(unit.capacity);
+  const ac = parseTonnage(a.name, a.model, a.notes);
+  if (uc !== null && ac !== null && Math.abs(uc - ac) <= 0.05) score += 30;
+  if (isHvac(a)) score += 10;
+  return score;
+}
+
+/** Assets best matching the unit first; ties keep their order. Nothing is removed. */
+export function rankAssetsForUnit<T extends RankableAsset>(unit: { serial: string | null; model: string | null; capacity: string | null }, assets: T[]): Array<{ asset: T; score: number }> {
+  return assets
+    .map((asset, i) => ({ asset, score: matchScore(unit, asset), i }))
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map(({ asset, score }) => ({ asset, score }));
+}
+
+/** One line to tell similar assets apart: model, serial and capacity when known. */
+export function assetDetail(a: RankableAsset): string {
+  const tons = parseTonnage(a.name, a.model, a.notes);
+  return [a.model?.trim(), a.serial_number?.trim() ? `Serial ${a.serial_number.trim()}` : null, tons !== null ? `${tons} TR` : null].filter(Boolean).join(" · ");
+}

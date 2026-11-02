@@ -11,7 +11,7 @@ import { requestProposalExtraction } from "@/lib/procurement/proposal-extract-cl
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import type { FacilityAsset } from "@/types";
-import { describeUnitMismatch, findPossibleDuplicates, normaliseSerial, type DuplicateCandidate } from "@/lib/asset-duplicates";
+import { assetDetail, describeUnitMismatch, findPossibleDuplicates, normaliseSerial, rankAssetsForUnit, type DuplicateCandidate } from "@/lib/asset-duplicates";
 import { useAmcOverlap } from "@/lib/procurement/use-amc-overlap";
 import { AssetMismatchNote, AssetOverlapNote } from "@/components/procurement/asset-warnings";
 import { planAmcPrefill, suggestAssetForUnit, UNIT_SKIPPED, type PrefillAnswers, type PrefillCurrent, type PrefillPlan } from "@/lib/procurement/amc-prefill";
@@ -32,6 +32,7 @@ export interface CardAsset {
   serial_number?: string | null;
   model?: string | null;
   notes?: string | null;
+  category?: { name?: string | null; slug?: string | null } | null;
 }
 
 interface Props {
@@ -68,13 +69,17 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
   const plan = useMemo(() => (extracted ? planAmcPrefill(extracted, current, answers, unitAssets) : null), [extracted, current, answers, unitAssets]);
   // Other live AMCs already covering the chosen assets in the proposal's dates (advisory).
   const overlaps = useAmcOverlap(unitAssets.filter((a) => a && a !== UNIT_SKIPPED), extracted?.startDate, extracted?.endDate);
-  const assetOptions = useMemo(
-    () => [
-      { value: UNIT_SKIPPED, label: "Not ours / leave out" },
-      ...assets.map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` })),
-    ],
-    [assets],
-  );
+  // Best matches first, each with enough detail (model, serial, capacity) to tell similar assets apart.
+  const optionsFor = (u: { serial: string | null; model: string | null; capacity: string | null }) => [
+    { value: UNIT_SKIPPED, label: "Not ours / leave out" },
+    ...rankAssetsForUnit(u, assets).map(({ asset, score }) => ({
+      value: asset.id,
+      label: `${asset.name}${asset.asset_code ? ` (${asset.asset_code})` : ""}`,
+      detail: assetDetail(asset) || undefined,
+      badge: score >= 50 ? { text: "Likely match", className: "bg-green-100 text-green-800" } : undefined,
+    })),
+  ];
+
 
   const pick = (f: File | null) => {
     if (!f) return;
@@ -212,7 +217,7 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
                       </div>
                       <div className="space-y-1">
                         <SearchableSelect
-                          options={assetOptions}
+                          options={optionsFor(u)}
                           value={unitAssets[i] ?? ""}
                           onValueChange={(v) => chooseForRow(i, v)}
                           placeholder="Choose the asset…"
@@ -225,9 +230,16 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
                       {unitAssets[i] && unitAssets[i] !== UNIT_SKIPPED && (() => {
                         const chosenAsset = assets.find((a) => a.id === unitAssets[i]);
                         const reasons = chosenAsset ? describeUnitMismatch(u, chosenAsset) : [];
-                        if (reasons.length === 0 && !overlaps[unitAssets[i]]?.length) return null;
+                        const sharers = extracted.equipment.map((_, j) => j).filter((j) => unitAssets[j] === unitAssets[i]);
+                        const sharedTotal = sharers.reduce((sum, j) => sum + (extracted.equipment[j].rate ?? 0), 0);
+                        if (reasons.length === 0 && !overlaps[unitAssets[i]]?.length && sharers.length < 2) return null;
                         return (
                           <div className="sm:col-span-2 space-y-2">
+                            {sharers.length > 1 && (
+                              <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                                Units {sharers.map((j) => j + 1).join(", ")} are on this one asset, so they will be billed together as a single line{sharedTotal > 0 ? `: ₹${sharedTotal.toLocaleString("en-IN")} for the year` : ""}.
+                              </p>
+                            )}
                             <AssetMismatchNote reasons={reasons} />
                             <AssetOverlapNote conflicts={overlaps[unitAssets[i]]} />
                           </div>

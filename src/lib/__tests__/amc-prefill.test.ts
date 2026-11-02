@@ -148,6 +148,7 @@ describe("planAmcPrefill with several units", () => {
     expect(p.updates.lines).toHaveLength(4);
     expect(p.notes.join(" ")).toMatch(/1 unit was left out/);
     expect(p.notes.join(" ")).toMatch(/add up to ₹57,960, but the proposal total is ₹64,170/);
+    expect(p.unitScope).toEqual({ covered: 4, leftOut: 1, coveredTotal: 57960, proposalTotal: 64170 });
   });
   it("asks how the vendor bills before splitting unit costs", () => {
     const p = planAmcPrefill({ ...fiveUnits, billingFrequency: null }, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);

@@ -837,10 +837,16 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       count += u.lines.length;
     }
     // Keep the proposal itself as the attached quotation, so the approver can read it.
-    const amount = answers.amount !== undefined ? Number(answers.amount) : x.valueBeforeGst;
+    // When some units were left out, the attached figure is what this request covers, so the approver
+    // never sees a quotation that disagrees with the lines; the full proposal total stays in the note.
+    const scope = plan.unitScope && plan.unitScope.leftOut > 0 ? plan.unitScope : null;
+    const amount = scope ? scope.coveredTotal : answers.amount !== undefined ? Number(answers.amount) : x.valueBeforeGst;
+    const quoteNotes = scope
+      ? `AMC proposal. Covers ${scope.covered} of the ${scope.covered + scope.leftOut} units listed (${formatCurrency(scope.coveredTotal)} before GST${scope.proposalTotal ? ` of ${formatCurrency(scope.proposalTotal)}` : ""}); ${scope.leftOut} left out.`
+      : "AMC proposal";
     setQuotations((prev) => [
       ...prev,
-      { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: "AMC proposal", file },
+      { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: quoteNotes, file },
     ]);
     toast.success("Filled in from the proposal. Check each step as you go.");
     return count;

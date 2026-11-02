@@ -85,3 +85,32 @@ describe("datesOverlap", () => {
     expect(datesOverlap("2026-04-01", "2027-03-31", "2027-04-01", "2028-03-31")).toBe(false);
   });
 });
+
+import { assetDetail, matchScore, rankAssetsForUnit } from "../asset-duplicates";
+
+describe("rankAssetsForUnit", () => {
+  const unit = { serial: "DSA361R1-OAFSF02371", model: "DSA361R1-OA", capacity: "3.00 TR" };
+  const hvac = { category: { slug: "hvac", name: "HVAC" } };
+  const assets = [
+    { id: "chair", name: "TEST chair", category: { slug: "furn", name: "Furniture" } },
+    { id: "pkg", name: "Package 11 TR", model: "DPA1321R3-IA", ...hvac },
+    { id: "same-model", name: "Duct 2", model: "DSA361R1-OA", ...hvac },
+    { id: "exact", name: "Duct 1", model: "DSA361R1-OA", serial_number: "FSF02371", ...hvac },
+    { id: "cap", name: "Spare 3 TR", ...hvac },
+  ];
+  it("puts the serial match first, then model, then capacity, then other air-conditioning assets", () => {
+    expect(rankAssetsForUnit(unit, assets).map((r) => r.asset.id)).toEqual(["exact", "same-model", "cap", "pkg", "chair"]);
+  });
+  it("keeps every asset and the original order for ties", () => {
+    const plain = [{ id: "a", name: "A" }, { id: "b", name: "B" }];
+    expect(rankAssetsForUnit(unit, plain).map((r) => r.asset.id)).toEqual(["a", "b"]);
+    expect(matchScore(unit, plain[0])).toBe(0);
+  });
+});
+
+describe("assetDetail", () => {
+  it("joins model, serial and capacity, leaving out what is unknown", () => {
+    expect(assetDetail({ id: "x", name: "Duct 3 TR", model: "DSA361R1-OA", serial_number: "FSF02371" })).toBe("DSA361R1-OA · Serial FSF02371 · 3 TR");
+    expect(assetDetail({ id: "x", name: "Unit 1" })).toBe("");
+  });
+});

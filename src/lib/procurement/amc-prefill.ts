@@ -62,6 +62,8 @@ export interface PrefillPlan {
   notes: string[];
   /** Multi-unit proposals: how many units still need an asset (or "leave out") chosen. */
   unitsToDecide: number;
+  /** Multi-unit proposals once every unit is decided: what this request covers of what the proposal lists. */
+  unitScope?: { covered: number; leftOut: number; coveredTotal: number; proposalTotal: number | null };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -195,6 +197,7 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
 
   const cycles = datesOk && frequency ? cyclesBetween(x.startDate, x.endDate, frequency) : null;
   let unitsToDecide = 0;
+  let unitScope: PrefillPlan["unitScope"];
 
   if (x.equipment.length > 1) {
     // One line per asset: units the user maps to the same asset are billed together.
@@ -222,6 +225,7 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
       const left = decided.map((d, i) => (d === UNIT_SKIPPED ? i : -1)).filter((i) => i >= 0);
       if (left.length > 0) notes.push(`${left.length} unit${left.length === 1 ? " was" : "s were"} left out, as not covered by this contract.`);
       const unitSum = round2(x.equipment.reduce((s, e, i) => (decided[i] === UNIT_SKIPPED ? s : s + (e.rate ?? 0)), 0));
+      unitScope = { covered: x.equipment.length - left.length, leftOut: left.length, coveredTotal: unitSum, proposalTotal: value };
       if (value && Math.abs(unitSum - value) > 1) notes.push(`The unit costs add up to ${inr(unitSum)}, but the proposal total is ${inr(value)}. Check the figures before sending.`);
     } else if (unitsToDecide === 0 && !untouched) {
       notes.push("You already entered asset lines, so the proposal's units were not applied. Check each line on the Cost step.");
@@ -244,7 +248,7 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
     found.push({ label: "Equipment", value: [e.capacity, e.description].filter(Boolean).join(" ") });
   }
 
-  return { updates, found, questions, notes, unitsToDecide };
+  return { updates, found, questions, notes, unitsToDecide, unitScope };
 }
 
 /** The asset whose serial number matches a unit's, when there is exactly one. */
