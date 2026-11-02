@@ -38,6 +38,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -151,6 +152,10 @@ export default function ProposalDetailPage({
   const [depositExceptionProofFile, setDepositExceptionProofFile] = useState<File | null>(null);
   const [depositExceptionSubmitting, setDepositExceptionSubmitting] = useState(false);
   const exceptionFileInputRef = useRef<HTMLInputElement>(null);
+  // Remove an entered exception (admin/manager, reason required)
+  const [removeExceptionOpen, setRemoveExceptionOpen] = useState(false);
+  const [removeExceptionReason, setRemoveExceptionReason] = useState("");
+  const [removeExceptionSubmitting, setRemoveExceptionSubmitting] = useState(false);
 
   // Deposit email preview dialog
   const [depositEmailOpen, setDepositEmailOpen] = useState(false);
@@ -403,6 +408,30 @@ export default function ProposalDetailPage({
   };
 
   const canReduceDeposit = ["admin", "manager"].includes(currentUser?.role || "");
+
+  const submitRemoveException = async () => {
+    setRemoveExceptionSubmitting(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/deposit-exception`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: removeExceptionReason.trim() }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        toast.success("Deposit exception removed");
+        setRemoveExceptionOpen(false);
+        setRemoveExceptionReason("");
+        fetchProposal();
+      } else {
+        toast.error(json?.error || "Failed to remove the deposit exception");
+      }
+    } catch {
+      toast.error("Unexpected error removing the deposit exception");
+    } finally {
+      setRemoveExceptionSubmitting(false);
+    }
+  };
 
   const submitDepositException = async () => {
     const magnitude = parseFloat(depositExceptionAmount);
@@ -1435,6 +1464,16 @@ export default function ProposalDetailPage({
                       >
                         <Pencil className="h-3 w-3" />
                         {Number(proposal.deposit_exception_amount || 0) !== 0 ? "Edit deposit exception" : "Apply a deposit exception"}
+                      </button>
+                    )}
+                    {canReduceDeposit && Number(proposal.deposit_exception_amount || 0) !== 0 && (
+                      <button
+                        type="button"
+                        onClick={() => { setRemoveExceptionReason(""); setRemoveExceptionOpen(true); }}
+                        className="text-xs text-red-700 hover:text-red-900 underline flex items-center gap-1"
+                      >
+                        <X className="h-3 w-3" />
+                        Remove deposit exception
                       </button>
                     )}
                   </div>
@@ -2842,6 +2881,29 @@ export default function ProposalDetailPage({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove Deposit Exception Dialog */}
+      <Dialog open={removeExceptionOpen} onOpenChange={(o) => { if (!removeExceptionSubmitting) setRemoveExceptionOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove the deposit exception?</DialogTitle>
+            <DialogDescription>
+              The required deposit goes back to ₹{Number(proposal?.security_deposit_amount || 0).toLocaleString("en-IN")}
+              {Number(proposal?.deposit_credit_amount || 0) > 0 ? " less the held credit" : ""}. Any deposit link or email already sent for the adjusted amount must be cancelled first.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="rde-reason">Reason <span className="text-destructive">*</span> <span className="text-muted-foreground font-normal">(min 10 characters)</span></Label>
+            <Textarea id="rde-reason" rows={2} value={removeExceptionReason} onChange={(e) => setRemoveExceptionReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemoveExceptionOpen(false)} disabled={removeExceptionSubmitting}>Keep it</Button>
+            <Button variant="destructive" onClick={submitRemoveException} disabled={removeExceptionSubmitting || removeExceptionReason.trim().length < 10}>
+              {removeExceptionSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Remove exception
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
