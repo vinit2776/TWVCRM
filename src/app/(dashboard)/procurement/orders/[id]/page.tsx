@@ -41,6 +41,9 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { ServiceCyclesCard, type CycleBill } from "@/components/procurement/service-cycles-card";
 import { poKind, PO_KIND_STYLES } from "@/lib/procurement/po-type";
 import { PoTypeChip } from "@/components/procurement/po-type-chip";
+import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
+import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
+import type { SuggestionField } from "@/lib/procurement/invoice-check";
 import { ConvertToServiceDialog, type ConvertBill } from "@/components/procurement/convert-to-service-dialog";
 import { CONVERTIBLE_STATUSES } from "@/lib/procurement/convert-to-service";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
@@ -370,6 +373,17 @@ export default function PurchaseOrderDetailPage() {
   const invFileRef = useRef<HTMLInputElement>(null);
   // Service PO invoice: which service report this invoice covers
   const [invServiceReportId, setInvServiceReportId] = useState("");
+  // Advisory read of the uploaded invoice; any failure just hides the card.
+  const [invCheck, setInvCheck] = useState<InvoiceCheckState>({ status: "idle" });
+  useEffect(() => {
+    if (!invFile) { setInvCheck({ status: "idle" }); return; }
+    let cancelled = false;
+    setInvCheck({ status: "loading" });
+    requestInvoiceExtraction(invFile).then((x) => {
+      if (!cancelled) setInvCheck(x ? { status: "ok", extracted: x } : { status: "unavailable" });
+    });
+    return () => { cancelled = true; };
+  }, [invFile]);
   // AMC contracts auto-approve every invoice after the first — this opts a
   // specific one back into manual review (e.g. amount or date looks off).
   const [invAmcManualReview, setInvAmcManualReview] = useState(false);
@@ -2423,6 +2437,19 @@ export default function PurchaseOrderDetailPage() {
               </div>
             )}
 
+            {po?.po_type === "service" && (() => {
+              const sr = (po.po_service_reports as PoServiceReport[] | undefined ?? []).find((r) => r.id === invServiceReportId);
+              if (!sr) return null;
+              return (
+                <dl className="rounded-lg border divide-y text-sm">
+                  <div className="flex justify-between gap-3 px-3 py-2"><dt className="text-muted-foreground">This invoice covers</dt><dd className="font-medium text-right">Cycle {sr.cycle_number}: {formatDate(sr.period_from)} – {formatDate(sr.period_to)}</dd></div>
+                  <div className="flex justify-between gap-3 px-3 py-2"><dt className="text-muted-foreground">Visit report</dt><dd className="font-medium text-right">
+                    Recorded{sr.report_file_url && <> · <a href={sr.report_file_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">View report</a></>}
+                  </dd></div>
+                </dl>
+              );
+            })()}
+
             {isAmcPo && (po?.vendor_bills ?? []).some((b) => b.approval_status === "approved") && (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 space-y-2">
                 <p className="text-sm text-emerald-800">
@@ -2477,7 +2504,7 @@ export default function PurchaseOrderDetailPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Invoice Amount (₹) <span className="text-red-500">*</span></Label>
+                <Label>Invoice amount before GST (₹) <span className="text-red-500">*</span></Label>
                 <Input
                   type="number"
                   min="0.01"
@@ -2526,6 +2553,26 @@ export default function PurchaseOrderDetailPage() {
                   onChange={setInvFile}
                 />
               )}
+              <InvoiceCheckCard
+                state={invCheck}
+                entered={{
+                  invoiceNumber: invNumber,
+                  invoiceDate: invDate,
+                  vendorName: (po?.procurement_vendors as { name?: string } | null)?.name ?? null,
+                  amount: parseFloat(invAmount) > 0 ? parseFloat(invAmount) : null,
+                  gstAmount: null,
+                }}
+                poCeiling={po ? (po.po_type === "service" ? Number(po.unit_cost_per_cycle) || null : Number(po.total_ordered_amount) || null) : null}
+                onApply={(field: SuggestionField, value: string) => {
+                  if (field === "amount") setInvAmount(value);
+                  else if (field === "invoiceNumber") setInvNumber(value);
+                  else if (field === "invoiceDate") {
+                    // This screen refuses invoice dates in the past, so don't apply one.
+                    if (value < today) toast.info("The invoice is dated in the past, which this screen doesn't accept. Enter today's date.");
+                    else setInvDate(value);
+                  }
+                }}
+              />
             </div>
 
             <div className="space-y-1.5">
