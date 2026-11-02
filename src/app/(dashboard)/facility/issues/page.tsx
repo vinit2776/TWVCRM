@@ -90,6 +90,7 @@ function FacilityIssuesPageInner() {
   const [onlyUnowned, setOnlyUnowned] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
   const [assignedToFilter, setAssignedToFilter] = useState(() => searchParams.get("assigned_to") ?? "");
+  const [attentionTile, setAttentionTile] = useState<AttentionTile | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(() => !!searchParams.get("assigned_to"));
 
   const fetchData = async () => {
@@ -165,6 +166,9 @@ function FacilityIssuesPageInner() {
     if (assignedToFilter) {
       result = result.filter((i) => i.assigned_to === assignedToFilter);
     }
+    if (attentionTile) {
+      result = result.filter((i) => matchesAttentionTile(i, attentionTile));
+    }
     if (onlyUnowned) {
       // Sort: claim_sla_breached first, then by priority (critical → low), then by created_at
       const PRIORITY_WEIGHT: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -179,7 +183,7 @@ function FacilityIssuesPageInner() {
       });
     }
     return result;
-  }, [issues, search, onlyUnowned, assignedToFilter]);
+  }, [issues, search, onlyUnowned, assignedToFilter, attentionTile]);
 
   // Group by assignee — "Unclaimed" pinned first (own bucket so tickets
   // nobody owns stay visible instead of disappearing until claimed), then
@@ -280,7 +284,7 @@ function FacilityIssuesPageInner() {
 
       <FacilityViewTabs active="work" />
 
-      <ActivityFeed />
+      <ActivityFeed activeTile={attentionTile} onTile={setAttentionTile} shown={attentionTile ? filtered.length : null} />
 
       {/* ───── Search + filter toggle ──────────────────────────────────────── */}
       <div className="flex items-center gap-2">
@@ -598,7 +602,28 @@ function dayGroup(iso: string): string {
 // Overview above the grouped list: what needs attention now, one row per
 // ticket (not per event), and a weekly roll-up. Independent of the filters
 // of the grouped-by-assignee list below.
-function ActivityFeed() {
+type AttentionTile = "overdue" | "due_soon" | "unclaimed" | "critical" | "reopened";
+
+const OPEN_ISSUE_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+const TILE_HOUR_MS = 3_600_000;
+
+// Mirrors the counts in /api/facility/issues/activity so a tile's number and
+// the list it opens agree. "Reopened" uses the current status: the tile counts
+// tickets reopened this week, which can include ones since resolved again.
+function matchesAttentionTile(i: FacilityIssue, tile: AttentionTile): boolean {
+  const open = OPEN_ISSUE_STATUSES.includes(i.status);
+  const now = Date.now();
+  const due = i.sla_target_at ? new Date(i.sla_target_at).getTime() : null;
+  switch (tile) {
+    case "overdue": return open && due !== null && due < now;
+    case "due_soon": return open && due !== null && due >= now && due <= now + 4 * TILE_HOUR_MS;
+    case "unclaimed": return (i.status === "new" || i.status === "reopened") && !i.assigned_to && new Date(i.reported_at).getTime() < now - 6 * TILE_HOUR_MS;
+    case "critical": return open && i.priority === "critical";
+    case "reopened": return i.status === "reopened";
+  }
+}
+
+function ActivityFeed({ activeTile, onTile, shown }: { activeTile: AttentionTile | null; onTile: (t: AttentionTile | null) => void; shown: number | null }) {
   const [rows, setRows] = useState<ActivityRow[]>([]);
   const [attention, setAttention] = useState<ActivityAttention | null>(null);
   const [weekly, setWeekly] = useState<ActivityWeekly | null>(null);
@@ -617,12 +642,12 @@ function ActivityFeed() {
 
   const scopes = [...new Set(rows.map((r) => r.issue?.scope).filter((x): x is string => !!x))];
   const visible = scopeFilter === "all" ? rows : rows.filter((r) => r.issue?.scope === scopeFilter);
-  const tiles: { label: string; value: number; detail?: string; tone: "bad" | "warn" | "neutral" }[] = attention ? [
-    { label: "Overdue", value: attention.overdue, detail: attention.oldest_overdue ? `oldest: ${formatSpan(attention.oldest_overdue.hours * 3_600_000)}, ${attention.oldest_overdue.issue_number}` : undefined, tone: "bad" },
-    { label: "Due in 4h", value: attention.due_soon, tone: "warn" },
-    { label: "Unclaimed 6h+", value: attention.unclaimed, tone: "warn" },
-    { label: "Critical open", value: attention.critical, tone: "bad" },
-    { label: "Reopened this week", value: attention.reopened_week, tone: "neutral" },
+  const tiles: { key: AttentionTile; label: string; value: number; detail?: string; tone: "bad" | "warn" | "neutral" }[] = attention ? [
+    { key: "overdue", label: "Overdue", value: attention.overdue, detail: attention.oldest_overdue ? `oldest: ${formatSpan(attention.oldest_overdue.hours * 3_600_000)}, ${attention.oldest_overdue.issue_number}` : undefined, tone: "bad" },
+    { key: "due_soon", label: "Due in 4h", value: attention.due_soon, tone: "warn" },
+    { key: "unclaimed", label: "Unclaimed 6h+", value: attention.unclaimed, tone: "warn" },
+    { key: "critical", label: "Critical open", value: attention.critical, tone: "bad" },
+    { key: "reopened", label: "Reopened this week", value: attention.reopened_week, tone: "neutral" },
   ] : [];
   const TILE_TONE = { bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-700", neutral: "bg-muted/40 text-muted-foreground" } as const;
 
@@ -641,15 +666,34 @@ function ActivityFeed() {
       {!collapsed && (
         <div>
           {tiles.length > 0 && (
+            <>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3">
               {tiles.map((t) => (
-                <div key={t.label} className={cn("rounded-lg px-2.5 py-2 text-xs", t.value > 0 ? TILE_TONE[t.tone] : "bg-muted/30 text-muted-foreground")}>
+                <button
+                  key={t.key}
+                  type="button"
+                  disabled={t.value === 0}
+                  aria-pressed={activeTile === t.key}
+                  onClick={() => onTile(activeTile === t.key ? null : t.key)}
+                  className={cn(
+                    "rounded-lg px-2.5 py-2 text-xs text-left transition-shadow",
+                    t.value > 0 ? cn(TILE_TONE[t.tone], "hover:ring-1 hover:ring-current cursor-pointer") : "bg-muted/30 text-muted-foreground cursor-default",
+                    activeTile === t.key && "ring-2 ring-current",
+                  )}
+                >
                   <div className="text-xl font-medium leading-tight">{t.value}</div>
                   <div>{t.label}</div>
                   {t.detail && t.value > 0 && <div className="text-[11px] opacity-80 truncate">{t.detail}</div>}
-                </div>
+                </button>
               ))}
             </div>
+            {activeTile && (
+              <div className="flex items-center gap-2 px-3 pb-2 text-xs text-muted-foreground">
+                <span>Showing {shown ?? 0} ticket{shown === 1 ? "" : "s"} in the list below for “{tiles.find((t) => t.key === activeTile)?.label}”.</span>
+                <button type="button" onClick={() => onTile(null)} className="underline hover:text-foreground">Clear</button>
+              </div>
+            )}
+            </>
           )}
           {scopes.length > 1 && (
             <div className="flex gap-1.5 flex-wrap px-3 pb-2">
