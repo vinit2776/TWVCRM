@@ -323,6 +323,27 @@ export default function ContractDetailPage({
   // Assigned spaces
   const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
 
+  // A pending escalation request can exist without the contract's own status
+  // flag being set, so look the request up directly instead of trusting the flag.
+  const [pendingEscalationId, setPendingEscalationId] = useState<string | null>(null);
+  const [escalationRefresh, setEscalationRefresh] = useState(0);
+  useEffect(() => {
+    if (!contract?.is_renewal) { setPendingEscalationId(null); return; }
+    let cancelled = false;
+    fetch(`/api/approval-requests?status=pending&entity_type=contract&entity_id=${contract.id}&limit=10`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const req = (json?.data ?? []).find((x: { approval_type: string }) =>
+          ["escalation_reduction", "escalation_waiver"].includes(x.approval_type));
+        setPendingEscalationId(req?.id ?? null);
+      })
+      .catch(() => { if (!cancelled) setPendingEscalationId(null); });
+    return () => { cancelled = true; };
+  }, [contract?.id, contract?.is_renewal, escalationRefresh]);
+  const escalationApprovalStatus = contract?.escalation_approval_status ?? (pendingEscalationId ? "pending" : null);
+  const escalationApprovalId = contract?.escalation_approval_id ?? pendingEscalationId;
+
   const handleSpaceAllocationsChange = useCallback((allocs: ContractSpaceAllocation[]) => {
     setSpaceAllocations(allocs);
   }, []);
@@ -2139,6 +2160,36 @@ export default function ContractDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {/* Escalation approval status — on any renewal, whatever its status */}
+          {contract.is_renewal && escalationApprovalStatus && (
+            <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
+              escalationApprovalStatus === "pending"
+                ? "border-purple-200 bg-purple-50 text-purple-800"
+                : escalationApprovalStatus === "approved"
+                  ? "border-green-200 bg-green-50 text-green-800"
+                  : "border-red-200 bg-red-50 text-red-800"
+            }`}>
+              <p className="font-semibold flex items-center gap-1">
+                {escalationApprovalStatus === "pending" && "⏳ Escalation Approval Pending"}
+                {escalationApprovalStatus === "approved" && "✓ Escalation Approved"}
+                {escalationApprovalStatus === "rejected" && "✗ Escalation Rejected"}
+              </p>
+              <p>
+                {escalationApprovalStatus === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
+                {escalationApprovalStatus === "approved" && "The negotiated escalation rate has been approved by admin."}
+                {escalationApprovalStatus === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
+              </p>
+              {escalationApprovalStatus === "pending" &&
+                escalationApprovalId &&
+                ["admin", "manager"].includes(userRole ?? "") && (
+                  <EscalationApprovalActions
+                    approvalId={escalationApprovalId}
+                    onActed={() => { setEscalationRefresh((n) => n + 1); fetchContract(false); }}
+                  />
+                )}
+            </div>
+          )}
+
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
           {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
@@ -2170,38 +2221,8 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
-                {/* Escalation approval status — on renewal drafts */}
-                {contract.is_renewal && contract.escalation_approval_status && (
-                  <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
-                    contract.escalation_approval_status === "pending"
-                      ? "border-purple-200 bg-purple-50 text-purple-800"
-                      : contract.escalation_approval_status === "approved"
-                        ? "border-green-200 bg-green-50 text-green-800"
-                        : "border-red-200 bg-red-50 text-red-800"
-                  }`}>
-                    <p className="font-semibold flex items-center gap-1">
-                      {contract.escalation_approval_status === "pending" && "⏳ Escalation Approval Pending"}
-                      {contract.escalation_approval_status === "approved" && "✓ Escalation Approved"}
-                      {contract.escalation_approval_status === "rejected" && "✗ Escalation Rejected"}
-                    </p>
-                    <p>
-                      {contract.escalation_approval_status === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
-                      {contract.escalation_approval_status === "approved" && "The negotiated escalation rate has been approved by admin."}
-                      {contract.escalation_approval_status === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
-                    </p>
-                    {contract.escalation_approval_status === "pending" &&
-                      contract.escalation_approval_id &&
-                      ["admin", "manager"].includes(userRole ?? "") && (
-                        <EscalationApprovalActions
-                          approvalId={contract.escalation_approval_id}
-                          onActed={() => fetchContract(false)}
-                        />
-                      )}
-                  </div>
-                )}
-
                 {/* Escalation waiver — admin only, on renewal drafts */}
-                {contract.is_renewal && contract.status === "draft" && !contract.escalation_approval_status && (
+                {contract.is_renewal && contract.status === "draft" && !escalationApprovalStatus && (
                   <EscalationWaiverSection
                     contractId={contract.id}
                     escalationWaived={contract.escalation_waived || false}

@@ -298,8 +298,17 @@ export async function PATCH(
       allowedFields.rejected_at = body.rejected_at || now;
       allowedFields.rejected_by = actorId;
     } else if (body.status === "active") {
-      // Block activation if escalation approval is pending
-      if (oldContract.escalation_approval_status === "pending") {
+      // Block activation if escalation approval is pending. The request itself
+      // is authoritative: the contract's status flag can be missing while a
+      // request is still open.
+      const { count: openEscalationRequests } = await createAdminClient()
+        .from("approval_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("entity_type", "contract")
+        .eq("entity_id", id)
+        .eq("status", "pending")
+        .in("approval_type", ["escalation_reduction", "escalation_waiver"]);
+      if (oldContract.escalation_approval_status === "pending" || (openEscalationRequests ?? 0) > 0) {
         return NextResponse.json({
           error: "Cannot activate: escalation rate approval is pending. Ask your admin to approve the negotiated rate first.",
         }, { status: 400 });
