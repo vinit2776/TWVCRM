@@ -127,7 +127,7 @@ export async function extractAmcProposal(base64: string, mediaType: ExtractionMe
     const message = await anthropic.messages.create(
       {
         model: MODEL,
-        max_tokens: 1200,
+        max_tokens: 4000,
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: [fileBlock, { type: "text", text: "Extract the AMC proposal terms as JSON." }] }],
       },
@@ -135,12 +135,17 @@ export async function extractAmcProposal(base64: string, mediaType: ExtractionMe
     );
     const text = message.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { status: "unavailable" };
+    if (!match) {
+      // Reason only (never the document or the reply): a cut-off reply looks different from a refusal.
+      console.error("[extractAmcProposal] no JSON in reply, stop_reason:", message.stop_reason);
+      return { status: "unavailable" };
+    }
     const extracted = normaliseProposal(JSON.parse(match[0]));
+    if (!extracted) console.error("[extractAmcProposal] reply had nothing usable, stop_reason:", message.stop_reason);
     return extracted ? { status: "ok", extracted } : { status: "unavailable" };
   } catch (err) {
     // Name only — never the proposal content or the request payload.
-    console.error("[extractAmcProposal]", err instanceof Error ? err.name : "error");
+    console.error("[extractAmcProposal]", err instanceof Error ? err.name : "error", err instanceof Anthropic.APIError ? err.status : "");
     return { status: "unavailable" };
   }
 }
