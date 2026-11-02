@@ -52,6 +52,7 @@ import { ContractRatePhasesSection } from "@/components/contracts/contract-rate-
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { EscalationApprovalActions } from "@/components/contracts/escalation-approval-actions";
 import { ContractMoratoriumSection } from "@/components/contracts/contract-moratorium-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
 import { ContractDepositAdjustmentsSection } from "@/components/contracts/contract-deposit-adjustments-section";
@@ -2188,6 +2189,14 @@ export default function ContractDetailPage({
                       {contract.escalation_approval_status === "approved" && "The negotiated escalation rate has been approved by admin."}
                       {contract.escalation_approval_status === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
                     </p>
+                    {contract.escalation_approval_status === "pending" &&
+                      contract.escalation_approval_id &&
+                      ["admin", "manager"].includes(userRole ?? "") && (
+                        <EscalationApprovalActions
+                          approvalId={contract.escalation_approval_id}
+                          onActed={() => fetchContract(false)}
+                        />
+                      )}
                   </div>
                 )}
 
