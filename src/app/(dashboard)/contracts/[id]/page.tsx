@@ -89,7 +89,7 @@ import {
   CONTRACT_PRE_ACTIVATION_STATUSES,
   canWithdrawContract,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import {
@@ -2216,6 +2216,13 @@ export default function ContractDetailPage({
                 {escalationApprovalStatus === "approved" && "The negotiated escalation rate has been approved by admin."}
                 {escalationApprovalStatus === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
               </p>
+              {escalationApprovalStatus !== "pending" && contract.escalation_decision?.acted_at && (
+                <p className="opacity-80">
+                  {escalationApprovalStatus === "approved" ? "Approved" : "Rejected"}
+                  {contract.escalation_decision.acted_by_name ? ` by ${contract.escalation_decision.acted_by_name}` : ""}
+                  {` on ${formatDateTime(contract.escalation_decision.acted_at)}`}
+                </p>
+              )}
               {escalationApprovalStatus === "pending" &&
                 escalationApprovalId &&
                 ["admin", "manager"].includes(userRole ?? "") && (

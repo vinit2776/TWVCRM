@@ -64,6 +64,24 @@ export async function GET(
     parentContract = parent;
   }
 
+  // Who decided the negotiated escalation, and when — shown on the renewal's
+  // approval banner. Read through the user client: approval_requests is readable
+  // by any signed-in user, and the name comes from the same join the rest of
+  // this route uses.
+  let escalationDecision: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null = null;
+  if (data.escalation_approval_id && data.escalation_approval_status && data.escalation_approval_status !== "pending") {
+    const { data: ar } = await supabase
+      .from("approval_requests")
+      .select("acted_at, rejection_reason, acted_by_user:users!approval_requests_acted_by_fkey(full_name)")
+      .eq("id", data.escalation_approval_id)
+      .maybeSingle();
+    if (ar) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const actor = (ar as any).acted_by_user as { full_name: string } | null;
+      escalationDecision = { acted_by_name: actor?.full_name ?? null, acted_at: ar.acted_at ?? null, rejection_reason: ar.rejection_reason ?? null };
+    }
+  }
+
   const renewalProrataGate = data.is_renewal && data.status !== "active"
     ? await getRenewalProrataGate(createAdminClient(), data)
     : null;
@@ -73,6 +91,7 @@ export async function GET(
       ...data,
       ...actorNames,
       parent_contract: parentContract,
+      escalation_decision: escalationDecision,
       renewal_prorata_blocking: renewalProrataGate?.blocking ?? false,
     },
   });
