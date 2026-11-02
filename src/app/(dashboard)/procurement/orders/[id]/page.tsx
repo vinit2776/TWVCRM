@@ -1145,11 +1145,11 @@ export default function PurchaseOrderDetailPage() {
           <div className="min-w-0">
             <p className="text-sm font-medium text-amber-900">This AMC was raised as a goods PO</p>
             <p className="text-xs text-amber-800 mt-0.5">
-              It can&apos;t record service reports or invoice by cycle. Convert it to a service contract to get the cycle billing flow.
+              It can&apos;t record service reports or invoice by cycle. Set it up as an AMC service contract to get the cycle billing flow.
             </p>
           </div>
           <Button size="sm" className="bg-amber-600 hover:bg-amber-700" onClick={() => setShowConvert(true)}>
-            Convert to service contract
+            Set up as AMC
           </Button>
         </div>
       )}
@@ -3111,6 +3111,8 @@ export default function PurchaseOrderDetailPage() {
             amc_start_date: po.amc_start_date,
             amc_end_date: po.amc_end_date,
             amc_terminated_at: po.amc_terminated_at,
+            payment_terms: po.payment_terms,
+            notes: po.notes,
           }}
           bills={((po.vendor_bills ?? []) as unknown as ConvertBill[])}
           onDone={fetchPo}
