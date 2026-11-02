@@ -2856,6 +2856,7 @@ export default function ContractDetailPage({
           </Card>
 
           {/* Assigned Spaces — with unit picker and seat validation */}
+          <div id="space-allocation" className="scroll-mt-4">
           <ContractSpaceManager
             contractId={id}
             locationId={contract.location_id ?? null}
@@ -2865,6 +2866,7 @@ export default function ContractDetailPage({
             contractEndDate={contract.end_date}
             onAllocationsChange={handleSpaceAllocationsChange}
           />
+          </div>
 
           {/* Seat-level occupant tracking */}
           {contract?.location_id && spaceAllocations.length > 0 && (
@@ -2964,6 +2966,18 @@ export default function ContractDetailPage({
           <DialogFooter>
             <Button variant="outline" onClick={() => setSpaceWarningOpen(false)}>
               Go Back
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSpaceWarningOpen(false);
+                // Wait for the dialog to unmount so its scroll lock is gone.
+                setTimeout(() => {
+                  document.getElementById("space-allocation")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 150);
+              }}
+            >
+              Assign space now
             </Button>
             <Button
               className="bg-amber-600 hover:bg-amber-700 text-white"
