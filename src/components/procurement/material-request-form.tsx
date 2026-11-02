@@ -36,6 +36,8 @@ import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { AmcStepHeader, AmcReviewCard } from "@/components/procurement/amc-wizard-parts";
 import { AmcProposalCard } from "@/components/procurement/amc-proposal-card";
 import type { PrefillAnswers, PrefillPlan } from "@/lib/procurement/amc-prefill";
+import { useAmcOverlap } from "@/lib/procurement/use-amc-overlap";
+import { AssetOverlapNote } from "@/components/procurement/asset-warnings";
 import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { AMC_STEPS, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
 
@@ -257,6 +259,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   }, [department, reimbursementContracts.length]);
 
   // Auto-fill service name + end date when asset/start date change.
+  // Other live AMCs already covering the chosen assets in these dates (advisory; never blocks saving).
+  const amcOverlaps = useAmcOverlap(amcLines.map((l) => l.assetId), amcStartDate, amcEndDate, isEdit ? pr?.id : undefined);
   const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
     setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   const handleAssetSelect = (lineId: string, assetId: string) => {
@@ -1185,6 +1189,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                         placeholder="Select the asset this line covers..."
                         emptyMessage="No active assets found"
                       />
+                      <AssetOverlapNote conflicts={l.assetId ? amcOverlaps[l.assetId] : undefined} />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="space-y-1.5">

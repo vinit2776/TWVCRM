@@ -37,3 +37,51 @@ describe("findPossibleDuplicates", () => {
     expect(findPossibleDuplicates({ serial: null, model: null }, assets)).toEqual({ sameSerial: [], sameModel: [] });
   });
 });
+
+import { describeUnitMismatch, parseTonnage } from "../asset-duplicates";
+import { datesOverlap } from "../procurement/amc-overlap";
+
+describe("parseTonnage", () => {
+  it("reads TR and tons written in several ways", () => {
+    expect(parseTonnage("Ducted ODU 3.00 TR")).toBe(3);
+    expect(parseTonnage("11TR package")).toBe(11);
+    expect(parseTonnage("1.5 ton split")).toBe(1.5);
+  });
+  it("returns null when none is written, and ignores unrelated numbers", () => {
+    expect(parseTonnage("AMC Test HVAC Unit 2", null, undefined)).toBeNull();
+    expect(parseTonnage("Cabin 3 AC")).toBeNull();
+  });
+  it("takes the first text that has one", () => {
+    expect(parseTonnage("Unit", "5.5 TR", "9 TR")).toBe(5.5);
+  });
+});
+
+describe("describeUnitMismatch", () => {
+  const unit = { serial: "DSA361R1-OAFSF02371", model: "DSA361R1-OA", capacity: "3.00 TR" };
+  it("says nothing for the right asset", () => {
+    expect(describeUnitMismatch(unit, { name: "Ducted 3 TR", model: "DSA361R1-OA", serial_number: "FSF02371" })).toEqual([]);
+  });
+  it("warns when the capacity written on the asset differs", () => {
+    expect(describeUnitMismatch(unit, { name: "Package unit 11 TR" })).toEqual(["it looks like a 11 TR unit, but the proposal unit is 3 TR"]);
+  });
+  it("warns on a different serial or model", () => {
+    const r = describeUnitMismatch(unit, { name: "AC", model: "DPA1321R3-IA", serial_number: "HVF00117" });
+    expect(r).toHaveLength(2);
+    expect(r[0]).toMatch(/serial number is HVF00117/);
+    expect(r[1]).toMatch(/model is DPA1321R3-IA/);
+  });
+  it("stays quiet when the asset has no serial, model or capacity to compare", () => {
+    expect(describeUnitMismatch(unit, { name: "AMC Test HVAC Unit 1" })).toEqual([]);
+    expect(describeUnitMismatch({ serial: null, model: null, capacity: null }, { name: "11 TR", model: "X", serial_number: "ABCD1234" })).toEqual([]);
+  });
+});
+
+describe("datesOverlap", () => {
+  it("finds shared days, including a single shared day", () => {
+    expect(datesOverlap("2026-04-01", "2027-03-31", "2026-12-01", "2027-11-30")).toBe(true);
+    expect(datesOverlap("2026-04-01", "2026-06-30", "2026-06-30", "2026-09-30")).toBe(true);
+  });
+  it("does not flag back-to-back contracts", () => {
+    expect(datesOverlap("2026-04-01", "2027-03-31", "2027-04-01", "2028-03-31")).toBe(false);
+  });
+});
