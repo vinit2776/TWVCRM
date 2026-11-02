@@ -14,7 +14,7 @@ const blueStar: ExtractedAmcProposal = {
   startDate: "2026-03-30", endDate: "2027-03-29",
   billingFrequency: "half_yearly", billedInAdvance: true, visitsPerYear: 4, coverage: "comprehensive",
   valueBeforeGst: 22770, amountCandidates: [], gstPercent: 18,
-  contactName: null, contactPhone: null, contactEmail: null,
+  contactName: null, contactPhone: null, contactEmail: null, contactCandidates: [],
   equipment: [{ description: "DPA1321 package unit", model: "DPA1321R3-IA", serial: "S1", capacity: "11 TR", rate: 22770 }],
   confidence: "high",
 };
@@ -78,6 +78,31 @@ describe("planAmcPrefill", () => {
   it("ignores an end date that is not after the start", () => {
     const p = planAmcPrefill({ ...blueStar, endDate: "2026-03-01" }, empty);
     expect(p.updates.startDate).toBeUndefined();
+  });
+});
+
+describe("vendor contact", () => {
+  const two = { ...blueStar, contactName: "Yuva Kumar", contactPhone: "7401777684", contactEmail: null,
+    contactCandidates: [{ name: "Michael Angre", phone: "022-67154500", email: "cs@bluestarindia.com", role: "Service Manager" }] };
+  it("asks who to call when the proposal gives more than one contact", () => {
+    const p = planAmcPrefill(two, empty);
+    expect(p.questions.map((q) => q.id)).toEqual(["contact"]);
+    expect(p.questions[0].options.map((o) => o.label)).toEqual(["Yuva Kumar · 7401777684", "Michael Angre · 022-67154500 · Service Manager"]);
+    expect(p.updates.contactName).toBeUndefined();
+  });
+  it("uses the contact the user chose", () => {
+    const p = planAmcPrefill(two, empty, { contact: "1" });
+    expect(p.questions).toEqual([]);
+    expect(p.updates).toMatchObject({ contactName: "Michael Angre", helpline: "022-67154500", contactEmail: "cs@bluestarindia.com" });
+  });
+  it("counts the same person listed twice once and does not ask", () => {
+    const p = planAmcPrefill({ ...two, contactCandidates: [{ name: "Yuva K", phone: "+91 74017 77684", email: null, role: null }] }, empty);
+    expect(p.questions).toEqual([]);
+    expect(p.updates).toMatchObject({ contactName: "Yuva Kumar", helpline: "7401777684" });
+  });
+  it("uses a single contact as read and notes when there is none", () => {
+    expect(planAmcPrefill({ ...blueStar, contactName: "A B", contactPhone: "9876543210" }, empty).updates.contactName).toBe("A B");
+    expect(planAmcPrefill(blueStar, empty).notes.join(" ")).toMatch(/No vendor contact/);
   });
 });
 

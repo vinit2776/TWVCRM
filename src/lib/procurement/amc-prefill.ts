@@ -1,7 +1,7 @@
 import { BILLING_CYCLE_LABELS, type ServicePoBillingCycle } from "@/lib/constants";
 import { cyclesBetween } from "@/lib/procurement/amc-billing";
 import { formatDate } from "@/lib/utils";
-import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
+import type { ExtractedAmcProposal, ExtractedContact } from "@/lib/procurement/proposal-extraction";
 
 /** What the wizard already holds. Prefill only ever fills what is still empty. */
 export interface PrefillCurrent {
@@ -39,7 +39,7 @@ export interface PrefillUpdates {
   lines?: PrefillLine[];
 }
 
-export type PrefillQuestionId = "amount" | "frequency" | "coverage";
+export type PrefillQuestionId = "amount" | "frequency" | "coverage" | "contact";
 
 export interface PrefillQuestion {
   id: PrefillQuestionId;
@@ -68,6 +68,26 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const blank = (s: string) => s.trim() === "";
 const FREQUENCIES: ServicePoBillingCycle[] = ["monthly", "quarterly", "half_yearly", "yearly"];
+
+/** The same person or number listed twice counts once: compared by the last 10 digits of the phone, else by name. */
+const contactKey = (c: ExtractedContact) => {
+  const digits = (c.phone ?? "").replace(/\D/g, "").slice(-10);
+  return digits.length >= 6 ? digits : (c.name ?? "").toLowerCase().trim();
+};
+
+/** Every distinct vendor contact the proposal gives, the best one first. */
+export function distinctContacts(x: ExtractedAmcProposal): ExtractedContact[] {
+  const all: ExtractedContact[] = [];
+  if (x.contactName || x.contactPhone) all.push({ name: x.contactName, phone: x.contactPhone, email: x.contactEmail, role: null });
+  all.push(...x.contactCandidates);
+  const seen = new Set<string>();
+  return all.filter((c) => {
+    const k = contactKey(c);
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
 
 /**
  * Turns what was read from a proposal into wizard updates, without overwriting anything the
@@ -124,11 +144,20 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, ans
     });
   }
 
-  if (x.contactName || x.contactPhone) {
-    found.push({ label: "Vendor contact", value: [x.contactName, x.contactPhone].filter(Boolean).join(" · ") });
-    if (blank(cur.contactName) && x.contactName) updates.contactName = x.contactName;
-    if (blank(cur.helpline) && x.contactPhone) updates.helpline = x.contactPhone;
-    if (blank(cur.contactEmail) && x.contactEmail) updates.contactEmail = x.contactEmail;
+  // Several contacts means the user says who to call; one is used as read; none is a note.
+  const contacts = distinctContacts(x);
+  const picked = answers.contact !== undefined ? contacts[Number(answers.contact)] : contacts.length === 1 ? contacts[0] : undefined;
+  if (contacts.length >= 2 && !picked) {
+    questions.push({
+      id: "contact",
+      prompt: "The proposal gives more than one vendor contact. Who should be called when something breaks?",
+      options: contacts.map((c, i) => ({ label: [c.name, c.phone, c.role].filter(Boolean).join(" · "), value: String(i) })),
+    });
+  } else if (picked) {
+    found.push({ label: "Vendor contact", value: [picked.name, picked.phone].filter(Boolean).join(" · ") });
+    if (blank(cur.contactName) && picked.name) updates.contactName = picked.name;
+    if (blank(cur.helpline) && picked.phone) updates.helpline = picked.phone;
+    if (blank(cur.contactEmail) && picked.email) updates.contactEmail = picked.email;
   } else {
     notes.push("No vendor contact was found. Enter one on the Contacts step.");
   }
