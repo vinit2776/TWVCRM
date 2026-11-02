@@ -1048,6 +1048,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       {amcWizard && amcStep === 0 && (
         <AmcProposalCard
           assets={assets}
+          defaultLocationId={locationId || undefined}
+          onAssetCreated={(a) => setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]))}
           onApply={applyProposalPrefill}
           current={{
             serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,

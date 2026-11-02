@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { FileUp, Loader2, ScanSearch } from "lucide-react";
+import { FileUp, Loader2, Plus, ScanSearch } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,8 @@ import { EXTRACTION_MEDIA_TYPES } from "@/lib/procurement/proposal-extraction";
 import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { requestProposalExtraction } from "@/lib/procurement/proposal-extract-client";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
+import type { FacilityAsset } from "@/types";
 import { planAmcPrefill, suggestAssetForUnit, UNIT_SKIPPED, type PrefillAnswers, type PrefillCurrent, type PrefillPlan } from "@/lib/procurement/amc-prefill";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -31,6 +33,10 @@ interface Props {
   current: PrefillCurrent;
   /** Active assets the units in a multi-unit proposal are matched to. */
   assets: CardAsset[];
+  /** The request's location, offered as the default when a missing asset is created from here. */
+  defaultLocationId?: string;
+  /** Called with an asset created from a unit row, so the wizard can offer it on the Cost step too. */
+  onAssetCreated: (asset: FacilityAsset) => void;
   /** Called when the user confirms. The wizard fills its fields and keeps the file as the proposal. */
   onApply: (plan: PrefillPlan, file: File, extracted: ExtractedAmcProposal, answers: PrefillAnswers) => number;
 }
@@ -39,12 +45,14 @@ interface Props {
  * Optional first step: read the vendor's proposal and fill in what it says. Nothing changes
  * until the user presses the button, and the next steps still show every value for checking.
  */
-export function AmcProposalCard({ current, assets, onApply }: Props) {
+export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCreated, onApply }: Props) {
   const [state, setState] = useState<State>({ status: "idle" });
   const [file, setFile] = useState<File | null>(null);
   const [answers, setAnswers] = useState<PrefillAnswers>({});
   // One entry per unit in the proposal: an asset id, UNIT_SKIPPED, or "" while undecided.
   const [unitAssets, setUnitAssets] = useState<string[]>([]);
+  // The unit (by row) a new asset is being created for; null when the dialog is closed.
+  const [creatingFor, setCreatingFor] = useState<number | null>(null);
   const seq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
 
@@ -73,6 +81,19 @@ export function AmcProposalCard({ current, assets, onApply }: Props) {
       setState(x ? { status: "ok", extracted: x } : { status: "unavailable" });
     });
   };
+
+  const newAssetDefaults = useMemo(() => {
+    const u = creatingFor !== null ? extracted?.equipment[creatingFor] : null;
+    if (!u) return undefined;
+    return {
+      name: [u.description, u.capacity].filter(Boolean).join(" ").slice(0, 120),
+      make: extracted?.vendorName ?? "",
+      model: u.model ?? "",
+      serial_number: u.serial ?? "",
+      vendor: extracted?.vendorName ?? "",
+      notes: u.capacity ? `Capacity ${u.capacity}. Added from the vendor's AMC proposal.` : "Added from the vendor's AMC proposal.",
+    };
+  }, [creatingFor, extracted]);
 
   const reset = () => {
     seq.current++;
@@ -150,17 +171,22 @@ export function AmcProposalCard({ current, assets, onApply }: Props) {
                           {u.serial ? `Serial ${u.serial}` : "No serial number"} · {u.rate ? `₹${u.rate.toLocaleString("en-IN")} for the year` : "No cost listed"}
                         </p>
                       </div>
-                      <SearchableSelect
-                        options={assetOptions}
-                        value={unitAssets[i] ?? ""}
-                        onValueChange={(v) => setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === i ? v : prev[j] ?? "")))}
-                        placeholder="Choose the asset…"
-                        emptyMessage="No active assets found"
-                      />
+                      <div className="space-y-1">
+                        <SearchableSelect
+                          options={assetOptions}
+                          value={unitAssets[i] ?? ""}
+                          onValueChange={(v) => setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === i ? v : prev[j] ?? "")))}
+                          placeholder="Choose the asset…"
+                          emptyMessage="No active assets found"
+                        />
+                        <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" onClick={() => setCreatingFor(i)}>
+                          <Plus className="h-3 w-3" /> Not in the list? Add it as a new asset
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
-                {assets.length === 0 && <p className="px-3 py-2 text-xs text-amber-800 bg-amber-50 border-t border-amber-200">No active assets were found. Add the assets in Facility first, or leave the units out.</p>}
+                {assets.length === 0 && <p className="px-3 py-2 text-xs text-amber-800 bg-amber-50 border-t border-amber-200">No active assets were found. Use &quot;Add it as a new asset&quot; on each unit.</p>}
               </div>
             )}
             {plan.questions.map((q) => (
@@ -200,6 +226,18 @@ export function AmcProposalCard({ current, assets, onApply }: Props) {
           </div>
         )}
       </CardContent>
+      <FacilityAssetFormDialog
+        open={creatingFor !== null}
+        onOpenChange={(o) => { if (!o) setCreatingFor(null); }}
+        defaultLocationId={defaultLocationId}
+        initialValues={newAssetDefaults}
+        onSuccess={(a) => {
+          const row = creatingFor;
+          onAssetCreated(a);
+          if (row !== null && extracted) setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === row ? a.id : prev[j] ?? "")));
+          setCreatingFor(null);
+        }}
+      />
     </Card>
   );
 }

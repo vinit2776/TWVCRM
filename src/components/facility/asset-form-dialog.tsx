@@ -49,10 +49,12 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   asset?: FacilityAsset | null;
   defaultLocationId?: string;
+  /** Starting values for a NEW asset (ignored when editing), e.g. read from a vendor's proposal. */
+  initialValues?: Partial<Record<"name" | "make" | "model" | "serial_number" | "vendor" | "notes", string>>;
   onSuccess: (asset: FacilityAsset) => void;
 }
 
-export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, onSuccess }: Props) {
+export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLocationId, initialValues, onSuccess }: Props) {
   const isEdit = !!asset;
 
   const [locations, setLocations] = useState<Location[]>([]);
@@ -108,29 +110,29 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       location_id: asset?.location_id || defaultLocationId || "",
       floor_id: asset?.floor_id || "",
       category_id: asset?.category_id || "",
-      name: asset?.name || "",
+      name: asset?.name || initialValues?.name || "",
       asset_code: asset?.asset_code || "",
-      make: asset?.make || "",
-      model: asset?.model || "",
-      serial_number: asset?.serial_number || "",
+      make: asset?.make || initialValues?.make || "",
+      model: asset?.model || initialValues?.model || "",
+      serial_number: asset?.serial_number || initialValues?.serial_number || "",
       mac_address: asset?.mac_address || "",
       ip_address: asset?.ip_address || "",
       purchase_date: asset?.purchase_date?.slice(0, 10) || "",
       warranty_expiry: asset?.warranty_expiry?.slice(0, 10) || "",
-      vendor: asset?.vendor || "",
+      vendor: asset?.vendor || initialValues?.vendor || "",
       status: (asset?.status || "active") as "active" | "maintenance" | "retired",
       lifecycle_stage: (asset?.lifecycle_stage || "operational") as FacilityLifecycleStage,
       installation_date: asset?.installation_date?.slice(0, 10) || "",
       assigned_department: asset?.assigned_department || "",
       next_service_due: asset?.next_service_due?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
-      notes: asset?.notes || "",
+      notes: asset?.notes || initialValues?.notes || "",
       attention_notes: asset?.attention_notes || "",
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
     setPendingPhotos([]);
     setStep(1);
-  }, [open, asset, defaultLocationId]);
+  }, [open, asset, defaultLocationId, initialValues]);
 
   useEffect(() => {
     if (!form.location_id) { setFloors([]); return; }
