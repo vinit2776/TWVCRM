@@ -11,6 +11,7 @@ import { requestProposalExtraction } from "@/lib/procurement/proposal-extract-cl
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import type { FacilityAsset } from "@/types";
+import { findPossibleDuplicates, normaliseSerial, type DuplicateCandidate } from "@/lib/asset-duplicates";
 import { planAmcPrefill, suggestAssetForUnit, UNIT_SKIPPED, type PrefillAnswers, type PrefillCurrent, type PrefillPlan } from "@/lib/procurement/amc-prefill";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -27,6 +28,7 @@ export interface CardAsset {
   name: string;
   asset_code?: string | null;
   serial_number?: string | null;
+  model?: string | null;
 }
 
 interface Props {
@@ -53,6 +55,9 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
   const [unitAssets, setUnitAssets] = useState<string[]>([]);
   // The unit (by row) a new asset is being created for; null when the dialog is closed.
   const [creatingFor, setCreatingFor] = useState<number | null>(null);
+  // Shown under a unit before a new asset is created, when it may already be registered.
+  const [dupPrompt, setDupPrompt] = useState<{ row: number; kind: "serial" | "model"; matches: DuplicateCandidate[] } | null>(null);
+  const [checkingRow, setCheckingRow] = useState<number | null>(null);
   const seq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
 
@@ -94,6 +99,35 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
       notes: u.capacity ? `Capacity ${u.capacity}. Added from the vendor's AMC proposal.` : "Added from the vendor's AMC proposal.",
     };
   }, [creatingFor, extracted]);
+
+  const chooseForRow = (row: number, assetId: string) => {
+    if (!extracted) return;
+    setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === row ? assetId : prev[j] ?? "")));
+    setDupPrompt(null);
+  };
+
+  /** Before opening the new-asset form, look for an asset that may already be this unit. */
+  const requestNewAsset = async (row: number) => {
+    const u = extracted?.equipment[row];
+    if (!u) return;
+    setCheckingRow(row);
+    try {
+      // Assets matched to another unit cannot be this one.
+      const taken = new Set(unitAssets.filter((a, j) => j !== row && a && a !== UNIT_SKIPPED));
+      // The picker only lists active assets; a search also finds retired ones with the same serial.
+      let pool: DuplicateCandidate[] = assets;
+      if (normaliseSerial(u.serial)) {
+        const res = await fetch(`/api/facility/assets?search=${encodeURIComponent(u.serial!.trim())}`).then((r) => r.json()).catch(() => null);
+        if (Array.isArray(res?.data)) pool = [...assets, ...(res.data as DuplicateCandidate[]).filter((a) => !assets.some((x) => x.id === a.id))];
+      }
+      const { sameSerial, sameModel } = findPossibleDuplicates(u, pool, taken);
+      if (sameSerial.length > 0) setDupPrompt({ row, kind: "serial", matches: sameSerial });
+      else if (sameModel.length > 0) setDupPrompt({ row, kind: "model", matches: sameModel });
+      else setCreatingFor(row);
+    } finally {
+      setCheckingRow(null);
+    }
+  };
 
   const reset = () => {
     seq.current++;
@@ -175,14 +209,33 @@ export function AmcProposalCard({ current, assets, defaultLocationId, onAssetCre
                         <SearchableSelect
                           options={assetOptions}
                           value={unitAssets[i] ?? ""}
-                          onValueChange={(v) => setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === i ? v : prev[j] ?? "")))}
+                          onValueChange={(v) => chooseForRow(i, v)}
                           placeholder="Choose the asset…"
                           emptyMessage="No active assets found"
                         />
-                        <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" onClick={() => setCreatingFor(i)}>
-                          <Plus className="h-3 w-3" /> Not in the list? Add it as a new asset
+                        <button type="button" disabled={checkingRow === i} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-60" onClick={() => void requestNewAsset(i)}>
+                          {checkingRow === i ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} Not in the list? Add it as a new asset
                         </button>
                       </div>
+                      {dupPrompt?.row === i && (
+                        <div className="sm:col-span-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 space-y-2">
+                          <p className="text-sm font-medium text-amber-900">
+                            {dupPrompt.kind === "serial"
+                              ? "An asset with this serial number is already registered. This is probably the same unit, and adding it again would create a duplicate."
+                              : "Assets of the same model are already registered and not matched to another unit. Is this unit one of them?"}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {dupPrompt.matches.map((m) => (
+                              <Button key={m.id} size="sm" variant="outline" onClick={() => chooseForRow(i, m.id)}>
+                                Use {m.name}{m.asset_code ? ` (${m.asset_code})` : ""}{m.serial_number ? ` · ${m.serial_number}` : " · no serial"}
+                              </Button>
+                            ))}
+                            <Button size="sm" variant="ghost" onClick={() => { setDupPrompt(null); setCreatingFor(i); }}>
+                              {dupPrompt.kind === "serial" ? "Add it anyway" : "No, it is a different unit. Add a new asset"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
