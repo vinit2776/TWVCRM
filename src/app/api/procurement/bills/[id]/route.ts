@@ -1,3 +1,4 @@
+import { findLiveDuplicateInvoice } from "@/lib/procurement/duplicate-invoice";
 import { chainLockedResponse } from "@/lib/procurement/chain-lock";
 import { DEAD_BILL_STATUSES_FILTER } from "@/lib/constants";
 import { NextRequest, NextResponse } from "next/server";
@@ -1288,16 +1289,10 @@ export async function PATCH(
       // Duplicate invoice-number guard (mirrors creation), excluding this bill itself.
       const trimmedInvoiceNumber = parsed.data.invoice_number?.trim() || null;
       if (trimmedInvoiceNumber) {
-        const { count: dupCount } = await supabase
-          .from("vendor_bills")
-          .select("*", { count: "exact", head: true })
-          .eq("vendor_id", bill.vendor_id)
-          .eq("invoice_number", trimmedInvoiceNumber)
-          .not("approval_status", "in", DEAD_BILL_STATUSES_FILTER)
-          .neq("id", id);
-        if (dupCount && dupCount > 0) {
+        const dup = await findLiveDuplicateInvoice(supabase, bill.vendor_id, trimmedInvoiceNumber, id);
+        if (dup) {
           return NextResponse.json(
-            { error: `Invoice number "${trimmedInvoiceNumber}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+            { error: `Invoice number "${trimmedInvoiceNumber}" already exists for this vendor (${dup.bill_number}). Check Vendor Payments to avoid duplicate processing.` },
             { status: 409 }
           );
         }
