@@ -503,12 +503,12 @@ export async function PATCH(
   // Fetched separately rather than via an embedded PostgREST join — the
   // self-referencing FK relationship isn't resolvable through the embed
   // syntax in this project's schema cache.
-  type ParentSummary = { id: string; items: unknown; subtotal: number; seats: number };
+  type ParentSummary = { id: string; items: unknown; subtotal: number; seats: number; escalation_percentage: number | null; contract_number: string };
   let parent: ParentSummary | null = null;
   if (contract.parent_contract_id) {
     const { data: parentData } = await admin
       .from("contracts")
-      .select("id, items, subtotal, seats")
+      .select("id, items, subtotal, seats, escalation_percentage, contract_number")
       .eq("id", contract.parent_contract_id)
       .single();
     parent = parentData;
@@ -635,6 +635,47 @@ export async function PATCH(
       },
     });
 
+    // Same rule as at creation: a reduced or zero escalation set by a
+    // non-admin needs admin approval. Editing the draft afterwards must not
+    // be a way around it.
+    const parentEscPct = Number(parent?.escalation_percentage || 10);
+    const escalationChanged = escalationPct !== Number(contract.escalation_percentage || 0);
+    const needsApproval = dbUser.role !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
+    let approvalStatus: string | null = contract.escalation_approval_status ?? null;
+
+    if (needsApproval && escalationChanged) {
+      const approvalType = escalationPct === 0 ? "escalation_waiver" : "escalation_reduction";
+      const { data: approvalReq } = await admin
+        .from("approval_requests")
+        .insert({
+          approval_type: approvalType,
+          entity_type: "contract",
+          entity_id: id,
+          entity_reference: contract.contract_number,
+          requested_by: dbUser.id,
+          reason: `${approvalType === "escalation_waiver" ? "Escalation waiver" : "Escalation reduction"} from ${parentEscPct}% to ${escalationPct}% on renewal of ${parent?.contract_number ?? "parent contract"}`,
+          metadata: {
+            parent_contract_id: contract.parent_contract_id,
+            parent_contract_number: parent?.contract_number,
+            parent_escalation_percentage: parentEscPct,
+            proposed_escalation_percentage: escalationPct,
+            parent_subtotal: parentSubtotal,
+            proposed_subtotal: subtotal,
+            requested_by_name: null,
+          },
+        })
+        .select("id")
+        .single();
+
+      if (approvalReq) {
+        await admin
+          .from("contracts")
+          .update({ escalation_approval_status: "pending", escalation_approval_id: approvalReq.id })
+          .eq("id", id);
+        approvalStatus = "pending";
+      }
+    }
+
     return NextResponse.json({
       success: true,
       data: {
@@ -643,6 +684,7 @@ export async function PATCH(
         total_amount: totalAmount,
         deposit_shortfall: depositShortfall,
         end_date: endDateStr,
+        escalation_approval_status: approvalStatus,
       },
     });
   }

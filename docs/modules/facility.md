@@ -560,7 +560,7 @@ Defined in `src/lib/facility.ts`:
 ```typescript
 FACILITY_ROLES = {
   manage: ["admin", "it_manager", "it_team"],
-  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager"],
+  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager", "coordinator"],
   // Anyone authenticated can report (no role check on POST /api/facility/issues)
 }
 ```
