@@ -3,7 +3,7 @@
  * Mobile-first 3-step wizard for reporting a facility issue.
  *
  * Step 1 — Where?  Optional asset search (auto-fills location+scope) OR pick location manually
- * Step 2 — What?   Pick scope (7 buttons) → priority → title + description + photo
+ * Step 2 — What?   Pick scope (6 buttons) → priority → title + description + photo
  * Step 3 — Who?    Reporter contact
  */
 
@@ -26,7 +26,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
-import { BUSINESS_HOURS_TIME_SLOTS } from "@/lib/time-slots";
+import { BUSINESS_HOURS_TIME_SLOTS, currentTimeSlot } from "@/lib/time-slots";
 import { classify } from "@/lib/facility-classifier";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
@@ -56,7 +56,11 @@ interface Props {
 
 type Step = 1 | 2 | 3;
 
-const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
+// Electrical and plumbing are reported under Facility; the scopes still exist
+// for older tickets and assets, so incoming values are folded in rather than removed.
+const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "housekeeping", "security", "other", "facility"];
+const toPickerScope = (s: FacilityScope): FacilityScope =>
+  s === "electrical" || s === "plumbing" ? "facility" : s;
 
 const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
   it: Wifi, hvac: ThermometerSun, plumbing: Droplets,
@@ -139,7 +143,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   useEffect(() => {
     if (!classifierUiEnabled || selectedAsset || userTouchedScope) return;
     const t = setTimeout(() => {
-      if (classification.scope) setScope(classification.scope);
+      if (classification.scope) setScope(toPickerScope(classification.scope));
     }, 400);
     return () => clearTimeout(t);
   }, [classification, classifierUiEnabled, selectedAsset, userTouchedScope]);
@@ -164,7 +168,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     setFloorId(defaults?.floor_id || "");
     setSpaceUnitId(defaults?.space_unit_id || "");
     setAssetId(defaults?.asset_id || "");
-    setScope(defaults?.scope || null);
+    setScope(defaults?.scope ? toPickerScope(defaults.scope) : null);
     setAssetScopeOverridden(false);
     setUserTouchedScope(false);
     setSelectedAsset(null);
@@ -215,7 +219,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     // Pre-fill from the asset's registered category, but this is a starting point,
     // not a lock — the picker stays visible below so the reporter can correct it
     // if the asset itself is mis-categorized.
-    if (asset.category?.scope) setScope(asset.category.scope as FacilityScope);
+    if (asset.category?.scope) setScope(toPickerScope(asset.category.scope as FacilityScope));
     setAssetScopeOverridden(false);
     setAssetQuery("");
     setAssetResults([]);
@@ -502,7 +506,10 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
                   sel ? "bg-[#015E65] text-white" : "bg-muted text-muted-foreground")}>
                   <Icon className="h-4 w-4" />
                 </div>
-                <span className={cn("text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
+                <span className="min-w-0">
+                  <span className={cn("block text-sm", sel && "font-medium")}>{SCOPE_LABEL[s]}</span>
+                  {s === "facility" && <span className="block text-[11px] text-muted-foreground">Incl. electrical &amp; plumbing</span>}
+                </span>
               </button>
             );
           })}
@@ -609,7 +616,11 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
               id="tat-date"
               type="date"
               value={tatDate}
-              onChange={(e) => setTatDate(e.target.value)}
+              onChange={(e) => {
+                setTatDate(e.target.value);
+                // Default the time to now (next slot) so picking a date alone gives a valid deadline.
+                if (e.target.value && !tatTime) setTatTime(currentTimeSlot());
+              }}
               className="max-w-[160px]"
             />
             <Select value={tatTime} onValueChange={setTatTime}>

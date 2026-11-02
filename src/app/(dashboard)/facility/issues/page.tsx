@@ -29,11 +29,11 @@ import { LifecycleStepper } from "@/components/facility/lifecycle-stepper";
 import { ComplaintsQueue } from "@/components/facility/complaints-queue";
 import { FacilityViewTabs } from "@/components/facility/facility-view-tabs";
 import {
-  PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
+  PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL, STATUS_LIST, STATUS_STYLES, kpiPointsStyle,
   timeAgo, timeUntil,
 } from "@/lib/facility-ui";
 import type {
-  FacilityIssue, FacilityIssuePriority, FacilityIssueStatus,
+  FacilityIssue, FacilityIssuePriority, FacilityIssueStatus, FacilityScope,
 } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
@@ -529,7 +529,12 @@ function FacilityIssuesPageInner() {
   );
 }
 
-interface ActivityEvent {
+interface ActivityIssue {
+  issue_number: string; title: string; task_type: string; status: string; scope: string; priority: string;
+  reported_at: string | null; resolved_at: string | null; sla_target_at: string | null;
+  location: { name: string } | null; assignee: { full_name: string } | null;
+}
+interface ActivityRow {
   id: string;
   issue_id: string;
   event_type: string;
@@ -537,44 +542,91 @@ interface ActivityEvent {
   message: string | null;
   payload: Record<string, unknown> | null;
   created_at: string;
-  issue: { issue_number: string; title: string; task_type: string; status: string } | null;
+  collaborators_added: number;
+  issue: ActivityIssue | null;
+}
+interface ActivityAttention {
+  overdue: number; oldest_overdue: { issue_number: string; hours: number } | null;
+  due_soon: number; unclaimed: number; critical: number; reopened_week: number;
+}
+interface ActivityWeekly { resolved: number; on_time: number; avg_hours: number | null; busiest: { name: string; count: number } | null }
+
+function formatSpan(ms: number): string {
+  const mins = Math.max(Math.round(ms / 60_000), 1);
+  if (mins < 60) return `${mins}m`;
+  const hours = mins / 60;
+  if (hours < 48) return `${Math.floor(hours)}h${mins % 60 ? ` ${mins % 60}m` : ""}`;
+  return `${Math.round(hours / 24)}d`;
 }
 
-// The stepper on an activity-feed row must show the status AS OF that event,
-// not the ticket's live current status — otherwise every historical row for
-// the same ticket shows an identical (and possibly stale-looking) stepper,
-// e.g. an old "reopened" row displaying today's "resolved" as if that's what
-// happened back then. resolved/reopened/status_changed events carry
-// payload.to (the resulting status) already; claiming always lands on
-// "acknowledged" per the assign route. Plain assignment/take-over doesn't
-// change status, so there's no reliable historical value to show for those
-// — the stepper is omitted for that row rather than guessing.
-function statusAtEvent(e: ActivityEvent): string | null {
-  if (e.event_type === "claimed") return "acknowledged";
-  if (e.event_type === "resolved" || e.event_type === "reopened" || e.event_type === "status_changed") {
-    const to = e.payload?.to;
-    return typeof to === "string" ? to : null;
+// Plain-English outcome for a ticket's latest event, plus an on-time/late tag
+// when the ticket is done. TAT is judged from the ticket's own resolved_at.
+function describeActivity(r: ActivityRow): { text: string; tag?: { label: string; tone: "ok" | "bad" | "warn" } } {
+  const i = r.issue;
+  const who = r.actor_label ?? "Someone";
+  const done = r.event_type === "resolved" || (r.event_type === "status_changed" && r.payload?.to === "closed");
+  if (done && i?.resolved_at && i.reported_at) {
+    const took = new Date(i.resolved_at).getTime() - new Date(i.reported_at).getTime();
+    const by = i.assignee?.full_name ?? who;
+    if (!i.sla_target_at) return { text: `${r.event_type === "resolved" ? "Resolved" : "Closed"} by ${by} in ${formatSpan(took)}` };
+    const tat = new Date(i.sla_target_at).getTime() - new Date(i.reported_at).getTime();
+    const late = new Date(i.resolved_at).getTime() - new Date(i.sla_target_at).getTime();
+    return {
+      text: `${r.event_type === "resolved" ? "Resolved" : "Closed"} by ${by} in ${formatSpan(took)} (TAT ${formatSpan(tat)})`,
+      tag: late <= 0 ? { label: "on time", tone: "ok" } : { label: `late by ${formatSpan(late)}`, tone: "bad" },
+    };
   }
-  return null;
+  const collab = r.collaborators_added > 0 ? ` · +${r.collaborators_added} collaborator${r.collaborators_added > 1 ? "s" : ""}` : "";
+  if (r.event_type === "reopened") return { text: `Reopened by ${who}${collab}`, tag: { label: "reopened", tone: "warn" } };
+  if (r.event_type === "claimed") return { text: `${who} picked this up${collab}` };
+  const overdue = i && ["new", "acknowledged", "in_progress", "reopened"].includes(i.status) && i.sla_target_at && new Date(i.sla_target_at).getTime() < Date.now();
+  return { text: `${r.message ?? "Updated"}${collab}`, tag: overdue ? { label: "overdue", tone: "bad" } : undefined };
 }
 
-// Global "who did what, when" strip — claims, assignments, take-overs,
-// resolutions, reopens, closes, across every technician. Independent of the
-// grouped-by-assignee list below (and its filters); this is a shared feed.
+const TAG_TONE = { ok: "bg-emerald-50 text-emerald-700", bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-700" } as const;
+
+function dayGroup(iso: string): string {
+  const d = new Date(iso);
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((startOfToday.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86_400_000);
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return "Earlier this week";
+  return "Older";
+}
+
+// Overview above the grouped list: what needs attention now, one row per
+// ticket (not per event), and a weekly roll-up. Independent of the filters
+// of the grouped-by-assignee list below.
 function ActivityFeed() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [rows, setRows] = useState<ActivityRow[]>([]);
+  const [attention, setAttention] = useState<ActivityAttention | null>(null);
+  const [weekly, setWeekly] = useState<ActivityWeekly | null>(null);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
+  const [scopeFilter, setScopeFilter] = useState<string>("all");
 
   useEffect(() => {
     fetch("/api/facility/issues/activity")
       .then((r) => r.json())
-      .then((j) => setEvents(j.data ?? []))
+      .then((j) => { setRows(j.data ?? []); setAttention(j.attention ?? null); setWeekly(j.weekly ?? null); })
       .finally(() => setLoading(false));
   }, []);
 
-  if (!loading && events.length === 0) return null;
+  if (!loading && rows.length === 0 && !attention) return null;
 
+  const scopes = [...new Set(rows.map((r) => r.issue?.scope).filter((x): x is string => !!x))];
+  const visible = scopeFilter === "all" ? rows : rows.filter((r) => r.issue?.scope === scopeFilter);
+  const tiles: { label: string; value: number; detail?: string; tone: "bad" | "warn" | "neutral" }[] = attention ? [
+    { label: "Overdue", value: attention.overdue, detail: attention.oldest_overdue ? `oldest: ${formatSpan(attention.oldest_overdue.hours * 3_600_000)}, ${attention.oldest_overdue.issue_number}` : undefined, tone: "bad" },
+    { label: "Due in 4h", value: attention.due_soon, tone: "warn" },
+    { label: "Unclaimed 6h+", value: attention.unclaimed, tone: "warn" },
+    { label: "Critical open", value: attention.critical, tone: "bad" },
+    { label: "Reopened this week", value: attention.reopened_week, tone: "neutral" },
+  ] : [];
+  const TILE_TONE = { bad: "bg-red-50 text-red-700", warn: "bg-amber-50 text-amber-700", neutral: "bg-muted/40 text-muted-foreground" } as const;
+
+  let lastGroup = "";
   return (
     <div className="rounded-lg border overflow-hidden">
       <button
@@ -582,54 +634,86 @@ function ActivityFeed() {
         onClick={() => setCollapsed((v) => !v)}
         className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors bg-muted/10"
       >
-        <span className="text-sm font-medium">Recent activity</span>
-        <span className="text-xs text-muted-foreground">who did what, last {events.length}</span>
+        <span className="text-sm font-medium">Overview</span>
+        <span className="text-xs text-muted-foreground">what needs attention and what just happened</span>
         <ChevronDown className={cn("h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150", collapsed && "-rotate-90")} />
       </button>
       {!collapsed && (
-        <div className="divide-y">
-          {loading ? (
-            <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>
-          ) : (
-            events.map((e) => {
-              const isTask = e.issue?.task_type === "delegated_task";
-              return (
-                <Link
-                  key={e.id}
-                  href={`/facility/issues/${e.issue_id}`}
-                  className={cn(
-                    "block px-3 py-2 hover:bg-muted/20 transition-colors",
-                    isTask && "bg-teal-50/60",
-                  )}
-                  onClick={() => pushTrailEntry({ href: `/facility/issues/${e.issue_id}`, label: e.issue?.title ?? e.issue?.issue_number ?? "Issue" })}
+        <div>
+          {tiles.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3">
+              {tiles.map((t) => (
+                <div key={t.label} className={cn("rounded-lg px-2.5 py-2 text-xs", t.value > 0 ? TILE_TONE[t.tone] : "bg-muted/30 text-muted-foreground")}>
+                  <div className="text-xl font-medium leading-tight">{t.value}</div>
+                  <div>{t.label}</div>
+                  {t.detail && t.value > 0 && <div className="text-[11px] opacity-80 truncate">{t.detail}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {scopes.length > 1 && (
+            <div className="flex gap-1.5 flex-wrap px-3 pb-2">
+              {["all", ...scopes].map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => setScopeFilter(sc)}
+                  className={cn("text-xs rounded-full border px-2.5 py-1", scopeFilter === sc ? "bg-foreground text-background border-foreground" : "hover:bg-muted/40")}
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0">
-                      {getInitials(e.actor_label ?? "?")}
-                    </span>
-                    <span className="text-xs flex-1 min-w-0 truncate">
-                      <span className="font-medium">{e.actor_label ?? "Someone"}</span>
-                      {" — "}
-                      <span className="text-muted-foreground">{e.message}</span>
-                      {e.issue && <span className="text-muted-foreground"> · {e.issue.issue_number}</span>}
-                    </span>
-                    {(() => { const s = statusAtEvent(e); return s ? <LifecycleStepper status={s} inline /> : null; })()}
-                    {e.issue && (
-                      isTask ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white text-teal-800 font-semibold inline-flex items-center gap-0.5 shrink-0">
-                          <UserPlus className="h-2.5 w-2.5" /> Task
+                  {sc === "all" ? "All" : SCOPE_LABEL[sc as FacilityScope] ?? sc}
+                </button>
+              ))}
+            </div>
+          )}
+          <div>
+            {loading ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground border-t">Loading…</div>
+            ) : visible.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-muted-foreground border-t">No recent activity here.</div>
+            ) : (
+              visible.map((e) => {
+                const group = dayGroup(e.created_at);
+                const header = group !== lastGroup ? group : null;
+                lastGroup = group;
+                const d = describeActivity(e);
+                const isTask = e.issue?.task_type === "delegated_task";
+                return (
+                  <div key={e.id}>
+                    {header && <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/20 border-t">{header}</div>}
+                    <Link
+                      href={`/facility/issues/${e.issue_id}`}
+                      className={cn("block px-3 py-2 border-t hover:bg-muted/20 transition-colors", isTask && "bg-teal-50/60")}
+                      onClick={() => pushTrailEntry({ href: `/facility/issues/${e.issue_id}`, label: e.issue?.title ?? e.issue?.issue_number ?? "Issue" })}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <span className="h-6 w-6 rounded-full bg-[#015E65]/15 text-[#015E65] flex items-center justify-center text-[10px] font-semibold shrink-0 mt-0.5">
+                          {getInitials(e.issue?.assignee?.full_name ?? e.actor_label ?? "?")}
                         </span>
-                      ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-slate-50 text-slate-700 ring-slate-200 inline-flex items-center gap-0.5 shrink-0">
-                          <Wrench className="h-2.5 w-2.5" /> Work Order
-                        </span>
-                      )
-                    )}
-                    <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            <span className="text-muted-foreground font-normal">{e.issue?.issue_number} · </span>
+                            {e.issue?.title ?? "Ticket"}
+                            {d.tag && <span className={cn("ml-2 text-[11px] font-normal rounded-full px-2 py-0.5", TAG_TONE[d.tag.tone])}>{d.tag.label}</span>}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[e.issue?.location?.name, d.text].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground shrink-0">{timeAgo(e.created_at)}</span>
+                      </div>
+                    </Link>
                   </div>
-                </Link>
-              );
-            })
+                );
+              })
+            )}
+          </div>
+          {weekly && weekly.resolved > 0 && (
+            <div className="px-3 py-2 border-t bg-muted/20 text-[11px] text-muted-foreground text-center">
+              This week: {weekly.resolved} resolved · {weekly.on_time} on time
+              {weekly.avg_hours != null && <> · avg {weekly.avg_hours}h</>}
+              {attention && <> · {attention.reopened_week} reopened</>}
+              {weekly.busiest && <> · busiest: {weekly.busiest.name} ({weekly.busiest.count})</>}
+            </div>
           )}
         </div>
       )}
