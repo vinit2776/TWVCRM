@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planAmcPrefill, type PrefillCurrent } from "../procurement/amc-prefill";
+import { planAmcPrefill, suggestAssetForUnit, UNIT_SKIPPED, type PrefillCurrent } from "../procurement/amc-prefill";
 import { normaliseProposal, type ExtractedAmcProposal } from "../procurement/proposal-extraction";
 
 const empty: PrefillCurrent = {
@@ -15,7 +15,7 @@ const blueStar: ExtractedAmcProposal = {
   billingFrequency: "half_yearly", billedInAdvance: true, visitsPerYear: 4, coverage: "comprehensive",
   valueBeforeGst: 22770, amountCandidates: [], gstPercent: 18,
   contactName: null, contactPhone: null, contactEmail: null,
-  equipment: [{ description: "DPA1321 package unit", capacity: "11 TR", rate: 22770 }],
+  equipment: [{ description: "DPA1321 package unit", model: "DPA1321R3-IA", serial: "S1", capacity: "11 TR", rate: 22770 }],
   confidence: "high",
 };
 
@@ -42,34 +42,38 @@ describe("planAmcPrefill", () => {
   it("asks instead of choosing when two amounts could be the total", () => {
     const p = planAmcPrefill({ ...blueStar, amountCandidates: [22770, 33000] }, empty);
     expect(p.questions).toHaveLength(1);
-    expect(p.questions[0].options.map((o) => o.value).sort()).toEqual([22770, 33000]);
+    expect(p.questions[0].options.map((o) => o.value).sort()).toEqual(["22770", "33000"]);
     expect(p.updates.firstLine).toBeUndefined();
   });
   it("applies the user's answer to the question", () => {
-    const p = planAmcPrefill({ ...blueStar, amountCandidates: [22770, 33000] }, empty, 33000);
+    const p = planAmcPrefill({ ...blueStar, amountCandidates: [22770, 33000] }, empty, { amount: "33000" });
     expect(p.questions).toEqual([]);
     expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly", perCycleCost: "16500" });
   });
-  it("does not put a multi-unit total on one asset line", () => {
-    const p = planAmcPrefill({ ...blueStar, equipment: [{ description: "A", capacity: "5.5 TR", rate: 11385 }, { description: "B", capacity: "3 TR", rate: 6210 }] }, empty);
-    // Frequency is the vendor's for every unit; the cost is left for the user to split.
-    expect(p.updates.firstLine?.perCycleCost).toBeUndefined();
-    expect(p.updates.firstLine?.billingCycle).toBe("half_yearly");
-    expect(p.notes.join(" ")).toMatch(/2 units/);
-  });
   it("leaves the cost blank when the total does not split evenly", () => {
     const p = planAmcPrefill({ ...blueStar, valueBeforeGst: 22770.01 }, empty);
-    expect(p.updates.firstLine).toBeUndefined();
+    expect(p.updates.firstLine).toEqual({ billingCycle: "half_yearly" });
     expect(p.notes.join(" ")).toMatch(/does not split evenly/);
   });
   it("counts a multi-year contract's visits for every year", () => {
     const p = planAmcPrefill({ ...blueStar, endDate: "2028-03-29" }, empty);
     expect(p.updates.visitsCovered).toBe("8");
   });
-  it("asks the user to choose billing when the proposal does not say", () => {
-    const p = planAmcPrefill({ ...blueStar, billingFrequency: null }, empty);
-    expect(p.updates.firstLine).toBeUndefined();
-    expect(p.notes.join(" ")).toMatch(/billing frequency/i);
+  it("asks how the vendor bills when the proposal does not say, and uses the answer", () => {
+    const asked = planAmcPrefill({ ...blueStar, billingFrequency: null }, empty);
+    expect(asked.updates.firstLine).toBeUndefined();
+    expect(asked.questions.map((q) => q.id)).toEqual(["frequency"]);
+    const answered = planAmcPrefill({ ...blueStar, billingFrequency: null }, empty, { frequency: "quarterly" });
+    expect(answered.questions).toEqual([]);
+    expect(answered.updates.firstLine).toEqual({ billingCycle: "quarterly", perCycleCost: "5692.5" });
+  });
+  it("asks who pays for parts when coverage is unclear, and never assumes", () => {
+    const asked = planAmcPrefill({ ...blueStar, coverage: null }, empty);
+    expect(asked.questions.map((q) => q.id)).toEqual(["coverage"]);
+    expect(asked.updates.coverage).toBeUndefined();
+    const answered = planAmcPrefill({ ...blueStar, coverage: null }, empty, { coverage: "labour_only" });
+    expect(answered.questions).toEqual([]);
+    expect(answered.updates.coverage).toBe("labour_only");
   });
   it("ignores an end date that is not after the start", () => {
     const p = planAmcPrefill({ ...blueStar, endDate: "2026-03-01" }, empty);
@@ -77,10 +81,85 @@ describe("planAmcPrefill", () => {
   });
 });
 
+// Shaped like the Blue Star proposal Q-780826: five units, each with its own cost, billed half-yearly.
+const fiveUnits: ExtractedAmcProposal = {
+  ...blueStar,
+  proposalNumber: "Q-780826", valueBeforeGst: 64170,
+  equipment: [
+    { description: "Package IDU", model: "DPA1321R3-IA", serial: "HVF00117", capacity: "11.00 TR", rate: 22770 },
+    { description: "Ducted ODU", model: "DSA361R1-OA", serial: "FSF02371", capacity: "3.00 TR", rate: 6210 },
+    { description: "Ducted ODU", model: "DSA361R1-OA", serial: "LUF05380", capacity: "3.00 TR", rate: 6210 },
+    { description: "Ducted ODU", model: "DSA361R1-OA", serial: "HSF03069", capacity: "3.00 TR", rate: 6210 },
+    { description: "Package IDU", model: "DPA1321R3-IA", serial: "BXF00075", capacity: "11.00 TR", rate: 22770 },
+  ],
+};
+
+describe("planAmcPrefill with several units", () => {
+  it("waits for every unit to be matched to an asset before filling any line", () => {
+    const p = planAmcPrefill(fiveUnits, empty, {}, ["a1", "a2", "", "", ""]);
+    expect(p.unitsToDecide).toBe(3);
+    expect(p.updates.lines).toBeUndefined();
+  });
+  it("makes one line per asset with that asset's share of each bill", () => {
+    const p = planAmcPrefill(fiveUnits, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);
+    expect(p.unitsToDecide).toBe(0);
+    expect(p.updates.lines).toEqual([
+      { assetId: "a1", billingCycle: "half_yearly", perCycleCost: "11385" },
+      { assetId: "a2", billingCycle: "half_yearly", perCycleCost: "3105" },
+      { assetId: "a3", billingCycle: "half_yearly", perCycleCost: "3105" },
+      { assetId: "a4", billingCycle: "half_yearly", perCycleCost: "3105" },
+      { assetId: "a5", billingCycle: "half_yearly", perCycleCost: "11385" },
+    ]);
+  });
+  it("bills together the units the user matches to one asset", () => {
+    const p = planAmcPrefill(fiveUnits, empty, {}, ["pkg", "duct", "duct", "duct", "pkg"]);
+    expect(p.updates.lines).toEqual([
+      { assetId: "pkg", billingCycle: "half_yearly", perCycleCost: "22770" },
+      { assetId: "duct", billingCycle: "half_yearly", perCycleCost: "9315" },
+    ]);
+  });
+  it("leaves out a unit that is not ours and warns that the total no longer matches", () => {
+    const p = planAmcPrefill(fiveUnits, empty, {}, ["a1", "a2", "a3", UNIT_SKIPPED, "a5"]);
+    expect(p.updates.lines).toHaveLength(4);
+    expect(p.notes.join(" ")).toMatch(/1 unit was left out/);
+    expect(p.notes.join(" ")).toMatch(/add up to ₹57,960, but the proposal total is ₹64,170/);
+  });
+  it("asks how the vendor bills before splitting unit costs", () => {
+    const p = planAmcPrefill({ ...fiveUnits, billingFrequency: null }, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);
+    expect(p.questions.map((q) => q.id)).toEqual(["frequency"]);
+    expect(p.updates.lines).toBeUndefined();
+  });
+  it("leaves an asset's cost blank when its units do not split into whole bills", () => {
+    const odd = { ...fiveUnits, equipment: fiveUnits.equipment.map((e, i) => (i === 1 ? { ...e, rate: 6210.01 } : e)) };
+    const p = planAmcPrefill(odd, empty, {}, ["a1", "a2", "a3", "a4", "a5"]);
+    expect(p.updates.lines?.find((l) => l.assetId === "a2")?.perCycleCost).toBe("");
+    expect(p.notes.join(" ")).toMatch(/does not split evenly/);
+  });
+  it("does not replace asset lines the user already entered", () => {
+    const typed: PrefillCurrent = { ...empty, firstLine: { assetId: "x", perCycleCost: "", lineCount: 1 } };
+    const p = planAmcPrefill(fiveUnits, typed, {}, ["a1", "a2", "a3", "a4", "a5"]);
+    expect(p.updates.lines).toBeUndefined();
+    expect(p.notes.join(" ")).toMatch(/already entered asset lines/);
+  });
+});
+
+describe("suggestAssetForUnit", () => {
+  const assets = [{ id: "a", serial_number: " hvf00117 " }, { id: "b", serial_number: "FSF02371" }, { id: "c", serial_number: "dup" }, { id: "d", serial_number: "DUP" }];
+  it("matches on serial number, ignoring case and spaces", () => {
+    expect(suggestAssetForUnit({ serial: "HVF00117" }, assets)).toBe("a");
+  });
+  it("does not guess when no asset or several assets share the serial", () => {
+    expect(suggestAssetForUnit({ serial: "NOPE" }, assets)).toBe("");
+    expect(suggestAssetForUnit({ serial: "dup" }, assets)).toBe("");
+    expect(suggestAssetForUnit({ serial: null }, assets)).toBe("");
+  });
+});
+
 describe("normaliseProposal", () => {
   it("accepts a well-formed reading and trims it", () => {
-    const x = normaliseProposal({ vendor_name: " Blue Star ", start_date: "2026-03-30", end_date: "2027-03-29", billing_frequency: "half_yearly", visits_per_year: 4, value_before_gst: 22770, equipment: [{ description: "Unit", capacity: "11 TR", rate: 22770 }], confidence: "high" });
+    const x = normaliseProposal({ vendor_name: " Blue Star ", start_date: "2026-03-30", end_date: "2027-03-29", billing_frequency: "half_yearly", visits_per_year: 4, value_before_gst: 22770, equipment: [{ description: "Unit", model: "M1", serial: "SN1", capacity: "11 TR", rate: 22770 }], confidence: "high" });
     expect(x).toMatchObject({ vendorName: "Blue Star", billingFrequency: "half_yearly", visitsPerYear: 4, valueBeforeGst: 22770 });
+    expect(x?.equipment[0]).toMatchObject({ model: "M1", serial: "SN1" });
   });
   it("drops values that fail the checks instead of failing the whole reading", () => {
     const x = normaliseProposal({ vendor_name: "V", visits_per_year: -3, value_before_gst: -5, billing_frequency: "weekly", contact_email: "not an email", start_date: "30/03/2026" });

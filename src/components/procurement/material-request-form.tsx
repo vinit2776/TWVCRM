@@ -35,7 +35,7 @@ import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUni
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { AmcStepHeader, AmcReviewCard } from "@/components/procurement/amc-wizard-parts";
 import { AmcProposalCard } from "@/components/procurement/amc-proposal-card";
-import type { PrefillPlan } from "@/lib/procurement/amc-prefill";
+import type { PrefillAnswers, PrefillPlan } from "@/lib/procurement/amc-prefill";
 import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { AMC_STEPS, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
 
@@ -813,7 +813,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   };
 
   /** Fills the wizard from a proposal the user confirmed; returns how many details were set. */
-  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, chosenValue: number | undefined): number => {
+  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, answers: PrefillAnswers): number => {
     const u = plan.updates;
     let count = 0;
     if (u.serviceName !== undefined) { setServiceItemName(u.serviceName); count++; }
@@ -828,8 +828,12 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "" } : l)));
       count += fl.perCycleCost === undefined ? 1 : 2;
     }
+    if (u.lines) {
+      setAmcLines(u.lines.map((l) => newAmcLine({ assetId: l.assetId, billingCycle: l.billingCycle, perCycleCost: l.perCycleCost })));
+      count += u.lines.length;
+    }
     // Keep the proposal itself as the attached quotation, so the approver can read it.
-    const amount = chosenValue ?? x.valueBeforeGst;
+    const amount = answers.amount !== undefined ? Number(answers.amount) : x.valueBeforeGst;
     setQuotations((prev) => [
       ...prev,
       { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: "AMC proposal", file },
@@ -1043,6 +1047,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
       {amcWizard && amcStep === 0 && (
         <AmcProposalCard
+          assets={assets}
           onApply={applyProposalPrefill}
           current={{
             serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,

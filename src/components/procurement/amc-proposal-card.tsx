@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EXTRACTION_MEDIA_TYPES } from "@/lib/procurement/proposal-extraction";
 import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { requestProposalExtraction } from "@/lib/procurement/proposal-extract-client";
-import { planAmcPrefill, type PrefillCurrent, type PrefillPlan } from "@/lib/procurement/amc-prefill";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { planAmcPrefill, suggestAssetForUnit, UNIT_SKIPPED, type PrefillAnswers, type PrefillCurrent, type PrefillPlan } from "@/lib/procurement/amc-prefill";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -19,25 +20,43 @@ type State =
   | { status: "ok"; extracted: ExtractedAmcProposal }
   | { status: "applied"; count: number };
 
+export interface CardAsset {
+  id: string;
+  name: string;
+  asset_code?: string | null;
+  serial_number?: string | null;
+}
+
 interface Props {
   current: PrefillCurrent;
+  /** Active assets the units in a multi-unit proposal are matched to. */
+  assets: CardAsset[];
   /** Called when the user confirms. The wizard fills its fields and keeps the file as the proposal. */
-  onApply: (plan: PrefillPlan, file: File, extracted: ExtractedAmcProposal, chosenValue: number | undefined) => number;
+  onApply: (plan: PrefillPlan, file: File, extracted: ExtractedAmcProposal, answers: PrefillAnswers) => number;
 }
 
 /**
  * Optional first step: read the vendor's proposal and fill in what it says. Nothing changes
  * until the user presses the button, and the next steps still show every value for checking.
  */
-export function AmcProposalCard({ current, onApply }: Props) {
+export function AmcProposalCard({ current, assets, onApply }: Props) {
   const [state, setState] = useState<State>({ status: "idle" });
   const [file, setFile] = useState<File | null>(null);
-  const [chosen, setChosen] = useState<number | undefined>(undefined);
+  const [answers, setAnswers] = useState<PrefillAnswers>({});
+  // One entry per unit in the proposal: an asset id, UNIT_SKIPPED, or "" while undecided.
+  const [unitAssets, setUnitAssets] = useState<string[]>([]);
   const seq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
 
   const extracted = state.status === "ok" ? state.extracted : null;
-  const plan = useMemo(() => (extracted ? planAmcPrefill(extracted, current, chosen) : null), [extracted, current, chosen]);
+  const plan = useMemo(() => (extracted ? planAmcPrefill(extracted, current, answers, unitAssets) : null), [extracted, current, answers, unitAssets]);
+  const assetOptions = useMemo(
+    () => [
+      { value: UNIT_SKIPPED, label: "Not ours / leave out" },
+      ...assets.map((a) => ({ value: a.id, label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}` })),
+    ],
+    [assets],
+  );
 
   const pick = (f: File | null) => {
     if (!f) return;
@@ -45,10 +64,12 @@ export function AmcProposalCard({ current, onApply }: Props) {
     if (!(EXTRACTION_MEDIA_TYPES as readonly string[]).includes(f.type)) { toast.error("Upload a PDF, JPG, PNG or WebP of the proposal."); return; }
     const mine = ++seq.current;
     setFile(f);
-    setChosen(undefined);
+    setAnswers({});
+    setUnitAssets([]);
     setState({ status: "loading" });
     requestProposalExtraction(f).then((x) => {
       if (mine !== seq.current) return;
+      if (x) setUnitAssets(x.equipment.length > 1 ? x.equipment.map((e) => suggestAssetForUnit(e, assets)) : []);
       setState(x ? { status: "ok", extracted: x } : { status: "unavailable" });
     });
   };
@@ -56,7 +77,8 @@ export function AmcProposalCard({ current, onApply }: Props) {
   const reset = () => {
     seq.current++;
     setFile(null);
-    setChosen(undefined);
+    setAnswers({});
+    setUnitAssets([]);
     setState({ status: "idle" });
     if (input.current) input.current.value = "";
   };
@@ -113,12 +135,40 @@ export function AmcProposalCard({ current, onApply }: Props) {
                 </div>
               ))}
             </dl>
+            {extracted.equipment.length > 1 && (
+              <div className="rounded-lg border">
+                <div className="px-3 py-2 border-b bg-muted/40">
+                  <p className="text-sm font-medium">{extracted.equipment.length} units are listed. Which asset is each one?</p>
+                  <p className="text-xs text-muted-foreground">Units matched to the same asset are billed together. Choose &quot;Not ours&quot; for any unit this contract should not cover.</p>
+                </div>
+                <ul className="divide-y">
+                  {extracted.equipment.map((u, i) => (
+                    <li key={i} className="grid gap-2 px-3 py-2.5 sm:grid-cols-[1fr_16rem] sm:items-center">
+                      <div className="text-sm min-w-0">
+                        <p className="font-medium">{i + 1}. {[u.capacity, u.model ?? u.description].filter(Boolean).join(" · ")}</p>
+                        <p className="text-xs text-muted-foreground break-words">
+                          {u.serial ? `Serial ${u.serial}` : "No serial number"} · {u.rate ? `₹${u.rate.toLocaleString("en-IN")} for the year` : "No cost listed"}
+                        </p>
+                      </div>
+                      <SearchableSelect
+                        options={assetOptions}
+                        value={unitAssets[i] ?? ""}
+                        onValueChange={(v) => setUnitAssets((prev) => extracted.equipment.map((_, j) => (j === i ? v : prev[j] ?? "")))}
+                        placeholder="Choose the asset…"
+                        emptyMessage="No active assets found"
+                      />
+                    </li>
+                  ))}
+                </ul>
+                {assets.length === 0 && <p className="px-3 py-2 text-xs text-amber-800 bg-amber-50 border-t border-amber-200">No active assets were found. Add the assets in Facility first, or leave the units out.</p>}
+              </div>
+            )}
             {plan.questions.map((q) => (
               <div key={q.id} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
                 <p className="text-sm font-medium text-amber-900">{q.prompt}</p>
                 <div className="flex flex-wrap gap-2">
                   {q.options.map((o) => (
-                    <Button key={o.value} size="sm" variant={chosen === o.value ? "default" : "outline"} onClick={() => setChosen(o.value)}>{o.label}</Button>
+                    <Button key={o.value} size="sm" variant={answers[q.id] === o.value ? "default" : "outline"} onClick={() => setAnswers((a) => ({ ...a, [q.id]: o.value }))}>{o.label}</Button>
                   ))}
                 </div>
               </div>
@@ -130,9 +180,9 @@ export function AmcProposalCard({ current, onApply }: Props) {
             )}
             <div className="flex flex-wrap gap-2">
               <Button
-                disabled={plan.questions.length > 0 || plan.found.length === 0}
+                disabled={plan.questions.length > 0 || plan.unitsToDecide > 0 || plan.found.length === 0}
                 onClick={() => {
-                  const count = onApply(plan, file, extracted, chosen);
+                  const count = onApply(plan, file, extracted, answers);
                   setState({ status: "applied", count });
                 }}
               >
@@ -140,7 +190,13 @@ export function AmcProposalCard({ current, onApply }: Props) {
               </Button>
               <Button variant="outline" onClick={reset}>Don&apos;t use it</Button>
             </div>
-            {plan.questions.length > 0 && <p className="text-xs text-muted-foreground">Answer the question above to continue.</p>}
+            {(plan.questions.length > 0 || plan.unitsToDecide > 0) && (
+              <p className="text-xs text-muted-foreground">
+                {plan.unitsToDecide > 0 ? `Choose an asset for ${plan.unitsToDecide} more unit${plan.unitsToDecide === 1 ? "" : "s"}` : ""}
+                {plan.unitsToDecide > 0 && plan.questions.length > 0 ? " and answer" : plan.questions.length > 0 ? "Answer" : ""}
+                {plan.questions.length > 0 ? ` the question${plan.questions.length === 1 ? "" : "s"} above` : ""} to continue.
+              </p>
+            )}
           </div>
         )}
       </CardContent>
