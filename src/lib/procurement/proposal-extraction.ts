@@ -48,7 +48,7 @@ Return ONLY a JSON object, no other text:
 
 - vendor_name is the company offering the service, not the customer.
 - start_date and end_date are the contract period ("Proposed Period From/To").
-- billing_frequency is how often the vendor invoices ("Billing Frequency"). visits_per_year is the number of preventive maintenance visits per year.
+- billing_frequency is how often the vendor invoices ("Billing Frequency"). Use it ONLY when the document prints a billing frequency or instalment schedule; a twelve-month contract period alone is NOT yearly billing, so use null. visits_per_year is the number of preventive maintenance visits per year.
 - coverage: "comprehensive" if the vendor supplies parts and labour; "labour_only" if parts are extra; null if unclear.
 - value_before_gst is the TOTAL contract premium for the whole period BEFORE GST ("Total Taxable Amount"), never the grand total with tax and never a single instalment.
 - amount_candidates: only when the document shows two or more figures that could each be the total contract value before GST (for example two alternative quotes); otherwise an empty list. Do not include GST-inclusive totals or per-instalment figures.
