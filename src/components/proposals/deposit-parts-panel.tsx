@@ -27,6 +27,7 @@ import {
   type DepositPosition,
 } from "@/lib/deposit-instalments";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { partialDepositState } from "@/lib/deposit-activation";
 import { DepositRefundSection, type DepositRefund } from "@/components/proposals/deposit-refund-section";
 import type { DepositInstalment } from "@/types";
 
@@ -48,6 +49,8 @@ interface Props {
   onChanged: () => void;
   /** Tells the page that parts exist, so it can stand its single-deposit buttons down. */
   onPartsActive: (active: boolean) => void;
+  /** Reports how much of the deposit is in, so the page can relax gates that follow the >50% rule. */
+  onPosition?: (position: DepositPosition) => void;
 }
 
 const MEDIA = [
@@ -65,7 +68,7 @@ function Stat({ label, value, hint, tone }: { label: string; value: number; hint
   );
 }
 
-export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentStatus, userId, role, onChanged, onPartsActive }: Props) {
+export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentStatus, userId, role, onChanged, onPartsActive, onPosition }: Props) {
   const [data, setData] = useState<PanelData | null>(null);
   const [requestOpen, setRequestOpen] = useState(false);
   const [recordFor, setRecordFor] = useState<DepositInstalment | null>(null);
@@ -81,12 +84,13 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
       const json = await res.json();
       setData(json.data);
       onPartsActive((json.data.instalments as DepositInstalment[]).some((i) => i.status !== "cancelled"));
+      onPosition?.(json.data.position as DepositPosition);
       const r = await fetch(`/api/proposals/${proposalId}/deposit-refund`);
       if (r.ok) setRefund((await r.json()).data);
     } catch {
       // The panel is additive; the single-deposit card still works without it.
     }
-  }, [proposalId, onPartsActive]);
+  }, [proposalId, onPartsActive, onPosition]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -159,10 +163,17 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
             </p>
           </div>
           {depositPaymentStatus === "pending" && (
-            <p className="rounded-md border-l-4 border-amber-500 bg-amber-100 px-2.5 py-1.5 text-xs text-amber-900">
-              The contract cannot be activated until the full {formatCurrency(position.required)} is paid.
-              <b> {formatCurrency(position.balance)} still to collect.</b>
-            </p>
+            partialDepositState(position.required, position.paid).allowsActivation ? (
+              <p className="rounded-md border-l-4 border-amber-500 bg-amber-100 px-2.5 py-1.5 text-xs text-amber-900">
+                More than half of the deposit is in, so the contract <b>can be activated</b> and the GST invoice sent.
+                <b> {formatCurrency(position.balance)} is still pending</b> — keep collecting it.
+              </p>
+            ) : (
+              <p className="rounded-md border-l-4 border-amber-500 bg-amber-100 px-2.5 py-1.5 text-xs text-amber-900">
+                The contract cannot be activated until more than half of the {formatCurrency(position.required)} is paid.
+                <b> {formatCurrency(position.balance)} still to collect.</b>
+              </p>
+            )
           )}
 
           <ul className="space-y-1.5">

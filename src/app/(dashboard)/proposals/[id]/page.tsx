@@ -63,6 +63,8 @@ import { ProposalForm } from "@/components/proposals/proposal-form";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { JourneyPanel } from "@/components/journey/journey-panel";
 import { DepositRequestHistory } from "@/components/proposals/deposit-request-history";
+import { partialDepositState, partialDepositWarning, type PartialDepositState } from "@/lib/deposit-activation";
+import type { DepositPosition } from "@/lib/deposit-instalments";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
 import { DepositPartsPanel } from "@/components/proposals/deposit-parts-panel";
@@ -117,6 +119,10 @@ export default function ProposalDetailPage({
   const [manualPayMedium, setManualPayMedium] = useState("");
   // True once any part of the deposit has been asked for or paid: the single-deposit controls stand down.
   const [depositPartsActive, setDepositPartsActive] = useState(false);
+  // More than half of the deposit received in parts: activation and the GST invoice are allowed, with a pending-balance warning.
+  const [depositCollection, setDepositCollection] = useState<PartialDepositState | null>(null);
+  const handleDepositPosition = useCallback((p: DepositPosition) => setDepositCollection(partialDepositState(p.required, p.paid)), []);
+  const depositPartialOk = !!depositCollection?.allowsActivation;
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -1036,7 +1042,7 @@ export default function ProposalDetailPage({
                       ) : (
                         <DropdownMenuItem
                           onClick={() => openGstDialog(invoiceSentAlready)}
-                          disabled={hasDeposit && !depositPaid}
+                          disabled={hasDeposit && !depositPaid && !depositPartialOk}
                         >
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
                           <div>
@@ -1044,7 +1050,7 @@ export default function ProposalDetailPage({
                               {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {hasDeposit && !depositPaid
+                              {hasDeposit && !depositPaid && !depositPartialOk
                                 ? "Deposit must be paid first"
                                 : `₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month · Prorated · PDF attached`}
                             </p>
@@ -1487,6 +1493,7 @@ export default function ProposalDetailPage({
                   role={currentUser?.role ?? null}
                   onChanged={fetchProposal}
                   onPartsActive={setDepositPartsActive}
+                  onPosition={handleDepositPosition}
                 />
 
                 {proposal.deposit_payment_status === "paid" && (
@@ -1680,7 +1687,7 @@ export default function ProposalDetailPage({
           {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
             const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
             const depositPaid = proposal.deposit_payment_status === "paid";
-            const canSendInvoice = !depositRequired || depositPaid;
+            const canSendInvoice = !depositRequired || depositPaid || depositPartialOk;
             const invoiceSent = !!proposal.occupation_start_date;
 
             return (
@@ -1794,7 +1801,12 @@ export default function ProposalDetailPage({
                     <>
                       {!canSendInvoice && (
                         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Security deposit must be paid before sending the GST invoice.
+                          More than half of the security deposit must be paid before sending the GST invoice.
+                        </p>
+                      )}
+                      {canSendInvoice && !depositPaid && depositCollection && (
+                        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                          {partialDepositWarning(depositCollection)}
                         </p>
                       )}
                       <Button
