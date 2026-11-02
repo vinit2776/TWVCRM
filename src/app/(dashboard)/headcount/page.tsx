@@ -34,7 +34,7 @@ const AREA_TYPES: { key: keyof LocationCapacityConfig; label: string; emoji: str
   { key: "conference_room", label: "Conference Room", emoji: "🎯" },
 ];
 
-const ROLES_CAN_ENTER = ["admin", "manager", "floor_manager", "office_admin"];
+const ROLES_CAN_ENTER = ["admin", "manager", "floor_manager", "office_admin", "coordinator"];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
