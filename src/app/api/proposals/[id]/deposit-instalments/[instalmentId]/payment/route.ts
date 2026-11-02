@@ -3,7 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { canRecordPayments } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { instalmentErrorMessage } from "@/lib/deposit-instalments";
-import { cancelRazorpayLink } from "@/lib/deposit-instalment-server";
+import { cancelRazorpayLink, syncContractDepositFromParts } from "@/lib/deposit-instalment-server";
 import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
 
 /**
@@ -118,6 +118,17 @@ export async function POST(
       ...(res.complete ? { deposit_complete: { old: false, new: true } } : {}),
     },
   });
+
+  // Last part in: a contract activated while the deposit was part-paid now holds the full deposit.
+  if (res.complete) {
+    const synced = await syncContractDepositFromParts(admin, id).catch(() => ({ synced: false }));
+    if (synced.synced) {
+      void logAudit(admin, {
+        entityType: "proposal", entityId: id, action: "update", performedBy: actor.id,
+        changes: { contract_deposit_completed: { old: "pending", new: "paid" } },
+      });
+    }
+  }
 
   // Confirm to the customer with the running breakup. Best effort: the payment is
   // already recorded, so a failed email is logged (communications_log) not surfaced as an error.
