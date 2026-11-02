@@ -26,7 +26,7 @@ export interface PrefillUpdates {
   contactName?: string;
   helpline?: string;
   contactEmail?: string;
-  firstLine?: { billingCycle: ServicePoBillingCycle; perCycleCost: string };
+  firstLine?: { billingCycle: ServicePoBillingCycle; perCycleCost?: string };
 }
 
 export interface PrefillQuestion {
@@ -113,6 +113,8 @@ export function planAmcPrefill(x: ExtractedAmcProposal, cur: PrefillCurrent, cho
 
   if (x.equipment.length > 1) {
     notes.push(`This proposal covers ${x.equipment.length} units. Add one asset per unit on the Cost step and enter each unit's share.`);
+    // The cost stays with the user, but the vendor's billing frequency applies to every unit.
+    if (x.billingFrequency) updates.firstLine = { billingCycle: x.billingFrequency };
   } else if (value && x.billingFrequency && cur.firstLine.lineCount === 1 && blank(cur.firstLine.perCycleCost)) {
     const cycles = datesOk ? cyclesBetween(x.startDate, x.endDate, x.billingFrequency) : null;
     if (cycles && cycles > 0) {

@@ -52,7 +52,9 @@ describe("planAmcPrefill", () => {
   });
   it("does not put a multi-unit total on one asset line", () => {
     const p = planAmcPrefill({ ...blueStar, equipment: [{ description: "A", capacity: "5.5 TR", rate: 11385 }, { description: "B", capacity: "3 TR", rate: 6210 }] }, empty);
-    expect(p.updates.firstLine).toBeUndefined();
+    // Frequency is the vendor's for every unit; the cost is left for the user to split.
+    expect(p.updates.firstLine?.perCycleCost).toBeUndefined();
+    expect(p.updates.firstLine?.billingCycle).toBe("half_yearly");
     expect(p.notes.join(" ")).toMatch(/2 units/);
   });
   it("leaves the cost blank when the total does not split evenly", () => {

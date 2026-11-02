@@ -825,8 +825,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     if (u.contactEmail !== undefined) { setAmcContactEmail(u.contactEmail); count++; }
     if (u.firstLine) {
       const fl = u.firstLine;
-      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost, cycleCountOverride: "" } : l)));
-      count += 2;
+      setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "" } : l)));
+      count += fl.perCycleCost === undefined ? 1 : 2;
     }
     // Keep the proposal itself as the attached quotation, so the approver can read it.
     const amount = chosenValue ?? x.valueBeforeGst;
