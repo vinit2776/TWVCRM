@@ -2845,3 +2845,30 @@ export const CHARGE_HOLD_ALLOWED_ROLES = ["admin", "manager"];
 // enforces.
 export const USAGE_CHARGE_REVIEW_REQUIRED_AFTER_DAYS = 60;
 
+
+/**
+ * Reasons offered on the one-tap "Not interested" action in the Leads list. Each maps onto the
+ * lead's existing lost reason (reports keep one vocabulary), except Junk, which is a status of its
+ * own and hides the lead from the pipeline.
+ */
+export const NOT_INTERESTED_REASONS = ["junk", "price", "location", "space", "other"] as const;
+export type NotInterestedReason = (typeof NOT_INTERESTED_REASONS)[number];
+
+export const NOT_INTERESTED_REASON_LABELS: Record<NotInterestedReason, string> = {
+  junk: "Junk",
+  price: "Price",
+  location: "Location",
+  space: "Space",
+  other: "Other",
+};
+
+/** The lost reason each Not interested reason is stored as. Junk has none: it sets status `junk`. */
+export const NOT_INTERESTED_TO_LOST_REASON: Record<Exclude<NotInterestedReason, "junk">, string> = {
+  price: "budget",
+  location: "location",
+  space: "requirements_not_met",
+  other: "other",
+};
+
+/** Why a call got no answer, as picked on the one-tap "No answer" action. */
+export const NO_ANSWER_REASONS = ["Switched off", "No response", "Not reachable (no incoming)"] as const;

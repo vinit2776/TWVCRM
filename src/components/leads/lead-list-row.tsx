@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate, formatSmartDate } from "@/lib/utils";
 import type { Lead } from "@/types";
@@ -69,11 +70,14 @@ export function LeadListRow({
   unread,
   reEnquiry,
   onOpen,
+  onChanged,
 }: {
   lead: Lead;
   unread: boolean;
   reEnquiry: boolean;
   onOpen: () => void;
+  /** Called after a one-tap action saves, so the list can reload. */
+  onChanged: () => void;
 }) {
   const want = wantLine(lead);
   const place = lead.location?.name ?? lead._enquiry?.preferred_location ?? null;
@@ -141,6 +145,13 @@ export function LeadListRow({
           {owner ? ` · ${owner}` : ""}
         </span>
       </div>
+
+      {/* Line 4: log what just happened, without opening the lead */}
+      {!CLOSED_STATUSES.includes(lead.status) && !lead.archived_at && (
+        <div className="pt-1">
+          <LeadQuickActions lead={lead} onChanged={onChanged} />
+        </div>
+      )}
     </div>
   );
 }
