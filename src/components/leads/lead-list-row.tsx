@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
+import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate, formatSmartDate } from "@/lib/utils";
 import type { Lead } from "@/types";
@@ -70,18 +71,20 @@ export function LeadListRow({
   unread,
   reEnquiry,
   onOpen,
+  users,
   onChanged,
 }: {
   lead: Lead;
   unread: boolean;
   reEnquiry: boolean;
   onOpen: () => void;
+  /** People a lead can be handed to. */
+  users: { id: string; full_name: string; role: string }[];
   /** Called after a one-tap action saves, so the list can reload. */
   onChanged: () => void;
 }) {
   const want = wantLine(lead);
   const place = lead.location?.name ?? lead._enquiry?.preferred_location ?? null;
-  const owner = lead.assigned_user?.full_name ?? null;
   const name = `${lead.first_name} ${lead.last_name}`.trim();
 
   return (
@@ -140,9 +143,11 @@ export function LeadListRow({
       {/* Line 3: what happens next, and how it came in */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 text-sm">
         <div className="min-w-0 max-w-full"><NextAction lead={lead} /></div>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {LEAD_SOURCE_LABELS[lead.source] ?? lead.source} · {lead._enquiry ? "asked" : "added"} {formatSmartDate(lead._enquiry?.received_at ?? lead.created_at)}
-          {owner ? ` · ${owner}` : ""}
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            {LEAD_SOURCE_LABELS[lead.source] ?? lead.source} · {lead._enquiry ? "asked" : "added"} {formatSmartDate(lead._enquiry?.received_at ?? lead.created_at)}
+          </span>
+          <LeadHandlerChip lead={lead} users={users} onChanged={onChanged} />
         </span>
       </div>
 

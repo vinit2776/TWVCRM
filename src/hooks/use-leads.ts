@@ -45,7 +45,7 @@ export function useLead(id: string) {
 
 export function useUsers() {
   const [users, setUsers] = useState<
-    { id: string; full_name: string; email: string }[]
+    { id: string; full_name: string; email: string; role: string }[]
   >([]);
   const [loading, setLoading] = useState(true);
 
@@ -53,7 +53,7 @@ export function useUsers() {
     const supabase = createClient();
     const { data } = await supabase
       .from("users")
-      .select("id, full_name, email")
+      .select("id, full_name, email, role")
       .eq("is_active", true)
       .order("full_name");
     setUsers(data || []);
