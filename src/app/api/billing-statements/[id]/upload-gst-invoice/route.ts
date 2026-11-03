@@ -260,7 +260,7 @@ export async function POST(
     meta.acknowledge_off_period_date !== true
   ) {
     return badRequest(
-      `Invoice date ${meta.invoice_date} is outside the billing period ` +
+      `Invoice date ${meta.invoice_date} doesn't fit the billing period ` +
       `${statement.period_start} → ${statement.period_end}. Confirm the date is intended to upload anyway.`,
     );
   }
