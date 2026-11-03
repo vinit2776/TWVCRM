@@ -9,6 +9,8 @@ import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbu
 import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
 import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
+import { extractFromPdf } from "@/lib/tally-pdf-extract";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
@@ -32,6 +34,7 @@ import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-l
  *   - B-series upload with IRN → 422
  *   - Customer has GSTIN but B-series uploaded → 422
  *   - Customer has no GSTIN but A-series uploaded → 422
+ *   - Period printed on the PDF shares no month with the statement's → 422 without acknowledge_period_mismatch
  *   - Invoice date outside the period's months without acknowledge_off_period_date → 422
  */
 export const dynamic = "force-dynamic";
@@ -48,6 +51,8 @@ interface UploadBody {
   nic_signature_verified: boolean;
   /** Accounts confirmed an invoice date outside the billing period is intended. */
   acknowledge_off_period_date?: boolean;
+  /** Accounts confirmed the period printed on the PDF differs from the statement's on purpose. */
+  acknowledge_period_mismatch?: boolean;
 }
 
 function badRequest(reason: string) {
@@ -263,6 +268,19 @@ export async function POST(
       `Invoice date ${meta.invoice_date} doesn't fit the billing period ` +
       `${statement.period_start} → ${statement.period_end}. Confirm the date is intended to upload anyway.`,
     );
+  }
+
+  // The period printed on the PDF is re-read here rather than trusted from the
+  // client, so the form's warning can't be skipped by leaving the field out.
+  // Unreadable PDFs and PDFs naming no period pass: absence of evidence isn't a mismatch.
+  if (file.type === "application/pdf" && meta.acknowledge_period_mismatch !== true) {
+    const { invoice_period_months } = await extractFromPdf(Buffer.from(await file.arrayBuffer()));
+    if (invoicePeriodMismatch(invoice_period_months, statement.period_start, statement.period_end)) {
+      return badRequest(
+        `This invoice says it bills ${invoice_period_months.join(", ")}, but the statement covers ` +
+        `${statement.period_start} → ${statement.period_end}. Confirm the period is correct to upload anyway.`,
+      );
+    }
   }
 
   const customerHasGstin = !!partyLead?.gst_number;
