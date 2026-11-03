@@ -82,8 +82,31 @@ export async function GET(request: NextRequest) {
     subject: string | null;
     type: string;
   };
+  type EnquiryGlance = {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    message: string | null;
+  };
+  type EnquiryRow = {
+    lead_id: string;
+    source: string;
+    received_at: string;
+    payload: {
+      workspace_type?: string;
+      seat_capacity?: number;
+      budget_per_seat?: number;
+      preferred_location?: string;
+      description?: string;
+      messages?: { text?: string }[];
+    } | null;
+  };
   type LeadRow = {
     id: string;
+    _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
       overdue: boolean;
@@ -269,6 +292,34 @@ export async function GET(request: NextRequest) {
   }
 
   const leads = [...priorityLeads, ...restLeads];
+
+  // What the latest public enquiry asked for. A form lead's requirement lives on the enquiry,
+  // not on the lead, so without this the list can't say what a lead wants or when they last asked.
+  const leadIds = leads.map((l) => l.id);
+  if (leadIds.length > 0) {
+    const { data: enquiryRows } = await supabase
+      .from("lead_enquiries")
+      .select("lead_id, source, received_at, payload")
+      .in("lead_id", leadIds)
+      .or("resolution_outcome.is.null,resolution_outcome.neq.spam")
+      .order("received_at", { ascending: false });
+    const latest = new Map<string, EnquiryGlance>();
+    for (const row of (enquiryRows || []) as EnquiryRow[]) {
+      if (latest.has(row.lead_id)) continue;
+      const p = row.payload ?? {};
+      const thread = (p.messages ?? []).map((m) => (m.text ?? "").trim()).filter(Boolean);
+      latest.set(row.lead_id, {
+        source: row.source,
+        received_at: row.received_at,
+        workspace_type: p.workspace_type ?? null,
+        seat_capacity: p.seat_capacity ?? null,
+        budget_per_seat: p.budget_per_seat ?? null,
+        preferred_location: p.preferred_location ?? null,
+        message: (thread[thread.length - 1] ?? p.description?.trim()) || null,
+      });
+    }
+    for (const l of leads) l._enquiry = latest.get(l.id) ?? null;
+  }
 
   return NextResponse.json({
     data: leads,
