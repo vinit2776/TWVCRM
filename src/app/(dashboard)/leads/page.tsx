@@ -352,8 +352,8 @@ export default function LeadsPage() {
                     users={users}
                     onChanged={refetch}
                     onOpen={() => {
-                      pushTrailEntry({ href: `/leads/${lead.id}`, label: `${lead.first_name} ${lead.last_name}` });
-                      router.push(`/leads/${lead.id}`);
+                      pushTrailEntry({ href: `/leads/${lead.id}/activity`, label: `${lead.first_name} ${lead.last_name}` });
+                      router.push(`/leads/${lead.id}/activity`);
                     }}
                   />
                 );
