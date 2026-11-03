@@ -568,7 +568,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
           <p>
             <strong>Invoice date is outside the billing period.</strong> This invoice is dated{" "}
-            {formatDate(invoiceDate)} but covers {formatDate(row.period_start)} → {formatDate(row.period_end)}.
+            {formatDate(invoiceDate)} but covers {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}.
             Check the date on the Tally voucher before sending — it decides the GST month.
           </p>
           <label className="flex items-center gap-2">
