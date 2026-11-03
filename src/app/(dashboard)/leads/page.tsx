@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -172,6 +172,10 @@ export default function LeadsPage() {
           <Button variant="outline" onClick={() => setImportOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
             Import CSV
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/new/call")}>
+            <Phone className="mr-2 h-4 w-4" />
+            Log a call
           </Button>
           <Button onClick={() => router.push("/leads/new")}>
             <Plus className="mr-2 h-4 w-4" />

@@ -208,7 +208,7 @@ export default function LeadActivityPage() {
                     {istTime(e.at)} · {actorText(e)}
                   </div>
                   <div className="font-medium">{e.title}</div>
-                  {e.detail && <div className="text-sm text-muted-foreground">{e.detail}</div>}
+                  {e.detail && <div className="whitespace-pre-line text-sm text-muted-foreground">{e.detail}</div>}
                   {e.links.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {e.links.map((l) => (
