@@ -21,3 +21,14 @@ export const BUSINESS_HOURS_TIME_SLOTS: TimeSlotOption[] = (() => {
   }
   return slots;
 })();
+
+// Next half-hour slot from now, clamped to the dropdown's range.
+export const currentTimeSlot = (): string => {
+  const now = new Date();
+  const mins = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 30) * 30;
+  const slots = BUSINESS_HOURS_TIME_SLOTS;
+  return (slots.find((sl) => {
+    const [h, m] = sl.value.split(":").map(Number);
+    return h * 60 + m >= mins;
+  }) ?? slots[slots.length - 1]).value;
+};
