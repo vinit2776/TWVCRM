@@ -26,7 +26,7 @@ export function LeadDayHeader({
       {sources.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {sources.map(([source, n]) => (
-            <span key={source} className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">
+            <span key={source} className="rounded-full border bg-background px-2 py-0.5 text-xs capitalize text-muted-foreground">
               {LEAD_SOURCE_LABELS[source] ?? source} {n}
             </span>
           ))}
