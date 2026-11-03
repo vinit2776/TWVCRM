@@ -269,6 +269,7 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 3. If `security_deposit_months > 0`: `deposit_payment_status = 'paid'`
 - **Renewal exception**: contracts with `deposit_carried_from` bypass the gate
 - Admin bypass: include `payment_override_reason` in PATCH body (logged to audit)
+- **Part-paid deposit (>50%)**: when the deposit is being collected in parts and **more than 50% of the adjusted required amount has actually been received** (`src/lib/deposit-activation.ts`), the deposit leg of the gate is satisfied with a warning: the PATCH must carry `acknowledge_partial_deposit: true` (else 409 `PARTIAL_DEPOSIT_ACK_REQUIRED`), the contract claims the proposal's deposit and snapshots it as `pending` with a note, and when the last part is paid `syncContractDepositFromParts` flips the contract's deposit to paid. The pro-rata / first invoice is still required, and the monthly GST invoice (`send-invoice`) follows the same >50% rule. Any role that can activate may do this. Exactly 50% is not enough. Both the proposal and the contract show a "deposit pending" warning until the balance is in.
 
 ### Staged security deposit (parts)
 

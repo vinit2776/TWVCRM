@@ -733,6 +733,8 @@ export interface Contract {
   // Escalation approval
   escalation_approval_status?: string | null; // 'pending' | 'approved' | 'rejected'
   escalation_approval_id?: string | null;
+  /** Who approved/rejected the escalation and when (null while pending or for older rows with no record). */
+  escalation_decision?: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null;
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;

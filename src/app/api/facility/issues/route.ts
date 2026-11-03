@@ -127,6 +127,7 @@ export async function POST(request: NextRequest) {
     reporter_name, reporter_email, reporter_phone,
     linked_feedback_id,
     assigned_to: delegateAssignedTo,   // delegated_task only — the person being delegated to
+    additional_assignee_ids: additionalAssigneeIds,  // delegated_task only — co-assignees, stored as collaborators
     due_date,                          // delegated_task only — manual TAT, required (D4)
     tat_hours: manualTatHours,         // reported_problem only — manual override of the computed TAT
     attachments,           // optional array of { file_url, file_path, file_type, caption }
@@ -407,6 +408,25 @@ export async function POST(request: NextRequest) {
           collaboratorIds.map((user_id) => ({ issue_id: issue.id, user_id, added_by: dbUser.id })),
           { onConflict: "issue_id,user_id", ignoreDuplicates: true }
         );
+    }
+  }
+
+  // Co-assignees picked when delegating: the first pick is assigned_to, the rest
+  // join as collaborators so they get the same notifications and access.
+  if (task_type === "delegated_task" && Array.isArray(additionalAssigneeIds) && additionalAssigneeIds.length > 0) {
+    const adminClient = createAdminClient();
+    const requested = [...new Set(additionalAssigneeIds.filter((id): id is string => typeof id === "string"))]
+      .filter((id) => id !== finalAssignee?.id);
+    const { data: activeUsers } = await adminClient
+      .from("users")
+      .select("id")
+      .in("id", requested)
+      .eq("is_active", true);
+    const rows = (activeUsers ?? []).map((u) => ({ issue_id: issue.id, user_id: u.id as string, added_by: dbUser.id }));
+    if (rows.length > 0) {
+      await adminClient
+        .from("facility_issue_collaborators")
+        .upsert(rows, { onConflict: "issue_id,user_id", ignoreDuplicates: true });
     }
   }
 
