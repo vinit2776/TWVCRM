@@ -25,6 +25,8 @@ export interface DunnableRow {
   amount: number;
   due_date: string | null;
   payment_link_url: string | null;
+  /** Razorpay link id, so the reminder can check the link is still live. */
+  payment_link_id: string | null;
   followup_enabled: boolean;
   reminder_count: number;
   last_reminder_sent_at: string | null;
@@ -78,6 +80,7 @@ export async function fetchDunnableReceivables(
         email: lead?.email ?? null, phone: lead?.mobile || lead?.phone || null,
         amount: owed, due_date: d.deposit_due_date,
         payment_link_url: d.deposit_razorpay_link_url,
+        payment_link_id: d.deposit_razorpay_link_id,
         followup_enabled: true,
         reminder_count: d.deposit_reminder_count || 0,
         last_reminder_sent_at: d.deposit_last_reminder_sent_at,
@@ -89,7 +92,7 @@ export async function fetchDunnableReceivables(
     let q = admin
       .from("deposit_topups")
       .select(`
-        id, amount, due_date, razorpay_payment_link_url, reminder_count, last_reminder_sent_at,
+        id, amount, due_date, razorpay_payment_link_url, razorpay_payment_link_id, reminder_count, last_reminder_sent_at,
         contract:contracts!deposit_topups_contract_id_fkey(
           contract_number,
           lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, phone, mobile)
@@ -108,6 +111,7 @@ export async function fetchDunnableReceivables(
         phone: contract?.lead?.mobile || contract?.lead?.phone || null,
         amount: Number(t.amount || 0), due_date: t.due_date,
         payment_link_url: t.razorpay_payment_link_url,
+        payment_link_id: t.razorpay_payment_link_id,
         followup_enabled: true,
         reminder_count: t.reminder_count || 0,
         last_reminder_sent_at: t.last_reminder_sent_at,
@@ -125,7 +129,7 @@ export async function fetchDunnableReceivables(
     let q = admin
       .from("proforma_invoices")
       .select(`
-        id, invoice_number, total_amount, due_date, razorpay_link_url,
+        id, invoice_number, total_amount, due_date, razorpay_link_url, razorpay_link_id,
         followup_enabled, reminder_count, last_reminder_sent_at,
         lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, phone, mobile),
         case:cases!proforma_invoices_case_id_fkey(
@@ -151,6 +155,7 @@ export async function fetchDunnableReceivables(
         phone: lead?.mobile || lead?.phone || invParty?.phone || null,
         amount: Number(inv.total_amount || 0), due_date: inv.due_date,
         payment_link_url: inv.razorpay_link_url,
+        payment_link_id: inv.razorpay_link_id,
         followup_enabled: inv.followup_enabled !== false,
         reminder_count: inv.reminder_count || 0,
         last_reminder_sent_at: inv.last_reminder_sent_at,

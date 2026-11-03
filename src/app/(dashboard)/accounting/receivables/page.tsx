@@ -1479,7 +1479,7 @@ export default function AccountsReceivablePage() {
                       />
                       <span className="text-sm text-blue-900">
                         <span className="font-medium">Generate fresh payment link</span>
-                        <span className="text-blue-600 text-xs block">Cancel the old link · create a new 15-day link · resend invoice with new QR code</span>
+                        <span className="text-blue-600 text-xs block">Cancel the old link · create a new 180-day link · resend invoice with new QR code</span>
                       </span>
                     </label>
                   </div>

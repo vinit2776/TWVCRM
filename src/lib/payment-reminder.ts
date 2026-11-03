@@ -13,14 +13,13 @@
  * Returns a per-statement summary the caller can use for response payloads.
  */
 
-import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
-import { getCachedSettings } from "@/lib/app-settings-cache";
 import { totalPaid as settlementTotalPaid, balanceDue as settlementBalanceDue, settlementAmount } from "@/lib/settlement";
 import { fetchInvoiceAttachment, type ReminderAttachment } from "@/lib/reminder-invoice-attachment";
 import { splitAttachable } from "@/lib/reminder-consolidation";
+import { ensureStatementLink, insertReminderHistory, LINK_UNAVAILABLE_NOTE, type LinkOutcome } from "@/lib/payment-link-guard";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -172,89 +171,6 @@ export function hasReachedCustomer(s: DeliveryMarkers): boolean {
   return Boolean(s.proforma_sent_at) || Boolean(s.emailed_at) || Boolean(s.tally_delivered_at);
 }
 
-/**
- * Refreshes the Razorpay link if expired/missing; returns a working URL or
- * null if Razorpay is disabled / call failed. Persists the new id+url on the
- * statement so subsequent reminders reuse it.
- */
-export async function ensureLivePaymentLink(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  admin: SupabaseClient, statement: any, contract: any, lead: any, appUrl: string,
-  partyRef?: string,
-): Promise<string | null> {
-  const settings = await getCachedSettings(admin, [
-    "razorpay_key_id",
-    "razorpay_key_secret",
-    "razorpay_enabled",
-  ]);
-  if (settings["razorpay_enabled"] !== "true" || !settings["razorpay_key_id"] || !settings["razorpay_key_secret"]) return null;
-  const auth = Buffer.from(`${settings["razorpay_key_id"]}:${settings["razorpay_key_secret"]}`).toString("base64");
-
-  const existingId = statement.razorpay_payment_link_id as string | undefined;
-  const existingUrl = statement.razorpay_payment_link_url as string | undefined;
-  if (existingId) {
-    try {
-      const res = await fetch(`https://api.razorpay.com/v1/payment_links/${existingId}`, { headers: { Authorization: `Basic ${auth}` } });
-      if (res.ok) {
-        const data = await res.json() as { status?: string; short_url?: string };
-        if (data.status === "created") return data.short_url || existingUrl || null;
-      }
-    } catch (err) {
-      console.error("[payment-reminder] link status check failed:", err);
-    }
-  }
-
-  const refId = `bs_${statement.id}_r${statement.reminder_count || 0}`;
-  const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
-  const phone = (lead?.mobile || lead?.phone || "").replace(/\s/g, "");
-  const email = lead?.email || "";
-  const ref = partyRef ?? contract?.contract_number ?? "";
-
-  const payload: Record<string, unknown> = {
-    // Defensive rupee-rounding — total_amount should already be a whole rupee,
-    // but this guards against any stale/unrounded value ever landing on the row.
-    amount: Math.round(Number(statement.total_amount)) * 100,
-    currency: "INR",
-    accept_partial: false,
-    description: `${statement.statement_number} — ${ref}`,
-    reference_id: refId,
-    expire_by: Math.floor(Date.now() / 1000) + RAZORPAY_MAX_LINK_VALIDITY_SECONDS,
-    notify: { sms: !!phone, email: !!email },
-    reminder_enable: true,
-    notes: { statement_id: statement.id, contract_number: ref, reminder_regen: "true" },
-    callback_url: `${appUrl}/billing`,
-    callback_method: "get",
-  };
-  if (customerName || email || phone) {
-    payload.customer = {
-      ...(customerName ? { name: customerName } : {}),
-      ...(email ? { email } : {}),
-      ...(phone ? { contact: phone } : {}),
-    };
-  }
-
-  try {
-    const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-      method: "POST",
-      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!rzpRes.ok) {
-      console.error("[payment-reminder] create link failed:", await rzpRes.text());
-      return existingUrl || null;
-    }
-    const data = await rzpRes.json() as { id: string; short_url: string };
-    await admin.from("billing_statements").update({
-      razorpay_payment_link_id: data.id,
-      razorpay_payment_link_url: data.short_url,
-    }).eq("id", statement.id);
-    return data.short_url;
-  } catch (err) {
-    console.error("[payment-reminder] create link threw:", err);
-    return existingUrl || null;
-  }
-}
-
 function renderEmail(opts: {
   customerName: string; stmt: string; contractNumber: string; contractLabel?: string;
   periodStart: string; periodEnd: string; dueDate: string;
@@ -276,6 +192,8 @@ function renderEmail(opts: {
   trackingPixelUrl?: string | null;
   /** Name of the attached invoice document ("tax invoice" / "proforma"); omit when nothing is attached. */
   attachedDoc?: string | null;
+  /** True when no working Pay link could be secured — shows a reply-for-a-link line. */
+  linkIssue?: boolean;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
   const d = opts.daysOverdue;
@@ -348,6 +266,10 @@ export interface ReminderSendResult {
   whatsAppSent: boolean;
   recipient: { email: string | null; phone: string | null };
   errors: string[];
+  /** Set when nothing was sent on purpose (not a failure), e.g. the link shows a payment. */
+  skipped?: string;
+  /** Invoices sent without a Pay button because no working link could be secured. */
+  linkIssues?: string[];
 }
 
 /**
@@ -394,7 +316,18 @@ export async function sendOneReminder(
   const daysOverdue = daysOverdueFromDueDate(s.due_date as string);
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
 
-  const payLinkUrl = await ensureLivePaymentLink(admin, s, contract, lead, appUrl, partyRef);
+  const link = await ensureStatementLink(admin, s, lead, appUrl, partyRef);
+  if (link.outcome === "paid") {
+    // Razorpay shows money on this link that the CRM has not reconciled yet.
+    // Chasing the customer now would be wrong, and so would a second link.
+    return {
+      stageIdx, toneLabel: stage.toneLabel, emailSent: false, whatsAppSent: false,
+      recipient: { email: lead?.email || null, phone: null }, errors: [],
+      skipped: "the payment link shows a payment that is not reconciled yet",
+    };
+  }
+  const payLinkUrl = link.url;
+  const linkIssue = link.outcome === "unconfirmed";
 
   // Build CC list per stage.
   const cc: string[] = [];
@@ -458,6 +391,7 @@ export async function sendOneReminder(
       cancelledPiNumber,
       trackingPixelUrl,
       attachedDoc: attachment ? docNoun : null,
+      linkIssue,
     });
     try {
       const r = await resend.emails.send({
@@ -474,7 +408,7 @@ export async function sendOneReminder(
     } catch (err) {
       errors.push(`email: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await admin.from("billing_reminder_sends").insert({
+    await insertReminderHistory(admin, "billing_reminder_sends", [{
       billing_statement_id: s.id,
       stage_index: stageIdx,
       stage_label: stage.toneLabel,
@@ -484,7 +418,10 @@ export async function sendOneReminder(
       error: emailSent ? null : errors[errors.length - 1] || "unknown",
       triggered_by: triggeredBy,
       triggered_by_user_id: triggeredByUserId || null,
-    });
+      pay_link_url: payLinkUrl,
+      pay_link_created_at: link.createdAt,
+      pay_link_outcome: link.outcome,
+    }]);
   }
 
   // WhatsApp (stage 1 onwards, only if customer has a phone)
@@ -498,7 +435,7 @@ export async function sendOneReminder(
     } catch (err) {
       errors.push(`whatsapp: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await admin.from("billing_reminder_sends").insert({
+    await insertReminderHistory(admin, "billing_reminder_sends", [{
       billing_statement_id: s.id,
       stage_index: stageIdx,
       stage_label: stage.toneLabel,
@@ -508,7 +445,10 @@ export async function sendOneReminder(
       error: whatsAppSent ? null : errors[errors.length - 1] || "unknown",
       triggered_by: triggeredBy,
       triggered_by_user_id: triggeredByUserId || null,
-    });
+      pay_link_url: payLinkUrl,
+      pay_link_created_at: link.createdAt,
+      pay_link_outcome: link.outcome,
+    }]);
   }
 
   // Advance ladder bookkeeping only on at-least-one-channel success.
@@ -524,6 +464,7 @@ export async function sendOneReminder(
     emailSent, whatsAppSent,
     recipient: { email: lead?.email || null, phone },
     errors,
+    ...(linkIssue ? { linkIssues: [s.statement_number as string] } : {}),
   };
 }
 
@@ -539,12 +480,16 @@ export interface ConsolidatedItem {
   billed: number;
   paid: number;
   payLinkUrl: string | null;
+  linkCreatedAt?: string | null;
+  linkOutcome?: LinkOutcome;
 }
 
 export function renderConsolidatedEmail(opts: {
   customerName: string; intro: string; toneLabel: string;
   items: ConsolidatedItem[]; totalStr: string; oldestDays: number;
   omittedAttachments: number; showContract: boolean; trackingPixelUrl: string | null;
+  /** True when at least one invoice has no working Pay link. */
+  linkIssue?: boolean;
 }): string {
   const n = opts.items.length;
   const rows = opts.items.map((it) => `
@@ -583,6 +528,7 @@ export function renderConsolidatedEmail(opts: {
           </tr>${rows}
           <tr><td colspan="3" style="padding:8px;font-weight:700;border-top:2px solid #015E65;">Total outstanding</td><td style="padding:8px;text-align:right;font-weight:700;border-top:2px solid #015E65;white-space:nowrap;">Rs. ${opts.totalStr}</td><td style="border-top:2px solid #015E65;"></td></tr>
         </table>
+        ${opts.linkIssue ? `<p style="color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;font-size:12px;">${LINK_UNAVAILABLE_NOTE}</p>` : ""}
         ${opts.omittedAttachments > 0 ? `<p style="color:#666;font-size:12px;">The ${n - opts.omittedAttachments} oldest invoices are attached; reply to this email for a copy of the other ${opts.omittedAttachments}.</p>` : ""}
         <p style="color:#666;font-size:12px;margin-top:20px;">Prefer a single transfer? Pay Rs. ${opts.totalStr} by bank transfer or UPI (details are on each invoice) and quote the invoice numbers. If you've already made the payment, please ignore this reminder. For any queries, reply to this email or contact our accounts team.</p>
         <p style="color:#666;font-size:12px;">Regards,<br/>Accounts Team — The WorkVilla</p>
@@ -630,6 +576,7 @@ export async function sendConsolidatedReminder(
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
 
   const items: ConsolidatedItem[] = [];
+  const paidOnLink: string[] = [];
   for (const st of statements) {
     const { data: pays } = await admin
       .from("billing_payments").select("amount, tds_amount").eq("billing_statement_id", st.id);
@@ -639,6 +586,12 @@ export async function sendConsolidatedReminder(
     if (balance <= 0) continue;
     const contract = st.contract, proposal = st.proposal, invoice = st.invoice;
     const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? "";
+    const link = await ensureStatementLink(admin, st, leadOf(st), appUrl, partyRef);
+    if (link.outcome === "paid") {
+      // Razorpay shows a payment the CRM has not reconciled — do not chase this one.
+      paidOnLink.push((st.gst_invoice_number as string | null) || (st.statement_number as string));
+      continue;
+    }
     items.push({
       statement: st,
       ref: (st.gst_invoice_number as string | null) || (st.statement_number as string),
@@ -647,12 +600,18 @@ export async function sendConsolidatedReminder(
       daysOverdue: daysOverdueFromDueDate(st.due_date as string),
       balance, paid,
       billed: settlementAmount(st.total_amount as number),
-      payLinkUrl: await ensureLivePaymentLink(admin, st, contract, leadOf(st), appUrl, partyRef),
+      payLinkUrl: link.url,
+      linkCreatedAt: link.createdAt,
+      linkOutcome: link.outcome,
     });
   }
   if (items.length === 0) {
+    if (paidOnLink.length > 0) {
+      return { stageIdx, toneLabel: stage.toneLabel, emailSent: false, whatsAppSent: false, recipient: { email: lead?.email || null, phone: null }, errors: [], skipped: `payment link shows a payment not yet reconciled (${paidOnLink.join(", ")})`, statementIds: [] };
+    }
     return { stageIdx, toneLabel: stage.toneLabel, emailSent: false, whatsAppSent: false, recipient: { email: lead?.email || null, phone: null }, errors: ["nothing outstanding"], statementIds: [] };
   }
+  const linkIssues = items.filter((it) => it.linkOutcome === "unconfirmed").map((it) => it.ref);
 
   const total = items.reduce((sum, it) => sum + it.balance, 0);
   const totalStr = fmtINR(total);
@@ -685,6 +644,7 @@ export async function sendConsolidatedReminder(
       omittedAttachments: omitted,
       showContract: new Set(items.map((it) => it.contractRef)).size > 1,
       trackingPixelUrl,
+      linkIssue: linkIssues.length > 0,
     });
     try {
       const r = await resend.emails.send({
@@ -701,7 +661,7 @@ export async function sendConsolidatedReminder(
       errors.push(`email: ${err instanceof Error ? err.message : String(err)}`);
     }
     // One history row per invoice, so each statement's drawer shows it was covered.
-    await admin.from("billing_reminder_sends").insert(items.map((it) => ({
+    await insertReminderHistory(admin, "billing_reminder_sends", items.map((it) => ({
       billing_statement_id: it.statement.id,
       stage_index: stageIdx,
       stage_label: stage.toneLabel,
@@ -711,6 +671,9 @@ export async function sendConsolidatedReminder(
       error: emailSent ? null : errors[errors.length - 1] || "unknown",
       triggered_by: triggeredBy,
       triggered_by_user_id: triggeredByUserId || null,
+      pay_link_url: it.payLinkUrl,
+      pay_link_created_at: it.linkCreatedAt ?? null,
+      pay_link_outcome: it.linkOutcome ?? null,
     })));
   }
 
@@ -725,7 +688,7 @@ export async function sendConsolidatedReminder(
     } catch (err) {
       errors.push(`whatsapp: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await admin.from("billing_reminder_sends").insert(items.map((it) => ({
+    await insertReminderHistory(admin, "billing_reminder_sends", items.map((it) => ({
       billing_statement_id: it.statement.id,
       stage_index: stageIdx,
       stage_label: stage.toneLabel,
@@ -735,6 +698,9 @@ export async function sendConsolidatedReminder(
       error: whatsAppSent ? null : errors[errors.length - 1] || "unknown",
       triggered_by: triggeredBy,
       triggered_by_user_id: triggeredByUserId || null,
+      pay_link_url: null,
+      pay_link_created_at: null,
+      pay_link_outcome: null,
     })));
   }
 
@@ -756,6 +722,7 @@ export async function sendConsolidatedReminder(
     stageIdx, toneLabel: stage.toneLabel, emailSent, whatsAppSent,
     recipient: { email: lead?.email || null, phone },
     errors, statementIds: items.map((it) => it.statement.id as string),
+    ...(linkIssues.length > 0 ? { linkIssues } : {}),
   };
 }
 
