@@ -36,6 +36,7 @@ const CLOSED = ["won", "lost", "junk"];
 
 interface Timeline {
   events: TimelineEvent[];
+  stale?: { state: "active" } | { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
   requirement: {
     workspace_type: string | null;
     seat_capacity: number | null;
@@ -169,6 +170,21 @@ export default function LeadActivityPage() {
             ) : (
               <span className="font-semibold">No next step set</span>
             )}
+          </div>
+        )}
+
+        {timeline?.stale && timeline.stale.state !== "active" && (
+          <div className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            {timeline.stale.state === "stale" ? (
+              <>
+                <b>Stale.</b> Nothing has happened for {timeline.stale.daysQuiet} days. It will be archived automatically.
+              </>
+            ) : (
+              <>
+                <b>Stale in {timeline.stale.daysLeft} day{timeline.stale.daysLeft === 1 ? "" : "s"}.</b> Nothing has happened for a while.
+              </>
+            )}{" "}
+            Log a call, book a follow-up or pin it to keep it.
           </div>
         )}
 

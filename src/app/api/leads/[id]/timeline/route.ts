@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { LEAD_SOURCE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
+import { istDayKey } from "@/lib/lead-days";
+import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
 import {
   activityEvent,
   contractEvents,
@@ -34,7 +36,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const [activitiesRes, enquiriesRes, proposalsRes, contractsRes] = await Promise.all([
+  const [leadRes, activitiesRes, enquiriesRes, proposalsRes, contractsRes] = await Promise.all([
+    supabase.from("leads").select("status, created_at, archived_at, pinned_at").eq("id", id).single(),
     supabase
       .from("activities")
       .select(
@@ -110,9 +113,30 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       }
     : null;
 
+  // Has the lead gone quiet? Same rule as the Leads list and the daily archive job.
+  const lead = leadRes.data;
+  const today = istDayKey(new Date());
+  const stale = lead
+    ? leadStaleState({
+        status: lead.status,
+        archivedAt: lead.archived_at,
+        pinnedAt: lead.pinned_at,
+        lastEventAt:
+          latestInstant([
+            lead.created_at,
+            ...activities.filter((a) => !(NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")).map((a) => a.created_at),
+            ...((enquiriesRes.data ?? []) as EnquiryRow[]).map((e) => e.received_at),
+          ]) ?? lead.created_at,
+        hasFutureFollowUp: activities.some(
+          (a) => !a.is_follow_up_done && !!a.follow_up_date && istDayKey(a.follow_up_date) >= today,
+        ),
+      })
+    : { state: "active" as const };
+
   return NextResponse.json({
     data: {
       events: sortTimeline(events),
+      stale,
       requirement,
       next_step: nextStep(activities),
       truncated: activities.length >= ACTIVITY_LIMIT,

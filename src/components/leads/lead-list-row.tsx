@@ -130,6 +130,16 @@ export function LeadListRow({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {lead._stale && (
+            <span
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-600"
+              title="Nothing has happened on this lead for a while. It is archived automatically once it has been quiet for 15 days, unless a follow-up is booked or it is pinned."
+            >
+              {lead._stale.state === "stale"
+                ? "Stale"
+                : `Stale in ${lead._stale.daysLeft} day${lead._stale.daysLeft === 1 ? "" : "s"}`}
+            </span>
+          )}
           <LeadPinButton lead={lead} onChanged={onChanged} />
           <StatusBadge type="lead_status" value={lead.status} />
         </div>
