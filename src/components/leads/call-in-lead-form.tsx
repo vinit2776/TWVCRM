@@ -54,6 +54,7 @@ export function CallInLeadForm({ onUseFullForm }: { onUseFullForm: () => void })
   const [company, setCompany] = useState("");
   const [followUp, setFollowUp] = useState("");
   const [followUpNote, setFollowUpNote] = useState("");
+  const [pin, setPin] = useState(false);
   const [saving, setSaving] = useState(false);
   const [existing, setExisting] = useState<{ id: string; name: string } | null>(null);
 
@@ -117,6 +118,7 @@ export function CallInLeadForm({ onUseFullForm }: { onUseFullForm: () => void })
           follow_up_date: followUp,
           follow_up_notes: followUpNote.trim(),
           existing_lead_id: existing?.id,
+          pin: pin || undefined,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -226,6 +228,10 @@ export function CallInLeadForm({ onUseFullForm }: { onUseFullForm: () => void })
             <Input value={followUpNote} onChange={(e) => setFollowUpNote(e.target.value)} placeholder="e.g. Send pricing, book a tour" />
           </label>
         </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={pin} onChange={(e) => setPin(e.target.checked)} className="h-4 w-4" />
+          <span><b>Pin this enquiry</b> <span className="text-muted-foreground">stays highlighted on every calendar day until you unpin it</span></span>
+        </label>
         <p className="text-xs text-muted-foreground">You will be the person handling this lead. You can hand it over from its page.</p>
       </Step>
 

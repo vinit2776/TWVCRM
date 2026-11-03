@@ -24,6 +24,8 @@ const bodySchema = z
     follow_up_notes: z.string().trim().min(1, "What needs to happen?"),
     /** The caller's number already belongs to this lead: log the call there instead of making a duplicate. */
     existing_lead_id: z.string().uuid().optional(),
+    /** Keep this lead in front of the team until someone unpins it. */
+    pin: z.boolean().optional(),
   })
   .refine((v) => !!v.phone?.trim() || !!v.email?.trim(), {
     message: "Add a phone number or an email",
@@ -65,6 +67,7 @@ export async function POST(request: NextRequest) {
   if (leadId) {
     const { data: existing } = await supabase.from("leads").select("id").eq("id", leadId).single();
     if (!existing) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+    if (b.pin) await supabase.from("leads").update({ pinned_at: new Date().toISOString(), pinned_by: me.id }).eq("id", leadId);
   } else {
     const { data: lead, error } = await supabase
       .from("leads")
@@ -83,6 +86,7 @@ export async function POST(request: NextRequest) {
         budget_per_seat: b.budget_per_seat ?? null,
         created_by: me.id,
         assigned_to: me.id,
+        ...(b.pin ? { pinned_at: new Date().toISOString(), pinned_by: me.id } : {}),
       })
       .select("id, first_name, last_name")
       .single();

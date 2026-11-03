@@ -201,6 +201,8 @@ export interface Lead {
   lost_reason?: string;
   // Soft-disable
   archived_at?: string | null;
+  /** Set while the lead is pinned: highlighted in the list and shown on every calendar day. */
+  pinned_at?: string | null;
   archived_by?: string | null;
   archive_reason?: string | null;
 }
