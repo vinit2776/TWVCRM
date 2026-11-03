@@ -28,6 +28,7 @@ import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, type ServicePoBillingCycle,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
+import { uploadQuotation } from "@/lib/procurement/upload-quotation";
 import { cyclesBetween, contractTotal, cycleFromUnit, CYCLE_COST_LABEL, CYCLE_ITEM_UNIT, CYCLE_UNIT_LABEL } from "@/lib/procurement/amc-billing";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
@@ -537,25 +538,10 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     let ok = 0;
     for (const q of validQuotations) {
       if (!q.file) continue;
-      const fd = new FormData();
-      fd.append("file", q.file);
-      fd.append("vendor_name", q.vendor_name.trim());
-      fd.append("amount", q.amount);
-      if (q.notes.trim()) fd.append("notes", q.notes.trim());
-      try {
-        const res = await fetch(`/api/procurement/requests/${prId}/quotations`, {
-          method: "POST",
-          body: fd,
-        });
-        if (res.ok) ok++;
-        else {
-          const j = await res.json().catch(() => ({}));
-          toast.error(`Failed to upload quotation from ${q.vendor_name}: ${j.error ?? res.statusText}`);
-        }
-      } catch (err) {
-        toast.error(`Failed to upload quotation from ${q.vendor_name}`);
-        console.error(err);
-      }
+      // Storage first, then the details: the route no longer accepts the file itself.
+      const result = await uploadQuotation(prId, { file: q.file, vendor_name: q.vendor_name, amount: q.amount, notes: q.notes });
+      if (result.ok) ok++;
+      else toast.error(`Failed to upload quotation from ${q.vendor_name}: ${result.error}`);
     }
     return ok;
   };
