@@ -126,8 +126,8 @@ export async function POST(request: NextRequest) {
     reported_via = "walk_in",
     reporter_name, reporter_email, reporter_phone,
     linked_feedback_id,
-    assigned_to: delegateAssignedTo,   // delegated_task only — the person being delegated to
-    additional_assignee_ids: additionalAssigneeIds,  // delegated_task only — co-assignees, stored as collaborators
+    assigned_to: delegateAssignedTo,   // delegated_task: the person being delegated to; reported_problem: optional override of the department in-charge
+    additional_assignee_ids: additionalAssigneeIds,  // co-assignees, stored as collaborators
     due_date,                          // delegated_task only — manual TAT, required (D4)
     tat_hours: manualTatHours,         // reported_problem only — manual override of the computed TAT
     attachments,           // optional array of { file_url, file_path, file_type, caption }
@@ -325,6 +325,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // A reporter who picked assignees in the wizard overrides the department's
+  // in-charge; an invalid pick is ignored so routing falls back to the default.
+  if (task_type === "reported_problem" && typeof delegateAssignedTo === "string" && delegateAssignedTo) {
+    const { data: picked } = await createAdminClient()
+      .from("users")
+      .select("id, full_name, is_active")
+      .eq("id", delegateAssignedTo)
+      .single();
+    if (picked && canDelegateTo(picked)) autoAssignee = { id: picked.id, full_name: picked.full_name };
+  }
+
   const now = new Date().toISOString();
   const finalAssignee = delegatedAssignee ?? autoAssignee;
   const { data: issue, error } = await supabase
@@ -411,9 +422,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Co-assignees picked when delegating: the first pick is assigned_to, the rest
+  // Co-assignees picked on creation: the first pick is assigned_to, the rest
   // join as collaborators so they get the same notifications and access.
-  if (task_type === "delegated_task" && Array.isArray(additionalAssigneeIds) && additionalAssigneeIds.length > 0) {
+  if (Array.isArray(additionalAssigneeIds) && additionalAssigneeIds.length > 0) {
     const adminClient = createAdminClient();
     const requested = [...new Set(additionalAssigneeIds.filter((id): id is string => typeof id === "string"))]
       .filter((id) => id !== finalAssignee?.id);
