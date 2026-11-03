@@ -167,6 +167,8 @@ export const createActivitySchema = z.object({
   meeting_location: z.string().optional(),
   meeting_start_at: z.string().optional(),
   meeting_end_at: z.string().optional(),
+  /** Who will host the tour; reminded 2 hours before, along with whoever booked it. */
+  tour_host_id: z.string().uuid().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
 }).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {

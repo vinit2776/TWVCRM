@@ -170,7 +170,7 @@ export function LeadListRow({
       {/* Line 4: log what just happened, without opening the lead */}
       {!CLOSED_STATUSES.includes(lead.status) && !lead.archived_at && (
         <div className="pt-1">
-          <LeadQuickActions lead={lead} onChanged={onChanged} />
+          <LeadQuickActions lead={lead} onChanged={onChanged} users={users} />
         </div>
       )}
     </div>
