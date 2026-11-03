@@ -36,11 +36,24 @@ export async function POST(
   }
   const { reason, note } = parsed.data;
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
   if (!oldLead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+  // Archiving is deliberately limited (see the archive route). A sales rep may close a lead that is
+  // theirs, or that nobody has picked up yet; admins and managers may close any.
+  const canClose =
+    dbUser?.role === "admin" ||
+    dbUser?.role === "manager" ||
+    (dbUser?.role === "sales_rep" && (!oldLead.assigned_to || oldLead.assigned_to === dbUser.id));
+  if (!canClose) {
+    return NextResponse.json({ error: "Only the person handling this lead, or a manager, can close it" }, { status: 403 });
+  }
   if (oldLead.status === "won") {
     return NextResponse.json({ error: "A won lead can't be closed as not interested" }, { status: 409 });
+  }
+  if (oldLead.archived_at) {
+    return NextResponse.json({ error: "This lead is already closed and archived" }, { status: 409 });
   }
 
   const now = new Date().toISOString();
@@ -53,8 +66,24 @@ export async function POST(
   update.archived_by = dbUser?.id ?? null;
   update.archive_reason = `Not interested: ${label}`;
 
-  const { data, error } = await supabase.from("leads").update(update).eq("id", id).select("*").single();
+  const { data, error } = await supabase
+    .from("leads")
+    .update(update)
+    .eq("id", id)
+    .is("archived_at", null)
+    .select("*")
+    .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Whatever was still pending on this lead is no longer a to-do: clear it so it stops showing as
+  // overdue and in the digests.
+  const { error: doneError } = await supabase
+    .from("activities")
+    .update({ is_follow_up_done: true, follow_up_actioned_by: dbUser?.id ?? null, follow_up_actioned_at: now })
+    .eq("lead_id", id)
+    .eq("is_follow_up_done", false)
+    .not("follow_up_date", "is", null);
+  if (doneError) console.error("[not-interested] clearing follow-ups failed", doneError.code, doneError.message);
 
   // Keep the reason in the lead's timeline, as the Mark lost dialog does.
   const { error: noteError } = await supabase.from("activities").insert({
@@ -70,7 +99,7 @@ export async function POST(
     logAudit(supabase, {
       entityType: "lead",
       entityId: id,
-      action: "update",
+      action: "disable",
       performedBy: dbUser.id,
       changes: {
         status: { old: oldLead.status, new: update.status },

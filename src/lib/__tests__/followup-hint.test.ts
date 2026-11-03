@@ -32,6 +32,12 @@ describe("suggestFollowUp", () => {
     expect(suggestFollowUp("tomorrow 7am", NOW)).toBe("2026-11-05T09:00");
   });
 
+  it("does not mistake ordinary words for days or months", () => {
+    expect(suggestFollowUp("wants desks next month", NOW)).toBeNull();
+    expect(suggestFollowUp("a friendly referral", NOW)).toBeNull();
+    expect(suggestFollowUp("2 marketing seats, 12 junior staff", NOW)).toBeNull();
+  });
+
   it("returns null when the note names no date, or the time has already gone", () => {
     expect(suggestFollowUp("interested in 6 seats", NOW)).toBeNull();
     expect(suggestFollowUp("today 9am", NOW)).toBeNull();

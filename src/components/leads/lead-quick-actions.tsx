@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Phone, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,16 @@ function plusOneHour(value: string): string {
   const [h, m] = t.split(":").map(Number);
   if (h < 23) return `${d}T${String(h + 1).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   return `${d}T23:59`;
+}
+
+/** Today's date in IST as yyyy-MM-dd (the browser's UTC date is a day behind before 5:30am IST). */
+function istToday(): string {
+  return new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/** A tour time that has already passed would be logged as a completed tour, not a booked one. */
+function isPast(value: string): boolean {
+  return new Date(`${value}:00+05:30`).getTime() <= Date.now();
 }
 
 async function postActivity(leadId: string, body: Record<string, unknown>) {
@@ -56,6 +66,8 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
   const [followUpNote, setFollowUpNote] = useState("");
   const [reason, setReason] = useState("");
   const [tourAt, setTourAt] = useState("");
+  // Once the person picks a follow-up themselves, typing in the note stops overwriting it.
+  const followUpTouched = useRef(false);
 
   const open = (p: Panel) => {
     if (panel === p) return setPanel(null);
@@ -64,6 +76,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
     setFollowUpNote("");
     setReason("");
     setTourAt("");
+    followUpTouched.current = false;
     setFollowUp(p === "no_answer" ? followUpInDays(2) : p === "quote" ? followUpInDays(3) : "");
     if (p === "no_answer") setFollowUpNote("Call back");
     if (p === "quote") setFollowUpNote("Chase the quote");
@@ -88,7 +101,13 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
   const followUpFields = (label: string) => (
     <div className="space-y-2">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <FollowUpDateTimeInput value={followUp} onChange={setFollowUp} />
+      <FollowUpDateTimeInput
+        value={followUp}
+        onChange={(v) => {
+          followUpTouched.current = true;
+          setFollowUp(v);
+        }}
+      />
       {followUp && (
         <Input
           placeholder="What needs to happen?"
@@ -163,7 +182,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
                     setNote(text);
                     // Pre-fill the follow-up from a date in the note, until the person sets their own.
                     const hint = suggestFollowUp(text);
-                    if (hint) setFollowUp(hint);
+                    if (hint && !followUpTouched.current) setFollowUp(hint);
                   }}
                   placeholder="e.g. Wants 6 seats from January. Call Friday 4pm with pricing"
                 />
@@ -185,9 +204,11 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
           {panel === "tour" && (
             <div className="space-y-1">
               <div className="text-sm font-medium">When is the tour?</div>
-              <FollowUpDateTimeInput value={tourAt} onChange={setTourAt} minDate={new Date().toISOString().slice(0, 10)} />
+              <FollowUpDateTimeInput value={tourAt} onChange={setTourAt} minDate={istToday()} />
               <div className="text-xs text-muted-foreground">
-                Held at {lead.location?.name ?? "the centre they asked for"}. Picking who hosts it comes next.
+                {tourAt && isPast(tourAt)
+                  ? "That time has already passed. Pick a later slot."
+                  : `Held at ${lead.location?.name ?? "the centre they asked for"}. Picking who hosts it comes next.`}
               </div>
             </div>
           )}
@@ -237,7 +258,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
                 saving ||
                 (panel === "spoke" && (!note.trim() || !followUpReady)) ||
                 (panel === "no_answer" && (!reason || !followUp || !followUpReady)) ||
-                (panel === "tour" && !tourAt) ||
+                (panel === "tour" && (!tourAt || isPast(tourAt))) ||
                 (panel === "quote" && !followUpReady) ||
                 (panel === "not_interested" && !reason)
               }
@@ -275,6 +296,9 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
                         meeting_start_at: tourAt,
                         meeting_end_at: plusOneHour(tourAt),
                         meeting_location: lead.location?.name,
+                        // The tour is the lead's next step: it shows in the list and on the calendar.
+                        follow_up_date: tourAt,
+                        follow_up_notes: `Tour at ${lead.location?.name ?? "the centre"}`,
                       }),
                     "Tour booked",
                   );
@@ -287,11 +311,13 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
                       ...followUpPayload(),
                     });
                     if (BEFORE_NEGOTIATING.includes(lead.status)) {
-                      await fetch(`/api/leads/${lead.id}`, {
+                      const res = await fetch(`/api/leads/${lead.id}`, {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ status: "negotiating" }),
                       });
+                      // The quote is already logged; don't fail the tap (a retry would log it twice).
+                      if (!res.ok) toast.warning("Quote logged, but the status could not be updated");
                     }
                   }, "Quote logged");
                 } else if (panel === "not_interested") {

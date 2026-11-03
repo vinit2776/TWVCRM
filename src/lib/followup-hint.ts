@@ -10,6 +10,11 @@ const DEFAULT_MIN = 11 * 60;
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+// Only whole day and month names (or their usual short forms) count, so "next month", "friendly"
+// or "2 marketing seats" are not read as a date.
+const WEEKDAY_WORDS = "sunday|sun|monday|mon|tuesday|tues|tue|wednesday|wed|thursday|thurs|thu|friday|fri|saturday|sat";
+const MONTH_WORDS =
+  "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec";
 
 type Ist = { y: number; m: number; d: number; minutes: number; weekday: number };
 
@@ -64,13 +69,13 @@ export function suggestFollowUp(note: string, now: Date = new Date()): string | 
   let day: { y: number; m: number; d: number } | null = null;
 
   const inN = text.match(/\bin (\d{1,2}) (day|week)s?\b/);
-  const dated = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTHS.join("|")})[a-z]*\\b`));
+  const dated = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTH_WORDS})\\b`));
 
   if (/\btoday\b/.test(text)) day = addDays(today, 0);
   else if (/\b(tomorrow|tmrw|tmr)\b/.test(text)) day = addDays(today, 1);
   else if (inN) day = addDays(today, Number(inN[1]) * (inN[2] === "week" ? 7 : 1));
   else if (dated) {
-    const m = MONTHS.indexOf(dated[2]);
+    const m = MONTHS.indexOf(dated[2].slice(0, 3));
     const d = Number(dated[1]);
     let y = today.y;
     if (Date.UTC(y, m, d) < Date.UTC(today.y, today.m, today.d)) y += 1;
@@ -78,9 +83,9 @@ export function suggestFollowUp(note: string, now: Date = new Date()): string | 
   } else if (/\bnext week\b/.test(text)) {
     day = addDays(today, ((8 - today.weekday) % 7) || 7);
   } else {
-    const wd = text.match(new RegExp(`\\b(${WEEKDAYS.join("|")})[a-z]*\\b`));
+    const wd = text.match(new RegExp(`\\b(${WEEKDAY_WORDS})\\b`));
     if (wd) {
-      const target = WEEKDAYS.indexOf(wd[1]);
+      const target = WEEKDAYS.indexOf(wd[1].slice(0, 3));
       day = addDays(today, ((target - today.weekday + 7) % 7) || 7);
     }
   }
