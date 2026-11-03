@@ -8,6 +8,7 @@ import { COMPANY_BANK_DETAILS, RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/
 import { fetchSupportingDocuments, mergeSupportingDocuments } from "@/lib/reimbursement-supporting-docs";
 import { appendElectricityAnnexure } from "@/lib/electricity-annexure-pdf";
 import { annexureFromSections } from "@/lib/electricity-annexure";
+import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
 import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-link";
 
 /**
@@ -31,6 +32,7 @@ import { createOrRecoverGstLink, gstLinkReferenceId } from "@/lib/razorpay-gst-l
  *   - B-series upload with IRN → 422
  *   - Customer has GSTIN but B-series uploaded → 422
  *   - Customer has no GSTIN but A-series uploaded → 422
+ *   - Invoice date outside the period's months without acknowledge_off_period_date → 422
  */
 export const dynamic = "force-dynamic";
 
@@ -44,6 +46,8 @@ interface UploadBody {
   autofill_source: "qr" | "pdf_text" | "bridge_match" | "manual";
   qr_payload: Record<string, unknown> | null;
   nic_signature_verified: boolean;
+  /** Accounts confirmed an invoice date outside the billing period is intended. */
+  acknowledge_off_period_date?: boolean;
 }
 
 function badRequest(reason: string) {
@@ -248,6 +252,16 @@ export async function POST(
     return badRequest(
       `Tally amount ₹${meta.invoice_amount} does not match statement total ₹${statement.total_amount}. ` +
       `Fix the Tally voucher or void+reissue the statement; no override is allowed.`,
+    );
+  }
+
+  if (
+    isInvoiceDateOffPeriod(meta.invoice_date, statement.period_start, statement.period_end) &&
+    meta.acknowledge_off_period_date !== true
+  ) {
+    return badRequest(
+      `Invoice date ${meta.invoice_date} is outside the billing period ` +
+      `${statement.period_start} → ${statement.period_end}. Confirm the date is intended to upload anyway.`,
     );
   }
 
