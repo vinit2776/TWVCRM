@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { normalizePhoneFields } from "@/lib/phone";
 import { reconcileLeadEnquiries } from "@/lib/enquiry-progress-load";
 import { updateLeadSchema } from "@/lib/validations";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
@@ -86,7 +87,7 @@ export async function PATCH(
   // Fetch current state for audit diff
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
 
-  const updateData: Record<string, unknown> = { ...result.data };
+  const updateData: Record<string, unknown> = normalizePhoneFields({ ...result.data });
 
   // Handle status transitions
   if (result.data.status === "won" && !body.converted_at) {
