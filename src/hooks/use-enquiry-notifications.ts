@@ -165,6 +165,25 @@ export function useEnquiryNotificationsCore() {
     [scheduleGraceRemoval]
   );
 
+  // The number behind this enquiry is not a prospect: label it, and every open WhatsApp enquiry
+  // from it leaves the queue (restorable from Spam).
+  const markNotALead = useCallback(
+    async (enquiryId: string, label: string, name?: string) => {
+      const res = await fetch(`/api/enquiries/${enquiryId}/not-a-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, name: name || undefined }),
+      });
+      if (!res.ok) { toast.error((await res.json().catch(() => null))?.error ?? "Could not label this number"); return; }
+      const { stashed_ids } = (await res.json()) as { stashed_ids: string[] };
+      const gone = new Set(stashed_ids);
+      setItems((prev) => prev.filter((i) => !gone.has(i.enquiryId)));
+      setActionVersion((v) => v + 1);
+      toast.success("Number labelled. Its messages will no longer open enquiries.");
+    },
+    []
+  );
+
   useEffect(() => {
     const supabase = createClient();
 
@@ -322,7 +341,7 @@ export function useEnquiryNotificationsCore() {
   return {
     items, activeCount, unclaimedCount,
     totalCount: activeCount + waInboundCount,
-    claim, unclaim, resolve, actionVersion,
+    claim, unclaim, resolve, markNotALead, actionVersion,
     alertQueue, dismissAlert, dismissAllAlerts,
     waInboundCount, waInboundItems, markWhatsAppSeen,
   };

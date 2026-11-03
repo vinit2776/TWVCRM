@@ -26,12 +26,19 @@ describe("applyLabelToKind", () => {
 });
 
 describe("shouldHoldForReview", () => {
-  it("holds only unsure messages from an unknown number without an ad", () => {
-    expect(shouldHoldForReview({ kind: "unsure", knownSender: false, hasReferral: false })).toBe(true);
-    expect(shouldHoldForReview({ kind: "unsure", knownSender: true, hasReferral: false })).toBe(false);
-    expect(shouldHoldForReview({ kind: "unsure", knownSender: false, hasReferral: true })).toBe(false);
-    expect(shouldHoldForReview({ kind: "enquiry", knownSender: false, hasReferral: false })).toBe(false);
-    expect(shouldHoldForReview({ kind: "spam", knownSender: false, hasReferral: false })).toBe(false);
+  const base = { kind: "unsure" as const, hasReferral: false, isCustomer: false, continuesConversation: false };
+
+  it("holds an unclear message from any non-customer number, known or not", () => {
+    expect(shouldHoldForReview(base)).toBe(true);
+  });
+  it("never holds an ad reply, a customer, or a message continuing a conversation", () => {
+    expect(shouldHoldForReview({ ...base, hasReferral: true })).toBe(false);
+    expect(shouldHoldForReview({ ...base, isCustomer: true })).toBe(false);
+    expect(shouldHoldForReview({ ...base, continuesConversation: true })).toBe(false);
+  });
+  it("only holds unclear messages", () => {
+    expect(shouldHoldForReview({ ...base, kind: "enquiry" })).toBe(false);
+    expect(shouldHoldForReview({ ...base, kind: "spam" })).toBe(false);
   });
 });
 
