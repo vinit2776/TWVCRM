@@ -73,6 +73,8 @@ export function useEnquiryNotificationsCore() {
   const [actionVersion, setActionVersion]       = useState(0);
 
   const graceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Lets actions outside the subscription effect (Undo) reload the open enquiries.
+  const reloadRef = useRef<(() => Promise<void>) | null>(null);
 
   const items = [...rawItems].sort((a, b) => {
     const aResolved = a.resolvedAt ? 1 : 0;
@@ -166,7 +168,7 @@ export function useEnquiryNotificationsCore() {
   );
 
   // The number behind this enquiry is not a prospect: label it, and every open WhatsApp enquiry
-  // from it leaves the queue (restorable from Spam).
+  // from it leaves the queue (restorable from Spam). The toast carries a one-tap Undo.
   const markNotALead = useCallback(
     async (enquiryId: string, label: string, name?: string) => {
       const res = await fetch(`/api/enquiries/${enquiryId}/not-a-lead`, {
@@ -175,11 +177,27 @@ export function useEnquiryNotificationsCore() {
         body: JSON.stringify({ label, name: name || undefined }),
       });
       if (!res.ok) { toast.error((await res.json().catch(() => null))?.error ?? "Could not label this number"); return; }
-      const { stashed_ids } = (await res.json()) as { stashed_ids: string[] };
-      const gone = new Set(stashed_ids);
+      const done = (await res.json()) as { stashed_ids: string[]; previous: unknown; lead_junked: boolean };
+      const gone = new Set(done.stashed_ids);
       setItems((prev) => prev.filter((i) => !gone.has(i.enquiryId)));
       setActionVersion((v) => v + 1);
-      toast.success("Number labelled. Its messages will no longer open enquiries.");
+      toast.success("Number labelled. Its messages will no longer open enquiries.", {
+        duration: 15_000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            const undo = await fetch(`/api/enquiries/${enquiryId}/not-a-lead`, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ stashed_ids: done.stashed_ids, previous: done.previous, lead_junked: done.lead_junked }),
+            });
+            if (!undo.ok) { toast.error((await undo.json().catch(() => null))?.error ?? "Could not undo"); return; }
+            await reloadRef.current?.();
+            setActionVersion((v) => v + 1);
+            toast.success("Undone. The number and its enquiries are back.");
+          },
+        },
+      });
     },
     []
   );
@@ -230,6 +248,7 @@ export function useEnquiryNotificationsCore() {
       );
     }
 
+    reloadRef.current = loadInitialData;
     loadInitialData().catch((err) => {
       console.error("[useEnquiryNotifications] loadInitialData failed:", err);
     });
