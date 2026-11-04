@@ -251,6 +251,10 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - `prepare` → `create_usage_invoice` RPC (`00564`) locks and links charges to a draft in one transaction and refuses if anything changed (`USAGE_INVOICE_STALE`). Preview with the existing `preview-send` / `proforma-pdf?preview=1` routes. `send` finalizes and dispatches by `contracts.billing_mode`; if it fails before anything irreversible (payment link, GST number, sent), the draft is discarded and charges return to the list. `cancel` discards and releases.
 - Discard and void must release all three charge tables, including `facility_usage_records.billing_statement_id`.
 
+### Ad-hoc invoices on a live contract
+
+A live contract (`active`, or `renewal_in_progress` before its end date — `isContractOperational`) captures all of the customer's financial activity, so `POST /api/invoices` ties a lead's ad-hoc invoice to it at creation (`src/lib/adhoc-contract-attach.ts`): one live contract attaches by itself, several make the form require a pick (`contract_id`, server returns 400 otherwise), none leaves it on the ad-hoc page only. Case-raised invoices have no lead and are untouched. The automatic purpose is always `other` (visibility only) — only a hand-set `prorata_first_invoice` can open the activation gate. Invoices raised before this rule: `node scripts/backfill-adhoc-contract-attach.mjs` (lists by default, `--apply` writes; skips customers with several live contracts).
+
 ### Proposal → Contract Flow (strictly enforced)
 
 **Responsibility split:**
