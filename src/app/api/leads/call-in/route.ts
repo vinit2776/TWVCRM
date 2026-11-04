@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { WORKSPACE_TYPES } from "@/lib/constants";
@@ -26,10 +26,16 @@ const bodySchema = z
     existing_lead_id: z.string().uuid().optional(),
     /** Keep this lead in front of the team until someone unpins it. */
     pin: z.boolean().optional(),
+    /** Contacting back a public-form enquiry: its lead takes the confirmed details and the saver claims it. */
+    enquiry_id: z.string().uuid().optional(),
   })
   .refine((v) => !!v.phone?.trim() || !!v.email?.trim(), {
     message: "Add a phone number or an email",
     path: ["phone"],
+  })
+  .refine((v) => !v.enquiry_id || !!v.existing_lead_id, {
+    message: "An enquiry belongs to a lead",
+    path: ["enquiry_id"],
   });
 
 // POST /api/leads/call-in
@@ -68,6 +74,10 @@ export async function POST(request: NextRequest) {
     const { data: existing } = await supabase.from("leads").select("id").eq("id", leadId).single();
     if (!existing) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     if (b.pin) await supabase.from("leads").update({ pinned_at: new Date().toISOString(), pinned_by: me.id }).eq("id", leadId);
+    if (b.enquiry_id) {
+      const refused = await applyContactBack(supabase, me.id, leadId, b.enquiry_id, b, locationNames);
+      if (refused) return refused;
+    }
   } else {
     const { data: lead, error } = await supabase
       .from("leads")
@@ -138,4 +148,89 @@ export async function POST(request: NextRequest) {
   if (!created && leadId) await autoUpdateLeadStatus(supabase, leadId, "activity");
 
   return NextResponse.json({ data: { lead_id: leadId, created, activity_id: activity.id } }, { status: 201 });
+}
+
+type Body = z.infer<typeof bodySchema>;
+
+// Contacting back a public-form enquiry. The enquiry must be this lead's own and still open. The lead
+// takes the details confirmed on the phone (only what was filled in) and, if nobody handles it yet,
+// the saver as its handler. Every open enquiry on it is claimed by the person saving (as logging any
+// activity does), and the next step is written onto the enquiry so the Leads queue shows it.
+// Returns a response only to refuse.
+async function applyContactBack(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  leadId: string,
+  enquiryId: string,
+  b: Body,
+  locationNames: string[],
+): Promise<NextResponse | null> {
+  const admin = await createAdminClient();
+  const { data: enquiry } = await admin
+    .from("lead_enquiries")
+    .select("id, reference, lead_id, resolved_at, next_step, follow_up_at")
+    .eq("id", enquiryId)
+    .single();
+  if (!enquiry || enquiry.lead_id !== leadId) {
+    return NextResponse.json({ error: "That enquiry does not belong to this lead" }, { status: 404 });
+  }
+  if (enquiry.resolved_at) {
+    return NextResponse.json({ error: "This enquiry is already resolved" }, { status: 409 });
+  }
+
+  const { data: before } = await supabase
+    .from("leads")
+    .select("first_name, last_name, company, email, mobile, location_id, workspace_type, seat_capacity, budget_per_seat, assigned_to")
+    .eq("id", leadId)
+    .single();
+
+  const patch: Record<string, unknown> = {
+    location_id: b.location_ids[0],
+    workspace_type: b.workspace_types[0],
+    seat_capacity: b.seats,
+  };
+  if (b.budget_per_seat != null) patch.budget_per_seat = b.budget_per_seat;
+  if (b.name?.trim()) Object.assign(patch, callInLeadName({ name: b.name }));
+  if (b.company?.trim()) patch.company = b.company.trim();
+  if (b.email?.trim()) patch.email = b.email.trim();
+  if (b.phone?.trim()) patch.mobile = b.phone.trim();
+  // Whoever takes the enquiry handles the lead, unless someone already does: the form promises
+  // "you will be the person handling this lead", and a lead nobody handles has no calendar to land on.
+  if (!(before as { assigned_to?: string | null } | null)?.assigned_to) patch.assigned_to = userId;
+
+  const { error: leadError } = await supabase.from("leads").update(patch).eq("id", leadId);
+  if (leadError) return NextResponse.json({ error: leadError.message }, { status: 500 });
+
+  const now = new Date().toISOString();
+  const followUpAt = istLocalToUtcIso(b.follow_up_date);
+  const { error: claimError } = await admin
+    .from("lead_enquiries")
+    .update({ claimed_by: userId, claimed_at: now })
+    .eq("lead_id", leadId)
+    .is("resolved_at", null);
+  if (claimError) console.error("[call-in] claim failed", claimError.code, claimError.message);
+
+  const { error: planError } = await admin
+    .from("lead_enquiries")
+    .update({ next_step: b.follow_up_notes, follow_up_at: followUpAt, next_step_by: userId, next_step_at: now })
+    .eq("id", enquiryId);
+  if (planError) console.error("[call-in] enquiry next step failed", planError.code, planError.message);
+
+  logAudit(supabase, {
+    entityType: "lead",
+    entityId: leadId,
+    action: "update",
+    performedBy: userId,
+    changes: {
+      enquiry: { old: enquiry.reference, new: enquiry.reference },
+      contacted_back: { old: null, new: locationNames.join(", ") },
+      next_step: { old: enquiry.next_step, new: b.follow_up_notes },
+      ...Object.fromEntries(
+        Object.entries(patch)
+          .filter(([k, v]) => (before as Record<string, unknown> | null)?.[k] !== v)
+          .map(([k, v]) => [k, { old: (before as Record<string, unknown> | null)?.[k] ?? null, new: v }]),
+      ),
+    },
+  });
+  return null;
 }

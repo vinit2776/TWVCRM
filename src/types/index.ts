@@ -172,6 +172,8 @@ export interface Lead {
     upcoming: boolean;
     /** Soonest pending follow-up: when it's due and the note saying what to do. */
     next?: {
+      /** The activity that holds this follow-up, so it can be marked done or rescheduled. */
+      activity_id: string;
       due_at: string;
       days_overdue: number;
       notes: string | null;
