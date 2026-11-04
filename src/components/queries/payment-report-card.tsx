@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { livePartNumbers } from "@/lib/deposit-instalments";
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
@@ -97,14 +98,15 @@ export function PaymentReportCard({
       try {
         const res = await fetch(`/api/proposals/${entityId}/deposit-instalments`);
         if (!res.ok) return;
-        const rows = ((await res.json()).data?.instalments ?? []) as Array<{ id: string; seq: number; amount: number | string; status: string }>;
+        const rows = ((await res.json()).data?.instalments ?? []) as Array<{ id: string; seq: number; amount: number | string; status: string; paid_amount?: number | string | null }>;
+        const numbers = livePartNumbers(rows);
         if (cancelled) return;
         const live = rows.filter((r) => r.status !== "cancelled");
         setDepositHasParts(live.length > 0);
         const open = live.filter((r) => r.status === "requested");
         // The part whose amount the customer reported; the only open one if just one is out.
         const match = open.find((r) => Math.abs(Number(r.amount) - Number(report.amount)) <= 1) ?? (open.length === 1 ? open[0] : null);
-        setDepositPart(match ? { id: match.id, seq: match.seq, amount: Number(match.amount) } : null);
+        setDepositPart(match ? { id: match.id, seq: numbers.get(match.id) ?? match.seq, amount: Number(match.amount) } : null);
       } catch {
         // Falls back to the single-deposit dialog, which explains itself if parts exist.
       }

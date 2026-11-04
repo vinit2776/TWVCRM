@@ -375,7 +375,7 @@ export async function fetchOtherReceivables(
         out.push(finish({
           ...base,
           part_id: o.id,
-          part_label: `Part ${o.seq} of the ₹${owed.toLocaleString("en-IN")} deposit · ₹${paidSoFar.toLocaleString("en-IN")} received${notAsked > 0 ? ` · ₹${notAsked.toLocaleString("en-IN")} not yet asked` : ""}`,
+          part_label: `Part ${o.no} of the ₹${owed.toLocaleString("en-IN")} deposit · ₹${paidSoFar.toLocaleString("en-IN")} received${notAsked > 0 ? ` · ₹${notAsked.toLocaleString("en-IN")} not yet asked` : ""}`,
           total_amount: o.amount,
           amount_paid: 0,
           due_date: o.due_date,

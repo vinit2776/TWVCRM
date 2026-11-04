@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
+import { livePartNumbers } from "@/lib/deposit-instalments";
 
 export const maxDuration = 60;
 
@@ -164,7 +165,7 @@ export async function GET(request: NextRequest) {
     // the last one, with the combined amount, so the proposal row above would
     // otherwise report the whole deposit on that day).
     admin.from("proposal_deposit_instalments").select(`
-      proposal_id, seq, paid_amount, payment_medium, payment_reference,
+      id, proposal_id, seq, paid_amount, payment_medium, payment_reference,
       proposal:proposals!proposal_deposit_instalments_proposal_id_fkey(
         proposal_number,
         lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
@@ -182,6 +183,15 @@ export async function GET(request: NextRequest) {
         .in("proposal_id", (depositPmts.data as any[]).map((p) => p.id).filter(Boolean))
     : { data: [] as { proposal_id: string }[] };
   (anyPartProposals || []).forEach((r) => partProposalIds.add(r.proposal_id));
+
+  // "Deposit part N" uses the number people see: live parts only, in order asked.
+  const { data: liveParts } = partProposalIds.size > 0
+    ? await admin.from("proposal_deposit_instalments").select("id, proposal_id, seq, status, paid_amount").in("proposal_id", Array.from(partProposalIds))
+    : { data: [] as Array<{ id: string; proposal_id: string; seq: number; status: string; paid_amount: number | null }> };
+  const partNumber = new Map<string, number>();
+  for (const pid of partProposalIds) {
+    for (const [id, n] of livePartNumbers((liveParts || []).filter((r) => r.proposal_id === pid))) partNumber.set(id, n);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function leadName(lead: any): string {
@@ -214,7 +224,7 @@ export async function GET(request: NextRequest) {
     })),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ...(partPmts.data || []).map((p: any) => ({
-      customerName: leadName(p.proposal?.lead), company: p.proposal?.lead?.company || null, ref: p.proposal?.proposal_number || "—", amount: Number(p.paid_amount || 0), mode: p.payment_medium || "—", reference: p.payment_reference || null, type: `Deposit part ${p.seq}`,
+      customerName: leadName(p.proposal?.lead), company: p.proposal?.lead?.company || null, ref: p.proposal?.proposal_number || "—", amount: Number(p.paid_amount || 0), mode: p.payment_medium || "—", reference: p.payment_reference || null, type: `Deposit part ${partNumber.get(p.id) ?? p.seq}`,
     })),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ...(proRataPmts.data || []).map((p: any) => ({

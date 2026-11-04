@@ -98,6 +98,26 @@ export function depositPosition(required: number, rows: InstalmentFigures[]): De
   };
 }
 
+/**
+ * The number a part is known by: 1, 2, 3… across the parts that are still live,
+ * in the order they were asked. A request that was cancelled without any money
+ * never takes a number, so cancelling Part 1 and asking again gives a new
+ * "Part 1", not "Part 2". The stored `seq` stays as the stable internal key
+ * (audit trail, proof file names); only what people read uses this.
+ *
+ * A cancelled request that was later paid is real money and stays numbered.
+ */
+export function livePartNumbers(
+  rows: Array<{ id: string; seq: number; status: string; paid_amount?: number | string | null }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const live = rows
+    .filter((r) => r.status !== "cancelled" || num(r.paid_amount) > 0)
+    .sort((a, b) => a.seq - b.seq);
+  live.forEach((r, i) => out.set(r.id, i + 1));
+  return out;
+}
+
 /** Smallest first part allowed without a manager's approval. */
 export function minFirstPart(required: number, percent: number = DEFAULT_MIN_FIRST_PART_PERCENT): number {
   return Math.ceil((required * percent) / 100);
