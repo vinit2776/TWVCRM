@@ -263,6 +263,9 @@ export const createInvoiceSchema = z.object({
   /** Bill the end client directly on a case that is billed to an aggregator. */
   bill_client_override: z.boolean().optional(),
   proposal_id: z.string().uuid().optional(),
+  // Which live contract this invoice belongs on. Optional: one live contract
+  // attaches by itself, several must be chosen (see decideAttachment()).
+  contract_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Security deposits are never billed through an ad-hoc invoice — they go
   // through the proposal deposit link instead (GST-exempt, tracked against
