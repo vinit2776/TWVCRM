@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import { useLocations } from "@/hooks/use-locations";
 import { WORKSPACE_TYPES, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { pushTrailEntry } from "@/lib/nav-trail";
 import type { ContactBackHints, ContactBackPrefill } from "@/lib/contact-back";
+import { assessValue, formatValue, VALUE_TIER_LABELS } from "@/lib/lead-value";
 
 const chip = (on: boolean) =>
   `rounded-full border px-4 py-2 text-sm min-h-10 ${on ? "border-primary bg-primary/10 font-semibold text-primary" : "hover:bg-muted"}`;
@@ -73,6 +74,30 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
   const [pin, setPin] = useState(false);
   const [saving, setSaving] = useState(false);
   const [existing, setExisting] = useState<{ id: string; name: string } | null>(null);
+
+  // Our standard rates, only to estimate a price when neither a quote nor a budget is given.
+  const [rates, setRates] = useState<{ location_id: string | null; workspace_type: string; monthly_rate_per_seat: number }[]>([]);
+  useEffect(() => {
+    fetch("/api/leads/rate-card")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => setRates(j.data ?? []))
+      .catch(() => {});
+  }, []);
+  const value = useMemo(() => {
+    const type = types[0] ?? null;
+    const rate = type
+      ? (rates.find((r) => r.location_id === (locationIds[0] ?? "") && r.workspace_type === type) ?? rates.find((r) => r.location_id === null && r.workspace_type === type))?.monthly_rate_per_seat
+      : undefined;
+    return assessValue({
+      seats,
+      workspaceType: type,
+      quotedPerSeat: Number(quoted) || null,
+      budgetPerSeat: Number(budget) || null,
+      standardRate: rate ? Number(rate) : null,
+      hasCompany: company.trim().length > 0,
+      startDate: startDate || null,
+    });
+  }, [types, locationIds, seats, quoted, budget, company, startDate, rates]);
 
   // Functional updates, so two quick taps never overwrite each other.
   const toggle = (set: React.Dispatch<React.SetStateAction<string[]>>, v: string) =>
@@ -176,6 +201,15 @@ export function CallInLeadForm({ onUseFullForm, contactBack }: { onUseFullForm?:
 
   return (
     <div className="space-y-5 rounded-lg border p-4 sm:p-6">
+      <div
+        className={`flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-sm ${
+          value.tier === "high" ? "bg-emerald-50 text-emerald-900" : value.tier === "worth_a_call" ? "bg-amber-50 text-amber-900" : "bg-muted text-muted-foreground"
+        }`}
+      >
+        <span className="font-semibold">{VALUE_TIER_LABELS[value.tier]}</span>
+        {value.monthly !== null && <span>· {value.estimated ? "est. " : ""}{formatValue(value.monthly)} / month</span>}
+        <span className="text-xs opacity-80">· {value.reasons.filter((r) => !r.startsWith("about ₹")).join(" · ")}</span>
+      </div>
       <Step n={1} title="Which location?" hint="pick more than one if they are open to it" said={hints?.location}>
         <div className="flex flex-wrap gap-2">
           {locations.map((l) => (
