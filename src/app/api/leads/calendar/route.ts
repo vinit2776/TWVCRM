@@ -37,11 +37,14 @@ export async function GET(request: NextRequest) {
 
   const { data: me } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   const ownerParam = searchParams.get("owner") ?? "me";
+  if (!["all", "me"].includes(ownerParam) && !/^[0-9a-f-]{36}$/i.test(ownerParam)) {
+    return NextResponse.json({ error: "owner must be me, all or a user id" }, { status: 400 });
+  }
   const owner = ownerParam === "all" ? null : ownerParam === "me" ? (me?.id ?? null) : ownerParam;
   const { start, end } = istRange(from, to);
 
   const select =
-    "id, type, subject, follow_up_date, follow_up_notes, lead_id, leads!inner(id, first_name, last_name, company, assigned_to, pinned_at, assigned_user:users!leads_assigned_to_fkey(full_name))";
+    "id, type, subject, follow_up_date, follow_up_notes, meeting_start_at, lead_id, leads!inner(id, first_name, last_name, company, assigned_to, pinned_at, assigned_user:users!leads_assigned_to_fkey(full_name))";
 
   const dueQuery = () => {
     let q = supabase
@@ -54,7 +57,21 @@ export async function GET(request: NextRequest) {
     return q;
   };
 
-  const [dueRes, overdueRes, pinnedRes, enquiryRes, actionRes] = await Promise.all([
+  // Tours this person hosts or booked sit on their calendar too, even when someone else handles
+  // the lead.
+  const hostedQuery = owner
+    ? supabase
+        .from("activities")
+        .select(select)
+        .eq("type", "tour")
+        .or(`tour_host_id.eq.${owner},created_by.eq.${owner}`)
+        .gte("meeting_start_at", start)
+        .lt("meeting_start_at", end)
+        .is("leads.archived_at", null)
+        .limit(200)
+    : Promise.resolve({ data: [] as unknown[], error: null });
+
+  const [dueRes, overdueRes, pinnedRes, enquiryRes, actionRes, hostedRes] = await Promise.all([
     dueQuery().gte("follow_up_date", start).lt("follow_up_date", end).order("follow_up_date").limit(LIMIT),
     searchParams.get("overdue") === "true"
       ? dueQuery().lt("follow_up_date", start).order("follow_up_date", { ascending: false }).limit(200)
@@ -86,13 +103,22 @@ export async function GET(request: NextRequest) {
       if (owner) q = q.eq("created_by", owner);
       return q;
     })(),
+    hostedQuery,
   ]);
 
-  for (const r of [dueRes, overdueRes, pinnedRes, enquiryRes, actionRes]) {
+  for (const r of [dueRes, overdueRes, pinnedRes, enquiryRes, actionRes, hostedRes]) {
     if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 });
   }
 
-  type Row = { id: string; type: string; subject: string | null; follow_up_date: string; follow_up_notes: string | null; leads: LeadJoin };
+  type Row = {
+    id: string;
+    type: string;
+    subject: string | null;
+    follow_up_date: string;
+    follow_up_notes: string | null;
+    meeting_start_at?: string | null;
+    leads: LeadJoin;
+  };
   const toItem = (r: Row): CalendarItem => ({
     id: r.id,
     leadId: r.leads.id,
@@ -106,7 +132,14 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     data: {
-      followups: ((dueRes.data ?? []) as unknown as Row[]).map(toItem),
+      followups: (() => {
+        const due = ((dueRes.data ?? []) as unknown as Row[]).map(toItem);
+        const seen = new Set(due.map((i) => i.id));
+        const hosted = ((hostedRes.data ?? []) as unknown as Row[])
+          .filter((r) => !seen.has(r.id))
+          .map((r) => toItem({ ...r, follow_up_date: r.meeting_start_at ?? r.follow_up_date, follow_up_notes: r.follow_up_notes ?? "Tour" }));
+        return [...due, ...hosted];
+      })(),
       overdue: ((overdueRes.data ?? []) as unknown as Row[]).map(toItem),
       pinned: ((pinnedRes.data ?? []) as unknown as LeadJoin[]).map((l) => ({
         id: l.id,

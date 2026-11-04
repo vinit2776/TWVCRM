@@ -191,7 +191,7 @@ export default function LeadActivityPage() {
         {!closed && (
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">Log what just happened (each action asks for the next step before saving):</div>
-            <LeadQuickActions lead={lead} onChanged={changed} />
+            <LeadQuickActions lead={lead} onChanged={changed} users={users} />
           </div>
         )}
       </div>

@@ -11,6 +11,7 @@ import {
   NOT_INTERESTED_REASONS,
   NOT_INTERESTED_REASON_LABELS,
   NO_ANSWER_REASONS,
+  LEAD_HANDLER_ROLES,
   type NotInterestedReason,
 } from "@/lib/constants";
 import { followUpInDays, suggestFollowUp } from "@/lib/followup-hint";
@@ -57,7 +58,16 @@ async function postActivity(leadId: string, body: Record<string, unknown>) {
  * asks only what that action needs, then logs the activity (which also claims the enquiry and moves
  * the status on, exactly as logging from the lead page does).
  */
-export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: () => void }) {
+export function LeadQuickActions({
+  lead,
+  onChanged,
+  users = [],
+}: {
+  lead: Lead;
+  onChanged: () => void;
+  /** People who can host a tour. Without them the tour is booked with no host. */
+  users?: { id: string; full_name: string; role: string }[];
+}) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -66,6 +76,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
   const [followUpNote, setFollowUpNote] = useState("");
   const [reason, setReason] = useState("");
   const [tourAt, setTourAt] = useState("");
+  const [tourHost, setTourHost] = useState("");
   // Once the person picks a follow-up themselves, typing in the note stops overwriting it.
   const followUpTouched = useRef(false);
 
@@ -76,6 +87,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
     setFollowUpNote("");
     setReason("");
     setTourAt("");
+    setTourHost("");
     followUpTouched.current = false;
     setFollowUp(p === "no_answer" ? followUpInDays(2) : p === "quote" ? followUpInDays(3) : "");
     if (p === "no_answer") setFollowUpNote("Call back");
@@ -205,10 +217,27 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
             <div className="space-y-1">
               <div className="text-sm font-medium">When is the tour?</div>
               <FollowUpDateTimeInput value={tourAt} onChange={setTourAt} minDate={istToday()} />
+              {users.length > 0 && (
+                <label className="mt-2 block space-y-1">
+                  <span className="text-sm font-medium">Who will host it? (optional)</span>
+                  <select
+                    value={tourHost}
+                    onChange={(e) => setTourHost(e.target.value)}
+                    className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  >
+                    <option value="">No host yet</option>
+                    {users
+                      .filter((u) => (LEAD_HANDLER_ROLES as readonly string[]).includes(u.role))
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>{u.full_name}</option>
+                      ))}
+                  </select>
+                </label>
+              )}
               <div className="text-xs text-muted-foreground">
                 {tourAt && isPast(tourAt)
                   ? "That time has already passed. Pick a later slot."
-                  : `Held at ${lead.location?.name ?? "the centre they asked for"}. Picking who hosts it comes next.`}
+                  : `Held at ${lead.location?.name ?? "the centre they asked for"}. You and the host are reminded 2 hours before.`}
               </div>
             </div>
           )}
@@ -296,6 +325,7 @@ export function LeadQuickActions({ lead, onChanged }: { lead: Lead; onChanged: (
                         meeting_start_at: tourAt,
                         meeting_end_at: plusOneHour(tourAt),
                         meeting_location: lead.location?.name,
+                        tour_host_id: tourHost || undefined,
                         // The tour is the lead's next step: it shows in the list and on the calendar.
                         follow_up_date: tourAt,
                         follow_up_notes: `Tour at ${lead.location?.name ?? "the centre"}`,
