@@ -4,7 +4,9 @@ import Link from "next/link";
 import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
+import { NextStepControls } from "@/components/leads/next-step-controls";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
+import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate, formatSmartDate } from "@/lib/utils";
 import type { Lead } from "@/types";
@@ -94,7 +96,9 @@ export function LeadListRow({
       onClick={onOpen}
       onKeyDown={(e) => e.key === "Enter" && onOpen()}
       className={`cursor-pointer space-y-1 px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-        unread
+        lead.pinned_at
+          ? "border-l-4 border-l-amber-500 bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-950/20"
+          : unread
           ? "bg-emerald-50/40 hover:bg-emerald-50 dark:bg-emerald-950/10"
           : reEnquiry
             ? "bg-amber-50/40 hover:bg-amber-50 dark:bg-amber-950/10"
@@ -111,7 +115,7 @@ export function LeadListRow({
             </span>
           )}
           <Link
-            href={`/leads/${lead.id}`}
+            href={`/leads/${lead.id}/activity`}
             onClick={(e) => e.stopPropagation()}
             className="truncate font-medium text-primary hover:underline"
           >
@@ -126,7 +130,20 @@ export function LeadListRow({
             <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">Disabled</span>
           )}
         </div>
-        <StatusBadge type="lead_status" value={lead.status} />
+        <div className="flex shrink-0 items-center gap-2">
+          {lead._stale && (
+            <span
+              className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-600"
+              title="Nothing has happened on this lead for a while. It is archived automatically once it has been quiet for 15 days, unless a follow-up is booked or it is pinned."
+            >
+              {lead._stale.state === "stale"
+                ? "Stale"
+                : `Stale in ${lead._stale.daysLeft} day${lead._stale.daysLeft === 1 ? "" : "s"}`}
+            </span>
+          )}
+          <LeadPinButton lead={lead} onChanged={onChanged} />
+          <StatusBadge type="lead_status" value={lead.status} />
+        </div>
       </div>
 
       {/* Line 2: what they want, and where */}
@@ -153,8 +170,15 @@ export function LeadListRow({
 
       {/* Line 4: log what just happened, without opening the lead */}
       {!CLOSED_STATUSES.includes(lead.status) && !lead.archived_at && (
-        <div className="pt-1">
-          <LeadQuickActions lead={lead} onChanged={onChanged} />
+        <div className="space-y-1.5 pt-1">
+          {lead._followup?.next?.activity_id && (
+            <NextStepControls
+              activityId={lead._followup.next.activity_id}
+              hasNote={!!lead._followup.next.notes?.trim()}
+              onChanged={onChanged}
+            />
+          )}
+          <LeadQuickActions lead={lead} onChanged={onChanged} users={users} />
         </div>
       )}
     </div>

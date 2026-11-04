@@ -119,6 +119,14 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/tour-reminders",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/lead-stale-archive",
+      "schedule": "30 22 * * *"
+    },
+    {
       "path": "/api/cron/lead-reminder-whatsapp",
       "schedule": "*/5 * * * *"
     },

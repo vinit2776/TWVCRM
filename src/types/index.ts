@@ -104,6 +104,7 @@ export type LeadSource =
   | "google_ads"
   | "direct_walkin"
   | "whatsapp"
+  | "inbound_call"
   | "referral"
   | "cold_call"
   | "aggregator";
@@ -171,6 +172,8 @@ export interface Lead {
     upcoming: boolean;
     /** Soonest pending follow-up: when it's due and the note saying what to do. */
     next?: {
+      /** The activity that holds this follow-up, so it can be marked done or rescheduled. */
+      activity_id: string;
       due_at: string;
       days_overdue: number;
       notes: string | null;
@@ -200,6 +203,10 @@ export interface Lead {
   lost_reason?: string;
   // Soft-disable
   archived_at?: string | null;
+  /** Set while the lead is pinned: highlighted in the list and shown on every calendar day. */
+  pinned_at?: string | null;
+  /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
+  _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
   archived_by?: string | null;
   archive_reason?: string | null;
 }
@@ -1198,6 +1205,8 @@ export interface BillingStatement {
 export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden" | "deposit_adjustment_requested" | "deposit_adjustment_approved" | "deposit_adjustment_rejected" | "deposit_adjustment_reversed" | "deposit_topup_recorded" | "deposit_topup_link_created" | "deposit_topup_paid" | "deposit_topup_reversed" | "deposit_topup_cancelled" | "deposit_accounted" | "deposit_accounting_reopened" | "asset_scope_mismatch" | "payment_fields_changed" | "contract_extended" | "query_raised" | "query_resolved" | "query_reopened" | "query_retargeted" | "payment_reported" | "payment_report_verified" | "payment_report_rejected" | "invoice_attributed" | "invoice_attribution_cleared" | "cap_override" | "revoke" | "replace" | "sync" | "projection_adjustment_added" | "projection_adjustment_removed" | "agreement_document_reuploaded" | "statement_held" | "statement_hold_released" | "booking_facility_override" | "commitment_terms_overridden" | "commitment_terms_recorded" | "rent_month_waived" | "rent_month_waiver_revoked" | "exit_started" | "exit_updated" | "exit_cancelled" | "exit_completed" | "exit_charge_added" | "exit_charge_updated" | "exit_charge_removed" | "exit_cleared" | "exit_approved" | "exit_returned" | "exit_paid" | "exit_owed_handled" | "rollback" | "special_clause_submitted" | "special_clause_approved" | "special_clause_changes_requested" | "special_clause_withdrawn" | "auto_renewal_stopped";
 export type AuditEntityType =
   | "value_cost_parameter"
+  | "lead_rate_card"
+  | "lead_promotion"
   | "lead"
   | "activity"
   | "task"

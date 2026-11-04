@@ -62,21 +62,29 @@ describe("minFirstPart / checkAsk", () => {
   });
   const fresh = depositPosition(60000, []);
   it("flags a first part below the floor as needing an override", () => {
-    expect(checkAsk(10000, fresh, false)).toEqual({ ok: true, needsOverride: true });
-    expect(checkAsk(15000, fresh, false)).toEqual({ ok: true, needsOverride: false });
+    expect(checkAsk(10000, fresh)).toEqual({ ok: true, needsOverride: true });
+    expect(checkAsk(15000, fresh)).toEqual({ ok: true, needsOverride: false });
   });
   it("lets the whole balance through even if the floor were higher", () => {
-    expect(checkAsk(60000, fresh, false, 100)).toEqual({ ok: true, needsOverride: false });
+    expect(checkAsk(60000, fresh, 100)).toEqual({ ok: true, needsOverride: false });
   });
   it("applies no floor to later parts", () => {
     const later = depositPosition(60000, [{ amount: 15000, status: "paid", paid_amount: 15000 }]);
-    expect(checkAsk(500, later, false)).toEqual({ ok: true, needsOverride: false });
+    expect(checkAsk(500, later)).toEqual({ ok: true, needsOverride: false });
   });
-  it("refuses more than the balance, a second open ask and non-positive amounts", () => {
+  it("refuses more than the balance and non-positive amounts", () => {
     const later = depositPosition(60000, [{ amount: 15000, status: "paid", paid_amount: 15000 }]);
-    expect(checkAsk(50000, later, false)).toMatchObject({ ok: false, code: "amount_exceeds_balance", balance: 45000 });
-    expect(checkAsk(1000, later, true)).toMatchObject({ ok: false, code: "open_ask_exists" });
-    expect(checkAsk(0, later, false)).toMatchObject({ ok: false, code: "amount_invalid" });
+    expect(checkAsk(50000, later)).toMatchObject({ ok: false, code: "amount_exceeds_balance", balance: 45000 });
+    expect(checkAsk(0, later)).toMatchObject({ ok: false, code: "amount_invalid" });
+  });
+  it("allows a second request while the first is still unpaid, up to what is not yet asked", () => {
+    const out = depositPosition(60000, [{ amount: 40000, status: "requested", paid_amount: null }]);
+    expect(checkAsk(20000, out)).toEqual({ ok: true, needsOverride: false });
+    expect(checkAsk(20001, out)).toMatchObject({ ok: false, code: "amount_exceeds_balance", balance: 20000 });
+  });
+  it("applies the first-ask minimum only when nothing has been requested or paid", () => {
+    const out = depositPosition(60000, [{ amount: 40000, status: "requested", paid_amount: null }]);
+    expect(checkAsk(5000, out)).toEqual({ ok: true, needsOverride: false });
   });
 });
 

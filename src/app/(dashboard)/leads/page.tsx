@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal, Phone, CalendarDays, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,6 +32,8 @@ import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provi
 import { OverdueFollowupBanner, type FollowupSummary } from "@/components/leads/overdue-followup-banner";
 import { EnquiryTracker } from "@/components/leads/enquiry-tracker";
 import { LeadListRow } from "@/components/leads/lead-list-row";
+import { LeadDayHeader } from "@/components/leads/lead-day-header";
+import { groupByDay, istDayKey, type DaySummary } from "@/lib/lead-days";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -48,8 +50,9 @@ export default function LeadsPage() {
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
   const [importOpen, setImportOpen] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [tab, setTab] = useState<LeadsTab>("enquiries");
+  const [tab, setTab] = useState<LeadsTab>("all");
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
 
   useEffect(() => {
@@ -60,6 +63,7 @@ export default function LeadsPage() {
   }, []);
 
   const { users } = useUsers();
+  const [daySummary, setDaySummary] = useState<Record<string, DaySummary>>({});
 
   const activeFilterCount =
     (statusFilter ? 1 : 0) +
@@ -94,8 +98,32 @@ export default function LeadsPage() {
     location_id: locationFilter || undefined,
     assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
+    pinned: pinnedOnly,
     view: tab === "followups" ? "overdue" : "all",
   });
+
+  // Whole-day counts for the day headers, for the days this page spans, under the same filters.
+  const leadDays = useMemo(() => {
+    const keys = leads.map((l) => istDayKey(l.created_at)).sort();
+    return keys.length > 0 ? { from: keys[0], to: keys[keys.length - 1] } : null;
+  }, [leads]);
+  useEffect(() => {
+    if (tab !== "all" || !leadDays) return;
+    const params = new URLSearchParams({ from: leadDays.from, to: leadDays.to });
+    if (sourceFilter.length > 0) params.set("source", sourceFilter.join(","));
+    if (locationFilter) params.set("location_id", locationFilter);
+    if (assignedToFilter) params.set("assigned_to", assignedToFilter);
+    let cancelled = false;
+    fetch(`/api/leads/inflow?${params}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data) setDaySummary(json.data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, leadDays, sourceFilter, locationFilter, assignedToFilter]);
 
   // Client-side: sort leads — unresolved attention items first
   const sortedLeads = useMemo(() => {
@@ -146,6 +174,18 @@ export default function LeadsPage() {
           <Button variant="outline" onClick={() => setImportOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
             Import CSV
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/overview")}>
+            <BarChart3 className="mr-2 h-4 w-4" />
+            Overview
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/calendar")}>
+            <CalendarDays className="mr-2 h-4 w-4" />
+            Calendar
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/new/call")}>
+            <Phone className="mr-2 h-4 w-4" />
+            Log a call
           </Button>
           <Button onClick={() => router.push("/leads/new")}>
             <Plus className="mr-2 h-4 w-4" />
@@ -203,6 +243,24 @@ export default function LeadsPage() {
           />
           <Button variant="outline" size="icon" onClick={handleSearch}>
             <Search className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={pinnedOnly ? "default" : "outline"}
+            onClick={() => {
+              setPinnedOnly((v) => !v);
+              setPage(1);
+            }}
+          >
+            Pinned
+          </Button>
+          <Button
+            variant={assignedToFilter === "none" ? "default" : "outline"}
+            onClick={() => {
+              setAssignedToFilter((v) => (v === "none" ? "" : "none"));
+              setPage(1);
+            }}
+          >
+            Unclaimed
           </Button>
           <Button variant={activeFilterCount > 0 ? "default" : "outline"} onClick={() => setFiltersOpen((v) => !v)}>
             <SlidersHorizontal className="mr-2 h-4 w-4" />
@@ -262,6 +320,7 @@ export default function LeadsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Owners</SelectItem>
+                <SelectItem value="none">Unclaimed (nobody handling)</SelectItem>
                 {users.map((u) => (
                   <SelectItem key={u.id} value={u.id}>
                     {u.full_name || u.email}
@@ -299,23 +358,31 @@ export default function LeadsPage() {
         />
       ) : (
         <div className="divide-y rounded-md border">
-          {sortedLeads.map((lead) => {
-            const isFormLead = isUnreadFormLead(lead);
-            return (
-              <LeadListRow
-                key={lead.id}
-                lead={lead}
-                unread={isFormLead}
-                reEnquiry={!isFormLead && reEnquiryLeadIds.has(lead.id)}
-                users={users}
-                onChanged={refetch}
-                onOpen={() => {
-                  pushTrailEntry({ href: `/leads/${lead.id}`, label: `${lead.first_name} ${lead.last_name}` });
-                  router.push(`/leads/${lead.id}`);
-                }}
-              />
-            );
-          })}
+          {// The day view keeps the server's newest-first order: re-sorting would split a day into pieces.
+          (tab === "all" ? groupByDay(leads) : [{ key: "", leads: sortedLeads }]).map((group) => (
+            <div key={group.key || "flat"} className="divide-y">
+              {group.key && (
+                <LeadDayHeader dayKey={group.key} summary={daySummary[group.key]} pageCount={group.leads.length} />
+              )}
+              {group.leads.map((lead) => {
+                const isFormLead = isUnreadFormLead(lead);
+                return (
+                  <LeadListRow
+                    key={lead.id}
+                    lead={lead}
+                    unread={isFormLead}
+                    reEnquiry={!isFormLead && reEnquiryLeadIds.has(lead.id)}
+                    users={users}
+                    onChanged={refetch}
+                    onOpen={() => {
+                      pushTrailEntry({ href: `/leads/${lead.id}/activity`, label: `${lead.first_name} ${lead.last_name}` });
+                      router.push(`/leads/${lead.id}/activity`);
+                    }}
+                  />
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
 
