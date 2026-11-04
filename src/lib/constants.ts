@@ -2872,3 +2872,6 @@ export const NOT_INTERESTED_TO_LOST_REASON: Record<Exclude<NotInterestedReason, 
 
 /** Why a call got no answer, as picked on the one-tap "No answer" action. */
 export const NO_ANSWER_REASONS = ["Switched off", "No response", "Not reachable (no incoming)"] as const;
+
+/** Roles that can handle (own) a lead: follow-ups, reminders and tour alerts go to this person. */
+export const LEAD_HANDLER_ROLES = ["admin", "manager", "sales_rep"] as const;

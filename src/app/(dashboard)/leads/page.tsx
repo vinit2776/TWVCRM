@@ -307,6 +307,7 @@ export default function LeadsPage() {
                 lead={lead}
                 unread={isFormLead}
                 reEnquiry={!isFormLead && reEnquiryLeadIds.has(lead.id)}
+                users={users}
                 onChanged={refetch}
                 onOpen={() => {
                   pushTrailEntry({ href: `/leads/${lead.id}`, label: `${lead.first_name} ${lead.last_name}` });
