@@ -2390,6 +2390,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingReference={booking.booking_number || ""}
         totalAmount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
         onSuccess={handlePaymentRecorded}
+        onPaymentsChanged={fetchBooking}
         upiId={upiId}
         upiQrCodePath={upiQrCodePath}
       />

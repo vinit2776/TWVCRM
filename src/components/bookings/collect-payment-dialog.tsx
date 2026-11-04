@@ -33,7 +33,10 @@ interface CollectPaymentDialogProps {
   bookingId: string;
   bookingReference?: string;
   totalAmount: number;
+  /** A payment was recorded or the dialog was finished. The booking page also emails the customer from this. */
   onSuccess: () => void;
+  /** Payments changed without anything to tell the customer (e.g. a reported payment was cancelled). Refresh only. */
+  onPaymentsChanged?: () => void;
   upiId?: string;
   upiQrCodePath?: string;
 }
@@ -45,6 +48,7 @@ export function CollectPaymentDialog({
   bookingReference = "",
   totalAmount,
   onSuccess,
+  onPaymentsChanged,
   upiId = "",
   upiQrCodePath = "",
 }: CollectPaymentDialogProps) {
@@ -104,7 +108,8 @@ export function CollectPaymentDialog({
       setCancellingPayment(null);
       setCancelReason("");
       await fetchPayments();
-      onSuccess();
+      // Not onSuccess: that sends the customer a booking confirmation email.
+      onPaymentsChanged?.();
     } finally {
       setCancelSaving(false);
     }
