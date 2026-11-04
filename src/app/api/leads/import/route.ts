@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { normalizePhoneFields } from "@/lib/phone";
 import { importLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { transformZohoRow } from "@/lib/zoho-field-mapping";
@@ -159,7 +160,7 @@ export async function POST(request: NextRequest) {
       skippedCount++;
       continue;
     }
-    newLeads.push(lead);
+    newLeads.push(normalizePhoneFields(lead));
   }
 
   // Bulk insert in batches; fall back to row-by-row on batch failure

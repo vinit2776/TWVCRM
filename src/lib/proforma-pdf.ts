@@ -211,6 +211,7 @@ export async function buildProformaPdf(
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,
     contractNumber: partyRef,
+    adhoc: statement.created_via === "adhoc_invoice",
     poNumber: statement.po_number as string | null,
     lineItems,
     subtotal,
