@@ -6,6 +6,9 @@ import {
   hasProof,
   verifyExcess,
   amountLeftToCollect,
+  canCancelReportedPayment,
+  isCancelledPayment,
+  cancelNote,
   bookingPaymentTolerance,
   roundToRupee,
 } from "../booking-payment-rules";
@@ -168,5 +171,27 @@ describe("amountLeftToCollect", () => {
   });
   it("never goes negative", () => {
     expect(amountLeftToCollect(100, [{ amount: 150, status: "verified", payment_mode: "cash" }])).toBe(0);
+  });
+});
+
+describe("canCancelReportedPayment", () => {
+  const pending = { status: "pending", payment_mode: "upi", created_by: "u1" };
+  it("lets the reporter and admin/accounts/manager cancel a pending UPI payment", () => {
+    expect(canCancelReportedPayment(pending, { id: "u1", role: "sales_rep" })).toBe(true);
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "accounts" })).toBe(true);
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "manager" })).toBe(true);
+  });
+  it("refuses other staff", () => {
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "sales_rep" })).toBe(false);
+  });
+  it("goes away once verified or closed, and for non-UPI", () => {
+    expect(canCancelReportedPayment({ ...pending, status: "verified" }, { id: "u1", role: "admin" })).toBe(false);
+    expect(canCancelReportedPayment({ ...pending, status: "rejected" }, { id: "u1", role: "admin" })).toBe(false);
+    expect(canCancelReportedPayment({ ...pending, payment_mode: "razorpay" }, { id: "u1", role: "admin" })).toBe(false);
+  });
+  it("marks a cancel apart from a bank rejection", () => {
+    expect(isCancelledPayment({ status: "rejected", verification_notes: cancelNote("A", " twice ") })).toBe(true);
+    expect(isCancelledPayment({ status: "rejected", verification_notes: "not in bank" })).toBe(false);
+    expect(cancelNote("A", " twice ")).toBe("Cancelled by A: twice");
   });
 });

@@ -155,3 +155,32 @@ export function closeOutPaymentState(
   const balance = Math.max(0, Math.round((grandTotal - state.verified - state.provisional) * 100) / 100);
   return { settled: false, provisional: false, balance };
 }
+
+/** Roles that may cancel anyone's pending payment; the reporter may cancel their own. */
+export const CANCEL_PAYMENT_ANY_ROLES = ["admin", "accounts", "manager"] as const;
+
+/** Stored in booking_payments.verification_notes so a cancel reads differently from a bank rejection. */
+export const CANCELLED_NOTE_PREFIX = "Cancelled";
+
+/**
+ * Whether `user` may cancel this reported payment. Only a manual UPI payment that
+ * is still waiting for accounts: once it is verified (or already rejected) the
+ * option is gone. Razorpay pending rows belong to their webhook.
+ */
+export function canCancelReportedPayment(
+  payment: { status: string; payment_mode: string; created_by?: string | null },
+  user: { id: string | null | undefined; role: string | null | undefined },
+): boolean {
+  if (payment.status !== "pending" || payment.payment_mode !== "upi") return false;
+  if (!user.id || !user.role) return false;
+  if ((CANCEL_PAYMENT_ANY_ROLES as readonly string[]).includes(user.role)) return true;
+  return !!payment.created_by && payment.created_by === user.id;
+}
+
+export function isCancelledPayment(p: { status: string; verification_notes?: string | null }): boolean {
+  return p.status === "rejected" && !!p.verification_notes?.startsWith(CANCELLED_NOTE_PREFIX);
+}
+
+export function cancelNote(fullName: string, reason: string): string {
+  return `${CANCELLED_NOTE_PREFIX} by ${fullName}: ${reason.trim()}`;
+}

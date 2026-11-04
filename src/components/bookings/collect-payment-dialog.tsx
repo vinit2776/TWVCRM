@@ -19,7 +19,7 @@ import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
-import { bookingPaymentTolerance } from "@/lib/booking-payment-rules";
+import { bookingPaymentTolerance, canCancelReportedPayment, isCancelledPayment } from "@/lib/booking-payment-rules";
 import {
   BOOKING_PAYMENT_RECORD_STATUS_LABELS,
   BOOKING_PAYMENT_RECORD_STATUS_COLORS,
@@ -71,6 +71,44 @@ export function CollectPaymentDialog({
   const [verifyingPayment, setVerifyingPayment] = useState<BookingPayment | null>(null);
   const [verifyNotes, setVerifyNotes] = useState("");
   const [verifyingSaving, setVerifyingSaving] = useState(false);
+
+  // Cancel a reported payment: who is asking, and the reason being typed.
+  const [me, setMe] = useState<{ id: string | null; role: string | null }>({ id: null, role: null });
+  const [cancellingPayment, setCancellingPayment] = useState<BookingPayment | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelSaving, setCancelSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j: { id?: string | null; role?: string | null }) => setMe({ id: j.id ?? null, role: j.role ?? null }))
+      .catch(() => { /* cancel just stays hidden */ });
+  }, [open]);
+
+  const handleCancel = async () => {
+    if (!cancellingPayment) return;
+    setCancelSaving(true);
+    try {
+      const res = await fetch(`/api/booking-payments/${cancellingPayment.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: cancelReason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Could not cancel the payment");
+        return;
+      }
+      toast.success("Payment cancelled");
+      setCancellingPayment(null);
+      setCancelReason("");
+      await fetchPayments();
+      onSuccess();
+    } finally {
+      setCancelSaving(false);
+    }
+  };
 
   const fetchPayments = useCallback(async () => {
     if (!bookingId) return;
@@ -372,7 +410,8 @@ export function CollectPaymentDialog({
               <Label className="text-xs text-muted-foreground">Payment History</Label>
               <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
                 {payments.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div key={p.id} className="px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{formatCurrency(p.amount)}</span>
                       <span className="text-xs text-muted-foreground">
@@ -381,7 +420,7 @@ export function CollectPaymentDialog({
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
-                        {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                        {isCancelledPayment(p) ? "Cancelled" : BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
                       </Badge>
                       {p.screenshot_path && (
                         <Button
@@ -409,7 +448,22 @@ export function CollectPaymentDialog({
                           <Eye className="mr-1 h-3 w-3" />Verify
                         </Button>
                       )}
+                      {canCancelReportedPayment(p, me) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs px-2 text-red-600 hover:text-red-700"
+                          onClick={() => { setCancellingPayment(p); setCancelReason(""); }}
+                        >
+                          <XCircle className="mr-1 h-3 w-3" />Cancel
+                        </Button>
+                      )}
                     </div>
+                  </div>
+                  {/* Who cancelled / why it was rejected */}
+                  {p.status === "rejected" && p.verification_notes && (
+                    <p className="mt-1 text-xs text-muted-foreground">{p.verification_notes}</p>
+                  )}
                   </div>
                 ))}
               </div>
@@ -700,6 +754,45 @@ export function CollectPaymentDialog({
           )}
           <p className="text-white/40 text-xs mt-1">Tap anywhere to close</p>
         </div>
+      )}
+
+      {/* Cancel reported payment */}
+      {cancellingPayment && (
+        <Dialog open={!!cancellingPayment} onOpenChange={() => setCancellingPayment(null)}>
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>Cancel reported payment</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Withdraws the {formatCurrency(cancellingPayment.amount)} UPI payment that is waiting for accounts. It
+                comes off the booking and the To verify list. This can&apos;t be done once accounts have verified it.
+              </p>
+              <div className="space-y-2">
+                <Label>Reason</Label>
+                <Input
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="e.g. entered twice, wrong booking"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setCancellingPayment(null)} disabled={cancelSaving}>
+                  Keep it
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1"
+                  onClick={handleCancel}
+                  disabled={cancelSaving || cancelReason.trim().length < 3}
+                >
+                  {cancelSaving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <XCircle className="mr-1 h-4 w-4" />}
+                  Cancel payment
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Verification Sub-Dialog */}
