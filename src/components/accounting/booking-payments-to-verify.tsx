@@ -20,6 +20,8 @@ interface PendingBookingPayment {
   screenshot_path: string | null;
   created_at: string;
   reported_by: string | null;
+  booking_total: number;
+  other_payments: { amount: number; status: string }[];
 }
 
 interface Props {
@@ -85,15 +87,24 @@ export function BookingPaymentsToVerify({ onChanged }: Props) {
     };
   }, [opened]);
 
+  // Another live payment on the booking that would take it past its total if
+  // this one were verified too — the signature of a double entry.
+  const duplicateOf = opened
+    ? opened.other_payments.find((o) => o.amount === opened.amount) ?? null
+    : null;
+  const overTotal = opened
+    ? opened.amount + opened.other_payments.reduce((s, o) => s + o.amount, 0) - opened.booking_total
+    : 0;
+
   const decide = useCallback(
-    async (status: "verified" | "rejected") => {
+    async (status: "verified" | "rejected", notes?: string) => {
       if (!opened) return;
       setBusy(true);
       try {
         const res = await fetch(`/api/booking-payments/${opened.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status }),
+          body: JSON.stringify({ status, verification_notes: notes }),
         });
         if (!res.ok) {
           const json = (await res.json().catch(() => ({}))) as { error?: string };
@@ -168,6 +179,7 @@ export function BookingPaymentsToVerify({ onChanged }: Props) {
             <div className="space-y-4 text-sm">
               <dl className="space-y-1.5">
                 {[
+                  ["Customer", opened.customer],
                   ["Amount", `${formatCurrency(opened.amount)} · UPI`],
                   ["Reference", opened.payment_reference ?? "None given"],
                   ["Reported", formatDate(opened.created_at)],
@@ -187,6 +199,25 @@ export function BookingPaymentsToVerify({ onChanged }: Props) {
                   </dd>
                 </div>
               </dl>
+
+              {opened.other_payments.length > 0 && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
+                  <p className="font-medium">
+                    {duplicateOf ? "Possible duplicate" : "Other payments on this booking"}
+                  </p>
+                  <ul className="list-disc pl-4">
+                    {opened.other_payments.map((o, i) => (
+                      <li key={i}>
+                        {formatCurrency(o.amount)} — {o.status === "verified" ? "already verified" : "also pending"}
+                      </li>
+                    ))}
+                  </ul>
+                  <p>
+                    Booking total {formatCurrency(opened.booking_total)}.
+                    {overTotal > 0.01 ? ` Verifying this too would be ${formatCurrency(overTotal)} over.` : ""}
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Payment proof</p>
@@ -224,9 +255,19 @@ export function BookingPaymentsToVerify({ onChanged }: Props) {
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Check className="h-4 w-4 mr-1" />}
                   Verify payment
                 </Button>
-                <Button type="button" variant="outline" disabled={busy} onClick={() => void decide("rejected")}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    void decide(
+                      "rejected",
+                      duplicateOf ? "Duplicate of another payment of the same amount on this booking." : undefined,
+                    )
+                  }
+                >
                   <X className="h-4 w-4 mr-1" />
-                  Reject
+                  {duplicateOf ? "Reject as duplicate" : "Reject"}
                 </Button>
               </div>
             </div>
