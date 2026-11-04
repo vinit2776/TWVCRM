@@ -261,3 +261,147 @@ describe("monitored template list stays in sync with whatsapp.ts", () => {
     expect(stale).toEqual([]);
   });
 });
+
+/**
+ * Per-template health.
+ *
+ * The case these exist for: between Aug and Nov 2026 `gst_invoice_doc` sent 37
+ * messages on the billing-statement path and delivered none — the WhatsApp
+ * document URL was a getPublicUrl() link to a PRIVATE bucket, which returns
+ * HTTP 400 to Meta (error 131053). The channel-level check reported "ok"
+ * throughout, because WhatsApp overall was failing at only ~6%.
+ */
+
+import {
+  evaluateTemplates,
+  templateAlerts,
+  mergeTemplateHealth,
+  TEMPLATE_WINDOW_DAYS,
+  type TemplateRow,
+  type StoredTemplateState,
+} from "@/lib/messaging-health";
+
+const tplRows = (name: string, n: number, status: string): TemplateRow[] =>
+  Array.from({ length: n }, () => ({ status, error_message: null, template_name: name }));
+
+describe("evaluateTemplates", () => {
+  it("catches a single dead template while the channel average looks healthy", () => {
+    // The real shape: one template fully broken, everything else fine.
+    const rows: TemplateRow[] = [
+      ...tplRows("gst_invoice_doc", 37, "failed"),
+      ...tplRows("payment_reminder", 500, "delivered"),
+      ...tplRows("booking_confirmation", 120, "delivered"),
+    ];
+
+    // Channel-level view — what the old monitor saw.
+    const channel = evaluateChannel(rows);
+    expect(channel.status).toBe("ok");
+
+    // Template-level view — what it should have seen.
+    const byTemplate = evaluateTemplates(rows);
+    expect(byTemplate.gst_invoice_doc.status).toBe("down");
+    expect(byTemplate.gst_invoice_doc.failRate).toBe(1);
+    expect(byTemplate.gst_invoice_doc.failedCount).toBe(37);
+    expect(byTemplate.payment_reminder.status).toBe("ok");
+  });
+
+  it("uses a window measured in days, because low-volume templates need one", () => {
+    // gst_invoice_doc sends ~24 times in 75 days; a 6h window never reaches
+    // MIN_SAMPLE_SIZE for it. Guard the constant so nobody shortens it back.
+    expect(TEMPLATE_WINDOW_DAYS).toBeGreaterThanOrEqual(7);
+  });
+
+  it("stays idle for a template with too few sends to judge", () => {
+    expect(evaluateTemplates(tplRows("rare_template", 3, "failed")).rare_template.status).toBe("idle");
+  });
+
+  it("ignores rows with no template name", () => {
+    const rows: TemplateRow[] = [
+      ...tplRows("a", 5, "delivered"),
+      { status: "failed", error_message: null, template_name: null },
+    ];
+    const r = evaluateTemplates(rows);
+    expect(Object.keys(r)).toEqual(["a"]);
+  });
+
+  it("returns nothing for no rows", () => {
+    expect(evaluateTemplates([])).toEqual({});
+  });
+});
+
+describe("templateAlerts", () => {
+  const down = evaluateTemplates(tplRows("gst_invoice_doc", 10, "failed"));
+
+  it("alerts the first time a template is seen down", () => {
+    const a = templateAlerts(down, {});
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ template: "gst_invoice_doc", previous: null });
+  });
+
+  it("does not re-alert while it stays down", () => {
+    const prior: Record<string, StoredTemplateState> = {
+      gst_invoice_doc: { status: "down", alerted: "down", sample: 10, failed: 10 },
+    };
+    expect(templateAlerts(down, prior)).toEqual([]);
+  });
+
+  it("announces recovery once", () => {
+    const ok = evaluateTemplates(tplRows("gst_invoice_doc", 10, "delivered"));
+    const prior: Record<string, StoredTemplateState> = {
+      gst_invoice_doc: { status: "down", alerted: "down", sample: 10, failed: 10 },
+    };
+    const a = templateAlerts(ok, prior);
+    expect(a).toHaveLength(1);
+    expect(a[0].health.status).toBe("ok");
+  });
+
+  it("never alerts on an idle template", () => {
+    expect(templateAlerts(evaluateTemplates(tplRows("x", 2, "failed")), {})).toEqual([]);
+  });
+
+  it("puts the worst template first", () => {
+    const mixed = evaluateTemplates([
+      ...tplRows("half_broken", 10, "failed").slice(0, 5),
+      ...tplRows("half_broken", 5, "delivered"),
+      ...tplRows("fully_broken", 10, "failed"),
+    ]);
+    const a = templateAlerts(mixed, {});
+    expect(a[0].template).toBe("fully_broken");
+  });
+});
+
+describe("mergeTemplateHealth", () => {
+  const now = "2026-11-02T00:00:00.000Z";
+
+  it("advances alerted only for templates that actually alerted", () => {
+    const current = evaluateTemplates([
+      ...tplRows("alerted_one", 10, "failed"),
+      ...tplRows("quiet_one", 10, "delivered"),
+    ]);
+    const alerts = templateAlerts(current, {});
+    const merged = mergeTemplateHealth({}, current, alerts, now);
+    expect(merged.alerted_one.alerted).toBe("down");
+    expect(merged.alerted_one.at).toBe(now);
+    // Healthy from the start never alerted, so it has no baseline to advance.
+    expect(merged.quiet_one.alerted).toBeNull();
+  });
+
+  it("keeps templates that sent nothing in this window", () => {
+    const prior: Record<string, StoredTemplateState> = {
+      dormant: { status: "down", alerted: "down", sample: 9, failed: 9 },
+    };
+    const merged = mergeTemplateHealth(prior, evaluateTemplates(tplRows("active", 10, "delivered")), [], now);
+    // Dropping it would re-alert from scratch the next time it sends.
+    expect(merged.dormant).toEqual(prior.dormant);
+    expect(merged.active.status).toBe("ok");
+  });
+
+  it("preserves an existing baseline when this run did not alert", () => {
+    const prior: Record<string, StoredTemplateState> = {
+      t: { status: "down", alerted: "down", at: "2026-10-01T00:00:00.000Z", sample: 10, failed: 10 },
+    };
+    const merged = mergeTemplateHealth(prior, evaluateTemplates(tplRows("t", 10, "failed")), [], now);
+    expect(merged.t.alerted).toBe("down");
+    expect(merged.t.at).toBe("2026-10-01T00:00:00.000Z");
+  });
+});

@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
-import { DEFAULT_MIN_FIRST_PART_PERCENT } from "@/lib/deposit-instalments";
+import { DEFAULT_MIN_FIRST_PART_PERCENT, depositPosition, requiredDeposit } from "@/lib/deposit-instalments";
+import { partialDepositState, type PartialDepositState } from "@/lib/deposit-activation";
+import { buildContractDepositSnapshot } from "@/lib/proposal-deposit-claim";
 
 /**
  * Server-side helpers for the staged deposit. Money state changes go through the
@@ -165,4 +167,60 @@ export async function loadPartReceivableState(
     out.set(r.proposal_id, s);
   }
   return out;
+}
+
+/**
+ * What has been received against a proposal's deposit collected in parts, and
+ * whether that is enough (more than half) to activate the contract with a
+ * pending-balance warning. Only paid parts count.
+ */
+export async function loadDepositCollection(
+  client: SupabaseClient,
+  proposal: { id: string; security_deposit_amount?: number | string | null; deposit_exception_amount?: number | string | null; deposit_credit_amount?: number | string | null },
+): Promise<PartialDepositState> {
+  const { data: rows } = await client
+    .from("proposal_deposit_instalments")
+    .select("amount, status, paid_amount")
+    .eq("proposal_id", proposal.id);
+  const required = requiredDeposit(proposal);
+  return partialDepositState(required, depositPosition(required, rows || []).paid);
+}
+
+/**
+ * A contract can be activated while the deposit is still part-paid; it then
+ * holds a pending deposit snapshot and the claim on the proposal's deposit.
+ * When the last part is paid and the proposal's deposit completes, bring the
+ * contract's own deposit record up to date so the pool, exits and receivables
+ * see it as paid. No-op unless the proposal is complete and a contract holds
+ * the claim with a deposit that is still marked pending.
+ */
+export async function syncContractDepositFromParts(
+  admin: SupabaseClient,
+  proposalId: string,
+): Promise<{ synced: boolean; contractId?: string }> {
+  const { data: p } = await admin
+    .from("proposals")
+    .select("security_deposit_amount, security_deposit_months, deposit_payment_status, deposit_payment_amount, deposit_payment_reference, deposit_payment_medium, deposit_payment_received_at, deposit_internal_notes, deposit_claimed_by_contract_id")
+    .eq("id", proposalId)
+    .maybeSingle();
+  if (!p || p.deposit_payment_status !== "paid" || !p.deposit_claimed_by_contract_id) return { synced: false };
+
+  const { data: c } = await admin
+    .from("contracts")
+    .select("id, status, deposit_payment_status")
+    .eq("id", p.deposit_claimed_by_contract_id)
+    .maybeSingle();
+  if (!c || c.deposit_payment_status === "paid") return { synced: false };
+
+  const fields = buildContractDepositSnapshot(p, true);
+  const { error } = await admin
+    .from("contracts")
+    .update(fields)
+    .eq("id", c.id)
+    .neq("deposit_payment_status", "paid");
+  if (error) {
+    console.error("[deposit-parts] could not bring the contract's deposit up to date:", error.message);
+    return { synced: false };
+  }
+  return { synced: true, contractId: c.id as string };
 }

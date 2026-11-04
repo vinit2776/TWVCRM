@@ -153,6 +153,17 @@ export interface Lead {
   entity_type?: string | null;
   id_proof_path?: string | null;
   id_proof_uploaded_at?: string | null;
+  // Latest public enquiry (attached by GET /api/leads, not a DB column)
+  _enquiry?: {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    /** The last thing the customer wrote: the WhatsApp message or the form's free text. */
+    message: string | null;
+  } | null;
   // Followup flag (attached by API, not DB column)
   _followup?: {
     overdue: boolean;
@@ -733,6 +744,8 @@ export interface Contract {
   // Escalation approval
   escalation_approval_status?: string | null; // 'pending' | 'approved' | 'rejected'
   escalation_approval_id?: string | null;
+  /** Who approved/rejected the escalation and when (null while pending or for older rows with no record). */
+  escalation_decision?: { acted_by_name: string | null; acted_at: string | null; rejection_reason: string | null } | null;
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
+import { phoneMatchClauses } from "@/lib/phone-search";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
     const { data } = await supabase
       .from("leads")
       .select("id, first_name, last_name, id_proof_path")
-      .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
+      .or(`phone.eq.${normalizeStoredPhone(phone_exact)},mobile.eq.${normalizeStoredPhone(phone_exact)}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
   }
@@ -48,6 +50,8 @@ export async function GET(request: NextRequest) {
   let searchOr = "";
   if (search && !search.startsWith("#")) {
     searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const phoneClauses = phoneMatchClauses(search, ["phone", "mobile"]);
+    if (phoneClauses.length) searchOr += `,${phoneClauses.join(",")}`;
     const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
     if (refMatch) {
       const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
@@ -82,8 +86,31 @@ export async function GET(request: NextRequest) {
     subject: string | null;
     type: string;
   };
+  type EnquiryGlance = {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    message: string | null;
+  };
+  type EnquiryRow = {
+    lead_id: string;
+    source: string;
+    received_at: string;
+    payload: {
+      workspace_type?: string;
+      seat_capacity?: number;
+      budget_per_seat?: number;
+      preferred_location?: string;
+      description?: string;
+      messages?: { text?: string }[];
+    } | null;
+  };
   type LeadRow = {
     id: string;
+    _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
       overdue: boolean;
@@ -270,6 +297,34 @@ export async function GET(request: NextRequest) {
 
   const leads = [...priorityLeads, ...restLeads];
 
+  // What the latest public enquiry asked for. A form lead's requirement lives on the enquiry,
+  // not on the lead, so without this the list can't say what a lead wants or when they last asked.
+  const leadIds = leads.map((l) => l.id);
+  if (leadIds.length > 0) {
+    const { data: enquiryRows } = await supabase
+      .from("lead_enquiries")
+      .select("lead_id, source, received_at, payload")
+      .in("lead_id", leadIds)
+      .or("resolution_outcome.is.null,resolution_outcome.neq.spam")
+      .order("received_at", { ascending: false });
+    const latest = new Map<string, EnquiryGlance>();
+    for (const row of (enquiryRows || []) as EnquiryRow[]) {
+      if (latest.has(row.lead_id)) continue;
+      const p = row.payload ?? {};
+      const thread = (p.messages ?? []).map((m) => (m.text ?? "").trim()).filter(Boolean);
+      latest.set(row.lead_id, {
+        source: row.source,
+        received_at: row.received_at,
+        workspace_type: p.workspace_type ?? null,
+        seat_capacity: p.seat_capacity ?? null,
+        budget_per_seat: p.budget_per_seat ?? null,
+        preferred_location: p.preferred_location ?? null,
+        message: (thread[thread.length - 1] ?? p.description?.trim()) || null,
+      });
+    }
+    for (const l of leads) l._enquiry = latest.get(l.id) ?? null;
+  }
+
   return NextResponse.json({
     data: leads,
     pagination: {
@@ -311,7 +366,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("leads")
     .insert({
-      ...result.data,
+      ...normalizePhoneFields(result.data),
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
     })

@@ -6,6 +6,7 @@ import { logWhatsAppActivity } from "@/lib/audit";
 import { calcGst } from "@/lib/tax";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { loadDepositCollection } from "@/lib/deposit-instalment-server";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -85,7 +86,11 @@ export async function POST(
 
   const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
   if (depositRequired && proposal.deposit_payment_status !== "paid") {
-    return NextResponse.json({ error: "Security deposit must be paid before sending the invoice" }, { status: 400 });
+    // A deposit collected in parts counts once more than half is received.
+    const collection = await loadDepositCollection(createAdminClient(), proposal);
+    if (!collection.allowsActivation) {
+      return NextResponse.json({ error: "More than half of the security deposit must be paid before sending the invoice" }, { status: 400 });
+    }
   }
 
   // Allow resend: status may be "sent" (first time) or anything post-acceptance

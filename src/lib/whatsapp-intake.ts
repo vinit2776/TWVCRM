@@ -264,18 +264,26 @@ export async function ingestInboundWhatsAppEnquiry(
     return { leadId, reference: (stashed?.reference as string | undefined) ?? null, kind, outcome: "spam_stashed" };
   }
 
-  // An unknown number whose message we cannot judge is held in the Possible leads tray: no lead,
-  // no enquiry, nothing lost. A clear enquiry from a number already held opens it with the
-  // earlier messages attached.
-  if (!input.matchedLeadId) {
-    if (shouldHoldForReview({ kind, knownSender: false, hasReferral: !!input.referral })) {
-      await holdPossibleLead(supabase, num, input, message, triage.reason);
-      return { leadId: null, reference: null, kind, outcome: "held_for_review" };
-    }
+  // A message we cannot judge is held in the Possible leads tray: no new enquiry, nothing lost.
+  // That includes a number that is already a lead (a staff member or vendor saved as a lead once
+  // would otherwise open a fresh card for every unclear line). A clear enquiry from a number
+  // that has something held opens it with the earlier messages attached.
+  if (
+    shouldHoldForReview({
+      kind,
+      hasReferral: !!input.referral,
+      isCustomer: ctx.isCustomer,
+      continuesConversation: grouping !== "new",
+    })
+  ) {
+    await holdPossibleLead(supabase, num, input, message, triage.reason);
+    return { leadId: input.matchedLeadId, reference: null, kind, outcome: "held_for_review" };
+  }
+  if (grouping === "new") {
     const held = await findHeld(supabase, num.last10);
     if (held) {
       const opened = await openEnquiryFromHeld(supabase, held, { extra: message });
-      if (opened) return { leadId: opened.leadId, reference: opened.reference, kind, outcome: "new_lead" };
+      if (opened) return { leadId: opened.leadId, reference: opened.reference, kind, outcome: opened.isReEnquiry ? "re_enquiry" : "new_lead" };
     }
   }
 
@@ -381,7 +389,7 @@ export async function openEnquiryFromHeld(
   supabase: SupabaseClient,
   held: HeldLead,
   opts: { extra?: StoredMessage; decidedBy?: string | null } = {}
-): Promise<{ leadId: string; reference: string | null } | null> {
+): Promise<{ leadId: string; reference: string | null; isReEnquiry: boolean } | null> {
   const { data: claimed } = await supabase
     .from("whatsapp_possible_leads")
     .update({ status: "promoted", decided_by: opts.decidedBy ?? null, decided_at: new Date().toISOString() })
@@ -424,7 +432,7 @@ export async function openEnquiryFromHeld(
     leadId, reference, displayName, isReEnquiry: !!existingLeadId,
     mobile: held.mobile, body: messages.map((m) => m.text).join(" / "),
   });
-  return { leadId, reference };
+  return { leadId, reference, isReEnquiry: !!existingLeadId };
 }
 
 async function createLead(

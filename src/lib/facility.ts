@@ -220,7 +220,7 @@ export function metSla(slaTargetAt?: string | null, resolvedAt?: string | null):
 /** Roles allowed to perform a given action — used in route guards. */
 export const FACILITY_ROLES = {
   manage: ["admin", "it_manager", "it_team"] as const,
-  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager"] as const,
+  workOnIssues: ["admin", "manager", "it_manager", "it_technician", "it_team", "fms", "office_admin", "floor_manager", "coordinator"] as const,
   // Bypasses ownership rules (assign to others, act on tickets they don't own) —
   // mirrors OVERRIDE_ROLES in the issue detail page.
   override: ["admin", "manager", "office_admin"] as const,

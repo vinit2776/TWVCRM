@@ -81,6 +81,7 @@ export async function POST(
       raw_text_snippet: null,
       bridge_match: false,
       po_number_found: null,
+      invoice_period_months: [],
     };
     return NextResponse.json(response);
   }
@@ -122,6 +123,7 @@ export async function POST(
     raw_text_snippet: parsed.raw_text_snippet,
     bridge_match: bridgeMatch,
     po_number_found: parsed.po_number_found,
+    invoice_period_months: parsed.invoice_period_months,
   };
 
   return NextResponse.json(response);

@@ -278,3 +278,127 @@ export function findTemplateIssues(
   }
   return issues;
 }
+
+// ---------------------------------------------------------------------------
+// Per-template health
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this exists on top of the per-channel rate.
+ *
+ * `gst_invoice_doc` sent 37 messages between Aug and Nov 2026 and delivered
+ * none — the WhatsApp document URL was built with getPublicUrl() against a
+ * private bucket, so Meta could not fetch the PDF (error 131053). Throughout,
+ * evaluateChannel() reported the WhatsApp channel as "ok", because channel-wide
+ * failure sat near 6%: one template at 100% simply disappears into the average.
+ *
+ * A per-channel rate answers "is messaging up?". It cannot answer "is every
+ * message type actually arriving?", which is the question that matters when a
+ * single document template quietly stops working.
+ */
+
+/**
+ * Template health is judged over days, not hours.
+ *
+ * The channel window is 6h because an account-level outage shows up in minutes
+ * across everything. A single template is different: `gst_invoice_doc` sends
+ * roughly 24 times in 75 days, so a 6h window almost never reaches
+ * MIN_SAMPLE_SIZE for it and would report "idle" forever — the exact blind spot
+ * this is meant to close.
+ */
+export const TEMPLATE_WINDOW_DAYS = 7;
+
+export type TemplateRow = MessageRow & { template_name: string | null };
+
+/** Per-template state as persisted in messaging_health_state.template_health. */
+export interface StoredTemplateState {
+  status: ChannelStatus;
+  /** Last status an email went out for — null when none has. */
+  alerted: ChannelStatus | null;
+  at?: string;
+  sample: number;
+  failed: number;
+}
+
+/**
+ * Groups rows by template and applies the same thresholds as the channel check.
+ *
+ * Deliberately reuses evaluateChannel() rather than defining a second set of
+ * rules: "down" should mean the same thing at both levels, and MIN_SAMPLE_SIZE
+ * still protects low-volume templates from a single blip. Only the window the
+ * caller selects differs.
+ *
+ * Rows with no template_name are skipped — they are inbound or ad-hoc sends and
+ * cannot be attributed to a template.
+ */
+export function evaluateTemplates(rows: TemplateRow[]): Record<string, ChannelHealth> {
+  const groups = new Map<string, MessageRow[]>();
+  for (const r of rows) {
+    if (!r.template_name) continue;
+    const g = groups.get(r.template_name);
+    if (g) g.push(r);
+    else groups.set(r.template_name, [r]);
+  }
+  const out: Record<string, ChannelHealth> = {};
+  for (const [name, rs] of groups) out[name] = evaluateChannel(rs);
+  return out;
+}
+
+export interface TemplateAlert {
+  template: string;
+  previous: ChannelStatus | null;
+  health: ChannelHealth;
+}
+
+/**
+ * Which templates changed state in a way worth an email.
+ *
+ * Uses the same shouldAlert() transition rules as the channel, so a template
+ * that stays down does not re-alert every 30 minutes, and a recovery is
+ * announced once.
+ */
+export function templateAlerts(
+  current: Record<string, ChannelHealth>,
+  prior: Record<string, StoredTemplateState | undefined>
+): TemplateAlert[] {
+  const out: TemplateAlert[] = [];
+  for (const [template, health] of Object.entries(current)) {
+    const previous = prior[template]?.alerted ?? null;
+    if (shouldAlert(previous, health.status)) out.push({ template, previous, health });
+  }
+  // Worst first, so the most urgent template leads the email.
+  const rank: Record<string, number> = { down: 0, degraded: 1, ok: 2, idle: 3 };
+  return out.sort((a, b) => rank[a.health.status] - rank[b.health.status]);
+}
+
+/**
+ * Merges this run's results into the stored map.
+ *
+ * `alerted` only advances for templates that actually produced an email, so a
+ * template flapping below the alert rules keeps its baseline. Templates absent
+ * from this run (nothing sent in the window) keep their previous entry rather
+ * than being dropped — losing it would re-alert from scratch next time they
+ * send.
+ */
+export function mergeTemplateHealth(
+  prior: Record<string, StoredTemplateState | undefined>,
+  current: Record<string, ChannelHealth>,
+  alerted: TemplateAlert[],
+  now: string
+): Record<string, StoredTemplateState> {
+  const alertedNames = new Map(alerted.map((a) => [a.template, a.health.status]));
+  const merged: Record<string, StoredTemplateState> = {};
+  for (const [k, v] of Object.entries(prior)) if (v) merged[k] = v;
+  for (const [template, health] of Object.entries(current)) {
+    const was = prior[template];
+    const justAlerted = alertedNames.get(template);
+    merged[template] = {
+      status: health.status,
+      alerted: justAlerted ?? was?.alerted ?? null,
+      at: justAlerted ? now : was?.at,
+      sample: health.sampleSize,
+      failed: health.failedCount,
+    };
+  }
+  return merged;
+}

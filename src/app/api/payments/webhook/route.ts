@@ -11,6 +11,7 @@ import { finalizeBillingPayment } from "@/lib/billing-payment-settlement";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { sendPartEmail } from "@/lib/deposit-instalment-email-server";
+import { syncContractDepositFromParts } from "@/lib/deposit-instalment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -252,6 +253,11 @@ export async function POST(request: NextRequest) {
             ...(partPayment.complete ? { deposit_complete: { old: false, new: true } } : {}),
           },
         }).catch(() => {});
+      }
+      // Last part in: a contract activated while the deposit was part-paid now holds the full deposit.
+      if (partPayment.success && !partPayment.already_paid && partPayment.complete) {
+        await syncContractDepositFromParts(supabase, partPayment.proposal_id).catch((e) =>
+          console.error("[webhook] contract deposit sync failed:", e instanceof Error ? e.message : e));
       }
       // Receipt with the running breakup — once per part (a repeat delivery is already_paid).
       if (partPayment.success && !partPayment.already_paid && partPayment.instalment_id) {
