@@ -1401,6 +1401,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <BookingLifecycleTimeline
             booking={booking}
             compRequest={compRequest}
+            payments={existingPayments}
             paymentReceivedAt={
               existingPayments
                 .filter((p) => p.status === "verified")
