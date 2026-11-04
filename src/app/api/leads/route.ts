@@ -165,7 +165,8 @@ export async function GET(request: NextRequest) {
   if (!include_archived) countQuery = countQuery.is("archived_at", null);
   if (status) countQuery = countQuery.eq("status", status);
   if (sources.length > 0) countQuery = countQuery.in("source", sources);
-  if (assigned_to) countQuery = countQuery.eq("assigned_to", assigned_to);
+  // "none" = leads nobody is handling yet (the Unclaimed filter).
+  if (assigned_to) countQuery = assigned_to === "none" ? countQuery.is("assigned_to", null) : countQuery.eq("assigned_to", assigned_to);
   if (rating) countQuery = countQuery.eq("rating", rating);
   if (location_id) countQuery = countQuery.eq("location_id", location_id);
   if (search) {
@@ -196,7 +197,7 @@ export async function GET(request: NextRequest) {
   if (!include_archived) priorityQuery = priorityQuery.is("leads.archived_at", null);
   if (status) priorityQuery = priorityQuery.eq("leads.status", status);
   if (sources.length > 0) priorityQuery = priorityQuery.in("leads.source", sources);
-  if (assigned_to) priorityQuery = priorityQuery.eq("leads.assigned_to", assigned_to);
+  if (assigned_to) priorityQuery = assigned_to === "none" ? priorityQuery.is("leads.assigned_to", null) : priorityQuery.eq("leads.assigned_to", assigned_to);
   if (rating) priorityQuery = priorityQuery.eq("leads.rating", rating);
   if (location_id) priorityQuery = priorityQuery.eq("leads.location_id", location_id);
   if (search) {
@@ -257,7 +258,7 @@ export async function GET(request: NextRequest) {
     if (!include_archived) restQuery = restQuery.is("archived_at", null);
     if (status) restQuery = restQuery.eq("status", status);
     if (sources.length > 0) restQuery = restQuery.in("source", sources);
-    if (assigned_to) restQuery = restQuery.eq("assigned_to", assigned_to);
+    if (assigned_to) restQuery = assigned_to === "none" ? restQuery.is("assigned_to", null) : restQuery.eq("assigned_to", assigned_to);
     if (rating) restQuery = restQuery.eq("rating", rating);
     if (location_id) restQuery = restQuery.eq("location_id", location_id);
     if (search) {
