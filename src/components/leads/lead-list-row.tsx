@@ -111,7 +111,7 @@ export function LeadListRow({
             </span>
           )}
           <Link
-            href={`/leads/${lead.id}`}
+            href={`/leads/${lead.id}/activity`}
             onClick={(e) => e.stopPropagation()}
             className="truncate font-medium text-primary hover:underline"
           >
