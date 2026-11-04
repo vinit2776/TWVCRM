@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Check, UserCheck, X, RefreshCw, Ban } from "lucide-react";
+import { Check, UserCheck, X, RefreshCw, Ban, Phone } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -239,6 +239,17 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          <button
+            onClick={() => {
+              onNavigate?.();
+              router.push(`/leads/contact-back/${item.enquiryId}`);
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5 transition-colors"
+          >
+            <Phone className="h-3 w-3" />
+            Call back
+          </button>
 
           <button
             onClick={goToLead}
