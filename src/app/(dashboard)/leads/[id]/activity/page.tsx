@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
+import { NextStepControls } from "@/components/leads/next-step-controls";
 import { useLead, useUsers } from "@/hooks/use-leads";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { dayLabel, istDayKey } from "@/lib/lead-days";
@@ -43,7 +44,7 @@ interface Timeline {
     budget_per_seat: number | null;
     preferred_location: string | null;
   } | null;
-  next_step: { due_at: string; notes: string | null; subject: string | null } | null;
+  next_step: { activity_id: string; due_at: string; notes: string | null; subject: string | null } | null;
   truncated: boolean;
 }
 
@@ -171,6 +172,9 @@ export default function LeadActivityPage() {
               <span className="font-semibold">No next step set</span>
             )}
           </div>
+        )}
+        {!CLOSED.includes(lead.status) && next?.activity_id && (
+          <NextStepControls activityId={next.activity_id} hasNote={!!next.notes?.trim()} onChanged={changed} />
         )}
 
         {timeline?.stale && timeline.stale.state !== "active" && (

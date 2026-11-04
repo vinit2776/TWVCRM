@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { istRange, type CalendarItem } from "@/lib/lead-calendar";
+import { STALE_AFTER_DAYS, STALE_WARNING_DAYS, STALE_EXEMPT_STATUSES } from "@/lib/lead-stale";
+import { loadStaleStates } from "@/lib/lead-stale-load";
 
 const LIMIT = 500;
 
@@ -16,10 +18,11 @@ type LeadJoin = {
 
 const leadName = (l: LeadJoin) => l.company || `${l.first_name} ${l.last_name ?? ""}`.trim();
 
-// GET /api/leads/calendar?from=yyyy-MM-dd&to=yyyy-MM-dd&owner=me|all|<user id>[&overdue=true]
+// GET /api/leads/calendar?from=yyyy-MM-dd&to=yyyy-MM-dd&owner=me|all|<user id>[&overdue=true][&stale=true]
 // What the sales team has on: follow-ups due in the range (and, optionally, everything overdue
 // before it), the pinned leads, and per-day counts of enquiries received and actions done. A
-// follow-up belongs to whoever handles the lead, so "owner" filters by the lead's handler. Read-only.
+// follow-up belongs to whoever handles the lead, so "owner" filters by the lead's handler.
+// stale=true adds the leads that will be archived within STALE_WARNING_DAYS. Read-only.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -110,6 +113,38 @@ export async function GET(request: NextRequest) {
     if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 });
   }
 
+  // Leads that go stale within a few days: the same rule as the Leads list badge and the archive job.
+  let staleSoon: { id: string; name: string; handler: string | null; daysLeft: number }[] = [];
+  if (searchParams.get("stale") === "true") {
+    const cutoff = new Date(Date.now() - (STALE_AFTER_DAYS - STALE_WARNING_DAYS) * 86_400_000).toISOString();
+    let sq = supabase
+      .from("leads")
+      .select("id, status, created_at, first_name, last_name, company, assigned_to, pinned_at, assigned_user:users!leads_assigned_to_fkey(full_name)")
+      .is("archived_at", null)
+      .is("pinned_at", null)
+      .not("status", "in", `(${STALE_EXEMPT_STATUSES.join(",")})`)
+      .lte("created_at", cutoff)
+      .order("created_at", { ascending: true })
+      .limit(1000);
+    if (owner) sq = sq.eq("assigned_to", owner);
+    const { data: candidates, error: staleError } = await sq;
+    if (staleError) return NextResponse.json({ error: staleError.message }, { status: 500 });
+    const rows = (candidates ?? []) as unknown as (LeadJoin & { status: string; created_at: string })[];
+    try {
+      const states = await loadStaleStates(supabase, rows);
+      staleSoon = rows
+        .map((l) => ({ l, state: states.get(l.id) }))
+        .flatMap(({ l, state }) =>
+          state?.state === "warning"
+            ? [{ id: l.id, name: leadName(l), handler: l.assigned_user?.full_name ?? null, daysLeft: state.daysLeft }]
+            : [],
+        )
+        .sort((a, b) => a.daysLeft - b.daysLeft);
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "history failed" }, { status: 500 });
+    }
+  }
+
   type Row = {
     id: string;
     type: string;
@@ -140,6 +175,7 @@ export async function GET(request: NextRequest) {
           .map((r) => toItem({ ...r, follow_up_date: r.meeting_start_at ?? r.follow_up_date, follow_up_notes: r.follow_up_notes ?? "Tour" }));
         return [...due, ...hosted];
       })(),
+      staleSoon,
       overdue: ((overdueRes.data ?? []) as unknown as Row[]).map(toItem),
       pinned: ((pinnedRes.data ?? []) as unknown as LeadJoin[]).map((l) => ({
         id: l.id,

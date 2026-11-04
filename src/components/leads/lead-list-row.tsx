@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
+import { NextStepControls } from "@/components/leads/next-step-controls";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
@@ -169,7 +170,14 @@ export function LeadListRow({
 
       {/* Line 4: log what just happened, without opening the lead */}
       {!CLOSED_STATUSES.includes(lead.status) && !lead.archived_at && (
-        <div className="pt-1">
+        <div className="space-y-1.5 pt-1">
+          {lead._followup?.next?.activity_id && (
+            <NextStepControls
+              activityId={lead._followup.next.activity_id}
+              hasNote={!!lead._followup.next.notes?.trim()}
+              onChanged={onChanged}
+            />
+          )}
           <LeadQuickActions lead={lead} onChanged={onChanged} users={users} />
         </div>
       )}

@@ -3,14 +3,11 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { withCronHealth } from "@/lib/cron-ping";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { parseCronMode } from "@/lib/vo-renewal-reminders";
-import { istDayKey } from "@/lib/lead-days";
+import { loadStaleStates } from "@/lib/lead-stale-load";
 import { resolveEnquiriesForArchivedLeads } from "@/lib/enquiry-progress-load";
 import {
   STALE_AFTER_DAYS,
   STALE_EXEMPT_STATUSES,
-  NON_EVENT_SUBJECTS,
-  leadStaleState,
-  latestInstant,
 } from "@/lib/lead-stale";
 
 /**
@@ -35,10 +32,7 @@ import {
 export const LEAD_STALE_ARCHIVE_MODE_SETTING = "lead_stale_archive_mode";
 const MAX_PER_RUN = 100;
 const CANDIDATE_LIMIT = 1500;
-const CHUNK = 150;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-type Row = Record<string, unknown>;
 
 async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -54,7 +48,6 @@ async function handler(request: NextRequest) {
 
   const now = new Date();
   const cutoff = new Date(now.getTime() - STALE_AFTER_DAYS * DAY_MS).toISOString();
-  const today = istDayKey(now);
 
   // Leads old enough to be stale at all; the real test follows.
   const { data: candidates, error } = await admin
@@ -74,44 +67,17 @@ async function handler(request: NextRequest) {
   const leads = (candidates ?? []) as { id: string; lead_number: number | string; status: string; created_at: string }[];
   const stale: { id: string; lead_number: number | string; daysQuiet: number }[] = [];
 
-  for (let i = 0; i < leads.length; i += CHUNK) {
-    const chunk = leads.slice(i, i + CHUNK);
-    const ids = chunk.map((l) => l.id);
-    const [activitiesRes, enquiriesRes] = await Promise.all([
-      admin
-        .from("activities")
-        .select("lead_id, created_at, subject, follow_up_date, is_follow_up_done")
-        .in("lead_id", ids)
-        .limit(8000),
-      admin.from("lead_enquiries").select("lead_id, received_at").in("lead_id", ids).limit(4000),
-    ]);
-    if (activitiesRes.error || enquiriesRes.error) {
-      const e = activitiesRes.error ?? enquiriesRes.error;
-      console.error("[lead-stale-archive] history failed", e?.code, e?.message);
-      return NextResponse.json({ error: e?.message ?? "history failed" }, { status: 500 });
-    }
-    const events = new Map<string, (string | null)[]>();
-    const ahead = new Set<string>();
-    for (const a of (activitiesRes.data ?? []) as Row[]) {
-      const id = a.lead_id as string;
-      if (!(NON_EVENT_SUBJECTS as readonly string[]).includes((a.subject as string) ?? "")) {
-        (events.get(id) ?? events.set(id, []).get(id)!).push(a.created_at as string);
-      }
-      if (!a.is_follow_up_done && a.follow_up_date && istDayKey(a.follow_up_date as string) >= today) ahead.add(id);
-    }
-    for (const e of (enquiriesRes.data ?? []) as Row[]) {
-      (events.get(e.lead_id as string) ?? events.set(e.lead_id as string, []).get(e.lead_id as string)!).push(e.received_at as string);
-    }
-
-    for (const l of chunk) {
-      const state = leadStaleState({
-        status: l.status,
-        lastEventAt: latestInstant([l.created_at, ...(events.get(l.id) ?? [])]) ?? l.created_at,
-        hasFutureFollowUp: ahead.has(l.id),
-        now,
-      });
-      if (state.state === "stale") stale.push({ id: l.id, lead_number: l.lead_number, daysQuiet: state.daysQuiet });
-    }
+  let states;
+  try {
+    states = await loadStaleStates(admin, leads, now);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "history failed";
+    console.error("[lead-stale-archive] history failed", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+  for (const l of leads) {
+    const state = states.get(l.id);
+    if (state?.state === "stale") stale.push({ id: l.id, lead_number: l.lead_number, daysQuiet: state.daysQuiet });
   }
 
   // Longest quiet first, capped.
