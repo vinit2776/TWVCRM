@@ -18,6 +18,7 @@ interface UseLeadsOptions {
   sort_order?: "asc" | "desc";
   include_archived?: boolean;
   view?: "overdue" | "all";
+  pinned?: boolean;
 }
 
 export function useLeads(options: UseLeadsOptions = {}) {
@@ -35,6 +36,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
       sort_order: options.sort_order,
       include_archived: options.include_archived || undefined,
       view: options.view,
+      pinned: options.pinned || undefined,
     },
   });
 }

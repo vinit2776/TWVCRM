@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, SlidersHorizontal, Phone, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -50,6 +50,7 @@ export default function LeadsPage() {
   const [assignedToFilter, setAssignedToFilter] = useState<string>("");
   const [importOpen, setImportOpen] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [tab, setTab] = useState<LeadsTab>("all");
   const [followupSummary, setFollowupSummary] = useState<FollowupSummary | null>(null);
@@ -97,6 +98,7 @@ export default function LeadsPage() {
     location_id: locationFilter || undefined,
     assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
+    pinned: pinnedOnly,
     view: tab === "followups" ? "overdue" : "all",
   });
 
@@ -173,6 +175,14 @@ export default function LeadsPage() {
             <Upload className="mr-2 h-4 w-4" />
             Import CSV
           </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/calendar")}>
+            <CalendarDays className="mr-2 h-4 w-4" />
+            Calendar
+          </Button>
+          <Button variant="outline" onClick={() => router.push("/leads/new/call")}>
+            <Phone className="mr-2 h-4 w-4" />
+            Log a call
+          </Button>
           <Button onClick={() => router.push("/leads/new")}>
             <Plus className="mr-2 h-4 w-4" />
             Create Lead
@@ -229,6 +239,15 @@ export default function LeadsPage() {
           />
           <Button variant="outline" size="icon" onClick={handleSearch}>
             <Search className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={pinnedOnly ? "default" : "outline"}
+            onClick={() => {
+              setPinnedOnly((v) => !v);
+              setPage(1);
+            }}
+          >
+            Pinned
           </Button>
           <Button
             variant={assignedToFilter === "none" ? "default" : "outline"}

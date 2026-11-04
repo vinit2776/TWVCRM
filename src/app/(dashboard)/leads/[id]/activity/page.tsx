@@ -7,6 +7,7 @@ import { CalendarClock, ExternalLink, Mail, MapPin, Phone } from "lucide-react";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
+import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { useLead, useUsers } from "@/hooks/use-leads";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
@@ -123,6 +124,7 @@ export default function LeadActivityPage() {
               <h1 className="truncate text-xl font-bold">{name}</h1>
               {lead.company && <span className="text-muted-foreground">· {lead.company}</span>}
               <StatusBadge type="lead_status" value={lead.status} />
+              <LeadPinButton lead={lead} onChanged={changed} withLabel />
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span>{LEAD_SOURCE_LABELS[lead.source] ?? lead.source}</span>
@@ -208,7 +210,7 @@ export default function LeadActivityPage() {
                     {istTime(e.at)} · {actorText(e)}
                   </div>
                   <div className="font-medium">{e.title}</div>
-                  {e.detail && <div className="text-sm text-muted-foreground">{e.detail}</div>}
+                  {e.detail && <div className="whitespace-pre-line text-sm text-muted-foreground">{e.detail}</div>}
                   {e.links.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {e.links.map((l) => (

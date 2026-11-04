@@ -5,6 +5,7 @@ import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
+import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate, formatSmartDate } from "@/lib/utils";
 import type { Lead } from "@/types";
@@ -94,7 +95,9 @@ export function LeadListRow({
       onClick={onOpen}
       onKeyDown={(e) => e.key === "Enter" && onOpen()}
       className={`cursor-pointer space-y-1 px-4 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-        unread
+        lead.pinned_at
+          ? "border-l-4 border-l-amber-500 bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-950/20"
+          : unread
           ? "bg-emerald-50/40 hover:bg-emerald-50 dark:bg-emerald-950/10"
           : reEnquiry
             ? "bg-amber-50/40 hover:bg-amber-50 dark:bg-amber-950/10"
@@ -126,7 +129,10 @@ export function LeadListRow({
             <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">Disabled</span>
           )}
         </div>
-        <StatusBadge type="lead_status" value={lead.status} />
+        <div className="flex shrink-0 items-center gap-2">
+          <LeadPinButton lead={lead} onChanged={onChanged} />
+          <StatusBadge type="lead_status" value={lead.status} />
+        </div>
       </div>
 
       {/* Line 2: what they want, and where */}
