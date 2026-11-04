@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RateCardDialog } from "@/components/leads/rate-card-dialog";
+import { InflowChart } from "@/components/leads/inflow-chart";
 import { LEAD_SOURCE_LABELS } from "@/lib/constants";
 import { VALUE_TIER_LABELS, formatValue, HIGH_VALUE_MONTHLY, WORTH_A_CALL_MONTHLY, HIGH_VALUE_SEATS } from "@/lib/lead-value";
 import { formatWait, type Overview, type Bar, type FocusItem } from "@/lib/lead-overview";
@@ -126,6 +127,8 @@ export default function LeadsOverviewPage() {
               {o.focus.map((f) => <FocusRow key={f.id} f={f} />)}
             </div>
           </div>
+
+          <InflowChart days={days} locationId={location === "all" ? null : location} canEdit={canEditRates} />
 
           {!p && (
             <div className="grid gap-3 md:grid-cols-2">
