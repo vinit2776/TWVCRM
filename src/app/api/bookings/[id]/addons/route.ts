@@ -1,3 +1,4 @@
+import { roundToRupee } from "@/lib/booking-payment-rules";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
@@ -252,6 +253,6 @@ async function recomputeBookingTotal(
   const baseGst = Number(baseBooking.gst_amount);
 
   await supabase.from("bookings").update({
-    total_amount_with_gst: parseFloat((baseAmount + baseGst + addonSum.total).toFixed(2)),
+    total_amount_with_gst: roundToRupee(baseAmount + baseGst + addonSum.total),
   }).eq("id", bookingId);
 }

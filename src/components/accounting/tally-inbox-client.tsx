@@ -44,6 +44,7 @@ import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
 import { InboxSendDialog } from "./inbox-send-dialog";
 import { StatementHistoryDialog } from "./statement-history-dialog";
+import { BookingPaymentsToVerify } from "@/components/accounting/booking-payments-to-verify";
 import { ToVerifyPanel } from "./to-verify-panel";
 import { ReportedPaymentSheet } from "@/components/queries/reported-payment-sheet";
 import { paymentModeLabel as reportedModeLabel } from "@/components/billing/payment-collected-panel";
@@ -224,13 +225,19 @@ export function TallyInboxClient() {
   // Open payment reports waiting on a bank check. Only meaningful (and only
   // shown) for the roles that can settle them — see canReviewPaymentReport.
   const canVerifyPayments = canReviewPaymentReport(currentUserRole);
-  const [toVerifyCount, setToVerifyCount] = useState<number | null>(null);
+  const [reportsToVerify, setReportsToVerify] = useState<number | null>(null);
+  const [bookingPaymentsToVerify, setBookingPaymentsToVerify] = useState(0);
   const loadToVerifyCount = useCallback(async () => {
     try {
-      const res = await fetch("/api/queries?stats=true", { cache: "no-store" });
+      const [res, bookingRes] = await Promise.all([
+        fetch("/api/queries?stats=true", { cache: "no-store" }),
+        fetch("/api/accounting/booking-payments-pending", { cache: "no-store" }),
+      ]);
       if (!res.ok) return;
       const json = (await res.json()) as { stats?: { to_verify?: number } };
-      setToVerifyCount(json.stats?.to_verify ?? 0);
+      const bookingJson = bookingRes.ok ? ((await bookingRes.json()) as { items?: unknown[] }) : null;
+      setReportsToVerify(json.stats?.to_verify ?? 0);
+      setBookingPaymentsToVerify(bookingJson?.items?.length ?? 0);
     } catch {
       // The tab simply shows no count.
     }
@@ -242,6 +249,11 @@ export function TallyInboxClient() {
   // These are backed by entirely different tables (billing_statements vs
   // booking_gst_tasks) and were previously stacked in one unlabeled list.
   const [activeType, setActiveType] = useState<"contracts" | "bookings">("contracts");
+  // Booking payments only make sense under Bookings; the rest are contract-side.
+  const toVerifyCount =
+    reportsToVerify === null
+      ? null
+      : reportsToVerify + (activeType === "bookings" ? bookingPaymentsToVerify : 0);
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   // Statement row state
@@ -1019,7 +1031,12 @@ export function TallyInboxClient() {
 
       {/* Worklist */}
       {tab === "to_verify" ? (
-        <ToVerifyPanel onChanged={() => void loadToVerifyCount()} search={searchInput} />
+        <div className="space-y-4">
+          {activeType === "bookings" && (
+            <BookingPaymentsToVerify onChanged={() => void loadToVerifyCount()} />
+          )}
+          <ToVerifyPanel onChanged={() => void loadToVerifyCount()} search={searchInput} />
+        </div>
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-medium">Failed to load inbox</p>
