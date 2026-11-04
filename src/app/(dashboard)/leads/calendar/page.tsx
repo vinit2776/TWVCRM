@@ -13,6 +13,7 @@ import { addDaysKey, bucketByDay, weekOf, type CalendarItem } from "@/lib/lead-c
 interface CalendarData {
   followups: CalendarItem[];
   overdue: CalendarItem[];
+  staleSoon: { id: string; name: string; handler: string | null; daysLeft: number }[];
   pinned: { id: string; name: string; handler: string | null }[];
   enquiryTimes: string[];
   actionTimes: string[];
@@ -61,7 +62,10 @@ export default function LeadsCalendarPage() {
 
   useEffect(() => {
     const params = new URLSearchParams({ from: days[0], to: days[days.length - 1], owner });
-    if (view === "day" && anchor === todayKey) params.set("overdue", "true");
+    if (view === "day" && anchor === todayKey) {
+      params.set("overdue", "true");
+      params.set("stale", "true");
+    }
     let cancelled = false;
     setFailed(false);
     fetch(`/api/leads/calendar?${params}`)
@@ -156,6 +160,21 @@ export default function LeadsCalendarPage() {
                   </Link>
                 ))}
                 {data.overdue.length > 20 && <div className="text-xs text-muted-foreground">and {data.overdue.length - 20} more, oldest last</div>}
+              </div>
+            </div>
+          )}
+          {(data.staleSoon ?? []).length > 0 && (
+            <div className="rounded-lg border border-slate-300 bg-slate-50 p-3">
+              <div className="text-sm font-semibold text-slate-700">Going stale soon ({data.staleSoon.length})</div>
+              <div className="mb-2 text-xs text-muted-foreground">Quiet for a while with nothing scheduled. They are archived automatically unless someone acts.</div>
+              <div className="space-y-1.5">
+                {data.staleSoon.slice(0, 20).map((l) => (
+                  <Link key={l.id} href={`/leads/${l.id}/activity`} className="block rounded-md bg-background px-2.5 py-1.5 text-sm hover:bg-muted">
+                    <span className="font-medium">{l.name}</span>
+                    <span className="text-muted-foreground"> · stale in {l.daysLeft} day{l.daysLeft === 1 ? "" : "s"}{owner === "all" && l.handler ? ` · ${l.handler}` : ""}</span>
+                  </Link>
+                ))}
+                {data.staleSoon.length > 20 && <div className="text-xs text-muted-foreground">and {data.staleSoon.length - 20} more</div>}
               </div>
             </div>
           )}
