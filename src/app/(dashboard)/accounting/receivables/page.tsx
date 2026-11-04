@@ -494,8 +494,13 @@ export default function AccountsReceivablePage() {
    * saved correctly; there was just nothing rendering it.
    */
   const reportsForOtherRow = useCallback(
-    (row: OtherReceivableRow): PendingPaymentReport[] =>
-      row.kind === "deposit" ? reportsByEntity.get(`proposal_deposit:${row.id}`) ?? [] : [],
+    (row: OtherReceivableRow): PendingPaymentReport[] => {
+      if (row.kind !== "deposit") return [];
+      const all = reportsByEntity.get(`proposal_deposit:${row.id}`) ?? [];
+      // Reports hang off the proposal, so with several parts out each one would
+      // appear under every part. Keep a part's own: the report for its amount.
+      return row.part_id ? all.filter((r) => Math.abs(Number(r.amount) - row.total_amount) <= 1) : all;
+    },
     [reportsByEntity],
   );
 
@@ -1694,7 +1699,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
               {rows.map((r) => {
                 const style = OTHER_KIND_STYLE[r.kind];
                 return (
-                  <Fragment key={`${r.kind}-${r.id}`}>
+                  <Fragment key={`${r.kind}-${r.id}-${r.part_id ?? ""}`}>
                   <tr className="border-b last:border-0 hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -1708,6 +1713,7 @@ function OtherReceivablesCard({ rows, totalCount, canRecordPayment, onRecorded, 
                         )}
                       </div>
                       <Badge variant="outline" className={`text-[10px] mt-1 ${style.cls}`}>{style.label}</Badge>
+                      {r.part_label && <div className="mt-1 max-w-[16rem] whitespace-normal text-[11px] text-muted-foreground">{r.part_label}</div>}
                     </td>
                     <td className="px-4 py-3">{r.party_name}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
