@@ -72,9 +72,10 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
 
   const LEAD_SELECT =
-    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
+    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(id, follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
 
   type Followup = {
+    id: string;
     follow_up_date: string | null;
     is_follow_up_done: boolean;
     follow_up_notes: string | null;
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
     type: string;
   };
   type NextFollowup = {
+    activity_id: string;
     due_at: string;
     days_overdue: number;
     notes: string | null;
@@ -153,6 +155,7 @@ export async function GET(request: NextRequest) {
         l._followup = {
           ...flags,
           next: {
+            activity_id: soonest.id,
             due_at: soonest.follow_up_date as string,
             days_overdue,
             notes: soonest.follow_up_notes,
