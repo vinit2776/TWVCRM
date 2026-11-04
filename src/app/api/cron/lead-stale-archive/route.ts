@@ -4,6 +4,7 @@ import { withCronHealth } from "@/lib/cron-ping";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { parseCronMode } from "@/lib/vo-renewal-reminders";
 import { istDayKey } from "@/lib/lead-days";
+import { resolveEnquiriesForArchivedLeads } from "@/lib/enquiry-progress-load";
 import {
   STALE_AFTER_DAYS,
   STALE_EXEMPT_STATUSES,
@@ -18,7 +19,9 @@ import {
  * src/lib/lead-stale.ts and is the same one the Leads list badge uses.
  *
  * It never messages anyone: it only archives leads and leaves a note in each one's history.
- * It skips pinned, won, lost and junk leads, and leads already archived.
+ * It skips pinned leads, finished ones (won, lost, junk), ones with a tour booked or a proposal out
+ * (tour_scheduled, proposal_sent, negotiating) and leads already archived. Open enquiries on an
+ * archived lead are closed as "No response".
  *
  * MODE (app_settings.lead_stale_archive_mode):
  *   off      does nothing
@@ -116,6 +119,7 @@ async function handler(request: NextRequest) {
   const batch = stale.slice(0, MAX_PER_RUN);
 
   let archived = 0;
+  let enquiriesClosed = 0;
   if (mode === "live" && batch.length > 0) {
     const archivedAt = now.toISOString();
     // The WHERE repeats the guards, so a lead pinned or archived since we looked is left alone.
@@ -137,6 +141,7 @@ async function handler(request: NextRequest) {
     const archivedIds = (done ?? []).map((r) => r.id as string);
     archived = archivedIds.length;
     if (archivedIds.length > 0) {
+      enquiriesClosed = await resolveEnquiriesForArchivedLeads(admin, archivedIds, now);
       const { error: noteError } = await admin.from("activities").insert(
         archivedIds.map((id) => ({
           lead_id: id,
@@ -155,6 +160,7 @@ async function handler(request: NextRequest) {
     stale: stale.length,
     wouldArchive: batch.length,
     archived,
+    enquiriesClosed,
     // Lead numbers only: no names or contact details in a cron response.
     sample: batch.slice(0, 20).map((l) => ({ lead: l.lead_number, daysQuiet: l.daysQuiet })),
   });
