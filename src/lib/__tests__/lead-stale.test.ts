@@ -30,8 +30,16 @@ describe("leadStaleState", () => {
     }
   });
 
-  it("applies to a lead in progress too (a tour booked weeks ago that nobody followed up)", () => {
-    expect(leadStaleState({ ...base, status: "tour_scheduled", lastEventAt: daysAgo(20) }).state).toBe("stale");
+  it("never applies while a tour is booked or a proposal is out", () => {
+    for (const status of ["tour_scheduled", "proposal_sent", "negotiating"]) {
+      expect(leadStaleState({ ...base, status, lastEventAt: daysAgo(60) })).toEqual({ state: "active" });
+    }
+  });
+
+  it("still applies to a lead that is only contacted or in a tour that was completed", () => {
+    for (const status of ["contacted", "tour_completed", "new"]) {
+      expect(leadStaleState({ ...base, status, lastEventAt: daysAgo(30) })).toEqual({ state: "stale", daysQuiet: 30 });
+    }
   });
 });
 

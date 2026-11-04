@@ -8,7 +8,13 @@ export const STALE_AFTER_DAYS = 15;
 export const STALE_WARNING_DAYS = 3;
 
 /** A lead in these statuses is finished one way or the other: nothing to chase. */
-export const STALE_EXEMPT_STATUSES = ["won", "lost", "junk"] as const;
+export const STALE_FINISHED_STATUSES = ["won", "lost", "junk"] as const;
+
+/** A tour booked or a proposal out is a conversation in progress, so quiet days don't count. */
+export const STALE_IN_PROGRESS_STATUSES = ["tour_scheduled", "proposal_sent", "negotiating"] as const;
+
+/** Never stale: finished, or in the middle of a tour or proposal. */
+export const STALE_EXEMPT_STATUSES = [...STALE_FINISHED_STATUSES, ...STALE_IN_PROGRESS_STATUSES] as const;
 
 /** Notes the system writes when a lead changes hands. They are bookkeeping, not contact. */
 export const NON_EVENT_SUBJECTS = ["Claimed", "Reassigned"] as const;
