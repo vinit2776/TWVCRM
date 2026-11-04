@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { queryEntityDef, type EntityRow } from "@/lib/queries/registry";
 import { fanOutQueryEvent, threadParticipantIds, entityLabel, loadEntity } from "@/lib/queries/server";
 import { logAudit } from "@/lib/audit";
+import { depositPosition, requiredDeposit } from "@/lib/deposit-instalments";
+import { REPORT_TOLERANCE } from "@/lib/queries/payment-report-balance";
 import { settleBookingPayment } from "@/lib/booking-payment-server";
 import {
   canReviewPaymentReport,
@@ -173,14 +175,43 @@ export async function PATCH(
   if (outcome === "verified" && report.target_kind === "deposit" && report.query.entity_type === "proposal_deposit") {
     const { data: proposal } = await admin
       .from("proposals")
-      .select("id, deposit_payment_status, deposit_payment_amount")
+      .select("id, deposit_payment_status, deposit_payment_amount, security_deposit_amount, deposit_exception_amount, deposit_credit_amount")
       .eq("id", report.query.entity_id)
       .maybeSingle();
 
     if (!proposal) {
       return NextResponse.json({ error: "That proposal no longer exists" }, { status: 400 });
     }
-    if (proposal.deposit_payment_status !== "paid") {
+    // Collected in parts, the proposal only reads 'paid' after the last part, so
+    // the proof is the parts received: they must cover what this report claims
+    // on top of what earlier verified reports already account for.
+    const { data: partRows } = await admin
+      .from("proposal_deposit_instalments")
+      .select("amount, status, paid_amount")
+      .eq("proposal_id", proposal.id);
+    const hasParts = (partRows ?? []).some((r) => r.status !== "cancelled" || Number(r.paid_amount ?? 0) > 0);
+    if (hasParts && proposal.deposit_payment_status !== "paid") {
+      const received = depositPosition(requiredDeposit(proposal), partRows ?? []).paid;
+      const { data: verified } = await admin
+        .from("query_payment_reports")
+        .select("amount, query:queries!query_payment_reports_query_id_fkey(entity_type, entity_id)")
+        .eq("status", "verified")
+        .eq("target_kind", "deposit")
+        .neq("id", id);
+      const alreadyAccounted = (verified ?? [])
+        .filter((r) => {
+          const raw = (r as unknown as { query: { entity_type: string; entity_id: string } | { entity_type: string; entity_id: string }[] | null }).query;
+          const q = Array.isArray(raw) ? raw[0] ?? null : raw;
+          return q?.entity_type === "proposal_deposit" && q?.entity_id === proposal.id;
+        })
+        .reduce((sum, r) => sum + Number((r as unknown as { amount: number }).amount || 0), 0);
+      if (received + REPORT_TOLERANCE < alreadyAccounted + Number(report.amount)) {
+        return NextResponse.json(
+          { error: "Record this part first — the deposit parts received so far don't cover what was reported, so there is nothing to verify against." },
+          { status: 400 },
+        );
+      }
+    } else if (proposal.deposit_payment_status !== "paid") {
       return NextResponse.json(
         {
           error:
