@@ -410,7 +410,8 @@ export function CollectPaymentDialog({
               <Label className="text-xs text-muted-foreground">Payment History</Label>
               <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
                 {payments.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div key={p.id} className="px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{formatCurrency(p.amount)}</span>
                       <span className="text-xs text-muted-foreground">
@@ -458,6 +459,11 @@ export function CollectPaymentDialog({
                         </Button>
                       )}
                     </div>
+                  </div>
+                  {/* Who cancelled / why it was rejected */}
+                  {p.status === "rejected" && p.verification_notes && (
+                    <p className="mt-1 text-xs text-muted-foreground">{p.verification_notes}</p>
+                  )}
                   </div>
                 ))}
               </div>

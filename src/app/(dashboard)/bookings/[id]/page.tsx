@@ -1,6 +1,6 @@
 "use client";
 
-import { amountLeftToCollect } from "@/lib/booking-payment-rules";
+import { amountLeftToCollect, isCancelledPayment } from "@/lib/booking-payment-rules";
 import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -2047,9 +2047,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                           </span>
                         </div>
                         <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
-                          {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                          {isCancelledPayment(p) ? "Cancelled" : BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
                         </Badge>
                       </div>
+                      {/* Who cancelled / why it was rejected */}
+                      {p.status === "rejected" && p.verification_notes && (
+                        <p className="mt-1 text-[11px] text-muted-foreground">{p.verification_notes}</p>
+                      )}
                       {/* Razorpay confirmation details */}
                       {p.payment_mode === "razorpay" && (p.razorpay_payment_id || p.razorpay_order_id) && (
                         <div className="mt-1.5 pt-1.5 border-t border-muted/50 text-[11px] text-muted-foreground space-y-0.5">
