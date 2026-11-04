@@ -46,6 +46,17 @@ describe("assessValue", () => {
   });
 });
 
+describe("implausible seat counts", () => {
+  it("does not value a lead whose seats look like a mistyped price", () => {
+    const r = assessValue({ seats: 6500, workspaceType: "dedicated_desk", budgetPerSeat: 6500, now: NOW });
+    expect(r).toMatchObject({ monthly: null, tier: "passing" });
+    expect(r.reasons[0]).toMatch(/mistyped/);
+  });
+  it("still values 500 seats", () => {
+    expect(assessValue({ seats: 500, budgetPerSeat: 6000, now: NOW }).tier).toBe("high");
+  });
+});
+
 describe("formatValue", () => {
   it("uses lakh and crore", () => {
     expect(formatValue(96000)).toBe("₹96,000");
