@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { PROPOSAL_MAX_TENURE_MONTHS } from "@/lib/proposal-terms";
+import { programmedEscalation } from "@/lib/auto-renewal";
 import {
   Dialog,
   DialogContent,
@@ -82,7 +83,9 @@ export function ContractRenewalDialog({
   const [tenureMonths, setTenureMonths] = useState(contract.tenure_months);
   const [seats, setSeats] = useState(contract.seats || 1);
   const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
-  const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
+  // Starts from the agreement's escalation, not from a rate that was negotiated
+  // for the previous term only.
+  const [escalationPct, setEscalationPct] = useState(() => programmedEscalation(contract));
   const [agreedNote, setAgreedNote] = useState("");
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
@@ -125,7 +128,7 @@ export function ContractRenewalDialog({
   }, [startDate, tenureMonths]);
 
   // Check if escalation needs admin approval (reduction or waiver by non-admin)
-  const parentEscPct = contract.escalation_percentage || 0;
+  const parentEscPct = programmedEscalation(contract);
   const needsEscalationApproval = userRole !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
 
   // Gap calculation
@@ -236,6 +239,9 @@ export function ContractRenewalDialog({
                   onChange={(e) => setEscalationPct(parseFloat(e.target.value) || 0)}
                   className="h-9"
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  Agreement: {parentEscPct}%. A different rate applies to this term only.
+                </p>
               </div>
               <div className="text-center pb-2">
                 <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto" />

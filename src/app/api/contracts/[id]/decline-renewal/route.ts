@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { AUTO_RENEW_STOP_REASONS } from "@/lib/auto-renewal";
+import { stopAutoRenewal } from "@/lib/auto-renewal-server";
 
 /**
  * POST /api/contracts/[id]/decline-renewal
@@ -91,6 +94,9 @@ export async function POST(
       renewal_declined_reason: { old: null, new: reason },
     },
   });
+
+  // A declined renewal must not be renewed automatically. No-op unless it was switched on.
+  await stopAutoRenewal(createAdminClient(), id, dbUser.id, AUTO_RENEW_STOP_REASONS.renewalDeclined);
 
   return NextResponse.json({ data: updated });
 }
