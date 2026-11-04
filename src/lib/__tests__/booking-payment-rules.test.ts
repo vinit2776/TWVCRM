@@ -6,6 +6,7 @@ import {
   hasProof,
   verifyExcess,
   amountLeftToCollect,
+  reportedPaymentState,
   canCancelReportedPayment,
   isCancelledPayment,
   cancelNote,
@@ -193,5 +194,28 @@ describe("canCancelReportedPayment", () => {
     expect(isCancelledPayment({ status: "rejected", verification_notes: cancelNote("A", " twice ") })).toBe(true);
     expect(isCancelledPayment({ status: "rejected", verification_notes: "not in bank" })).toBe(false);
     expect(cancelNote("A", " twice ")).toBe("Cancelled by A: twice");
+  });
+});
+
+describe("reportedPaymentState", () => {
+  it("is covered when reported money covers the total", () => {
+    const st = reportedPaymentState(2832, [{ amount: 2832, status: "pending", payment_mode: "upi" }]);
+    expect(st).toMatchObject({ reported: 2832, left: 0, coveredByReport: true, overReported: false });
+  });
+  it("flags a double entry", () => {
+    const st = reportedPaymentState(2832, [
+      { amount: 2832, status: "pending", payment_mode: "upi" },
+      { amount: 2832, status: "pending", payment_mode: "upi" },
+    ]);
+    expect(st).toMatchObject({ reported: 5664, left: 0, coveredByReport: true, overReported: true });
+  });
+  it("shows what is left on a partial report", () => {
+    const st = reportedPaymentState(1180, [{ amount: 500, status: "pending", payment_mode: "upi" }]);
+    expect(st).toMatchObject({ reported: 500, left: 680, coveredByReport: false, overReported: false });
+  });
+  it("does nothing when nothing is reported", () => {
+    const st = reportedPaymentState(1180, [{ amount: 1180, status: "verified", payment_mode: "cash" }]);
+    expect(st.reported).toBe(0);
+    expect(st.coveredByReport).toBe(false);
   });
 });

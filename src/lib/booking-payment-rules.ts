@@ -113,6 +113,33 @@ export function amountLeftToCollect(grandTotal: number, payments: BookingPayment
   return Math.max(0, Math.round((grandTotal - verified - pendingUpi) * 100) / 100);
 }
 
+export interface ReportedPaymentState {
+  /** Manual UPI payments awaiting accounts. */
+  reported: number;
+  /** What staff can still take now (see amountLeftToCollect). */
+  left: number;
+  /** Reported money covers what is owed, so only verification is outstanding. */
+  coveredByReport: boolean;
+  /** Verified plus reported is more than the booking total allows — a double entry. */
+  overReported: boolean;
+}
+
+/** Where a booking stands while UPI payments are reported but not yet verified. */
+export function reportedPaymentState(grandTotal: number, payments: BookingPaymentLike[]): ReportedPaymentState {
+  const reported = payments
+    .filter((p) => p.status === "pending" && p.payment_mode === "upi")
+    .reduce((sum, p) => sum + toNumber(p.amount), 0);
+  const left = amountLeftToCollect(grandTotal, payments);
+  const tolerance = bookingPaymentTolerance(grandTotal);
+  const verified = sumByStatus(payments, "verified");
+  return {
+    reported,
+    left,
+    coveredByReport: reported > 0 && left <= tolerance,
+    overReported: verified + reported - grandTotal > tolerance,
+  };
+}
+
 /** Another live payment on the same booking carrying the same reference. */
 export function findDuplicateReference(
   payments: Array<{ id?: string; status: string; payment_reference?: string | null }>,
