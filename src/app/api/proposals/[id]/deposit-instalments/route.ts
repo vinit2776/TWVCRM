@@ -7,6 +7,7 @@ import {
   canRequestDepositInstalment,
   depositPosition,
   instalmentErrorMessage,
+  livePartNumbers,
   requiredDeposit,
 } from "@/lib/deposit-instalments";
 import {
@@ -140,6 +141,11 @@ export async function POST(
     );
   }
 
+  // The number shown to the customer on the payment page: live parts only.
+  const { data: allParts } = await admin
+    .from("proposal_deposit_instalments").select("id, seq, status, paid_amount").eq("proposal_id", id);
+  const shownNo = livePartNumbers(allParts || []).get(res.instalment_id) ?? res.seq;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = proposal.lead as any;
   const link = creds ? await createInstalmentPaymentLink(creds, {
@@ -147,7 +153,7 @@ export async function POST(
     proposalId: id,
     proposalNumber: proposal.proposal_number,
     instalmentId: res.instalment_id,
-    seq: res.seq,
+    seq: shownNo,
     customer: {
       name: lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() || undefined : undefined,
       email: lead?.email,
