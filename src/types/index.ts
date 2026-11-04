@@ -1198,6 +1198,7 @@ export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent
 export type AuditEntityType =
   | "value_cost_parameter"
   | "lead_rate_card"
+  | "lead_promotion"
   | "lead"
   | "activity"
   | "task"
