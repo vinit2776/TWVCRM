@@ -32,7 +32,8 @@ export async function GET() {
     .select(
       `id, booking_id, amount, payment_mode, payment_reference, screenshot_path, created_at, created_by,
        booking:bookings(
-         booking_number, booking_date, guest_name,
+         booking_number, booking_date, guest_name, guest_company,
+         total_amount, total_amount_with_gst,
          lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
        )`,
     )
@@ -56,6 +57,9 @@ export async function GET() {
           booking_number: string | null;
           booking_date: string | null;
           guest_name: string | null;
+          guest_company: string | null;
+          total_amount: number | string | null;
+          total_amount_with_gst: number | string | null;
           lead: { first_name: string | null; last_name: string | null; company: string | null } | { first_name: string | null; last_name: string | null; company: string | null }[] | null;
         }
       | null;
@@ -82,15 +86,38 @@ export async function GET() {
     for (const u of users ?? []) creators.set(u.id as string, (u.full_name as string | null) ?? "");
   }
 
+  // Every other live payment on the same bookings: two pending rows for one
+  // transfer is the usual shape of the old double-entry (before 00640 refused
+  // it), and accounts need to see that to know which one to reject.
+  const siblings = new Map<string, { id: string; amount: number; status: string }[]>();
+  if (rows.length > 0) {
+    const { data: others } = await supabase
+      .from("booking_payments")
+      .select("id, booking_id, amount, status")
+      .in("booking_id", [...new Set(rows.map((r) => r.booking_id))])
+      .in("status", ["pending", "verified"]);
+    for (const o of others ?? []) {
+      const list = siblings.get(o.booking_id as string) ?? [];
+      list.push({ id: o.id as string, amount: Number(o.amount), status: o.status as string });
+      siblings.set(o.booking_id as string, list);
+    }
+  }
+
   const items = rows.map((r) => {
     const lead = Array.isArray(r.booking?.lead) ? r.booking?.lead[0] : r.booking?.lead;
     const leadName = [lead?.first_name, lead?.last_name].filter(Boolean).join(" ");
+    const total = Number(r.booking?.total_amount_with_gst) || Number(r.booking?.total_amount) || 0;
+    const others = (siblings.get(r.booking_id) ?? []).filter((o) => o.id !== r.id);
     return {
       id: r.id,
       booking_id: r.booking_id,
       booking_number: r.booking?.booking_number ?? null,
       booking_date: r.booking?.booking_date ?? null,
-      customer: r.booking?.guest_name || lead?.company || leadName || "Unknown customer",
+      // Same order the booking page uses, so the name matches what accounts see
+      // when they open the booking.
+      customer: leadName || r.booking?.guest_company || r.booking?.guest_name || lead?.company || "Unknown customer",
+      booking_total: total,
+      other_payments: others.map((o) => ({ amount: o.amount, status: o.status })),
       amount: Number(r.amount),
       payment_reference: r.payment_reference,
       screenshot_path: r.screenshot_path,
