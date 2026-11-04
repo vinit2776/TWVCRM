@@ -337,11 +337,18 @@ export async function fetchOtherReceivables(
   const partState = await loadPartReceivableState(supabase, (deposits || []).map((d) => d.id as string));
 
   for (const d of deposits || []) {
-    if (!depositIsChaseable({
-      status: d.status as string,
-      deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
-      deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
-    })) continue;
+    // Starting parts withdraws the proposal's own full-deposit link, which is
+    // what depositIsChaseable reads as "no live link, don't chase". A deposit in
+    // parts is listed for its parts instead, as long as the proposal is still open.
+    const inParts = partState.has(d.id as string);
+    const listed = inParts
+      ? ["accepted", "sent", "viewed"].includes(d.status as string)
+      : depositIsChaseable({
+          status: d.status as string,
+          deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
+          deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
+        });
+    if (!listed) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = d.lead as any;
     // The deposit actually owed: deposit plus any exception (negative when waived
