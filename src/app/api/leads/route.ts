@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
+import { phoneMatchClauses } from "@/lib/phone-search";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
     const { data } = await supabase
       .from("leads")
       .select("id, first_name, last_name, id_proof_path")
-      .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
+      .or(`phone.eq.${normalizeStoredPhone(phone_exact)},mobile.eq.${normalizeStoredPhone(phone_exact)}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
   }
@@ -48,6 +50,8 @@ export async function GET(request: NextRequest) {
   let searchOr = "";
   if (search && !search.startsWith("#")) {
     searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const phoneClauses = phoneMatchClauses(search, ["phone", "mobile"]);
+    if (phoneClauses.length) searchOr += `,${phoneClauses.join(",")}`;
     const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
     if (refMatch) {
       const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
@@ -362,7 +366,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("leads")
     .insert({
-      ...result.data,
+      ...normalizePhoneFields(result.data),
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
     })

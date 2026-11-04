@@ -39,6 +39,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
+import { adhocProformaPdfBase64, downloadAdhocProformaPdf } from "@/lib/adhoc-proforma-client";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -194,9 +195,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
 
   // ── Download Invoice PDF ──
   const handleDownloadInvoicePDF = async (inv: ProformaInvoice) => {
-    const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-    const doc = generateInvoicePDF(inv, lead || undefined);
-    doc.save(`${inv.invoice_number}.pdf`);
+    try {
+      await downloadAdhocProformaPdf(inv.id, inv.invoice_number);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to download the PDF");
+    }
   };
 
   // ── Email Proposal ──
@@ -228,11 +231,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       leadEmail: lead?.email || undefined,
       leadPhone: lead?.phone || lead?.mobile || undefined,
       defaultCc: lead?.billing_emails || undefined,
-      generatePDF: async () => {
-        const { generateInvoicePDF } = await import("@/lib/pdf-generator");
-        const doc = generateInvoicePDF(inv, lead || undefined);
-        return doc.output("datauristring").split(",")[1];
-      },
+      generatePDF: () => adhocProformaPdfBase64(inv.id),
     });
     setEmailDialogOpen(true);
   };

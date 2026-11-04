@@ -27,7 +27,7 @@
 
 import { ArrowRight, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-import { checkInPaymentState } from "@/lib/booking-payment-rules";
+import { amountLeftToCollect, bookingPaymentTolerance, checkInPaymentState } from "@/lib/booking-payment-rules";
 import { closeOutDecision } from "@/lib/process-registry";
 import type { Booking, BookingPayment } from "@/types";
 import type { CompRequestData } from "@/components/bookings/booking-lifecycle-timeline";
@@ -171,9 +171,10 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
     const paidSoFar = payments
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);
-    const settled = SETTLED.has(b.payment_status) || paidSoFar + 0.01 >= grandTotal;
+    const settled =
+      SETTLED.has(b.payment_status) || paidSoFar + bookingPaymentTolerance(grandTotal) >= grandTotal;
     if (!settled) {
-      const balance = grandTotal - paidSoFar;
+      const balance = amountLeftToCollect(grandTotal, payments);
       return {
         label: `Collect ${formatCurrency(balance)} balance`,
         detail: "Customer has checked out but payment is still due",
@@ -230,7 +231,8 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
     const paidSoFar = payments
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);
-    const settled = SETTLED.has(b.payment_status) || paidSoFar + 0.01 >= grandTotal;
+    const settled =
+      SETTLED.has(b.payment_status) || paidSoFar + bookingPaymentTolerance(grandTotal) >= grandTotal;
 
     // Mirrors the server's check-in gate: a full UPI payment staff have
     // attached proof to is enough to let the customer in while accounts verify.
@@ -245,7 +247,7 @@ function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: C
     }
 
     if (!settled) {
-      const balance = grandTotal - paidSoFar;
+      const balance = amountLeftToCollect(grandTotal, payments);
       const isWalkIn = b.customer_type === "walk_in";
       return {
         label: `Collect ${formatCurrency(balance)}`,
