@@ -1,3 +1,4 @@
+import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
@@ -111,6 +112,11 @@ export async function GET(request: NextRequest) {
   };
   type LeadRow = {
     id: string;
+    status: string;
+    created_at: string;
+    archived_at?: string | null;
+    pinned_at?: string | null;
+    _stale?: unknown;
     _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
@@ -328,6 +334,31 @@ export async function GET(request: NextRequest) {
       });
     }
     for (const l of leads) l._enquiry = latest.get(l.id) ?? null;
+
+    // How long each lead has been quiet, with the same rule the daily archive job uses.
+    const { data: activityRows } = await supabase
+      .from("activities")
+      .select("lead_id, created_at, subject")
+      .in("lead_id", leadIds)
+      .order("created_at", { ascending: false })
+      .limit(3000);
+    const lastActivity = new Map<string, string>();
+    for (const a of (activityRows || []) as { lead_id: string; created_at: string; subject: string | null }[]) {
+      if (lastActivity.has(a.lead_id)) continue;
+      if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
+      lastActivity.set(a.lead_id, a.created_at);
+    }
+    for (const l of leads) {
+      const stale = leadStaleState({
+        status: l.status,
+        archivedAt: l.archived_at,
+        pinnedAt: l.pinned_at,
+        lastEventAt:
+          latestInstant([l.created_at, lastActivity.get(l.id), l._enquiry?.received_at]) ?? l.created_at,
+        hasFutureFollowUp: !!(l._followup?.upcoming || l._followup?.due_today),
+      });
+      if (stale.state !== "active") l._stale = stale;
+    }
   }
 
   return NextResponse.json({

@@ -203,6 +203,8 @@ export interface Lead {
   archived_at?: string | null;
   /** Set while the lead is pinned: highlighted in the list and shown on every calendar day. */
   pinned_at?: string | null;
+  /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
+  _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
   archived_by?: string | null;
   archive_reason?: string | null;
 }
