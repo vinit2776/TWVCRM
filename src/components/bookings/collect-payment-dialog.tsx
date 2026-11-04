@@ -19,6 +19,7 @@ import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
+import { bookingPaymentTolerance, canCancelReportedPayment, isCancelledPayment } from "@/lib/booking-payment-rules";
 import {
   BOOKING_PAYMENT_RECORD_STATUS_LABELS,
   BOOKING_PAYMENT_RECORD_STATUS_COLORS,
@@ -32,7 +33,10 @@ interface CollectPaymentDialogProps {
   bookingId: string;
   bookingReference?: string;
   totalAmount: number;
+  /** A payment was recorded or the dialog was finished. The booking page also emails the customer from this. */
   onSuccess: () => void;
+  /** Payments changed without anything to tell the customer (e.g. a reported payment was cancelled). Refresh only. */
+  onPaymentsChanged?: () => void;
   upiId?: string;
   upiQrCodePath?: string;
 }
@@ -44,6 +48,7 @@ export function CollectPaymentDialog({
   bookingReference = "",
   totalAmount,
   onSuccess,
+  onPaymentsChanged,
   upiId = "",
   upiQrCodePath = "",
 }: CollectPaymentDialogProps) {
@@ -70,6 +75,45 @@ export function CollectPaymentDialog({
   const [verifyingPayment, setVerifyingPayment] = useState<BookingPayment | null>(null);
   const [verifyNotes, setVerifyNotes] = useState("");
   const [verifyingSaving, setVerifyingSaving] = useState(false);
+
+  // Cancel a reported payment: who is asking, and the reason being typed.
+  const [me, setMe] = useState<{ id: string | null; role: string | null }>({ id: null, role: null });
+  const [cancellingPayment, setCancellingPayment] = useState<BookingPayment | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelSaving, setCancelSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((j: { id?: string | null; role?: string | null }) => setMe({ id: j.id ?? null, role: j.role ?? null }))
+      .catch(() => { /* cancel just stays hidden */ });
+  }, [open]);
+
+  const handleCancel = async () => {
+    if (!cancellingPayment) return;
+    setCancelSaving(true);
+    try {
+      const res = await fetch(`/api/booking-payments/${cancellingPayment.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: cancelReason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Could not cancel the payment");
+        return;
+      }
+      toast.success("Payment cancelled");
+      setCancellingPayment(null);
+      setCancelReason("");
+      await fetchPayments();
+      // Not onSuccess: that sends the customer a booking confirmation email.
+      onPaymentsChanged?.();
+    } finally {
+      setCancelSaving(false);
+    }
+  };
 
   const fetchPayments = useCallback(async () => {
     if (!bookingId) return;
@@ -152,14 +196,25 @@ export function CollectPaymentDialog({
   const pendingTotal = payments
     .filter((p) => p.status === "pending")
     .reduce((sum, p) => sum + Number(p.amount), 0);
+  // Pending manual UPI is already claimed against the balance (the server
+  // counts it too), so it is not left to collect. Razorpay pending is not.
+  const pendingUpiTotal = payments
+    .filter((p) => p.status === "pending" && p.payment_mode === "upi")
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+  const tolerance = bookingPaymentTolerance(totalAmount);
   const balanceDue = Math.max(0, totalAmount - verifiedTotal);
+  // What staff can still take now. Several collections are fine until this
+  // is within tolerance of nothing.
+  const collectable = Math.max(0, totalAmount - verifiedTotal - pendingUpiTotal);
+  const canCollectMore = collectable > tolerance;
+  const fullyVerified = balanceDue <= tolerance;
 
-  // Default amount to balance due
+  // Default amount to what is left to collect, in whole rupees.
   useEffect(() => {
-    if (open && balanceDue > 0) {
-      setAmount(balanceDue.toFixed(2));
+    if (open && collectable > 0) {
+      setAmount(String(Math.round(collectable)));
     }
-  }, [open, balanceDue]);
+  }, [open, collectable]);
 
   const handleFileSelect = (file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -178,8 +233,12 @@ export function CollectPaymentDialog({
       toast.error("Please enter a valid amount");
       return;
     }
-    if (amt > balanceDue + 0.01) {
-      toast.error(`Amount exceeds balance due (${formatCurrency(balanceDue)})`);
+    if (amt > collectable + tolerance) {
+      toast.error(
+        pendingUpiTotal > 0
+          ? `Only ${formatCurrency(collectable)} is left to collect — ${formatCurrency(pendingUpiTotal)} is already reported and waiting for accounts`
+          : `Amount exceeds balance due (${formatCurrency(collectable)})`,
+      );
       return;
     }
 
@@ -260,7 +319,7 @@ export function CollectPaymentDialog({
       const wasVerified = paymentMode === "cash" || paymentMode === "card" ||
         (paymentMode === "upi" && !!screenshotFile);
       const newVerified = verifiedTotal + (wasVerified ? amt : 0);
-      if (newVerified >= totalAmount) {
+      if (newVerified >= totalAmount - tolerance) {
         onSuccess();
         onOpenChange(false);
       }
@@ -293,7 +352,7 @@ export function CollectPaymentDialog({
           const payment = payments.find((p) => p.id === paymentId);
           if (payment) {
             const newVerified = verifiedTotal + Number(payment.amount);
-            if (newVerified >= totalAmount) {
+            if (newVerified >= totalAmount - tolerance) {
               onSuccess();
               onOpenChange(false);
             }
@@ -356,7 +415,8 @@ export function CollectPaymentDialog({
               <Label className="text-xs text-muted-foreground">Payment History</Label>
               <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
                 {payments.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div key={p.id} className="px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{formatCurrency(p.amount)}</span>
                       <span className="text-xs text-muted-foreground">
@@ -365,7 +425,7 @@ export function CollectPaymentDialog({
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
-                        {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                        {isCancelledPayment(p) ? "Cancelled" : BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
                       </Badge>
                       {p.screenshot_path && (
                         <Button
@@ -393,7 +453,22 @@ export function CollectPaymentDialog({
                           <Eye className="mr-1 h-3 w-3" />Verify
                         </Button>
                       )}
+                      {canCancelReportedPayment(p, me) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs px-2 text-red-600 hover:text-red-700"
+                          onClick={() => { setCancellingPayment(p); setCancelReason(""); }}
+                        >
+                          <XCircle className="mr-1 h-3 w-3" />Cancel
+                        </Button>
+                      )}
                     </div>
+                  </div>
+                  {/* Who cancelled / why it was rejected */}
+                  {p.status === "rejected" && p.verification_notes && (
+                    <p className="mt-1 text-xs text-muted-foreground">{p.verification_notes}</p>
+                  )}
                   </div>
                 ))}
               </div>
@@ -407,7 +482,7 @@ export function CollectPaymentDialog({
           )}
 
           {/* Add Payment Form */}
-          {balanceDue > 0 && (
+          {canCollectMore && (
             <>
               <Separator />
 
@@ -416,12 +491,12 @@ export function CollectPaymentDialog({
                   <Label>Amount</Label>
                   <Input
                     type="number"
-                    step="0.01"
+                    step="1"
                     min="1"
-                    max={balanceDue}
+                    max={Math.round(collectable + tolerance)}
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    placeholder={`Max ${formatCurrency(balanceDue)}`}
+                    placeholder={`Max ${formatCurrency(collectable)}`}
                   />
                 </div>
 
@@ -631,7 +706,16 @@ export function CollectPaymentDialog({
             </>
           )}
 
-          {balanceDue <= 0 && !loading && (
+          {!canCollectMore && !fullyVerified && !loading && (
+            <div className="text-center py-4">
+              <p className="text-sm font-medium text-amber-700">Everything is reported</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {formatCurrency(pendingUpiTotal)} is waiting for accounts to verify it. Nothing more to collect.
+              </p>
+            </div>
+          )}
+
+          {fullyVerified && !loading && (
             <div className="text-center py-4">
               <CheckCircle className="h-8 w-8 text-green-500 mx-auto mb-2" />
               <p className="text-sm font-medium text-green-700">Payment Complete</p>
@@ -675,6 +759,45 @@ export function CollectPaymentDialog({
           )}
           <p className="text-white/40 text-xs mt-1">Tap anywhere to close</p>
         </div>
+      )}
+
+      {/* Cancel reported payment */}
+      {cancellingPayment && (
+        <Dialog open={!!cancellingPayment} onOpenChange={() => setCancellingPayment(null)}>
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>Cancel reported payment</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Withdraws the {formatCurrency(cancellingPayment.amount)} UPI payment that is waiting for accounts. It
+                comes off the booking and the To verify list. This can&apos;t be done once accounts have verified it.
+              </p>
+              <div className="space-y-2">
+                <Label>Reason</Label>
+                <Input
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="e.g. entered twice, wrong booking"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setCancellingPayment(null)} disabled={cancelSaving}>
+                  Keep it
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1"
+                  onClick={handleCancel}
+                  disabled={cancelSaving || cancelReason.trim().length < 3}
+                >
+                  {cancelSaving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <XCircle className="mr-1 h-4 w-4" />}
+                  Cancel payment
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Verification Sub-Dialog */}
