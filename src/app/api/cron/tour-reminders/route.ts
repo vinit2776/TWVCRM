@@ -17,7 +17,7 @@ import {
 
 /**
  * Tour reminders: runs every 15 minutes. A tour that starts within the next 2 hours gets one
- * reminder, by WhatsApp and email, to the people running it: whoever booked it and whoever hosts it.
+ * reminder, by WhatsApp and email, to the people running it: whoever booked it, whoever hosts it and whoever handles the lead.
  * It NEVER contacts the customer.
  *
  * Only tours still ahead are considered (a tour that has started is never reminded), and each tour
@@ -40,11 +40,12 @@ type Row = {
   meeting_location: string | null;
   creator: Person | null;
   host: Person | null;
-  lead: { first_name: string; last_name: string | null; company: string | null; lead_number: number | string } | null;
+  lead: {
+    assigned_user: Person | null; first_name: string; last_name: string | null; company: string | null; lead_number: number | string } | null;
 };
 
 const SELECT =
-  "id, lead_id, meeting_start_at, meeting_location, creator:users!activities_created_by_fkey(id, full_name, email, phone), host:users!activities_tour_host_id_fkey(id, full_name, email, phone), lead:leads!activities_lead_id_fkey!inner(first_name, last_name, company, lead_number, status, archived_at)";
+  "id, lead_id, meeting_start_at, meeting_location, creator:users!activities_created_by_fkey(id, full_name, email, phone), host:users!activities_tour_host_id_fkey(id, full_name, email, phone), lead:leads!activities_lead_id_fkey!inner(first_name, last_name, company, lead_number, status, archived_at, assigned_user:users!leads_assigned_to_fkey(id, full_name, email, phone))";
 
 async function handler(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -86,7 +87,7 @@ async function handler(request: NextRequest) {
       sample: rows.slice(0, 20).map((r) => ({
         lead: r.lead?.lead_number,
         inMinutes: minutesUntil(r.meeting_start_at, now),
-        people: tourReminderRecipients(r.creator, r.host).length,
+        people: tourReminderRecipients(r.creator, r.host, r.lead?.assigned_user).length,
       })),
     });
   }
@@ -122,7 +123,7 @@ async function handler(request: NextRequest) {
     const where = row.meeting_location || "the centre";
     const url = `${appUrl}/leads/${row.lead_id}/activity`;
 
-    for (const person of tourReminderRecipients(row.creator, row.host)) {
+    for (const person of tourReminderRecipients(row.creator, row.host, row.lead?.assigned_user)) {
       const first = person.full_name?.split(" ")[0] || "there";
       if (person.email) {
         try {

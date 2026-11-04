@@ -5,6 +5,11 @@ const priya = { id: "p", full_name: "Priya", email: "p@x.test", phone: "+911" };
 const arjun = { id: "a", full_name: "Arjun", email: "a@x.test", phone: null };
 
 describe("tourReminderRecipients", () => {
+  it("includes the lead's handler, once, even when they also booked or host", () => {
+    expect(tourReminderRecipients(priya, arjun, { id: "h", email: "h@x.com" }).map((p) => p.id)).toEqual(["p", "a", "h"]);
+    expect(tourReminderRecipients(priya, arjun, priya).map((p) => p.id)).toEqual(["p", "a"]);
+  });
+
   it("is the booker and the host, once each", () => {
     expect(tourReminderRecipients(priya, arjun).map((p) => p.id)).toEqual(["p", "a"]);
     expect(tourReminderRecipients(priya, priya).map((p) => p.id)).toEqual(["p"]);

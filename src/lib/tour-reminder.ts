@@ -1,5 +1,6 @@
 // The "tour in 2 hours" reminder: who gets it and what it says. A tour reminder goes to the
-// people running the tour (whoever booked it and whoever hosts it), never to the customer.
+// people running the tour (whoever booked it, whoever hosts it and whoever handles the lead),
+// never to the customer.
 
 /** How long before the tour start the reminder goes out. */
 export const TOUR_REMINDER_MINUTES = 120;
@@ -17,10 +18,14 @@ export interface Person {
 }
 
 /** Everyone involved in the tour, once each, and only those who can be reached. */
-export function tourReminderRecipients(booker: Person | null | undefined, host: Person | null | undefined): Person[] {
+export function tourReminderRecipients(
+  booker: Person | null | undefined,
+  host: Person | null | undefined,
+  handler?: Person | null,
+): Person[] {
   const seen = new Set<string>();
   const out: Person[] = [];
-  for (const p of [booker, host]) {
+  for (const p of [booker, host, handler]) {
     if (!p || seen.has(p.id)) continue;
     seen.add(p.id);
     if (p.email || p.phone) out.push(p);
