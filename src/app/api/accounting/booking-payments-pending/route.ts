@@ -3,8 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { canReviewPaymentReport } from "@/lib/queries/payment-reports";
 
 /**
- * GET /api/accounting/booking-payments-pending — UPI payments reported against
- * a booking that accounts haven't checked against the bank yet.
+ * GET /api/accounting/booking-payments-pending — pending UPI booking payments
+ * that have NO open verification report, so they would otherwise be invisible
+ * to accounts (the To verify list is built from reports).
  *
  * Feeds the Tally Inbox "To verify" tab. Verify / reject goes through the
  * existing PATCH /api/booking-payments/[id]; nothing is written here.
@@ -60,7 +61,20 @@ export async function GET() {
       | null;
   };
 
-  const rows = (data ?? []) as unknown as Row[];
+  // A payment recorded since 00640 already has an open report and shows in the
+  // reports list; this endpoint is for the ones that slipped past it (recorded
+  // before reports existed), so they are not listed twice.
+  const allRows = (data ?? []) as unknown as Row[];
+  const reported = new Set<string>();
+  if (allRows.length > 0) {
+    const { data: open } = await supabase
+      .from("query_payment_reports")
+      .select("booking_payment_id")
+      .eq("status", "reported")
+      .in("booking_payment_id", allRows.map((r) => r.id));
+    for (const r of open ?? []) reported.add(r.booking_payment_id as string);
+  }
+  const rows = allRows.filter((r) => !reported.has(r.id));
   const creatorIds = [...new Set(rows.map((r) => r.created_by).filter((v): v is string => !!v))];
   const creators = new Map<string, string>();
   if (creatorIds.length > 0) {

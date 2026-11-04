@@ -116,6 +116,9 @@ export function BookingPaymentsToVerify({ onChanged }: Props) {
   return (
     <div className="space-y-2">
       <h3 className="text-sm font-medium">Booking payments to verify</h3>
+      <p className="text-xs text-muted-foreground -mt-1">
+        Recorded without a verification report, so they would not otherwise appear here.
+      </p>
       <div className="rounded-lg border divide-y">
         {items.map((p) => (
           <button
