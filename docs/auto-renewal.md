@@ -1,8 +1,9 @@
 # Auto-renewal
 
-Status: **part 1 of 4 (foundation)**. Nothing here changes what a customer sees
-or is billed. No job reads these columns yet, and `contracts.auto_renew` is
-`false` everywhere until a person switches a contract on.
+Status: **parts 1 and 2 of 4 (foundation, dry-run job)**. Nothing here changes
+what a customer sees or is billed. `contracts.auto_renew` is `false` everywhere
+until a person switches a contract on, and the only thing that reads it is the
+dry-run digest job below, which changes nothing and contacts no customer.
 
 ## What it is
 
@@ -59,9 +60,27 @@ had it on is untouched.
 | `auto_renew_notice_lead_days` | `7` | see above |
 | `auto_renew_confirmation_days` | `15` | see above |
 
+## The daily job (part 2): `/api/cron/auto-renew`, 06:00 IST, dry run only
+
+For every contract with `auto_renew` on and status `active` or `renewal_in_progress`,
+`planAutoRenewals()` (pure, `src/lib/auto-renewal-plan.ts`) decides where it is in its
+schedule, and the job emails admin and accounts a digest of:
+
+- **Needs a person:** held, with every reason (overdue invoices, moratorium, rent waiver, tiered rate schedule, unapproved special clause, pending escalation approval, live exit, declined renewal).
+- **Due now:** what it would do today (prepare the draft, send notice #1, send the rate confirmation, roll).
+- **Coming up:** the next dated step for each contract in the next 30 days, with the rent the next term would carry at the agreement's escalation.
+
+It prepares nothing, sends nothing to customers and writes nothing. It sends no email
+at all when no contract is opted in. `app_settings.auto_renew_cron_mode` may be `off` or
+`dry_run`; `live` is not built, so it reads as `dry_run` and the response says so. A term
+that ends mid-month rolls on the 1st of the next month, not the day after.
+
+Overdue uses Accounts' receivables definition: finalized or exported, unpaid or
+part-paid, not voided, past its due date (the early-GST override date when set), counting
+the balance after payments and TDS.
+
 ## Parts still to come
 
-2. Daily job in dry-run: an internal digest of what it would prepare, send and hold.
 3. Contract page card, renewals board, Revise and Stop actions.
 4. Customer notices and the live roll (carry over vouchers, access and allocations; deposit top-up request).
 
