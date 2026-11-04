@@ -139,8 +139,8 @@ export async function cancelRazorpayLink(admin: SupabaseClient, linkId: string |
 export interface PartReceivableState {
   /** Money received across paid parts. */
   paid: number;
-  /** The one open (unpaid) ask, if any. */
-  open: { amount: number; due_date: string | null; link_url: string | null } | null;
+  /** Every open (unpaid) ask, oldest first. Several can be out at once. */
+  open: Array<{ id: string; seq: number; amount: number; due_date: string | null; link_url: string | null }>;
 }
 
 /**
@@ -157,13 +157,14 @@ export async function loadPartReceivableState(
   if (proposalIds.length === 0) return out;
   const { data } = await client
     .from("proposal_deposit_instalments")
-    .select("proposal_id, amount, status, paid_amount, due_date, razorpay_link_url")
+    .select("id, seq, proposal_id, amount, status, paid_amount, due_date, razorpay_link_url")
     .in("proposal_id", proposalIds)
-    .in("status", ["paid", "requested"]);
+    .in("status", ["paid", "requested"])
+    .order("seq", { ascending: true });
   for (const r of data || []) {
-    const s = out.get(r.proposal_id) ?? { paid: 0, open: null };
+    const s = out.get(r.proposal_id) ?? { paid: 0, open: [] };
     if (r.status === "paid") s.paid = Math.round((s.paid + Number(r.paid_amount ?? r.amount)) * 100) / 100;
-    else s.open = { amount: Number(r.amount), due_date: r.due_date, link_url: r.razorpay_link_url };
+    else s.open.push({ id: r.id, seq: r.seq, amount: Number(r.amount), due_date: r.due_date, link_url: r.razorpay_link_url });
     out.set(r.proposal_id, s);
   }
   return out;
