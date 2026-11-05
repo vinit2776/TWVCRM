@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { CYCLE_UNIT_LABEL, partitionBillsByCycle, serviceNextStep } from "@/lib/procurement/amc-billing";
+import { CYCLE_UNIT_LABEL, cycleStartDate, cycleTiming, partitionBillsByCycle, serviceNextStep } from "@/lib/procurement/amc-billing";
 import type { ServicePoBillingCycle } from "@/lib/constants";
 import type { PoServiceReport } from "@/types";
 
@@ -21,6 +21,8 @@ export interface CycleBill {
   approval_status: string;
   payment_status: string;
   service_report_id?: string | null;
+  /** The vendor's invoice file, so it can be opened from the cycle row. */
+  invoice_file_url?: string | null;
 }
 
 interface Props {
@@ -31,6 +33,8 @@ interface Props {
   billingCycle: ServicePoBillingCycle | null;
   cycleCount: number | null;
   unitCostPerCycle: number | null;
+  /** Cycle 1 starts here; later cycles are counted from it. */
+  serviceStartDate?: string | null;
   reports: PoServiceReport[];
   bills: CycleBill[];
   onRecordReport: () => void;
@@ -92,7 +96,7 @@ function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBil
  * as several invoices on the same contract.
  */
 export function ServiceCyclesCard({
-  accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle,
+  accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle, serviceStartDate,
   reports, bills: allBills, onRecordReport, onUploadInvoice, onEditInvoice, canTie, onChanged,
 }: Props) {
   // A withdrawn invoice is out of play, so its cycle reads as un-invoiced again.
@@ -103,6 +107,18 @@ export function ServiceCyclesCard({
   const unit = billingCycle ? CYCLE_UNIT_LABEL[billingCycle] : "cycle";
   const Unit = unit.charAt(0).toUpperCase() + unit.slice(1);
   const total = cycleCount ?? 0;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  /** "started 30 Sep 2026 (12 days ago)" / "starts 30 Mar 2027 (in 29 days)", from the contract start. */
+  const timingText = (n: number): string | null => {
+    const on = cycleStartDate(serviceStartDate, billingCycle, n);
+    const t = cycleTiming(on, today);
+    if (!on || !t) return null;
+    const when = formatDate(on);
+    if (t.kind === "today") return `${Unit} ${n} starts today (${when})`;
+    const plural = t.days === 1 ? "day" : "days";
+    return t.kind === "started" ? `${Unit} ${n} started on ${when} (${t.days} ${plural} ago)` : `${Unit} ${n} starts on ${when} (in ${t.days} ${plural})`;
+  };
   const sorted = [...reports].sort((a, b) => a.cycle_number - b.cycle_number);
   const billFor = (srId: string) => bills.find((b) => b.service_report_id === srId);
   // Only invoices tied to a report count towards the cycles. A legacy contract
@@ -148,6 +164,8 @@ export function ServiceCyclesCard({
     const bill = sr ? billFor(sr.id) : undefined;
     let state: ChipState = "upcoming";
     let text = "not yet due";
+    const on = cycleStartDate(serviceStartDate, billingCycle, n);
+    if (on) text = `starts ${formatDate(on)}`;
     if (bill?.approval_status === "approved" && bill.payment_status === "paid") { state = "paid"; text = "paid"; }
     else if (bill) { state = "progress"; text = bill.approval_status === "approved" ? "awaiting payment" : bill.approval_status === "rejected" ? "invoice rejected" : "awaiting approval"; }
     else if (n === currentCycle) { state = "current"; text = next.kind === "log_report" ? "report due" : "invoice due"; }
@@ -171,7 +189,7 @@ export function ServiceCyclesCard({
       case "log_report":
         return {
           title: `Next step: record the service report for ${unit} ${next.cycle}${total > 1 ? ` of ${total}` : ""}`,
-          body: "Upload the vendor's service report first. The invoice for this cycle unlocks after it.",
+          body: `${timingText(next.cycle) ? `${timingText(next.cycle)}. ` : ""}Upload the vendor's service report first. The invoice for this cycle unlocks after it.`,
           action: (
             <Button size="sm" className="bg-teal-600 hover:bg-teal-700" onClick={onRecordReport}>
               <ClipboardList className="h-4 w-4 mr-1" /> Record service report
@@ -181,7 +199,7 @@ export function ServiceCyclesCard({
       case "upload_invoice":
         return {
           title: `Next step: upload the invoice for ${unit} ${next.cycle}${total > 1 ? ` of ${total}` : ""}`,
-          body: `The service report is in. Upload the vendor invoice${unitCostPerCycle ? ` — up to ${formatCurrency(unitCostPerCycle)} for this ${unit}` : ""}.`,
+          body: `${timingText(next.cycle) ? `${timingText(next.cycle)}. ` : ""}The service report is in. Upload the vendor invoice${unitCostPerCycle ? `, up to ${formatCurrency(unitCostPerCycle)} before GST for this ${unit}` : ""}.`,
           action: (
             <Button size="sm" onClick={onUploadInvoice}>
               <Receipt className="h-4 w-4 mr-1" /> Upload invoice
@@ -297,6 +315,12 @@ export function ServiceCyclesCard({
                             {bill.bill_number}
                           </Link>
                           <p className="text-xs text-muted-foreground">{formatCurrency(bill.total_amount)}</p>
+                          {bill.invoice_file_url && (
+                            <a href={bill.invoice_file_url} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                              <Paperclip className="h-3 w-3" /> View invoice
+                            </a>
+                          )}
                           <div className="flex items-center gap-2">
                             <Badge variant="secondary" className={`text-[10px] ${approval.cls}`}>{approval.label}</Badge>
                             {bill.approval_status !== "approved" && (
@@ -328,7 +352,7 @@ export function ServiceCyclesCard({
                   <td className="px-3 py-2.5">
                     <p className="font-medium">{Unit} {upcomingCycle}</p>
                   </td>
-                  <td className="px-3 py-2.5 text-xs">{next.kind === "log_report" ? "Due" : "Not yet due"}</td>
+                  <td className="px-3 py-2.5 text-xs">{next.kind === "log_report" ? "Due" : (cycleStartDate(serviceStartDate, billingCycle, upcomingCycle) ? `Starts ${formatDate(cycleStartDate(serviceStartDate, billingCycle, upcomingCycle)!)}` : "Not yet due")}</td>
                   <td className="px-3 py-2.5 text-xs">
                     <span className="inline-flex items-center gap-1"><Lock className="h-3 w-3" /> After the report</span>
                   </td>
