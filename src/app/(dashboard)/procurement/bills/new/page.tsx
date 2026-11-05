@@ -23,6 +23,7 @@ import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hint
 import { InvoiceCheckCard, type InvoiceCheckState } from "@/components/procurement/invoice-check-card";
 import { checkInvoice, type SuggestionField } from "@/lib/procurement/invoice-check";
 import { requestInvoiceExtraction } from "@/lib/procurement/invoice-extract-client";
+import { SharedInvoiceSection, type SameInvoiceLookup, type ShareChoice } from "@/components/procurement/shared-invoice-section";
 import { ElectricityBillFields, EMPTY_ELECTRICITY_FIELDS, type ElectricityBillFieldsValue } from "@/components/procurement/electricity-bill-fields";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
@@ -61,6 +62,12 @@ function NewVendorBillForm() {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // One vendor invoice covering several POs: "open" = this is the first PO on a bigger invoice,
+  // "join" = the number is already on other bills. The amount field then holds this PO's share.
+  const [shareChoice, setShareChoice] = useState<ShareChoice>("none");
+  const [invoiceTotal, setInvoiceTotal] = useState("");
+  const [sameInvoice, setSameInvoice] = useState<SameInvoiceLookup | null>(null);
+
   // Duplicate-invoice detector (Finance Intelligence — Day 2)
   type DupCandidate = {
     bill_id: string; bill_number: string;
@@ -68,7 +75,13 @@ function NewVendorBillForm() {
     total_amount: number; similarity_score: number; match_reason: string;
     approval_status: string;
   };
-  const [duplicates, setDuplicates] = useState<DupCandidate[]>([]);
+  const [duplicatesRaw, setDuplicates] = useState<DupCandidate[]>([]);
+  // Bills the "same invoice, other PO" prompt already covers are not duplicates to block on:
+  // the person decides there whether this PO joins that invoice.
+  const duplicates = useMemo(() => {
+    const joinable = new Set(sameInvoice?.can_join ? sameInvoice.existing.map((b) => b.id) : []);
+    return duplicatesRaw.filter((d) => !joinable.has(d.bill_id));
+  }, [duplicatesRaw, sameInvoice]);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
@@ -266,6 +279,32 @@ function NewVendorBillForm() {
     return () => { cancelled = true; clearTimeout(t); };
   }, [vendorId, invoiceNumber, totalAmount, invoiceDate]);
 
+  // ── Same invoice number already on another PO's bill? ───────────────────────
+  useEffect(() => {
+    setSameInvoice(null);
+    const num = invoiceNumber.trim();
+    if (!vendorId || !poId || !num) {
+      setShareChoice((c) => (c === "join" ? "none" : c));
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({ vendor_id: vendorId, po_id: poId, invoice_number: num });
+        if (replacesBill?.id) qs.set("exclude_bill_id", replacesBill.id);
+        const res = await fetch(`/api/procurement/bills/same-invoice?${qs.toString()}`);
+        if (!res.ok || cancelled) return;
+        const json = (await res.json()) as SameInvoiceLookup;
+        if (cancelled) return;
+        if (json.existing?.length) setSameInvoice(json);
+        else setShareChoice((c) => (c === "join" ? "none" : c));
+      } catch {
+        // Advisory only: the bill route checks again when the form is saved.
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorId, poId, invoiceNumber, replacesBill?.id]);
+
   // ── Bill hints — debounced fetch (Day 3-5) ──────────────────────────────────
   useEffect(() => {
     // Reset dismissals when inputs change
@@ -429,6 +468,35 @@ function NewVendorBillForm() {
     return null;
   })();
 
+  const isGoodsPo = !!poData && poData.po_type !== "service";
+  const exceedsPo = isGoodsPo && shareChoice === "none" && !!amountError;
+
+  const joinShared = () => {
+    if (!sameInvoice) return;
+    setShareChoice("join");
+    setInvoiceTotal(String(sameInvoice.invoice_total));
+    const cur = parseFloat(totalAmount);
+    if (!isFinite(cur) || cur > sameInvoice.left + 0.01) {
+      const cap = effectiveCeiling && effectiveCeiling > 0 ? Math.min(sameInvoice.left, effectiveCeiling) : sameInvoice.left;
+      setTotalAmount(String(cap));
+    }
+  };
+  const openShared = () => {
+    setInvoiceTotal(totalAmount);
+    setTotalAmount("");
+    setShareChoice("open");
+  };
+  const backToNormal = () => {
+    if (invoiceTotal) setTotalAmount(invoiceTotal);
+    setInvoiceTotal("");
+    setShareChoice("none");
+  };
+  const useDifferentNumber = () => {
+    setInvoiceNumber("");
+    setSameInvoice(null);
+    document.getElementById("invoice_number")?.focus();
+  };
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (!poId && !companyId) return "Select which company this bill is for";
@@ -442,6 +510,23 @@ function NewVendorBillForm() {
     if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
+    if (sameInvoice && shareChoice !== "join") {
+      return sameInvoice.can_join
+        ? "This invoice number is already on another PO. Choose 'Yes, same invoice' to add this PO to it, or use a different number."
+        : (sameInvoice.reason ?? "This invoice number is already recorded.");
+    }
+    if (shareChoice !== "none") {
+      if (!invoiceNumber.trim()) return "Enter the invoice number: it is how the POs are tied to one invoice";
+      const tot = parseFloat(invoiceTotal);
+      if (!isFinite(tot) || tot <= 0) return "Enter the total on the vendor's invoice";
+      if (shareChoice === "open" && tot <= amount + 0.01) {
+        return "The invoice total must be more than this PO's share. If the invoice only covers this PO, choose 'It only covers this PO'.";
+      }
+      if (shareChoice === "join" && sameInvoice) {
+        if (tot < sameInvoice.invoice_total - 0.01) return "The invoice total can only go up here. To lower it, ask an admin.";
+        if (sameInvoice.allocated + amount > tot + 0.01) return "This share is more than is left on the invoice";
+      }
+    }
     if (showElectricity && !elecStatus.ok) return elecStatus.reason ?? "Choose the location this electricity bill is for";
     return null;
   };
@@ -496,6 +581,8 @@ function NewVendorBillForm() {
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
         replaces_bill_id: replacesBill?.id ?? null,
+        ...(shareChoice !== "none" ? { invoice_total: parseFloat(invoiceTotal) } : {}),
+        ...(shareChoice === "join" ? { join_existing_invoice: true } : {}),
         ...(needsToleranceReason ? { tolerance_exception_reason: toleranceReason.trim() } : {}),
         ...(showElectricity
           ? {
@@ -826,6 +913,21 @@ function NewVendorBillForm() {
             </div>
           )}
 
+          <SharedInvoiceSection
+            choice={shareChoice}
+            share={parseFloat(totalAmount) || 0}
+            invoiceTotal={invoiceTotal}
+            onInvoiceTotalChange={setInvoiceTotal}
+            exceedsPo={exceedsPo}
+            poNumber={poData?.po_number ?? null}
+            poValue={poData ? Number(poData.total_ordered_amount) : null}
+            lookup={sameInvoice}
+            onOpen={openShared}
+            onJoin={joinShared}
+            onBackToNormal={backToNormal}
+            onUseDifferentNumber={useDifferentNumber}
+          />
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="invoice_number">
@@ -847,7 +949,7 @@ function NewVendorBillForm() {
 
             <div className="space-y-1.5">
               <Label htmlFor="total_amount">
-                Invoice Amount (₹) <span className="text-red-500">*</span>
+                {shareChoice !== "none" ? "This PO's share of the invoice (₹)" : "Invoice Amount (₹)"} <span className="text-red-500">*</span>
               </Label>
               <Input
                 id="total_amount"
