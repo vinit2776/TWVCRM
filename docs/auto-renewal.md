@@ -1,6 +1,6 @@
 # Auto-renewal
 
-Status: **parts 1 and 2 of 4 (foundation, dry-run job)**. Nothing here changes
+Status: **parts 1 to 3 of 4 (foundation, dry-run job, contract-page card and board)**. Nothing here changes
 what a customer sees or is billed. `contracts.auto_renew` is `false` everywhere
 until a person switches a contract on, and the only thing that reads it is the
 dry-run digest job below, which changes nothing and contacts no customer.
@@ -79,9 +79,28 @@ Overdue uses Accounts' receivables definition: finalized or exported, unpaid or
 part-paid, not voided, past its due date (the early-GST override date when set), counting
 the balance after payments and TDS.
 
+## The contract page card and board (part 3)
+
+**Card** (`contract-auto-renewal-card.tsx`, on active and renewal-in-progress contracts): shows
+where the contract is on its schedule and the next term's rent, with **Turn on / Resume**,
+**Revise rate**, **Pause** and **Customer served notice**. It says plainly that the system is
+report-only for now. `GET/POST /api/contracts/[id]/auto-renewal`; roles admin, manager, sales rep
+(`AUTO_RENEW_MANAGE_ROLES`).
+
+- **Revise rate** stores a negotiated escalation for the next term only in
+  `contracts.auto_renew_escalation_override` (migration 00669), with who, when and why. The agreement's
+  figure is untouched. A rate below the agreement's needs an admin (`checkRevision`). A rate equal to the
+  agreement's clears the revision. The preview and the daily report use it.
+- **Pause** stops the roll only: `auto_renew` goes false with the reason "Paused while renegotiating: ...".
+  No exit starts. **Resume** switches it back on.
+- **Customer served notice** opens the existing Start exit dialog. It is the same exit process; the exit
+  route already switches auto-renewal off.
+
+**Board** (`/contracts/auto-renewals`, linked from Contracts, `GET /api/auto-renewals`): every opted-in
+contract with its status, next step and next rent, using the same planner as the daily report.
+
 ## Parts still to come
 
-3. Contract page card, renewals board, Revise and Stop actions.
 4. Customer notices and the live roll (carry over vouchers, access and allocations; deposit top-up request).
 
 ## Deploy note for part 1

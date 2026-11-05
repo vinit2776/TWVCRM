@@ -277,3 +277,25 @@ export const AUTO_RENEW_STOP_REASONS = {
   exitStarted: "Customer notice recorded (exit started)",
   renewalDeclined: "Renewal declined",
 } as const;
+
+/** Roles that may switch auto-renewal on, pause it, or revise the next rate (same as manual Renew/Extend). */
+export const AUTO_RENEW_MANAGE_ROLES = ["admin", "manager", "sales_rep"] as const;
+
+export const AUTO_RENEW_PAUSE_REASON_PREFIX = "Paused while renegotiating";
+
+export type RevisionCheck = { ok: true } | { ok: false; error: string };
+
+/**
+ * Whether a person may set `percentage` as the next term's escalation.
+ * A rate below the agreement's needs an admin: reducing the signed escalation is an
+ * admin decision on the manual renewal route too. At or above it, any manager role.
+ */
+export function checkRevision(percentage: number, programmed: number, role: string): RevisionCheck {
+  if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+    return { ok: false, error: "Enter a percentage between 0 and 100." };
+  }
+  if (percentage < programmed && isNegotiatedEscalation(percentage, programmed) && role !== "admin") {
+    return { ok: false, error: `A rate below the agreement's ${programmed}% needs an admin. Ask an admin to set it.` };
+  }
+  return { ok: true };
+}
