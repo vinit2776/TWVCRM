@@ -296,6 +296,7 @@ const GENERIC_BY_ACTION: Record<string, AuditSummary> = {
   payment_reported:        { label: "Payment reported", tone: "blue" },
   payment_report_verified: { label: "Payment report verified", tone: "green" },
   payment_report_rejected: { label: "Payment report rejected", tone: "red" },
+  payment_report_withdrawn: { label: "Payment report withdrawn", tone: "grey" },
 };
 
 const MONEY_KEYS = ["total_amount", "total_ordered_amount", "grand_total", "estimated_total", "amount"];
