@@ -34,6 +34,8 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PriceToleranceField } from "@/components/procurement/price-tolerance-field";
 import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUnit, FacilityAsset, PurchaseRequest } from "@/types";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
+import { AmcStepHeader, AmcReviewCard } from "@/components/procurement/amc-wizard-parts";
+import { AMC_STEPS, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
 
 interface LineItem {
   id: string; // local draft id (in edit mode, seeded from the existing row id)
@@ -134,6 +136,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   const isCenterScoped = (CENTER_SCOPED_DEPARTMENTS as readonly string[]).includes(department);
 
   // ── AMC fields (used when department === "amc") ─────────────────────────────
+  // New AMC requests are asked one question at a time; editing keeps the single page.
+  const [amcStep, setAmcStep] = useState(0);
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
   const [serviceItemName, setServiceItemName] = useState(pr?.service_item_name ?? "");
   const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">(
@@ -775,6 +779,22 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
     setTimeout(() => { void (isEdit ? doSave() : doSubmit()); }, 0);
   };
 
+  const amcWizard = department === "amc" && !isEdit;
+  const lastAmcStep = AMC_STEPS.length - 1;
+  /** Hides a block on every step but its own; unchanged when not in the step-by-step flow. */
+  const showStep = (n: number) => (!amcWizard || amcStep === n ? "" : "hidden");
+  const goToAmcStep = (n: number) => { setAmcStep(n); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const nextAmcStep = () => {
+    const err = validateAmcStep(amcStep, {
+      companyId, serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
+      unlimitedVisits: amcUnlimited, visitsCovered: amcVisitsCovered,
+      lines: amcLines.map((l) => ({ assetId: l.assetId, perCycleCost: l.perCycleCost, cycleCountOverride: l.cycleCountOverride })),
+      contactName: amcContactName, helpline: amcHelpline,
+    });
+    if (err) { toast.error(err); return; }
+    goToAmcStep(amcStep + 1);
+  };
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <PageBreadcrumb
@@ -793,13 +813,17 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           <p className="text-sm text-muted-foreground">
             {isEdit
               ? "Correct any detail on this request. It stays in its current status — no re-approval is triggered."
-              : "Fill in details and add items to request"}
+              : amcWizard
+                ? "Set up a new AMC contract, one question at a time"
+                : "Fill in details and add items to request"}
           </p>
         </div>
       </div>
 
+      {amcWizard && <AmcStepHeader step={amcStep} />}
+
       {/* Request Details */}
-      <Card>
+      <Card className={showStep(0)}>
         <CardHeader>
           <CardTitle className="text-base">Request Details</CardTitle>
         </CardHeader>
@@ -976,15 +1000,15 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
       {/* AMC Service Details — replaces the Line Items card when department=amc */}
       {department === "amc" && (
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className={amcWizard && ![1, 2, 3].includes(amcStep) ? "hidden" : ""}>
+          <CardHeader className={`pb-3 ${amcWizard ? "hidden" : ""}`}>
             <CardTitle className="text-base flex items-center gap-2">
               <Wrench className="h-4 w-4" />
               AMC Service Details <span className="text-red-500">*</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${showStep(1)}`}>
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="service-item-name">Service / Contract Name <span className="text-red-500">*</span></Label>
                 <Input
@@ -1061,7 +1085,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </div>
 
             {/* Assets covered — one line per asset, each on its own payment schedule */}
-            <div className="border-t pt-4 space-y-3">
+            <div className={`${amcWizard ? "" : "border-t pt-4"} space-y-3 ${showStep(2)}`}>
               <div>
                 <p className="text-sm font-medium">Assets covered <span className="text-red-500">*</span></p>
                 <p className="text-xs text-muted-foreground">
@@ -1175,8 +1199,26 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
               )}
             </div>
 
+            {/* What the vendor will bill, in plain numbers, so the figures can be sanity-checked before moving on */}
+            {amcWizard && amcStep === 2 && amcContractTotal > 0 && (
+              <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm space-y-1">
+                <p className="font-medium">What the vendor will bill</p>
+                {amcLines.filter((l) => parseFloat(l.perCycleCost) > 0).map((l) => {
+                  const c = amcLineCalc(l);
+                  const asset = assets.find((a) => a.id === l.assetId)?.name ?? "This asset";
+                  return (
+                    <p key={l.id} className="text-xs text-muted-foreground">
+                      {asset}: {c.count} bill{c.count === 1 ? "" : "s"} of {formatCurrency(c.cost)} before GST
+                      {" "}(about {formatCurrency(c.cost * 1.18)} with 18% GST on each invoice).
+                    </p>
+                  );
+                })}
+                <p className="text-xs text-muted-foreground">Enter the amount before GST. The vendor adds GST on every invoice.</p>
+              </div>
+            )}
+
             {/* Vendor Contact Hierarchy */}
-            <div className="border-t pt-4 space-y-3">
+            <div className={`${amcWizard ? "" : "border-t pt-4"} space-y-3 ${showStep(3)}`}>
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Vendor Service Contacts</p>
                 <p className="text-xs text-muted-foreground">L1 primary · L2 / L3 escalation</p>
@@ -1227,7 +1269,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
             </div>
 
             {/* Advance Request (optional) */}
-            <div className="border-t pt-4 space-y-2">
+            <div className={`border-t pt-4 space-y-2 ${showStep(2)}`}>
               <label className="flex items-center gap-2 cursor-pointer">
                 <Checkbox checked={advanceRequired} onCheckedChange={(c) => { setAdvanceRequired(Boolean(c)); setAdvanceExpanded(Boolean(c)); }} />
                 <span className="text-sm font-medium">Vendor is requesting an advance payment</span>
@@ -1551,7 +1593,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           Edit mode omits this: the MR already exists, so its quotations are added
           and removed directly on the detail page rather than staged here. */}
       {!isEdit && (
-      <Card>
+      <Card className={showStep(4)}>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <div>
             <CardTitle className="text-base">
@@ -1673,8 +1715,34 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       </Card>
       )}
 
+      {amcWizard && amcStep === lastAmcStep && (
+        <AmcReviewCard
+          company={companies.find((c) => c.id === companyId)?.name ?? "—"}
+          contractName={serviceItemName.trim() || "—"}
+          coverage={amcCoverageType === "labour_only" ? "Labour only (parts extra)" : "Comprehensive (parts and labour)"}
+          start={amcStartDate}
+          end={amcEndDate}
+          length={contractLengthText(amcStartDate, amcEndDate)}
+          visits={amcUnlimited ? "Unlimited" : `${amcVisitsCovered} a year`}
+          lines={amcLines.map((l) => {
+            const c = amcLineCalc(l);
+            return {
+              asset: assets.find((a) => a.id === l.assetId)?.name ?? "Asset",
+              frequency: CYCLE_UNIT_LABEL[l.billingCycle] + (c.count > 1 ? "s" : ""),
+              count: c.count,
+              perCycle: c.cost,
+              total: c.total,
+            };
+          })}
+          total={amcContractTotal}
+          contact={[amcContactName.trim(), amcHelpline.trim()].filter(Boolean).join(" · ") || "—"}
+          advance={advanceRequired && parseFloat(advanceAmount) > 0 ? formatCurrency(parseFloat(advanceAmount)) : null}
+          proposals={validQuotations.length}
+        />
+      )}
+
       {/* Summary & Actions */}
-      <Card>
+      <Card className={showStep(lastAmcStep)}>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           {department === "amc" ? (
             <div>
@@ -1736,6 +1804,23 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
           </div>
         </CardContent>
       </Card>
+
+      {amcWizard && (
+        // pr-20 / pb-24 on small screens keep the buttons clear of the floating help buttons.
+        <div className="flex items-center justify-between pr-20 pb-24 lg:pr-0 lg:pb-0">
+          <Button variant="outline" onClick={() => (amcStep === 0 ? router.back() : goToAmcStep(amcStep - 1))}>
+            {amcStep === 0 ? "Cancel" : "← Back"}
+          </Button>
+          {amcStep < lastAmcStep && (
+            <div className="flex items-center gap-3">
+              {AMC_STEPS[amcStep].key === "proposal" && validQuotations.length === 0 && (
+                <span className="text-xs text-muted-foreground">No proposal yet? You can skip.</span>
+              )}
+              <Button onClick={nextAmcStep}>{AMC_STEPS[amcStep].key === "proposal" ? (validQuotations.length === 0 ? "Skip" : "Next →") : "Next →"}</Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Catalog Picker Dialog */}
       <Dialog
