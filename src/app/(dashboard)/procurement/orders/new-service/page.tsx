@@ -399,7 +399,7 @@ function NewServicePOForm() {
           )}
           {openingFromMr > 0 && (
             <div className="mt-1 text-xs text-amber-800">
-              This contract was already running: {openingFromMr} {CYCLE_UNIT_LABEL[amcBillingCycle]}{openingFromMr === 1 ? "" : "s"} were billed and paid before it was entered here,
+              This contract was already running: {openingFromMr} {CYCLE_UNIT_LABEL[amcBillingCycle]}{openingFromMr === 1 ? "" : "s"} {openingFromMr === 1 ? "was" : "were"} billed and paid before it was entered here,
               so this PO covers only the {amcCycleCount} still to bill.
             </div>
           )}
