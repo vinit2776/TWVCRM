@@ -16,6 +16,8 @@ export const HIGH_VALUE_MONTHLY = 50_000;
 export const WORTH_A_CALL_MONTHLY = 15_000;
 export const HIGH_VALUE_SEATS = 10;
 export const SOON_START_DAYS = 56;
+/** More seats than any enquiry could mean: the field was almost certainly mistyped (a price in the seats box). */
+export const MAX_PLAUSIBLE_SEATS = 500;
 
 const OFFICE_TYPES = ["private_office", "managed", "enterprise"];
 const SMALL_TYPES = ["virtual_office", "hot_desk"];
@@ -56,7 +58,9 @@ function startsSoon(startDate: string | null | undefined, now: Date): boolean {
 
 export function assessValue(i: ValueInput): ValueResult {
   const now = i.now ?? new Date();
-  const seats = i.seats && i.seats > 0 ? i.seats : null;
+  const rawSeats = i.seats && i.seats > 0 ? i.seats : null;
+  const implausible = rawSeats !== null && rawSeats > MAX_PLAUSIBLE_SEATS;
+  const seats = implausible ? null : rawSeats;
   const given = i.quotedPerSeat || i.budgetPerSeat || null;
   const price = given ?? (i.standardRate && i.standardRate > 0 ? i.standardRate : null);
   const estimated = !given && price !== null;
@@ -84,7 +88,8 @@ export function assessValue(i: ValueInput): ValueResult {
     return { monthly, estimated, tier: "passing", reasons: [`${seats} seat${seats === 1 ? "" : "s"} of ${type.replace(/_/g, " ")}`, ...reasons] };
   }
   if (monthly === null) {
-    return { monthly, estimated, tier: "passing", reasons: [seats === null ? "no seats given" : "no price or budget given", ...reasons] };
+    const why = implausible ? `${rawSeats} seats looks mistyped` : seats === null ? "no seats given" : "no price or budget given";
+    return { monthly, estimated, tier: "passing", reasons: [why, ...reasons] };
   }
   if (monthly < WORTH_A_CALL_MONTHLY) {
     return { monthly, estimated, tier: "passing", reasons: [`about ₹${monthly.toLocaleString("en-IN")} a month`, ...reasons] };

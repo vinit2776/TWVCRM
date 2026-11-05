@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { paymentCredit, balanceDue } from "@/lib/settlement";
 import { loadPartReceivableState } from "@/lib/deposit-instalment-server";
+import { requiredDeposit } from "@/lib/deposit-instalments";
 import {
   daysOverdue, isStale, depositIsChaseable, todayIst, type ReceivableRow,
 } from "@/lib/receivables";
@@ -325,7 +326,7 @@ export async function fetchOtherReceivables(
     .from("proposals")
     .select(`
       id, proposal_number, status, security_deposit_amount, deposit_credit_amount,
-      deposit_due_date, deposit_razorpay_link_url, deposit_razorpay_link_id,
+      deposit_exception_amount, deposit_due_date, deposit_razorpay_link_url, deposit_razorpay_link_id,
       deposit_link_cancelled_at,
       deposit_reminder_count, deposit_last_reminder_sent_at,
       lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email)
@@ -336,14 +337,24 @@ export async function fetchOtherReceivables(
   const partState = await loadPartReceivableState(supabase, (deposits || []).map((d) => d.id as string));
 
   for (const d of deposits || []) {
-    if (!depositIsChaseable({
-      status: d.status as string,
-      deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
-      deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
-    })) continue;
+    // Starting parts withdraws the proposal's own full-deposit link, which is
+    // what depositIsChaseable reads as "no live link, don't chase". A deposit in
+    // parts is listed for its parts instead, as long as the proposal is still open.
+    const inParts = partState.has(d.id as string);
+    const listed = inParts
+      ? ["accepted", "sent", "viewed"].includes(d.status as string)
+      : depositIsChaseable({
+          status: d.status as string,
+          deposit_razorpay_link_id: d.deposit_razorpay_link_id as string | null,
+          deposit_link_cancelled_at: d.deposit_link_cancelled_at as string | null,
+        });
+    if (!listed) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = d.lead as any;
-    const owed = Number(d.security_deposit_amount || 0) - Number(d.deposit_credit_amount || 0);
+    // The deposit actually owed: deposit plus any exception (negative when waived
+    // in part) minus any carried-forward credit — the same figure the payment
+    // link, the deposits inbox and the report balance use.
+    const owed = requiredDeposit(d as { security_deposit_amount?: number; deposit_exception_amount?: number; deposit_credit_amount?: number });
     if (owed <= 0) continue; // fully covered by a carried-forward deposit
     // Collected in parts: show what is received and the part that is out. The
     // reminder ladder stays off — it would chase the whole amount.
@@ -371,7 +382,7 @@ export async function fetchOtherReceivables(
         out.push(finish({
           ...base,
           part_id: o.id,
-          part_label: `Part ${o.seq} of the ₹${owed.toLocaleString("en-IN")} deposit · ₹${paidSoFar.toLocaleString("en-IN")} received${notAsked > 0 ? ` · ₹${notAsked.toLocaleString("en-IN")} not yet asked` : ""}`,
+          part_label: `Part ${o.no} of the ₹${owed.toLocaleString("en-IN")} deposit · ₹${paidSoFar.toLocaleString("en-IN")} received${notAsked > 0 ? ` · ₹${notAsked.toLocaleString("en-IN")} not yet asked` : ""}`,
           total_amount: o.amount,
           amount_paid: 0,
           due_date: o.due_date,

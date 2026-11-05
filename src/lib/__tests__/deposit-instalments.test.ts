@@ -5,6 +5,7 @@ import {
   checkAsk,
   depositPosition,
   instalmentErrorMessage,
+  livePartNumbers,
   minFirstPart,
   requiredDeposit,
 } from "../deposit-instalments";
@@ -97,5 +98,26 @@ describe("roles and wording", () => {
   });
   it("explains the floor in rupees", () => {
     expect(instalmentErrorMessage("below_floor", { floor: 15000, percent: 25 })).toContain("₹15,000");
+  });
+});
+
+describe("livePartNumbers", () => {
+  it("numbers only live parts, so a cancelled first request does not use up Part 1", () => {
+    const n = livePartNumbers([
+      { id: "a", seq: 1, status: "cancelled", paid_amount: null },
+      { id: "b", seq: 2, status: "requested", paid_amount: null },
+    ]);
+    expect(n.has("a")).toBe(false);
+    expect(n.get("b")).toBe(1);
+  });
+  it("numbers in the order asked and keeps a cancelled request that was paid", () => {
+    const n = livePartNumbers([
+      { id: "c", seq: 3, status: "requested", paid_amount: null },
+      { id: "a", seq: 1, status: "paid", paid_amount: 10000 },
+      { id: "x", seq: 2, status: "cancelled", paid_amount: 5000 },
+      { id: "z", seq: 4, status: "cancelled", paid_amount: null },
+    ]);
+    expect([n.get("a"), n.get("x"), n.get("c")]).toEqual([1, 2, 3]);
+    expect(n.has("z")).toBe(false);
   });
 });

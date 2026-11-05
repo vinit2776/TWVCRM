@@ -22,6 +22,7 @@ import {
   checkAsk,
   DEPOSIT_INSTALMENT_STATUS_COLORS,
   DEPOSIT_INSTALMENT_STATUS_LABELS,
+  livePartNumbers,
   minFirstPart,
   type DepositInstalmentStatus,
   type DepositPosition,
@@ -122,6 +123,8 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   }
 
   const refreshed = useCallback(() => { load(); onChanged(); }, [load, onChanged]);
+  // Cancelled requests never take a number: the first live part is Part 1.
+  const partNo = useMemo(() => livePartNumbers(data?.instalments ?? []), [data]);
 
   if (!data) return null;
   const { instalments, position, has_open_ask: hasOpenAsk, enabled } = data;
@@ -186,7 +189,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
               return (
                 <li key={i.id} className={`rounded-md border bg-white/70 px-2.5 py-2 text-xs ${st === "cancelled" ? "opacity-60" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">Part {i.seq} · {formatCurrency(Number(i.paid_amount ?? i.amount))}</span>
+                    <span className="font-semibold">{partNo.has(i.id) ? `Part ${partNo.get(i.id)}` : "Cancelled request"} · {formatCurrency(Number(i.paid_amount ?? i.amount))}</span>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${DEPOSIT_INSTALMENT_STATUS_COLORS[st]}`}>
                       {DEPOSIT_INSTALMENT_STATUS_LABELS[st]}
                     </span>
@@ -270,13 +273,13 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
         onOpenChange={(o) => { if (!o) setReportFor(null); }}
         entityType="proposal_deposit"
         entityId={proposalId}
-        partyLabel={partyLabel ? `${partyLabel} · Part ${reportFor?.seq ?? ""}` : null}
+        partyLabel={partyLabel ? `${partyLabel} · Part ${reportFor ? partNo.get(reportFor.id) ?? "" : ""}` : null}
         suggestedAmount={reportFor ? Number(reportFor.amount) : null}
         onReported={refreshed}
       />
-      <RecordPartDialog part={recordFor} proposalId={proposalId} onClose={() => setRecordFor(null)} onDone={() => { setRecordFor(null); refreshed(); }} />
-      <SendPartDialog part={sendFor} proposalId={proposalId} onClose={() => setSendFor(null)} onDone={() => { setSendFor(null); refreshed(); }} />
-      <CancelPartDialog part={cancelFor} proposalId={proposalId} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refreshed(); }} />
+      <RecordPartDialog part={recordFor} no={recordFor ? partNo.get(recordFor.id) : undefined} proposalId={proposalId} onClose={() => setRecordFor(null)} onDone={() => { setRecordFor(null); refreshed(); }} />
+      <SendPartDialog part={sendFor} no={sendFor ? partNo.get(sendFor.id) : undefined} proposalId={proposalId} onClose={() => setSendFor(null)} onDone={() => { setSendFor(null); refreshed(); }} />
+      <CancelPartDialog part={cancelFor} no={cancelFor ? partNo.get(cancelFor.id) : undefined} proposalId={proposalId} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refreshed(); }} />
     </div>
   );
 }
@@ -400,8 +403,8 @@ function RequestPartDialog({ open, onClose, proposalId, position, percent, role,
   );
 }
 
-function RecordPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function RecordPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [medium, setMedium] = useState("");
   const [reference, setReference] = useState("");
@@ -435,7 +438,7 @@ function RecordPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Record bank transfer — Part {part?.seq}</DialogTitle>
+          <DialogTitle>Record bank transfer — Part {no ?? part?.seq}</DialogTitle>
           <DialogDescription>
             Amount {formatCurrency(Number(part?.amount ?? 0))}. This must match the request; if the customer paid a different amount, cancel this request and ask for the right one.
           </DialogDescription>
@@ -475,8 +478,8 @@ function RecordPartDialog({ part, proposalId, onClose, onDone }: {
   );
 }
 
-function CancelPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function CancelPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
@@ -502,7 +505,7 @@ function CancelPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Cancel Part {part?.seq}?</DialogTitle>
+          <DialogTitle>Cancel Part {no ?? part?.seq}?</DialogTitle>
           <DialogDescription>
             The payment link is withdrawn and {formatCurrency(Number(part?.amount ?? 0))} goes back to &ldquo;not yet asked&rdquo;.
           </DialogDescription>
@@ -522,8 +525,8 @@ function CancelPartDialog({ part, proposalId, onClose, onDone }: {
   );
 }
 
-function SendPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function SendPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
@@ -567,7 +570,7 @@ function SendPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !sending) onClose(); }}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Email Part {part?.seq} to the customer</DialogTitle>
+          <DialogTitle>Email Part {no ?? part?.seq} to the customer</DialogTitle>
           <DialogDescription>
             {to.length > 0 ? <>To <b>{to.join(", ")}</b>. </> : "No customer email on the lead. "}
             The email shows the total deposit, what is paid, this part and the balance after it.
