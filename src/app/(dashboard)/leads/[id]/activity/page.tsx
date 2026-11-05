@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { CalendarClock, ExternalLink, Mail, MapPin, Phone } from "lucide-react";
+import { ExternalLink, Mail, MapPin, Phone } from "lucide-react";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
-import { NextStepControls } from "@/components/leads/next-step-controls";
+import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
 import { useLead, useUsers } from "@/hooks/use-leads";
 import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
 import { dayLabel, istDayKey } from "@/lib/lead-days";
@@ -113,7 +113,6 @@ export default function LeadActivityPage() {
   ].filter(Boolean);
   const place = lead.location?.name ?? req?.preferred_location ?? null;
   const next = timeline?.next_step ?? null;
-  const overdue = next ? Date.parse(next.due_at) < Date.now() : false;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -155,26 +154,16 @@ export default function LeadActivityPage() {
 
         {/* The next step, always on top */}
         {!CLOSED.includes(lead.status) && (
-          <div
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
-              next ? (overdue ? "border-red-200 bg-red-50 text-red-700" : "border-amber-200 bg-amber-50") : "border-amber-200 bg-amber-50 text-amber-800"
-            }`}
-          >
-            <CalendarClock className="h-4 w-4 shrink-0" />
+          <div>
             {next ? (
-              <span>
-                <span className="font-semibold">{overdue ? "Overdue · " : "Next step · "}</span>
-                {new Date(next.due_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}
-                {" · "}
-                {next.notes || next.subject || "Follow up"}
-              </span>
+              <NextStepChip leadId={lead.id} next={next} onChanged={changed} />
             ) : (
-              <span className="font-semibold">No next step set</span>
+              <span className="flex flex-wrap items-center gap-2.5 text-sm">
+                <NoNextStepChip />
+                <span className="text-muted-foreground">Log an action below to set one</span>
+              </span>
             )}
           </div>
-        )}
-        {!CLOSED.includes(lead.status) && next?.activity_id && (
-          <NextStepControls activityId={next.activity_id} hasNote={!!next.notes?.trim()} onChanged={changed} />
         )}
 
         {timeline?.stale && timeline.stale.state !== "active" && (

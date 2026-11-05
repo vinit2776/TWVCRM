@@ -119,6 +119,7 @@ export async function GET(request: NextRequest) {
     archived_at?: string | null;
     pinned_at?: string | null;
     _stale?: unknown;
+    _last_contact?: { subject: string; at: string; note: string | null } | null;
     _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
@@ -341,17 +342,28 @@ export async function GET(request: NextRequest) {
     // How long each lead has been quiet, with the same rule the daily archive job uses.
     const { data: activityRows } = await supabase
       .from("activities")
-      .select("lead_id, created_at, subject")
+      .select("lead_id, created_at, subject, type, description")
       .in("lead_id", leadIds)
       .order("created_at", { ascending: false })
       .limit(3000);
     const lastActivity = new Map<string, string>();
-    for (const a of (activityRows || []) as { lead_id: string; created_at: string; subject: string | null }[]) {
-      if (lastActivity.has(a.lead_id)) continue;
+    // The last time someone actually spoke to or met them, for the "Last:" line on the row.
+    const lastContact = new Map<string, { subject: string; at: string; note: string | null }>();
+    for (const a of (activityRows || []) as {
+      lead_id: string;
+      created_at: string;
+      subject: string | null;
+      type: string;
+      description: string | null;
+    }[]) {
       if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
-      lastActivity.set(a.lead_id, a.created_at);
+      if (!lastActivity.has(a.lead_id)) lastActivity.set(a.lead_id, a.created_at);
+      if (!lastContact.has(a.lead_id) && ["call", "tour", "meeting", "email"].includes(a.type)) {
+        lastContact.set(a.lead_id, { subject: a.subject || a.type, at: a.created_at, note: a.description?.trim() || null });
+      }
     }
     for (const l of leads) {
+      l._last_contact = lastContact.get(l.id) ?? null;
       const stale = leadStaleState({
         status: l.status,
         archivedAt: l.archived_at,
