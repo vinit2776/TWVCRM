@@ -207,6 +207,8 @@ export interface Lead {
   pinned_at?: string | null;
   /** Set by the Leads list when the lead has gone quiet (see src/lib/lead-stale.ts). */
   _stale?: { state: "warning"; daysLeft: number } | { state: "stale"; daysQuiet: number };
+  /** Set by the Leads list: the last call, tour, meeting or email, for the "Last:" line. */
+  _last_contact?: { subject: string; at: string; note: string | null } | null;
   archived_by?: string | null;
   archive_reason?: string | null;
 }

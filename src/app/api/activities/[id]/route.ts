@@ -4,6 +4,7 @@ import { createReminderEvent, rescheduleReminderEvent } from "@/lib/google-calen
 import { istLocalToUtcIso } from "@/lib/utils";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit } from "@/lib/audit";
+import { followUpClosedRows } from "@/lib/follow-up-closed-note";
 
 export async function PATCH(
   request: NextRequest,
@@ -161,6 +162,17 @@ export async function PATCH(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  if (action === "close") {
+    const { error: noteError } = await supabase.from("activities").insert(
+      followUpClosedRows({
+        leadId: data.lead_id,
+        closed: [{ follow_up_date: data.follow_up_date, follow_up_notes: data.follow_up_notes, subject: data.subject }],
+        createdBy: dbUser?.id,
+      })
+    );
+    if (noteError) console.error("follow-up closed note failed", noteError.code, noteError.message);
   }
 
   logAudit(supabase, {

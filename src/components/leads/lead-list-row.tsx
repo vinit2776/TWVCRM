@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, CalendarClock, Clock, MapPin } from "lucide-react";
+import { MapPin } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { LeadQuickActions } from "@/components/leads/lead-quick-actions";
-import { NextStepControls } from "@/components/leads/next-step-controls";
+import { NextStepChip, NoNextStepChip } from "@/components/leads/next-step-chip";
 import { LeadHandlerChip } from "@/components/leads/lead-handler-chip";
 import { LeadPinButton } from "@/components/leads/lead-pin-button";
-import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
-import { formatCurrency, formatDate, formatSmartDate } from "@/lib/utils";
+import { LEAD_SOURCE_LABELS, WORKSPACE_TYPE_LABELS } from "@/lib/constants";
+import { formatCurrency, formatSmartDate } from "@/lib/utils";
 import type { Lead } from "@/types";
 
 /** A lead in these statuses has nothing left to do, so a missing next step is not a problem. */
@@ -27,40 +27,6 @@ function wantLine(lead: Lead): string | null {
   if (budget) parts.push(`${formatCurrency(budget)}/seat`);
   if (parts.length > 0) return parts.join(" · ");
   return enq?.message ? `“${enq.message.length > 90 ? `${enq.message.slice(0, 90)}…` : enq.message}”` : null;
-}
-
-/** The pending follow-up, worded as the next action it is. */
-function NextAction({ lead }: { lead: Lead }) {
-  const next = lead._followup?.next;
-  if (!next) {
-    if (CLOSED_STATUSES.includes(lead.status)) return <span className="text-muted-foreground">—</span>;
-    return (
-      <span className="inline-flex items-center gap-1 text-amber-700">
-        <CalendarClock className="h-3.5 w-3.5 shrink-0" />
-        No next step set
-      </span>
-    );
-  }
-  const overdue = next.days_overdue > 0;
-  const today = !overdue && lead._followup?.due_today;
-  const when = overdue
-    ? `${next.days_overdue} day${next.days_overdue === 1 ? "" : "s"} overdue`
-    : today
-      ? "today"
-      : formatDate(next.due_at);
-  const what = next.notes || next.subject || ACTIVITY_TYPE_LABELS[next.type] || "Follow up";
-  const Icon = overdue ? AlertTriangle : Clock;
-  return (
-    <span
-      className={`inline-flex min-w-0 items-center gap-1 ${
-        overdue ? "text-red-600" : today ? "text-amber-700" : "text-foreground"
-      }`}
-    >
-      <Icon className="h-3.5 w-3.5 shrink-0" />
-      <span className="shrink-0 font-medium">{when}</span>
-      <span className="truncate text-muted-foreground">· {what}</span>
-    </span>
-  );
 }
 
 /**
@@ -159,7 +125,18 @@ export function LeadListRow({
 
       {/* Line 3: what happens next, and how it came in */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 text-sm">
-        <div className="min-w-0 max-w-full"><NextAction lead={lead} /></div>
+        <div className="min-w-0 max-w-full">
+          {lead._followup?.next ? (
+            <NextStepChip leadId={lead.id} next={lead._followup.next} onChanged={onChanged} />
+          ) : CLOSED_STATUSES.includes(lead.status) ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span className="flex flex-wrap items-center gap-2.5">
+              <NoNextStepChip />
+              <span className="text-muted-foreground">Log an action below to set one</span>
+            </span>
+          )}
+        </div>
         <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           <span>
             {LEAD_SOURCE_LABELS[lead.source] ?? lead.source} · {lead._enquiry ? "asked" : "added"} {formatSmartDate(lead._enquiry?.received_at ?? lead.created_at)}
@@ -168,16 +145,19 @@ export function LeadListRow({
         </span>
       </div>
 
-      {/* Line 4: log what just happened, without opening the lead */}
+      {/* Line 4: what was done last, so a tap on an action visibly registers */}
+      {lead._last_contact && (
+        <div className="truncate text-[13px] text-muted-foreground">
+          <span className="font-semibold text-foreground">
+            Last: {lead._last_contact.subject} {formatSmartDate(lead._last_contact.at)}
+          </span>
+          {lead._last_contact.note && <> · “{lead._last_contact.note}”</>}
+        </div>
+      )}
+
+      {/* Line 5: log what just happened, without opening the lead */}
       {!CLOSED_STATUSES.includes(lead.status) && !lead.archived_at && (
-        <div className="space-y-1.5 pt-1">
-          {lead._followup?.next?.activity_id && (
-            <NextStepControls
-              activityId={lead._followup.next.activity_id}
-              hasNote={!!lead._followup.next.notes?.trim()}
-              onChanged={onChanged}
-            />
-          )}
+        <div className="pt-1">
           <LeadQuickActions lead={lead} onChanged={onChanged} users={users} />
         </div>
       )}
