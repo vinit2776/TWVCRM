@@ -1,4 +1,5 @@
 import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
+import { isLastContactActivity } from "@/lib/lead-last-contact";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
@@ -36,6 +37,11 @@ export async function GET(request: NextRequest) {
   // can't push newly created leads off page 1. Absent = legacy overdue-first merge
   // (other callers: pipeline, task dialog, command palette).
   const view = searchParams.get("view");
+  // view=ids: exactly these leads, in this order (the Follow-ups tab loads one group's rows this way).
+  const idsFilter =
+    view === "ids"
+      ? (searchParams.get("ids") ?? "").split(",").filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 100)
+      : null;
 
   // Quick phone lookup — returns just id, id_proof_path fields
   if (phone_exact) {
@@ -119,6 +125,7 @@ export async function GET(request: NextRequest) {
     archived_at?: string | null;
     pinned_at?: string | null;
     _stale?: unknown;
+    _last_contact?: { subject: string; at: string; note: string | null } | null;
     _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
@@ -189,7 +196,7 @@ export async function GET(request: NextRequest) {
       );
     }
   }
-  const { count, error: countError } = await countQuery;
+  const { count, error: countError } = idsFilter ? { count: idsFilter.length, error: null } : await countQuery;
   if (countError) {
     return NextResponse.json({ error: countError.message }, { status: 500 });
   }
@@ -225,7 +232,7 @@ export async function GET(request: NextRequest) {
   priorityQuery = priorityQuery.order("follow_up_date", { ascending: true });
 
   const { data: priorityRows, error: priorityError } =
-    view === "all" ? { data: [], error: null } : await priorityQuery;
+    view === "all" || idsFilter ? { data: [], error: null } : await priorityQuery;
   if (priorityError) {
     return NextResponse.json({ error: priorityError.message }, { status: 500 });
   }
@@ -239,6 +246,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  if (idsFilter) {
+    for (const id of idsFilter) {
+      if (!seenPriorityIds.has(id)) {
+        seenPriorityIds.add(id);
+        priorityIds.push(id);
+      }
+    }
+  }
+
   // Merge: overdue/due-today leads occupy the front of the combined ordering, then the
   // rest of the filtered leads fill in behind them in the requested sort order.
   const pageEnd = offset + limit;
@@ -246,7 +262,7 @@ export async function GET(request: NextRequest) {
     Math.min(offset, priorityIds.length),
     Math.min(pageEnd, priorityIds.length)
   );
-  const restNeeded = view === "overdue" ? 0 : limit - prioritySliceIds.length;
+  const restNeeded = view === "overdue" || idsFilter ? 0 : limit - prioritySliceIds.length;
   const restOffset = Math.max(0, offset - priorityIds.length);
 
   let priorityLeads: LeadRow[] = [];
@@ -341,17 +357,28 @@ export async function GET(request: NextRequest) {
     // How long each lead has been quiet, with the same rule the daily archive job uses.
     const { data: activityRows } = await supabase
       .from("activities")
-      .select("lead_id, created_at, subject")
+      .select("lead_id, created_at, subject, type, description")
       .in("lead_id", leadIds)
       .order("created_at", { ascending: false })
       .limit(3000);
     const lastActivity = new Map<string, string>();
-    for (const a of (activityRows || []) as { lead_id: string; created_at: string; subject: string | null }[]) {
-      if (lastActivity.has(a.lead_id)) continue;
+    // The last time someone actually spoke to or met them, for the "Last:" line on the row.
+    const lastContact = new Map<string, { subject: string; at: string; note: string | null }>();
+    for (const a of (activityRows || []) as {
+      lead_id: string;
+      created_at: string;
+      subject: string | null;
+      type: string;
+      description: string | null;
+    }[]) {
       if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
-      lastActivity.set(a.lead_id, a.created_at);
+      if (!lastActivity.has(a.lead_id)) lastActivity.set(a.lead_id, a.created_at);
+      if (!lastContact.has(a.lead_id) && isLastContactActivity(a)) {
+        lastContact.set(a.lead_id, { subject: a.subject || a.type, at: a.created_at, note: a.description?.trim() || null });
+      }
     }
     for (const l of leads) {
+      l._last_contact = lastContact.get(l.id) ?? null;
       const stale = leadStaleState({
         status: l.status,
         archivedAt: l.archived_at,
