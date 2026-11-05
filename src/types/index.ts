@@ -413,6 +413,9 @@ export interface Proposal {
   deposit_razorpay_link_id?: string;
   deposit_razorpay_link_url?: string;
   deposit_email_sent_at?: string;
+  /** Live first-month proforma (statement id and amount); set by GET /api/proposals/[id] only. */
+  pi_statement_id?: string | null;
+  pi_statement_total?: number | null;
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;

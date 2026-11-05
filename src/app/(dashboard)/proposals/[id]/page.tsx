@@ -14,6 +14,7 @@ import {
   Mail,
   AlertTriangle,
   Banknote,
+  BadgeIndianRupee,
   Upload,
   X,
   Loader2,
@@ -57,6 +58,7 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
@@ -134,6 +136,7 @@ export default function ProposalDetailPage({
   // from the deposit's manualPay* above — both dialogs live on this page and
   // sharing state would let one dialog inherit the other's half-typed values.
   const [monthlyPayDialogOpen, setMonthlyPayDialogOpen] = useState(false);
+  const [reportPiOpen, setReportPiOpen] = useState(false);
   const [monthlyPayAmount, setMonthlyPayAmount] = useState("");
   const [monthlyPayRef, setMonthlyPayRef] = useState("");
   const [monthlyPayMedium, setMonthlyPayMedium] = useState("");
@@ -1841,6 +1844,21 @@ export default function ProposalDetailPage({
                         Record Payment Received
                       </Button>
                     )}
+                  {/* Everyone else tells accounts the customer says they paid; accounts verify against the bank and record it. */}
+                  {proposal.payment_status !== "paid" &&
+                    !canRecordPayments(currentUser?.role) &&
+                    proposal.pi_statement_id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-teal-300 text-teal-700 hover:bg-teal-50"
+                        title="The customer says they've paid this proforma outside the CRM — accounts will check the bank and record it"
+                        onClick={() => setReportPiOpen(true)}
+                      >
+                        <BadgeIndianRupee className="mr-2 h-3.5 w-3.5" />
+                        Report paid
+                      </Button>
+                    )}
                 </CardContent>
               </Card>
             );
@@ -2581,6 +2599,15 @@ export default function ProposalDetailPage({
       </Dialog>
 
       {/* Record the monthly / pro-rata first invoice payment (bank transfer) */}
+      <ReportPaymentDialog
+        open={reportPiOpen}
+        onOpenChange={setReportPiOpen}
+        entityType="billing_statement"
+        entityId={proposal?.pi_statement_id ?? null}
+        partyLabel={`${proposal?.lead?.company || [proposal?.lead?.first_name, proposal?.lead?.last_name].filter(Boolean).join(" ")} · ${proposal?.proposal_number} · first-month proforma`}
+        suggestedAmount={proposal?.pi_statement_total ?? null}
+        onReported={fetchProposal}
+      />
       <Dialog open={monthlyPayDialogOpen} onOpenChange={setMonthlyPayDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
