@@ -5,6 +5,13 @@ import {
   findDuplicateReference,
   hasProof,
   verifyExcess,
+  amountLeftToCollect,
+  reportedPaymentState,
+  canCancelReportedPayment,
+  isCancelledPayment,
+  cancelNote,
+  bookingPaymentTolerance,
+  roundToRupee,
 } from "../booking-payment-rules";
 
 const upi = (amount: number, extra: Record<string, unknown> = {}) => ({
@@ -121,5 +128,94 @@ describe("closeOutPaymentState", () => {
   });
   it("does not count UPI that has no proof", () => {
     expect(closeOutPaymentState(2832, "pending", [upi(2832)]).settled).toBe(false);
+  });
+});
+
+describe("bookingPaymentTolerance", () => {
+  it("is ₹10 for small totals", () => {
+    expect(bookingPaymentTolerance(500)).toBe(10);
+    expect(bookingPaymentTolerance(0)).toBe(10);
+  });
+  it("is 2% once that exceeds ₹10", () => {
+    expect(bookingPaymentTolerance(8634)).toBeCloseTo(172.68, 2);
+  });
+  it("lets a booking count as covered a few rupees short", () => {
+    expect(checkInPaymentState(100, [{ amount: 91, status: "verified", payment_mode: "cash" }]).covered).toBe(true);
+    expect(checkInPaymentState(100, [{ amount: 89, status: "verified", payment_mode: "cash" }]).covered).toBe(false);
+  });
+  it("allows a verify to overshoot by the tolerance but no more", () => {
+    expect(verifyExcess(100, 0, 108)).toBe(0);
+    expect(verifyExcess(100, 0, 115)).toBe(15);
+  });
+});
+
+describe("roundToRupee", () => {
+  it("rounds to the nearest whole rupee", () => {
+    expect(roundToRupee(8634.06)).toBe(8634);
+    expect(roundToRupee(8634.5)).toBe(8635);
+  });
+});
+
+describe("amountLeftToCollect", () => {
+  it("takes verified and pending UPI off the total", () => {
+    expect(
+      amountLeftToCollect(8634, [{ amount: 7674.72, status: "pending", payment_mode: "upi" }]),
+    ).toBe(959.28);
+  });
+  it("ignores pending Razorpay and rejected rows", () => {
+    expect(
+      amountLeftToCollect(1000, [
+        { amount: 400, status: "pending", payment_mode: "razorpay" },
+        { amount: 300, status: "rejected", payment_mode: "upi" },
+      ]),
+    ).toBe(1000);
+  });
+  it("never goes negative", () => {
+    expect(amountLeftToCollect(100, [{ amount: 150, status: "verified", payment_mode: "cash" }])).toBe(0);
+  });
+});
+
+describe("canCancelReportedPayment", () => {
+  const pending = { status: "pending", payment_mode: "upi", created_by: "u1" };
+  it("lets the reporter and admin/accounts/manager cancel a pending UPI payment", () => {
+    expect(canCancelReportedPayment(pending, { id: "u1", role: "sales_rep" })).toBe(true);
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "accounts" })).toBe(true);
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "manager" })).toBe(true);
+  });
+  it("refuses other staff", () => {
+    expect(canCancelReportedPayment(pending, { id: "u9", role: "sales_rep" })).toBe(false);
+  });
+  it("goes away once verified or closed, and for non-UPI", () => {
+    expect(canCancelReportedPayment({ ...pending, status: "verified" }, { id: "u1", role: "admin" })).toBe(false);
+    expect(canCancelReportedPayment({ ...pending, status: "rejected" }, { id: "u1", role: "admin" })).toBe(false);
+    expect(canCancelReportedPayment({ ...pending, payment_mode: "razorpay" }, { id: "u1", role: "admin" })).toBe(false);
+  });
+  it("marks a cancel apart from a bank rejection", () => {
+    expect(isCancelledPayment({ status: "rejected", verification_notes: cancelNote("A", " twice ") })).toBe(true);
+    expect(isCancelledPayment({ status: "rejected", verification_notes: "not in bank" })).toBe(false);
+    expect(cancelNote("A", " twice ")).toBe("Cancelled by A: twice");
+  });
+});
+
+describe("reportedPaymentState", () => {
+  it("is covered when reported money covers the total", () => {
+    const st = reportedPaymentState(2832, [{ amount: 2832, status: "pending", payment_mode: "upi" }]);
+    expect(st).toMatchObject({ reported: 2832, left: 0, coveredByReport: true, overReported: false });
+  });
+  it("flags a double entry", () => {
+    const st = reportedPaymentState(2832, [
+      { amount: 2832, status: "pending", payment_mode: "upi" },
+      { amount: 2832, status: "pending", payment_mode: "upi" },
+    ]);
+    expect(st).toMatchObject({ reported: 5664, left: 0, coveredByReport: true, overReported: true });
+  });
+  it("shows what is left on a partial report", () => {
+    const st = reportedPaymentState(1180, [{ amount: 500, status: "pending", payment_mode: "upi" }]);
+    expect(st).toMatchObject({ reported: 500, left: 680, coveredByReport: false, overReported: false });
+  });
+  it("does nothing when nothing is reported", () => {
+    const st = reportedPaymentState(1180, [{ amount: 1180, status: "verified", payment_mode: "cash" }]);
+    expect(st.reported).toBe(0);
+    expect(st.coveredByReport).toBe(false);
   });
 });

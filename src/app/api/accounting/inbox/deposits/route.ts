@@ -58,6 +58,15 @@ export async function GET(request: NextRequest) {
   const partProposalIds = Array.from(new Set((partRows || []).filter((r) => r.status === "paid").map((r) => r.proposal_id)));
   const knownByProposal = new Map<string, number>();
   for (const r of partRows || []) knownByProposal.set(r.proposal_id, (knownByProposal.get(r.proposal_id) ?? 0) + 1);
+  // partRows holds only live parts (paid or still requested), so a part's number
+  // is its place among them in the order asked — cancelled requests take none.
+  const partNo = new Map<string, number>();
+  const seen = new Map<string, number>();
+  for (const r of [...(partRows || [])].sort((a, b) => a.seq - b.seq)) {
+    const n = (seen.get(r.proposal_id) ?? 0) + 1;
+    seen.set(r.proposal_id, n);
+    partNo.set(r.id, n);
+  }
 
   const { data: depositsAll } = await admin
     .from("proposals")
@@ -141,7 +150,7 @@ export async function GET(request: NextRequest) {
         party_name: partyName(lead),
         contract_number: contract?.contract_number ?? null,
         proposal_number: p.proposal_number,
-        part_seq: r.seq,
+        part_seq: partNo.get(r.id) ?? r.seq,
         parts_known: knownByProposal.get(r.proposal_id) ?? 1,
         amount: received,
         expected_amount: required,

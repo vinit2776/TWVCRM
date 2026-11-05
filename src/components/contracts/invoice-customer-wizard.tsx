@@ -286,6 +286,7 @@ export function InvoiceCustomerWizard({
         hasActiveProposal={false}
         onRequestProposal={() => router.push(`/leads/${leadId}`)}
         presetHead={invoicePurpose?.head}
+        contractId={contractId}
         onCreated={(invoice) => attachToContract(invoice.id)}
       />
     </>

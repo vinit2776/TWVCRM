@@ -1,3 +1,4 @@
+import { normalizeStoredPhone } from "@/lib/phone";
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
@@ -5,18 +6,6 @@ import { sendPushToAll } from "@/lib/push";
 import { messaging } from "@/lib/whatsapp";
 import { sanitiseAttribution } from "@/lib/public-forms/attribution";
 import { verifyTurnstile } from "@/lib/public-forms/turnstile";
-
-/** Normalise a phone number to a canonical 10-digit Indian mobile number.
- *  Strips all non-digit characters, then removes a leading country code
- *  (+91 / 91) or STD zero if present, so both "9876543210" and
- *  "+91 98765 43210" normalise to the same "9876543210".
- */
-function normalisePhone(raw: string): string {
-  let digits = raw.replace(/\D/g, "");
-  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
-  if (digits.length === 11 && digits.startsWith("0"))  digits = digits.slice(1);
-  return digits;
-}
 
 const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
 type AllowedSource = (typeof ALLOWED_SOURCES)[number];
@@ -221,7 +210,7 @@ export async function POST(request: NextRequest) {
   const firstName = nameParts[0];
   const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "-";
 
-  const normalisedMobile = normalisePhone(mobile);
+  const normalisedMobile = normalizeStoredPhone(mobile);
 
   // Validate: must be a 10-digit Indian mobile number (starts with 6–9)
   if (!/^[6-9]\d{9}$/.test(normalisedMobile)) {

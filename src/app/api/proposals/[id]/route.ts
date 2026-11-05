@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges, logView } from "@/lib/audit";
 import { updateProposalSchema } from "@/lib/validations";
 import { PROPOSAL_EDITABLE_STATUSES } from "@/lib/constants";
@@ -46,7 +46,26 @@ export async function GET(
     await logView(supabase, { entityType: "proposal", entityId: id, performedBy: dbUser.id });
   }
 
-  return NextResponse.json({ data });
+  // The first-month proforma, so the page can offer Report paid against it to
+  // people who can't record. Id and amount only; the proposal itself was
+  // already readable by this user.
+  const { data: piStatement } = await createAdminClient()
+    .from("billing_statements")
+    .select("id, total_amount")
+    .eq("proposal_id", id)
+    .eq("created_via", "proposal_pi")
+    .neq("status", "voided")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return NextResponse.json({
+    data: {
+      ...data,
+      pi_statement_id: piStatement?.id ?? null,
+      pi_statement_total: piStatement ? Number(piStatement.total_amount) : null,
+    },
+  });
 }
 
 export async function PATCH(

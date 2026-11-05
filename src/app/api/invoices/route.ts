@@ -6,6 +6,7 @@ import { invoiceParty, type InvoiceCaseLike } from "@/lib/invoice-party";
 import { RAZORPAY_MAX_LINK_VALIDITY_SECONDS } from "@/lib/constants";
 import { adhocInvoiceTotal } from "@/lib/adhoc-invoice-total";
 import { razorpayLinkDates } from "@/lib/razorpay-link-dates";
+import { decideAttachment, loadLiveContracts, contractBelongsToLead, AUTO_ATTRIBUTION_PURPOSE } from "@/lib/adhoc-contract-attach";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -67,6 +68,38 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // A live contract captures all of the customer's financial activity, so the
+  // invoice is tied to it at creation. Case-raised invoices have no lead and
+  // stay on the ad-hoc page.
+  const { contract_id: requestedContractId, ...invoiceFields } = result.data;
+  let attachContractId: string | null = null;
+  let attachedContractNumber: string | null = null;
+  if (result.data.lead_id && !result.data.case_id) {
+    const live = await loadLiveContracts(supabase, result.data.lead_id);
+    const belongs = requestedContractId
+      ? await contractBelongsToLead(supabase, requestedContractId, result.data.lead_id)
+      : false;
+    const decision = decideAttachment(live, requestedContractId, belongs);
+    if (decision.kind === "choose") {
+      return NextResponse.json(
+        { error: "This customer has more than one live contract. Choose which contract this invoice belongs to." },
+        { status: 400 }
+      );
+    }
+    if (decision.kind === "invalid") {
+      return NextResponse.json(
+        { error: "That contract does not belong to this customer." },
+        { status: 400 }
+      );
+    }
+    if (decision.kind === "attach") {
+      attachContractId = decision.contractId;
+      attachedContractNumber = live.find((c) => c.id === decision.contractId)?.contract_number ?? null;
+    }
+  } else if (requestedContractId) {
+    return NextResponse.json({ error: "A contract can only be chosen for a lead invoice." }, { status: 400 });
+  }
+
   const items = result.data.items;
   const subtotal = items.reduce((sum, item) => sum + item.total, 0);
   const taxAmount = subtotal * (result.data.tax_percentage / 100);
@@ -80,7 +113,15 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("proforma_invoices")
     .insert({
-      ...result.data,
+      ...invoiceFields,
+      ...(attachContractId
+        ? {
+            contract_id: attachContractId,
+            attribution_purpose: AUTO_ATTRIBUTION_PURPOSE,
+            attributed_at: new Date().toISOString(),
+            attributed_by: dbUser?.id,
+          }
+        : {}),
       status: "draft",
       subtotal,
       tax_amount: taxAmount,
@@ -94,6 +135,21 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const invoiceNumber: string = data.invoice_number;
+
+  if (data && dbUser?.id && attachContractId) {
+    logAudit(supabase, {
+      entityType: "contract",
+      entityId: attachContractId,
+      action: "invoice_attributed",
+      performedBy: dbUser.id,
+      changes: {
+        invoice_number: { old: null, new: invoiceNumber },
+        amount: { old: null, new: totalAmount },
+        attribution_purpose: { old: null, new: AUTO_ATTRIBUTION_PURPOSE },
+        automatic: { old: null, new: attachedContractNumber ? `live contract ${attachedContractNumber}` : "live contract" },
+      },
+    });
+  }
 
   if (data && dbUser?.id) {
     logAudit(supabase, {

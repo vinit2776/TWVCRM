@@ -184,6 +184,7 @@ Defined in `vercel.json`. All cron endpoints are under `src/app/api/cron/`. Time
 |----------|----------|---------|
 | 28–31st 21:00 IST | `/api/billing/auto-generate` | Monthly invoice generation |
 | Daily 18:30 IST | `/api/cron/contract-expiry` | Contract expiry alerts |
+| Daily 06:00 IST | `/api/cron/auto-renew` | Auto-renewal, **dry run only** (part 2 of 4, see `docs/auto-renewal.md`). For contracts with `contracts.auto_renew` on, emails admin and accounts a digest of who needs a person, what is due now and what is coming up. Changes nothing, contacts no customer, sends nothing when no contract is opted in. Mode is `app_settings.auto_renew_cron_mode` (`off` / `dry_run` default; `live` is not built and reads as `dry_run`) |
 | Daily 20:30 IST | `/api/digest` | Email digest |
 | Mon 09:30 IST | `/api/cron/vendor-email-digest` | Vendor email nag digest |
 | Daily 09:00 IST | `/api/cron/query-digest` | The only place queries send email — one digest per person (new/replies/overdue/silent); in-app alerts stay real-time |
@@ -217,6 +218,7 @@ Billing generation logic is centralised in `src/lib/billing.ts` — used by both
 | Facility tickets | `fms`, `admin` |
 | `coordinator` scope | Sales + Operations + Procurement (create/edit **own** MRs, view everything, **no approvals**) + day-to-day Facility. **No** Finance, Payroll, Attendance or Admin — sidebar hides them, `isCoordinatorBlockedPath` (`src/lib/restricted-roles.ts`) redirects typed URLs, API role lists refuse writes |
 | Void billing statements | `admin` only |
+| Withdraw an unverified payment report (Report paid) | the reporter, `admin`, `accounts` — only while it is still unverified; `POST /api/queries/payment-reports/[id]/withdraw`; never for booking reports |
 | Reverse a customer payment recorded in error | `admin` only — `POST /api/billing-statements/[id]/payment/[paymentId]/reverse` (reason ≥10 chars; refused for gateway/Tally-receipted/TDS-filed/deposit-adjustment payments, accounted or period-locked statements, and proposal/invoice/VO-case statements) |
 
 ### Procurement → Payment Flow (strict separation)
@@ -251,6 +253,10 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - `prepare` → `create_usage_invoice` RPC (`00564`) locks and links charges to a draft in one transaction and refuses if anything changed (`USAGE_INVOICE_STALE`). Preview with the existing `preview-send` / `proforma-pdf?preview=1` routes. `send` finalizes and dispatches by `contracts.billing_mode`; if it fails before anything irreversible (payment link, GST number, sent), the draft is discarded and charges return to the list. `cancel` discards and releases.
 - Discard and void must release all three charge tables, including `facility_usage_records.billing_statement_id`.
 
+### Ad-hoc invoices on a live contract
+
+A live contract (`active`, or `renewal_in_progress` before its end date — `isContractOperational`) captures all of the customer's financial activity, so `POST /api/invoices` ties a lead's ad-hoc invoice to it at creation (`src/lib/adhoc-contract-attach.ts`): one live contract attaches by itself, several make the form require a pick (`contract_id`, server returns 400 otherwise), none leaves it on the ad-hoc page only. Case-raised invoices have no lead and are untouched. The automatic purpose is always `other` (visibility only) — only a hand-set `prorata_first_invoice` can open the activation gate. The contract card's dropdown can re-tag an invoice as **Security deposit** (for deposits that slipped through before the creation gate): it asks first, only a paid invoice with no GST can be credited to the customer's deposit pool (taxed/unpaid ones show a warning and are refused), and switching away takes the credit back out. Invoices raised before this rule: `node scripts/backfill-adhoc-contract-attach.mjs` (lists by default, `--apply` writes; skips customers with several live contracts).
+
 ### Proposal → Contract Flow (strictly enforced)
 
 **Responsibility split:**
@@ -262,6 +268,7 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 - `POST /api/proposals/[id]/send-invoice` always creates a **fresh** link — never reuses `proposal.razorpay_payment_link_url`
 - Deposit paid → webhook auto-accepts proposal (`status → accepted`)
 - Pro-rata paid → `payment_status → paid`
+- The pro-rata invoice goes out **in parallel** with the deposit: it needs the deposit to have been *requested* (single request sent, or at least one live part), not received. Receipt is still required for contract activation.
 
 **Contract activation gate (hard — do not bypass):**
 1. `proposal_id` is set
@@ -275,7 +282,7 @@ Usage is never auto-generated — only rent is. Engine: `src/lib/usage-billing.t
 
 Sales can take a proposal's deposit in parts (e.g. ₹20k of ₹60k now). **Activation is unchanged — the deposit must still be paid in full.** Ships dark: `app_settings.deposit_instalments_enabled` (`false` by default); `deposit_min_first_part_percent` (default 25) is the smallest first part without a manager.
 
-- Each ask is a row in `proposal_deposit_instalments` (`00649`) with its **own fresh Razorpay link** for exactly that amount, one open (unpaid) ask at a time. Admin / manager / sales rep may ask (`POST /api/proposals/[id]/deposit-instalments`); a first part below the minimum needs an admin/manager override with a reason; recording a bank payment against a part stays admin/accounts only.
+- Each ask is a row in `proposal_deposit_instalments` (`00649`) with its **own fresh Razorpay link** for exactly that amount, **several asks can be open at once** (`00665` dropped the one-open index; what may still be asked is the part neither paid nor already requested). Each open part is its own Receivables line for that part's amount (the whole deposit shows in the line's label), has its own **Report paid** (on the proposal and in Receivables), and accounts record a reported part against the matching open part when verifying. Admin / manager / sales rep may ask (`POST /api/proposals/[id]/deposit-instalments`); a first part below the minimum needs an admin/manager override with a reason; recording a bank payment against a part stays admin/accounts only.
 - The proposal's completed-deposit fields (`deposit_payment_status = paid`, amount, reference, medium, received-at) are written **only when parts paid ≥ required** (`_rollup_proposal_deposit`). Anything that needs *cash received* must read the instalments; anything that means "complete" keeps reading the proposal. The first paid part accepts the proposal and locks its terms.
 - All money changes go through RPCs (service role only): `request_deposit_instalment`, `record_deposit_instalment_paid`, `record_deposit_payment_for_link` (webhook; also records a late payment on the original full-deposit link once parts exist), `cancel_deposit_instalment`.
 - Once any part is asked for or paid, the single-deposit paths stand down (`hasLiveInstalments`): `deposit-link`, `deposit-payment`, `deposit-payment-link`, `accept` and `revise` refuse or skip.

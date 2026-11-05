@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Check, UserCheck, X, RefreshCw } from "lucide-react";
+import { Check, UserCheck, X, RefreshCw, Ban, Phone } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,7 @@ import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notific
 import type { EnquiryOutcome } from "@/lib/enquiries";
 import { NextStepLine, StageChip } from "@/components/enquiries/enquiry-actions";
 import { EnquiryNameControl } from "@/components/enquiries/enquiry-name";
+import { NUMBER_LABELS, NUMBER_LABEL_TEXT } from "@/lib/whatsapp-gate";
 
 const OUTCOME_LABEL: Record<EnquiryOutcome, string> = {
   converted: "Converted to lead",
@@ -65,7 +66,7 @@ interface Props {
 
 export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
   const router = useRouter();
-  const { claim, unclaim, resolve } = useEnquiryNotifications();
+  const { claim, unclaim, resolve, markNotALead } = useEnquiryNotifications();
 
   const u = urgency(item);
   const isResolved = !!item.resolvedAt;
@@ -217,6 +218,38 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {item.sourceTag === "whatsapp" && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+                  title="Staff, a vendor or anyone who is not a prospect: their messages stop opening enquiries"
+                >
+                  <Ban className="h-3 w-3" />
+                  Not a lead
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                {NUMBER_LABELS.map((label) => (
+                  <DropdownMenuItem key={label} onClick={() => markNotALead(item.enquiryId, label)}>
+                    {NUMBER_LABEL_TEXT[label]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          <button
+            onClick={() => {
+              onNavigate?.();
+              router.push(`/leads/contact-back/${item.enquiryId}`);
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/5 transition-colors"
+          >
+            <Phone className="h-3 w-3" />
+            Call back
+          </button>
 
           <button
             onClick={goToLead}
