@@ -62,7 +62,7 @@ export function targetKindForEntity(entityType: PaymentReportEntityType): Paymen
  */
 export const DEPOSIT_RECORD_ROLES: readonly UserRole[] = ["admin", "manager", "accounts"];
 
-export type PaymentReportStatus = "reported" | "verified" | "rejected";
+export type PaymentReportStatus = "reported" | "verified" | "rejected" | "withdrawn";
 
 export const PAYMENT_REPORT_TARGET_LABELS: Record<PaymentReportTargetKind, string> = {
   invoice: "Invoice payment",
@@ -74,12 +74,14 @@ export const PAYMENT_REPORT_STATUS_LABELS: Record<PaymentReportStatus, string> =
   reported: "Reported · unverified",
   verified: "Verified",
   rejected: "No such payment",
+  withdrawn: "Withdrawn",
 };
 
 export const PAYMENT_REPORT_STATUS_COLORS: Record<PaymentReportStatus, string> = {
   reported: "bg-amber-50 border-amber-200 text-amber-800",
   verified: "bg-green-50 border-green-200 text-green-800",
   rejected: "bg-red-50 border-red-200 text-red-800",
+  withdrawn: "bg-muted/40 border-border text-muted-foreground",
 };
 
 /**
@@ -97,6 +99,23 @@ export const PAYMENT_REPORT_REVIEW_ROLES: readonly UserRole[] = ["admin", "accou
 
 export function canReviewPaymentReport(role: string | null | undefined): boolean {
   return !!role && (PAYMENT_REPORT_REVIEW_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Who can take a report back before it is verified: whoever raised it (to fix a
+ * wrong amount or date), or accounts/admin (to clear a mistaken one). Booking
+ * reports are raised by the server against a pending booking payment, so they
+ * are settled from the booking, never withdrawn.
+ */
+export function canWithdrawPaymentReport(args: {
+  status: PaymentReportStatus;
+  targetKind: PaymentReportTargetKind;
+  role: string | null | undefined;
+  userId: string | null | undefined;
+  reportedBy: string | null | undefined;
+}): boolean {
+  if (args.status !== "reported" || args.targetKind === "booking") return false;
+  return (!!args.userId && args.userId === args.reportedBy) || canReviewPaymentReport(args.role);
 }
 
 /**
@@ -319,6 +338,9 @@ export function closedReportSummary(args: {
 }): { headline: string; linkLine: string | null } {
   if (args.status === "rejected") {
     return { headline: "Payment report closed — no such payment", linkLine: null };
+  }
+  if (args.status === "withdrawn") {
+    return { headline: "Payment report withdrawn", linkLine: null };
   }
   if (args.targetKind === "deposit") {
     return { headline: "Payment report closed", linkLine: "Recorded against the deposit" };

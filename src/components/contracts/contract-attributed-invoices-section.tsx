@@ -34,6 +34,7 @@ interface AttributableInvoice {
   title: string;
   status: string;
   total_amount: number;
+  tax_amount: number | null;
   paid_at: string | null;
   payment_reference: string | null;
   gst_invoice_number: string | null;
@@ -65,6 +66,16 @@ const STATUS_BADGE: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-500 border-gray-200",
 };
 
+/** Why an invoice cannot be credited to the deposit pool, or null if it can.
+ *  Mirrors the checks in attribute_invoice_as_security_deposit (00581). */
+function depositBlocker(inv: { status: string; tax_amount: number | null }): string | null {
+  if (inv.status !== "paid") return "Only a paid invoice can be credited to the deposit pool.";
+  if (Number(inv.tax_amount ?? 0) > 0) {
+    return `This invoice includes GST of ${formatCurrency(Number(inv.tax_amount))}, so a security deposit may not be the right fit: deposits are refundable and GST-exempt. The invoice is not credited to the deposit pool.`;
+  }
+  return null;
+}
+
 export function ContractAttributedInvoicesSection({
   contractId,
   currentUserRole,
@@ -82,6 +93,9 @@ export function ContractAttributedInvoicesSection({
   // so it asks first — the icon alone is easy to hit by mistake.
   const [confirmDetach, setConfirmDetach] = useState<AttributableInvoice | null>(null);
   const [changingId, setChangingId] = useState<string | null>(null);
+  // A change to or from Security deposit moves money in the customer's deposit
+  // pool, so it asks first; the other purposes re-tag straight away.
+  const [pendingChange, setPendingChange] = useState<{ inv: AttributableInvoice; next: AdhocAttributionPurpose } | null>(null);
 
   const canAttribute = ["admin", "accounts"].includes(currentUserRole);
 
@@ -243,19 +257,25 @@ export function ContractAttributedInvoicesSection({
                 </div>
                 {canAttribute && (
                   <div className="flex shrink-0 items-center gap-1">
-                    {/* A deposit credit moves money in the deposit pool, so it is
-                        only changed by removing the attribution, never re-tagged inline. */}
-                    {inv.attribution_purpose && inv.attribution_purpose !== "security_deposit" && (
+                    {inv.attribution_purpose && (
                       <Select
                         value={inv.attribution_purpose}
-                        onValueChange={(v) => handleChangePurpose(inv.id, v as AdhocAttributionPurpose)}
+                        onValueChange={(v) => {
+                          const next = v as AdhocAttributionPurpose;
+                          if (next === inv.attribution_purpose) return;
+                          if (next === "security_deposit" || inv.attribution_purpose === "security_deposit") {
+                            setPendingChange({ inv, next });
+                          } else {
+                            void handleChangePurpose(inv.id, next);
+                          }
+                        }}
                         disabled={changingId === inv.id}
                       >
                         <SelectTrigger className="h-8 w-[170px] text-xs" aria-label={`What ${inv.invoice_number} covers`}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {ADHOC_ATTRIBUTION_PURPOSES.filter((p) => p !== "security_deposit").map((p) => (
+                          {ADHOC_ATTRIBUTION_PURPOSES.map((p) => (
                             <SelectItem key={p} value={p} className="text-xs">
                               {ADHOC_ATTRIBUTION_PURPOSE_LABELS[p]}
                             </SelectItem>
@@ -325,6 +345,50 @@ export function ContractAttributedInvoicesSection({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!pendingChange} onOpenChange={(o) => { if (!o) setPendingChange(null); }}>
+        <DialogContent>
+          {pendingChange && (() => {
+            const { inv, next } = pendingChange;
+            const toDeposit = next === "security_deposit";
+            const blocker = toDeposit ? depositBlocker(inv) : null;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>
+                    {toDeposit
+                      ? `Count ${inv.invoice_number} as a security deposit?`
+                      : `Stop counting ${inv.invoice_number} as a security deposit?`}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {toDeposit
+                      ? `This credits ${formatCurrency(inv.total_amount)} to the customer's deposit pool, usable across their contracts, and it stops counting as revenue. For deposits that were invoiced before deposits moved to the proposal link.`
+                      : `This takes ${formatCurrency(inv.total_amount)} back out of the customer's deposit pool and counts the invoice as: ${ADHOC_ATTRIBUTION_PURPOSE_LABELS[next]}. It is refused if the deposit has already been drawn on.`}
+                  </DialogDescription>
+                </DialogHeader>
+                {blocker && (
+                  <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    {blocker}
+                  </p>
+                )}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setPendingChange(null)}>Cancel</Button>
+                  <Button
+                    disabled={!!blocker}
+                    onClick={() => {
+                      setPendingChange(null);
+                      void handleChangePurpose(inv.id, next);
+                    }}
+                  >
+                    {toDeposit ? "Credit deposit pool" : "Take it back out"}
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -386,13 +450,23 @@ export function ContractAttributedInvoicesSection({
                 satisfy the activation payment requirement until it is marked paid.
               </p>
             )}
+
+            {purpose === "security_deposit" && selectedCandidate && depositBlocker(selectedCandidate) && (
+              <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {depositBlocker(selectedCandidate)}
+              </p>
+            )}
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={handleAttribute} disabled={!selectedInvoiceId || !purpose || saving}>
+            <Button onClick={handleAttribute} disabled={
+                !selectedInvoiceId || !purpose || saving ||
+                (purpose === "security_deposit" && !!selectedCandidate && !!depositBlocker(selectedCandidate))
+              }>
               {saving && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
               Attribute
             </Button>

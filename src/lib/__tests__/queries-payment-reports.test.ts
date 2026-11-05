@@ -12,6 +12,7 @@ import {
   matchingRecordedPayments,
   paymentCoversReportedAmount,
   closedReportSummary,
+  canWithdrawPaymentReport,
   MAX_AGE_DAYS,
   type PaymentReportFields,
 } from "@/lib/queries/payment-reports";
@@ -324,5 +325,46 @@ describe("paymentCoversReportedAmount", () => {
   });
   it("rejects a different amount, such as a part payment", () => {
     expect(paymentCoversReportedAmount({ amount: 10894 }, 26447)).toBe(false);
+  });
+});
+
+
+describe("canWithdrawPaymentReport", () => {
+  const base = { status: "reported" as const, targetKind: "invoice" as const, role: "sales_rep", userId: "u1", reportedBy: "u1" };
+
+  it("lets the reporter take back their own unverified report", () => {
+    expect(canWithdrawPaymentReport(base)).toBe(true);
+  });
+  it("refuses another non-accounts user", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2" })).toBe(false);
+  });
+  it("lets accounts and admin withdraw someone else's report", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "accounts" })).toBe(true);
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "admin" })).toBe(true);
+  });
+  it("refuses a manager who did not raise it", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: "u2", role: "manager" })).toBe(false);
+  });
+  it("refuses once the report is settled", () => {
+    for (const status of ["verified", "rejected", "withdrawn"] as const) {
+      expect(canWithdrawPaymentReport({ ...base, status })).toBe(false);
+    }
+  });
+  it("never withdraws a booking report", () => {
+    expect(canWithdrawPaymentReport({ ...base, targetKind: "booking", role: "admin" })).toBe(false);
+  });
+  it("needs a known user", () => {
+    expect(canWithdrawPaymentReport({ ...base, userId: null, reportedBy: null })).toBe(false);
+  });
+});
+
+describe("closedReportSummary withdrawn", () => {
+  it("reads as withdrawn, not closed against a payment", () => {
+    const r = closedReportSummary({
+      status: "withdrawn", targetKind: "invoice", reportedAmount: 100, reportedMode: "neft",
+      reportedOn: "2026-11-05", linkedPayment: null, modeLabel: (m) => m,
+    });
+    expect(r.headline).toBe("Payment report withdrawn");
+    expect(r.linkLine).toBeNull();
   });
 });

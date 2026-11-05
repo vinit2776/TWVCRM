@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Banknote, Copy, Download, Layers, Loader2, Mail, X } from "lucide-react";
+import { Banknote, BadgeIndianRupee, Copy, Download, Layers, Loader2, Mail, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,12 +22,14 @@ import {
   checkAsk,
   DEPOSIT_INSTALMENT_STATUS_COLORS,
   DEPOSIT_INSTALMENT_STATUS_LABELS,
+  livePartNumbers,
   minFirstPart,
   type DepositInstalmentStatus,
   type DepositPosition,
 } from "@/lib/deposit-instalments";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { partialDepositState } from "@/lib/deposit-activation";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { DepositRefundSection, type DepositRefund } from "@/components/proposals/deposit-refund-section";
 import type { DepositInstalment } from "@/types";
 
@@ -45,6 +47,8 @@ interface Props {
   depositPaymentStatus: string | undefined;
   userId: string | null;
   role: string | null;
+  /** "Customer · PROP-0157 · security deposit" — names the money on Report paid. */
+  partyLabel?: string | null;
   /** Refetch the proposal after money or state changed. */
   onChanged: () => void;
   /** Tells the page that parts exist, so it can stand its single-deposit buttons down. */
@@ -68,7 +72,7 @@ function Stat({ label, value, hint, tone }: { label: string; value: number; hint
   );
 }
 
-export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentStatus, userId, role, onChanged, onPartsActive, onPosition }: Props) {
+export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentStatus, userId, role, partyLabel, onChanged, onPartsActive, onPosition }: Props) {
   const [data, setData] = useState<PanelData | null>(null);
   const [requestOpen, setRequestOpen] = useState(false);
   const [recordFor, setRecordFor] = useState<DepositInstalment | null>(null);
@@ -76,6 +80,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   const [sendFor, setSendFor] = useState<DepositInstalment | null>(null);
   const [refund, setRefund] = useState<DepositRefund | null>(null);
   const [pdfFor, setPdfFor] = useState<string | null>(null);
+  const [reportFor, setReportFor] = useState<DepositInstalment | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -118,6 +123,8 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
   }
 
   const refreshed = useCallback(() => { load(); onChanged(); }, [load, onChanged]);
+  // Cancelled requests never take a number: the first live part is Part 1.
+  const partNo = useMemo(() => livePartNumbers(data?.instalments ?? []), [data]);
 
   if (!data) return null;
   const { instalments, position, has_open_ask: hasOpenAsk, enabled } = data;
@@ -126,7 +133,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
 
   const open = ["sent", "viewed", "accepted"].includes(proposalStatus);
   const refundLive = !!refund && refund.status !== "rejected";
-  const canAsk = enabled && open && !refundLive && depositPaymentStatus === "pending" && !hasOpenAsk && position.balance > 0 && canRequestDepositInstalment(role);
+  const canAsk = enabled && open && !refundLive && depositPaymentStatus === "pending" && position.notYetAsked > 0 && canRequestDepositInstalment(role);
   const canCancel = (i: DepositInstalment) => i.status === "requested" && (i.requested_by === userId || canOverrideDepositFloor(role));
   const barPct = (n: number) => (position.required > 0 ? Math.min(100, (n / position.required) * 100) : 0);
 
@@ -165,7 +172,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
           {depositPaymentStatus === "pending" && (
             partialDepositState(position.required, position.paid).allowsActivation ? (
               <p className="rounded-md border-l-4 border-amber-500 bg-amber-100 px-2.5 py-1.5 text-xs text-amber-900">
-                More than half of the deposit is in, so the contract <b>can be activated</b> and the GST invoice sent.
+                More than half of the deposit is in, so the contract <b>can be activated</b> and the proforma invoice sent.
                 <b> {formatCurrency(position.balance)} is still pending</b> — keep collecting it.
               </p>
             ) : (
@@ -182,7 +189,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
               return (
                 <li key={i.id} className={`rounded-md border bg-white/70 px-2.5 py-2 text-xs ${st === "cancelled" ? "opacity-60" : ""}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">Part {i.seq} · {formatCurrency(Number(i.paid_amount ?? i.amount))}</span>
+                    <span className="font-semibold">{partNo.has(i.id) ? `Part ${partNo.get(i.id)}` : "Cancelled request"} · {formatCurrency(Number(i.paid_amount ?? i.amount))}</span>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${DEPOSIT_INSTALMENT_STATUS_COLORS[st]}`}>
                       {DEPOSIT_INSTALMENT_STATUS_LABELS[st]}
                     </span>
@@ -214,6 +221,12 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
                           {pdfFor === i.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Download className="mr-1 h-3 w-3" />} Download PDF
                         </Button>
                       )}
+                      {/* Anyone can tell accounts a customer says they paid; only accounts/admin record it. */}
+                      <Button type="button" size="sm" variant="outline" className="h-6 border-teal-200 px-2 text-[11px] text-teal-700 hover:bg-teal-50"
+                        title="The customer says they've paid this part outside the CRM — accounts will check the bank and record it"
+                        onClick={() => setReportFor(i)}>
+                        <BadgeIndianRupee className="mr-1 h-3 w-3" /> Report paid
+                      </Button>
                       {canRecordPayments(role) && (
                         <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setRecordFor(i)}>
                           <Banknote className="mr-1 h-3 w-3" /> Record bank transfer
@@ -241,19 +254,32 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
       )}
       {canAsk && (
         <Button type="button" size="sm" className="w-full" onClick={() => setRequestOpen(true)}>
-          {anyParts ? "Request next part" : "Collect deposit in parts"}
+          {anyParts ? `Request ${position.awaiting > 0 ? "another" : "next"} part (${formatCurrency(position.notYetAsked)} not yet asked)` : "Collect deposit in parts"}
         </Button>
       )}
-      {enabled && hasOpenAsk && <p className="text-[11px] text-muted-foreground">One part can be open at a time — it needs to be paid or cancelled before the next is requested.</p>}
+      {enabled && hasOpenAsk && position.notYetAsked > 0 && depositPaymentStatus === "pending" && (
+        <p className="text-[11px] text-muted-foreground">
+          {formatCurrency(position.notYetAsked)} has not been asked for yet. You can request it now without waiting for the open part, or cancel an open part to change its amount.
+        </p>
+      )}
 
       <RequestPartDialog
         open={requestOpen} onClose={() => setRequestOpen(false)} proposalId={proposalId}
         position={position} percent={data.min_first_part_percent} role={role}
         onDone={() => { setRequestOpen(false); refreshed(); }}
       />
-      <RecordPartDialog part={recordFor} proposalId={proposalId} onClose={() => setRecordFor(null)} onDone={() => { setRecordFor(null); refreshed(); }} />
-      <SendPartDialog part={sendFor} proposalId={proposalId} onClose={() => setSendFor(null)} onDone={() => { setSendFor(null); refreshed(); }} />
-      <CancelPartDialog part={cancelFor} proposalId={proposalId} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refreshed(); }} />
+      <ReportPaymentDialog
+        open={!!reportFor}
+        onOpenChange={(o) => { if (!o) setReportFor(null); }}
+        entityType="proposal_deposit"
+        entityId={proposalId}
+        partyLabel={partyLabel ? `${partyLabel} · Part ${reportFor ? partNo.get(reportFor.id) ?? "" : ""}` : null}
+        suggestedAmount={reportFor ? Number(reportFor.amount) : null}
+        onReported={refreshed}
+      />
+      <RecordPartDialog part={recordFor} no={recordFor ? partNo.get(recordFor.id) : undefined} proposalId={proposalId} onClose={() => setRecordFor(null)} onDone={() => { setRecordFor(null); refreshed(); }} />
+      <SendPartDialog part={sendFor} no={sendFor ? partNo.get(sendFor.id) : undefined} proposalId={proposalId} onClose={() => setSendFor(null)} onDone={() => { setSendFor(null); refreshed(); }} />
+      <CancelPartDialog part={cancelFor} no={cancelFor ? partNo.get(cancelFor.id) : undefined} proposalId={proposalId} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refreshed(); }} />
     </div>
   );
 }
@@ -270,10 +296,10 @@ function RequestPartDialog({ open, onClose, proposalId, position, percent, role,
 
   useEffect(() => { if (open) { setAmount(""); setDueDate(""); setNote(""); setMessage(""); setOverride(""); } }, [open]);
 
-  const firstPart = position.paid === 0;
+  const firstPart = position.requested === 0;
   const floor = minFirstPart(position.required, percent);
   const amt = Number(amount);
-  const check = useMemo(() => (amt > 0 ? checkAsk(amt, position, false, percent) : null), [amt, position, percent]);
+  const check = useMemo(() => (amt > 0 ? checkAsk(amt, position, percent) : null), [amt, position, percent]);
   const needsOverride = check?.ok === true && check.needsOverride;
   const mayOverride = canOverrideDepositFloor(role);
 
@@ -308,8 +334,9 @@ function RequestPartDialog({ open, onClose, proposalId, position, percent, role,
         <DialogHeader>
           <DialogTitle>{firstPart ? "Collect deposit in parts" : "Request next part"}</DialogTitle>
           <DialogDescription>
-            Balance to collect {formatCurrency(position.balance)}
-            {position.paid > 0 ? ` · already paid ${formatCurrency(position.paid)}` : ""}.
+            Not yet asked {formatCurrency(position.notYetAsked)}
+            {position.paid > 0 ? ` · already paid ${formatCurrency(position.paid)}` : ""}
+            {position.awaiting > 0 ? ` · ${formatCurrency(position.awaiting)} already requested` : ""}.
             The contract still needs the full deposit before it can start.
           </DialogDescription>
         </DialogHeader>
@@ -323,22 +350,22 @@ function RequestPartDialog({ open, onClose, proposalId, position, percent, role,
             <Label htmlFor="dp-amount">Amount to request now (₹)</Label>
             <Input id="dp-amount" type="number" min={1} value={amount} onChange={(e) => setAmount(e.target.value)} />
             <div className="flex flex-wrap gap-1.5">
-              {firstPart && floor < position.balance && (
+              {firstPart && floor < position.notYetAsked && (
                 <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setAmount(String(floor))}>
                   Minimum {formatCurrency(floor)}
                 </Button>
               )}
-              <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setAmount(String(position.balance))}>
-                Full balance {formatCurrency(position.balance)}
+              <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => setAmount(String(position.notYetAsked))}>
+                {firstPart ? "Full balance" : "Everything not yet asked"} {formatCurrency(position.notYetAsked)}
               </Button>
             </div>
             {check?.ok === false && (
               <p className="text-xs text-red-600">
-                {check.code === "amount_exceeds_balance" ? `That is more than the balance (${formatCurrency(check.balance ?? 0)}).` : "Enter a valid amount."}
+                {check.code === "amount_exceeds_balance" ? `That is more than what is still to ask for (${formatCurrency(check.balance ?? 0)}).` : "Enter a valid amount."}
               </p>
             )}
             {amt > 0 && check?.ok && (
-              <p className="text-xs text-muted-foreground">After this ask, {formatCurrency(Math.max(0, position.balance - amt))} would remain to be asked.</p>
+              <p className="text-xs text-muted-foreground">After this ask, {formatCurrency(Math.max(0, position.notYetAsked - amt))} would remain to be asked.</p>
             )}
           </div>
           <div className="space-y-1.5">
@@ -376,8 +403,8 @@ function RequestPartDialog({ open, onClose, proposalId, position, percent, role,
   );
 }
 
-function RecordPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function RecordPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [medium, setMedium] = useState("");
   const [reference, setReference] = useState("");
@@ -411,7 +438,7 @@ function RecordPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Record bank transfer — Part {part?.seq}</DialogTitle>
+          <DialogTitle>Record bank transfer — Part {no ?? part?.seq}</DialogTitle>
           <DialogDescription>
             Amount {formatCurrency(Number(part?.amount ?? 0))}. This must match the request; if the customer paid a different amount, cancel this request and ask for the right one.
           </DialogDescription>
@@ -451,8 +478,8 @@ function RecordPartDialog({ part, proposalId, onClose, onDone }: {
   );
 }
 
-function CancelPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function CancelPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
@@ -478,7 +505,7 @@ function CancelPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Cancel Part {part?.seq}?</DialogTitle>
+          <DialogTitle>Cancel Part {no ?? part?.seq}?</DialogTitle>
           <DialogDescription>
             The payment link is withdrawn and {formatCurrency(Number(part?.amount ?? 0))} goes back to &ldquo;not yet asked&rdquo;.
           </DialogDescription>
@@ -498,8 +525,8 @@ function CancelPartDialog({ part, proposalId, onClose, onDone }: {
   );
 }
 
-function SendPartDialog({ part, proposalId, onClose, onDone }: {
-  part: DepositInstalment | null; proposalId: string; onClose: () => void; onDone: () => void;
+function SendPartDialog({ part, no, proposalId, onClose, onDone }: {
+  part: DepositInstalment | null; no?: number; proposalId: string; onClose: () => void; onDone: () => void;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [subject, setSubject] = useState("");
@@ -543,7 +570,7 @@ function SendPartDialog({ part, proposalId, onClose, onDone }: {
     <Dialog open={!!part} onOpenChange={(o) => { if (!o && !sending) onClose(); }}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Email Part {part?.seq} to the customer</DialogTitle>
+          <DialogTitle>Email Part {no ?? part?.seq} to the customer</DialogTitle>
           <DialogDescription>
             {to.length > 0 ? <>To <b>{to.join(", ")}</b>. </> : "No customer email on the lead. "}
             The email shows the total deposit, what is paid, this part and the balance after it.

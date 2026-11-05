@@ -98,6 +98,26 @@ export function depositPosition(required: number, rows: InstalmentFigures[]): De
   };
 }
 
+/**
+ * The number a part is known by: 1, 2, 3… across the parts that are still live,
+ * in the order they were asked. A request that was cancelled without any money
+ * never takes a number, so cancelling Part 1 and asking again gives a new
+ * "Part 1", not "Part 2". The stored `seq` stays as the stable internal key
+ * (audit trail, proof file names); only what people read uses this.
+ *
+ * A cancelled request that was later paid is real money and stays numbered.
+ */
+export function livePartNumbers(
+  rows: Array<{ id: string; seq: number; status: string; paid_amount?: number | string | null }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const live = rows
+    .filter((r) => r.status !== "cancelled" || num(r.paid_amount) > 0)
+    .sort((a, b) => a.seq - b.seq);
+  live.forEach((r, i) => out.set(r.id, i + 1));
+  return out;
+}
+
 /** Smallest first part allowed without a manager's approval. */
 export function minFirstPart(required: number, percent: number = DEFAULT_MIN_FIRST_PART_PERCENT): number {
   return Math.ceil((required * percent) / 100);
@@ -105,20 +125,22 @@ export function minFirstPart(required: number, percent: number = DEFAULT_MIN_FIR
 
 export type AskCheck =
   | { ok: true; needsOverride: boolean }
-  | { ok: false; code: "amount_invalid" | "amount_exceeds_balance" | "open_ask_exists"; balance?: number };
+  | { ok: false; code: "amount_invalid" | "amount_exceeds_balance"; balance?: number };
 
-/** Mirror of request_deposit_instalment's checks, for instant feedback in the UI. */
+/**
+ * Mirror of request_deposit_instalment's checks, for instant feedback in the UI.
+ * Several parts can be out at once, so what may still be asked is the part of
+ * the deposit that is neither paid nor already requested (notYetAsked).
+ */
 export function checkAsk(
   amount: number,
   pos: DepositPosition,
-  hasOpenAsk: boolean,
   percent: number = DEFAULT_MIN_FIRST_PART_PERCENT,
 ): AskCheck {
-  if (hasOpenAsk) return { ok: false, code: "open_ask_exists" };
   if (!(amount > 0)) return { ok: false, code: "amount_invalid" };
-  if (amount > pos.balance) return { ok: false, code: "amount_exceeds_balance", balance: pos.balance };
-  const firstPart = pos.paid === 0;
-  const needsOverride = firstPart && amount < pos.balance && amount < minFirstPart(pos.required, percent);
+  if (amount > pos.notYetAsked) return { ok: false, code: "amount_exceeds_balance", balance: pos.notYetAsked };
+  const firstAsk = pos.requested === 0;
+  const needsOverride = firstAsk && amount < pos.notYetAsked && amount < minFirstPart(pos.required, percent);
   return { ok: true, needsOverride };
 }
 
@@ -130,7 +152,6 @@ export function instalmentErrorMessage(code: string, extra?: { floor?: number; p
     case "proposal_not_open": return "This proposal is not open for deposit requests (it must be sent or accepted).";
     case "deposit_not_pending": return "The deposit is already fully paid or not required on this proposal.";
     case "nothing_to_collect": return "There is no deposit left to collect on this proposal.";
-    case "open_ask_exists": return "There is already an unpaid part request. Wait for it to be paid, or cancel it first.";
     case "amount_exceeds_balance": return `That is more than the balance still to collect (${rupees(extra?.balance)}).`;
     case "below_floor":
       return `The first part must be at least ${extra?.percent ?? DEFAULT_MIN_FIRST_PART_PERCENT}% of the deposit (${rupees(extra?.floor)}). A manager or admin can approve a smaller one with a reason.`;

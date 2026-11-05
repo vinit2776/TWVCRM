@@ -44,4 +44,10 @@ describe("renderConsolidatedEmail", () => {
     expect(renderConsolidatedEmail({ ...base, items, showContract: true })).toContain("TWV-C-0123");
     expect(renderConsolidatedEmail({ ...base, items })).not.toContain("TWV-C-0123");
   });
+
+  it("tells the customer to reply for a link when one invoice has none", () => {
+    const html = renderConsolidatedEmail({ ...base, items: [items[0], item("INV-NOLINK", "1 Oct", 5, 100, 0, null)], linkIssue: true });
+    expect(html).toContain("Reply to this email and we'll send you a fresh one");
+    expect(renderConsolidatedEmail({ ...base, items })).not.toContain("Reply to this email and we'll send you a fresh one");
+  });
 });

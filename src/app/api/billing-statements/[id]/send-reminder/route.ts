@@ -99,6 +99,10 @@ export async function POST(
     triggeredBy: "manual", triggeredByUserId: dbUser.id, ccPools,
   });
 
+  if (result.skipped) {
+    return NextResponse.json({ error: `Reminder not sent: ${result.skipped}` }, { status: 409 });
+  }
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: id,
@@ -119,6 +123,8 @@ export async function POST(
     whatsAppSent: result.whatsAppSent,
     recipient: result.recipient,
     errors: result.errors,
+    // True when the email went without a Pay button: no working link could be secured.
+    linkIssue: (result.linkIssues?.length ?? 0) > 0,
   });
 }
 

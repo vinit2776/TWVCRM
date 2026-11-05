@@ -37,6 +37,8 @@ export interface OtherReceivableRow {
   reminder_count: number;
   href: string | null;
   parent_id?: string | null;
+  part_id?: string | null;
+  part_label?: string | null;
 }
 
 export const OTHER_KIND_STYLE: Record<OtherReceivableRow["kind"], { label: string; cls: string }> = {
@@ -61,13 +63,15 @@ export function RecordOtherPaymentDialog({ row, onClose, onDone }: {
   const [submitting, setSubmitting] = useState(false);
 
   const kindLabel = OTHER_KIND_STYLE[row.kind].label;
+  // A deposit part is recorded for exactly what was asked, never short.
+  const isPart = row.kind === "deposit" && !!row.part_id;
   // A deposit recorded below the required amount needs explicit sign-off
   // (and the server rejects anything more than 10% short outright).
   const shortfall = row.balance_due - (parseFloat(amount) || 0);
-  const needsShortfallApproval = row.kind === "deposit" && shortfall > 0;
+  const needsShortfallApproval = row.kind === "deposit" && !isPart && shortfall > 0;
   // The top-up settle endpoint closes out a fixed pending amount, so the
   // figure isn't the operator's to change there.
-  const amountEditable = row.kind !== "topup";
+  const amountEditable = row.kind !== "topup" && !isPart;
 
   async function submit() {
     const amt = parseFloat(amount);
@@ -75,10 +79,22 @@ export function RecordOtherPaymentDialog({ row, onClose, onDone }: {
       toast.error("Enter a valid amount");
       return;
     }
+    if (isPart && notes.trim().length < 10) {
+      toast.error("Add a note for accounts (at least 10 characters)");
+      return;
+    }
     setSubmitting(true);
     try {
       let res: Response;
-      if (row.kind === "deposit") {
+      if (isPart) {
+        const fd = new FormData();
+        fd.append("amount", String(amt));
+        fd.append("payment_medium", mode);
+        if (reference) fd.append("reference", reference);
+        fd.append("notes", notes.trim());
+        if (proof) fd.append("payment_proof", proof);
+        res = await fetch(`/api/proposals/${row.id}/deposit-instalments/${row.part_id}/payment`, { method: "POST", body: fd });
+      } else if (row.kind === "deposit") {
         const fd = new FormData();
         fd.append("amount", String(amt));
         fd.append("payment_medium", mode);
@@ -126,6 +142,7 @@ export function RecordOtherPaymentDialog({ row, onClose, onDone }: {
           <p className="text-sm text-muted-foreground">
             {kindLabel} · {row.party_name} · outstanding {formatCurrency(row.balance_due)}
           </p>
+          {row.part_label && <p className="text-xs text-muted-foreground">{row.part_label}</p>}
 
           <div>
             <Label>Amount received</Label>
@@ -137,7 +154,7 @@ export function RecordOtherPaymentDialog({ row, onClose, onDone }: {
             />
             {!amountEditable && (
               <p className="text-xs text-muted-foreground mt-1">
-                A top-up settles for its full pending amount.
+                {isPart ? "A deposit part is recorded for exactly what was asked. If the customer paid a different amount, cancel the request and ask for the right figure." : "A top-up settles for its full pending amount."}
               </p>
             )}
           </div>
@@ -163,7 +180,7 @@ export function RecordOtherPaymentDialog({ row, onClose, onDone }: {
           {row.kind !== "topup" && (
             <div>
               <Label>Notes</Label>
-              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" />
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={isPart ? "required, at least 10 characters" : "optional"} />
             </div>
           )}
 
