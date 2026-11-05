@@ -40,6 +40,9 @@ const createPrSchema = z.object({
   amc_start_date: z.string().optional().nullable(),
   amc_end_date: z.string().optional().nullable(),
   amc_visits_covered: z.number().int().positive().optional().nullable(),
+  // A contract already running when entered here: cycles settled and visits done before.
+  opening_cycles: z.number().int().min(0).max(120).default(0),
+  opening_visits: z.number().int().min(0).max(500).default(0),
   amc_contact_name: z.string().optional().nullable(),
   amc_helpline_number: z.string().optional().nullable(),
   amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
@@ -169,6 +172,11 @@ export async function POST(request: NextRequest) {
     prData.tolerance_reason = null;
   }
   if (prData.tolerance_requested_percent === 0) prData.tolerance_reason = null;
+  // Only a running AMC has an opening position.
+  if (prData.department !== "amc") {
+    prData.opening_cycles = 0;
+    prData.opening_visits = 0;
+  }
 
   // One line per asset — the same asset on two lines would double-count it.
   if (prData.department === "amc") {

@@ -1845,11 +1845,12 @@ export default function PurchaseOrderDetailPage() {
           terminated={!!po.amc_terminated_at}
           billingCycle={po.billing_cycle ?? null}
           cycleCount={po.cycle_count ?? null}
+          openingCycles={po.opening_cycles ?? 0}
           unitCostPerCycle={po.unit_cost_per_cycle ?? null}
           reports={(po.po_service_reports as PoServiceReport[] | undefined) ?? []}
           bills={(po.vendor_bills ?? []) as CycleBill[]}
           onRecordReport={() => {
-            setSrCycleNumber(String((po.po_service_reports?.length ?? 0) + 1));
+            setSrCycleNumber(String((po.opening_cycles ?? 0) + (po.po_service_reports?.length ?? 0) + 1));
             setSrPeriodFrom("");
             setSrPeriodTo("");
             setActionDialog("record_service_report");
