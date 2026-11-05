@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { AUTO_RENEW_MANAGE_ROLES } from "@/lib/auto-renewal";
 import { PLAN_STAGE_LABELS, type PlanStage } from "@/lib/auto-renewal-plan";
+import { ContractAutoRenewalNotices } from "@/components/contracts/contract-auto-renewal-notices";
 
 interface CardData {
   autoRenew: boolean;
@@ -28,6 +29,9 @@ interface CardData {
   stoppedAt: string | null;
   stopReason: string | null;
   paused: boolean;
+  /** Set once the rate notice has gone out: the next term's rent is then what the customer was told. */
+  lock: { sentAt: string; newRent: number } | null;
+  depositTopUp: number;
   programmedPct: number;
   revised: { percentage: number; reason: string | null; at: string | null } | null;
   plan: {
@@ -146,8 +150,8 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-          Report only for now. Switching this on adds the contract to the daily internal report. Nothing is prepared,
-          sent to the customer or rolled automatically yet, so this contract still needs the usual Renew.
+          The term is not rolled automatically yet, so this contract still needs the usual Renew. Switching this on adds
+          it to the daily internal report and to the customer notices below.
         </p>
 
         {data.autoRenew && plan && (
@@ -191,6 +195,22 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
                 </ul>
               </div>
             )}
+
+            {data.lock && (
+              <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                The customer was sent {formatCurrency(data.lock.newRent)} per month on {formatDate(data.lock.sentAt)}, so the rate is locked for this term.
+              </p>
+            )}
+
+            <ContractAutoRenewalNotices
+              contractId={contractId}
+              termEndDate={endDate}
+              canManage={canManage}
+              noticeOn={plan.schedule.noticeOn}
+              holds={plan.holds.map((h) => h.label)}
+              depositTopUp={data.depositTopUp}
+              onChanged={load}
+            />
           </>
         )}
 
@@ -220,7 +240,7 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
               </Button>
             ) : (
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="flex-1" disabled={busy} onClick={openRevise}>
+                <Button size="sm" variant="outline" className="flex-1" disabled={busy || !!data.lock} onClick={openRevise}>
                   <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
                   Revise rate
                 </Button>
@@ -236,7 +256,7 @@ export function ContractAutoRenewalCard({ contractId, contractNumber, endDate, u
                 Customer served notice
               </Button>
             )}
-            {data.revised && data.autoRenew && (
+            {data.revised && data.autoRenew && !data.lock && (
               <Button size="sm" variant="ghost" className="w-full text-xs" disabled={busy} onClick={() => run({ action: "clear_revision" }, "Back to the agreement's rate")}>
                 Clear revised rate
               </Button>

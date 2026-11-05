@@ -1,9 +1,10 @@
 # Auto-renewal
 
-Status: **parts 1 to 3 of 4 (foundation, dry-run job, contract-page card and board)**. Nothing here changes
-what a customer sees or is billed. `contracts.auto_renew` is `false` everywhere
-until a person switches a contract on, and the only thing that reads it is the
-dry-run digest job below, which changes nothing and contacts no customer.
+Status: **parts 1 to 3 and 4a of 4 (foundation, dry-run job, contract-page card and board, customer
+notices)**. Part 4b, the live roll, is still to come, so no contract rolls automatically. `contracts.auto_renew`
+is `false` everywhere until a person switches a contract on. The only thing a customer can receive is a
+notice a person approved or sent by hand (part 4a); the daily job drafts and sends notices only when
+`auto_renew_notice_mode` is `live`, which is not the default.
 
 ## What it is
 
@@ -99,9 +100,36 @@ report-only for now. `GET/POST /api/contracts/[id]/auto-renewal`; roles admin, m
 **Board** (`/contracts/auto-renewals`, linked from Contracts, `GET /api/auto-renewals`): every opted-in
 contract with its status, next step and next rent, using the same planner as the daily report.
 
+## Customer notices (part 4a)
+
+The system prepares each notice as a **draft**, a person reviews, edits and **approves** it, and it is
+**emailed** on its day. Email is the valid delivery method; nothing else is sent. A written rate notice is
+enough under clauses 18 and 19.
+
+- **Rate notice** (`kind = notice`): drafted from the draft day, sent on notice #1's day. Locks the price once sent.
+- **Rate confirmation** (`kind = confirmation`): drafted once the rate notice has gone out (it restates the locked rate), sent 15 days before the end date. Skipped when the schedule has none.
+- **One per term**: `auto_renewal_notices`, unique per contract, kind and term end date while live or sent (migration 00672). A cancelled notice is not recreated by the job.
+- **Who gets it**: the customer's email plus their billing emails, as invoices are addressed. Editable per notice.
+- **Approval**: admin, manager and sales rep (`AUTO_RENEW_MANAGE_ROLES`). Editing an approved notice sends it back to draft.
+- **Late**: a notice not sent by its day shows a red message on the contract. Staff open it, see the draft, change anything and send it now.
+- **Held contracts** (overdue invoices, moratorium and so on): the job drafts nothing and sends nothing for them, and the contract page and the internal email say why. An unpaid **deposit top-up never holds** a renewal; the review dialog just highlights the amount for staff.
+- **Price lock**: once the rate notice is sent, Revise rate and Clear revised rate are refused (409) and the card says so.
+
+**Switch**: `app_settings.auto_renew_notice_mode` (`off` / `dry_run` default / `live`), separate from the
+roll. Only `live` makes the daily job prepare drafts and send approved notices; anything unrecognised reads as
+`dry_run`. The job emails admin and accounts what needs a person (late, failed, held back, awaiting approval, sent).
+A person can always prepare and send by hand from the contract page, whatever the mode.
+
+**Safety**: off the production database a send may only reach `@example.com`; anything else is refused, not
+redirected. A notice is claimed (`sending`) before it goes, so two callers cannot both send it.
+
+Routes: `GET/POST /api/contracts/[id]/auto-renewal/notices`, `PATCH .../notices/[noticeId]` (edit, approve,
+unapprove, cancel, send). Logic: `src/lib/auto-renewal-notice.ts` (pure), `auto-renewal-notice-server.ts`.
+
 ## Parts still to come
 
-4. Customer notices and the live roll (carry over vouchers, access and allocations; deposit top-up request).
+4b. The live roll: create the next term on the day after the end date, carry over vouchers, access and
+allocations, the two-line invoice for a mid-month end, and the deposit top-up request.
 
 ## Deploy note for part 1
 

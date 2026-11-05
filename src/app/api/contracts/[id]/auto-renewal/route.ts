@@ -15,6 +15,7 @@ import {
 import { planAutoRenewals } from "@/lib/auto-renewal-plan";
 import { loadAutoRenewFacts } from "@/lib/auto-renewal-plan-server";
 import { stopAutoRenewal } from "@/lib/auto-renewal-server";
+import { lockedRateNotice } from "@/lib/auto-renewal-notice-server";
 
 const VIEW_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts"];
 
@@ -75,6 +76,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const c = row.data as Record<string, unknown>;
 
   const mode = parseAutoRenewMode(settings[AUTO_RENEW_CRON_MODE_SETTING]);
+  const lock = await lockedRateNotice(admin, id, String(c.end_date).slice(0, 10));
   const item = facts[0] ? planAutoRenewals(facts, today, parseAutoRenewTiming(settings)).items[0] : null;
 
   return NextResponse.json({
@@ -86,6 +88,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       stoppedAt: (c.auto_renew_stopped_at as string | null) ?? null,
       stopReason: (c.auto_renew_stop_reason as string | null) ?? null,
       paused: !c.auto_renew && String(c.auto_renew_stop_reason ?? "").startsWith(AUTO_RENEW_PAUSE_REASON_PREFIX),
+      // Set once the rate notice has gone out: the next term's rent is then what the customer was told.
+      lock,
+      // What the new rent adds to the security deposit. Shown to staff only; it never holds a renewal.
+      depositTopUp: item
+        ? Math.max(0, Math.round((item.nextRent - Number(c.subtotal ?? 0)) * Number(c.security_deposit_months ?? 3)))
+        : 0,
       programmedPct: programmedEscalation(c),
       revised:
         c.auto_renew_escalation_override == null
@@ -157,6 +165,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const stopped = await stopAutoRenewal(admin, id, me.id, `${AUTO_RENEW_PAUSE_REASON_PREFIX}: ${body.reason}`);
     if (!stopped) return NextResponse.json({ error: "Could not pause auto-renewal." }, { status: 500 });
     return NextResponse.json({ success: true });
+  }
+
+  if (body.action === "revise" || body.action === "clear_revision") {
+    const lock = await lockedRateNotice(admin, id, String(contract.end_date).slice(0, 10));
+    if (lock) {
+      return NextResponse.json(
+        { error: "The customer has already been sent this rate, so it is locked. Agree any change with them directly and renew by hand." },
+        { status: 409 },
+      );
+    }
   }
 
   if (body.action === "revise") {
