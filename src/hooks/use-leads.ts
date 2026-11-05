@@ -17,7 +17,7 @@ interface UseLeadsOptions {
   sort_by?: string;
   sort_order?: "asc" | "desc";
   include_archived?: boolean;
-  view?: "overdue" | "all";
+  view?: "overdue" | "all" | "ids";
   pinned?: boolean;
 }
 

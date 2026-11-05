@@ -36,6 +36,7 @@ import { LeadDayHeader } from "@/components/leads/lead-day-header";
 import { groupByDay, istDayKey, type DaySummary } from "@/lib/lead-days";
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { ToursView } from "@/components/leads/tours-view";
+import { FollowUpsView } from "@/components/leads/follow-ups-view";
 import type { TourGroup } from "@/lib/tours";
 import { pushTrailEntry } from "@/lib/nav-trail";
 
@@ -110,7 +111,8 @@ export default function LeadsPage() {
     assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
     pinned: pinnedOnly,
-    view: tab === "followups" ? "overdue" : "all",
+    // The Follow-ups tab loads its own rows (FollowUpsView), so this asks for none: view=ids with no ids.
+    view: tab === "followups" ? "ids" : "all",
   });
 
   // Whole-day counts for the day headers, for the days this page spans, under the same filters.
@@ -211,7 +213,7 @@ export default function LeadsPage() {
           { key: "enquiries", label: "New enquiries", count: activeCount, tone: "bg-emerald-500 text-white" },
           {
             key: "followups",
-            label: "Follow-ups due",
+            label: "Follow-ups",
             count: followupSummary ? followupSummary.overdue + followupSummary.due_today : 0,
             tone: "bg-red-500 text-white",
           },
@@ -356,19 +358,26 @@ export default function LeadsPage() {
       </div>
 
       {/* List */}
-      {loading ? (
+      {tab === "followups" ? (
+        <FollowUpsView
+          filters={{ search, status: statusFilter, sources: sourceFilter, locationId: locationFilter, assignedTo: assignedToFilter, pinned: pinnedOnly }}
+          users={users}
+          isUnread={isUnreadFormLead}
+          isReEnquiry={(lead) => reEnquiryLeadIds.has(lead.id)}
+          onOpenLead={(lead) => {
+            pushTrailEntry({ href: `/leads/${lead.id}/activity`, label: `${lead.first_name} ${lead.last_name}` });
+            router.push(`/leads/${lead.id}/activity`);
+          }}
+        />
+      ) : loading ? (
         <TableSkeleton rows={8} />
       ) : sortedLeads.length === 0 ? (
         <EmptyState
           icon={Users}
-          title={tab === "followups" ? "No follow-ups due" : "No leads found"}
-          description={
-            tab === "followups"
-              ? "Nothing is overdue or due today with the current filters."
-              : "Create your first lead or adjust your filters."
-          }
-          actionLabel={tab === "followups" ? undefined : "Create Lead"}
-          onAction={tab === "followups" ? undefined : () => router.push("/leads/new")}
+          title="No leads found"
+          description="Create your first lead or adjust your filters."
+          actionLabel="Create Lead"
+          onAction={() => router.push("/leads/new")}
         />
       ) : (
         <div className="divide-y rounded-md border">
@@ -401,7 +410,7 @@ export default function LeadsPage() {
       )}
 
       {/* Pagination */}
-      {pagination.totalPages > 1 && (
+      {tab !== "followups" && pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             Page {pagination.page} of {pagination.totalPages}
