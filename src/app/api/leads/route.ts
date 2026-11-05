@@ -37,6 +37,11 @@ export async function GET(request: NextRequest) {
   // can't push newly created leads off page 1. Absent = legacy overdue-first merge
   // (other callers: pipeline, task dialog, command palette).
   const view = searchParams.get("view");
+  // view=ids: exactly these leads, in this order (the Follow-ups tab loads one group's rows this way).
+  const idsFilter =
+    view === "ids"
+      ? (searchParams.get("ids") ?? "").split(",").filter((s) => /^[0-9a-f-]{36}$/i.test(s)).slice(0, 100)
+      : null;
 
   // Quick phone lookup — returns just id, id_proof_path fields
   if (phone_exact) {
@@ -191,7 +196,7 @@ export async function GET(request: NextRequest) {
       );
     }
   }
-  const { count, error: countError } = await countQuery;
+  const { count, error: countError } = idsFilter ? { count: idsFilter.length, error: null } : await countQuery;
   if (countError) {
     return NextResponse.json({ error: countError.message }, { status: 500 });
   }
@@ -227,7 +232,7 @@ export async function GET(request: NextRequest) {
   priorityQuery = priorityQuery.order("follow_up_date", { ascending: true });
 
   const { data: priorityRows, error: priorityError } =
-    view === "all" ? { data: [], error: null } : await priorityQuery;
+    view === "all" || idsFilter ? { data: [], error: null } : await priorityQuery;
   if (priorityError) {
     return NextResponse.json({ error: priorityError.message }, { status: 500 });
   }
@@ -241,6 +246,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  if (idsFilter) {
+    for (const id of idsFilter) {
+      if (!seenPriorityIds.has(id)) {
+        seenPriorityIds.add(id);
+        priorityIds.push(id);
+      }
+    }
+  }
+
   // Merge: overdue/due-today leads occupy the front of the combined ordering, then the
   // rest of the filtered leads fill in behind them in the requested sort order.
   const pageEnd = offset + limit;
@@ -248,7 +262,7 @@ export async function GET(request: NextRequest) {
     Math.min(offset, priorityIds.length),
     Math.min(pageEnd, priorityIds.length)
   );
-  const restNeeded = view === "overdue" ? 0 : limit - prioritySliceIds.length;
+  const restNeeded = view === "overdue" || idsFilter ? 0 : limit - prioritySliceIds.length;
   const restOffset = Math.max(0, offset - priorityIds.length);
 
   let priorityLeads: LeadRow[] = [];
