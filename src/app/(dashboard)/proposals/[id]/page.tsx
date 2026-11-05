@@ -695,8 +695,8 @@ export default function ProposalDetailPage({
         const verb = json.is_revise ? "resent" : "sent";
         toast.success(
           json.prorationFactor < 1
-            ? `GST invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
-            : `GST invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
+            ? `Proforma invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
+            : `Proforma invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
           { duration: 8000 }
         );
         setGstDialogOpen(false);
@@ -1034,7 +1034,7 @@ export default function ProposalDetailPage({
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-green-600" />
                           <div>
                             <p className="font-medium flex items-center gap-1.5">
-                              GST Invoice
+                              Proforma Invoice
                               <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded">PAID</span>
                             </p>
                             <p className="text-xs text-muted-foreground">Monthly charge paid — no email needed</p>
@@ -1048,7 +1048,7 @@ export default function ProposalDetailPage({
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
                           <div>
                             <p className="font-medium">
-                              {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
+                              {invoiceSentAlready ? "Revise & Resend Proforma Invoice" : "Proforma Invoice — First Month"}
                             </p>
                             <p className="text-xs text-muted-foreground">
                               {hasDeposit && !depositPaid && !depositRequested
@@ -1803,7 +1803,7 @@ export default function ProposalDetailPage({
                     <>
                       {!canSendInvoice && (
                         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Send the security deposit request before sending the GST invoice.
+                          Send the security deposit request before sending the proforma invoice.
                         </p>
                       )}
                       {canSendInvoice && !depositPaid && depositCollection && (
@@ -1818,7 +1818,7 @@ export default function ProposalDetailPage({
                         onClick={() => openGstDialog(false)}
                       >
                         <Mail className="mr-2 h-3.5 w-3.5" />
-                        Preview & Send GST Invoice
+                        Preview & Send Proforma Invoice
                       </Button>
                     </>
                   )}
@@ -2168,7 +2168,7 @@ export default function ProposalDetailPage({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
-              {gstIsRevise ? "Revise & Resend GST Invoice" : "Preview & Send GST Invoice"}
+              {gstIsRevise ? "Revise & Resend Proforma Invoice" : "Preview & Send Proforma Invoice"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground">
               {proposal.proposal_number} — Monthly charge ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
@@ -2310,13 +2310,13 @@ export default function ProposalDetailPage({
 
               {gstIsRevise && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new GST invoice number and send a fresh email (with the new PDF) to the customer.
+                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new proforma invoice number and send a fresh email (with the new PDF) to the customer.
                 </div>
               )}
 
               <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
                 <iframe
-                  title="GST invoice email preview"
+                  title="Proforma invoice email preview"
                   srcDoc={gstPreview.html}
                   className="w-full h-[400px] border-0"
                   sandbox=""

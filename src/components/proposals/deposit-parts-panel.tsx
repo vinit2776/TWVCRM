@@ -172,7 +172,7 @@ export function DepositPartsPanel({ proposalId, proposalStatus, depositPaymentSt
           {depositPaymentStatus === "pending" && (
             partialDepositState(position.required, position.paid).allowsActivation ? (
               <p className="rounded-md border-l-4 border-amber-500 bg-amber-100 px-2.5 py-1.5 text-xs text-amber-900">
-                More than half of the deposit is in, so the contract <b>can be activated</b> and the GST invoice sent.
+                More than half of the deposit is in, so the contract <b>can be activated</b> and the proforma invoice sent.
                 <b> {formatCurrency(position.balance)} is still pending</b> — keep collecting it.
               </p>
             ) : (

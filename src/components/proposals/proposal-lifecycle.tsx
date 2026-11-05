@@ -158,7 +158,7 @@ export function ProposalLifecycle({ proposal, depositPartsRequested }: Props) {
   if (!isRejected) {
     stages.push({
       key: "invoice",
-      label: "GST Invoice Issued",
+      label: "Proforma Invoice Issued",
       date: proposal.occupation_start_date,
       sub: proposal.occupation_start_date
         ? `Occupation from ${fmt(proposal.occupation_start_date)}`
