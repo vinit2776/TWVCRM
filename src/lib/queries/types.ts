@@ -223,7 +223,7 @@ export interface QueryStats {
  */
 export interface QueryPaymentReport {
   id: string;
-  status: "reported" | "verified" | "rejected";
+  status: "reported" | "verified" | "rejected" | "withdrawn";
   /** 'invoice' settles a statement; 'deposit' settles a proposal deposit. */
   target_kind: "invoice" | "deposit" | "booking";
   amount: number;

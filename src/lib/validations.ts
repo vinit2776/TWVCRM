@@ -171,6 +171,9 @@ export const createActivitySchema = z.object({
   tour_host_id: z.string().uuid().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
+  /** Set by the one-tap actions: this contact deals with the follow-ups already open on the lead,
+   *  so they are marked done and the new next step (if any) is the only one left. Never stored. */
+  closes_open_follow_ups: z.boolean().optional(),
 }).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {
   // The Follow-ups due list shows this as the "next action"; without it the person
   // picking the lead up has to open every lead to find out what the follow-up is for.

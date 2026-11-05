@@ -16,8 +16,8 @@ export const STALE_IN_PROGRESS_STATUSES = ["tour_scheduled", "proposal_sent", "n
 /** Never stale: finished, or in the middle of a tour or proposal. */
 export const STALE_EXEMPT_STATUSES = [...STALE_FINISHED_STATUSES, ...STALE_IN_PROGRESS_STATUSES] as const;
 
-/** Notes the system writes when a lead changes hands. They are bookkeeping, not contact. */
-export const NON_EVENT_SUBJECTS = ["Claimed", "Reassigned"] as const;
+/** Notes the system writes when a lead changes hands or a follow-up is closed. They are bookkeeping, not contact. */
+export const NON_EVENT_SUBJECTS = ["Claimed", "Reassigned", "Follow-up closed"] as const;
 
 export type StaleState =
   | { state: "active" }

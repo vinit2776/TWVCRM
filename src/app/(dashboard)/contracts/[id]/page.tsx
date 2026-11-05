@@ -115,6 +115,7 @@ import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
+import { ContractAutoRenewalCard } from "@/components/contracts/contract-auto-renewal-card";
 import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import { QueryButton } from "@/components/queries/query-button";
 import { useLeegalityEnabled } from "@/hooks/use-leegality-enabled";
@@ -2232,6 +2233,17 @@ export default function ContractDetailPage({
                   />
                 )}
             </div>
+          )}
+
+          {["active", "renewal_in_progress"].includes(contract.status) && (
+            <ContractAutoRenewalCard
+              contractId={contract.id}
+              contractNumber={contract.contract_number}
+              endDate={contract.end_date}
+              userRole={userRole}
+              onStartExit={() => setStartExitOpen(true)}
+              exitInProgress={!!exitView}
+            />
           )}
 
           {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
