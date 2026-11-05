@@ -7,6 +7,7 @@ import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { computePhaseBoundaries, formatDateRange } from "@/lib/rate-phase-dates";
 import { drawCompanyStamp } from "@/lib/company-stamp";
 import { composeProposalTerms } from "@/lib/proposal-terms";
+import { programmedEscalation } from "@/lib/auto-renewal";
 import { sanitizeForPdf } from "@/lib/pdf-text";
 
 // TWV Brand Colors
@@ -1258,7 +1259,8 @@ export function generateMembershipAgreementPDF(
   const monthlyFee = contract.subtotal || contract.total_amount || 0;
   const securityDepositMonths = contract.security_deposit_months ?? 3;
   const ifrsd = monthlyFee * securityDepositMonths;
-  const escalation = contract.escalation_percentage || 10;
+  // The agreement's escalation, not a rate negotiated for one term only.
+  const escalation = programmedEscalation(contract);
   const noticePeriod = contract.notice_period_months || 2;
   // Fallback for contracts predating the lock_in_months column (migration 00222):
   // lock-in was previously implied as tenure minus notice period.

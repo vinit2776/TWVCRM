@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 const INVOICE_FIELDS =
-  "id, invoice_number, title, status, total_amount, paid_at, payment_reference, " +
+  "id, invoice_number, title, status, total_amount, tax_amount, paid_at, payment_reference, " +
   "gst_invoice_number, due_date, created_at, contract_id, attribution_purpose, attributed_at";
 
 /**

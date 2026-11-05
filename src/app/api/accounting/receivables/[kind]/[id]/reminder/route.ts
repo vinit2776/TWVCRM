@@ -68,9 +68,13 @@ export async function POST(
   const res = await sendReceivableReminder(admin, {
     kind: row.kind, id: row.id, reference: row.reference, partyName: row.party_name,
     email: row.email, phone: row.phone, amount: row.amount, dueDate: row.due_date,
-    daysOverdue: days, stageIdx, payLinkUrl: row.payment_link_url,
+    daysOverdue: days, stageIdx, payLinkUrl: row.payment_link_url, payLinkId: row.payment_link_id,
     triggeredBy: "manual", triggeredByUserId: actor.id, ccPools,
   });
+
+  if (res.skipped) {
+    return NextResponse.json({ error: `Reminder not sent: ${res.skipped}` }, { status: 409 });
+  }
 
   if (!res.emailSent && !res.whatsAppSent) {
     return NextResponse.json(
@@ -83,6 +87,8 @@ export async function POST(
     data: {
       stage: res.stageIdx, tone: res.toneLabel,
       email_sent: res.emailSent, whatsapp_sent: res.whatsAppSent,
+      // True when the email went without a Pay button: no working link could be secured.
+      link_issue: res.linkIssue === true,
     },
   });
 }

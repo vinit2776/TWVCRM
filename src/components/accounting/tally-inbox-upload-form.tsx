@@ -13,7 +13,9 @@
 
 import { useMemo, useState } from "react";
 import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
-import { formatCurrency, preventEnterSubmit } from "@/lib/utils";
+import { formatCurrency, formatDate, preventEnterSubmit } from "@/lib/utils";
+import { isInvoiceDateOffPeriod } from "@/lib/invoice-date-period";
+import { invoicePeriodMismatch } from "@/lib/invoice-period-text";
 import { isRealCompanyName, leadAddress, voBillParty, type InboxRow, type ExtractResponse, type AutofillSource } from "@/lib/tally-handoff";
 import { ReimbursementSupportingDocuments } from "@/components/procurement/reimbursement-supporting-documents";
 
@@ -34,6 +36,10 @@ function usageLineLabel(statementType: string | null): string {
     case "usage": return "Usage charges";
     default: return "Usage charges";
   }
+}
+
+function formatMonthLabel(ym: string): string {
+  return new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
@@ -59,6 +65,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [invoiceAmount, setInvoiceAmount] = useState(String(row.statement_total_amount));
   const [partyNameOnInvoice, setPartyNameOnInvoice] = useState("");
   const [nameOverride, setNameOverride] = useState(false);
+  const [dateOverride, setDateOverride] = useState(false);
+  const [invoicePeriodMonths, setInvoicePeriodMonths] = useState<string[]>([]);
+  const [periodOverride, setPeriodOverride] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -91,6 +100,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
       }
       const data = (await res.json()) as ExtractResponse;
       setPoNumberFound(data.po_number_found);
+      setInvoicePeriodMonths(data.invoice_period_months ?? []);
+      setPeriodOverride(false);
       const filled = new Set<string>();
       if (data.fields.invoice_number) {
         setInvoiceNumber(data.fields.invoice_number);
@@ -151,8 +162,17 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     }
     if (!pdfFile) errors.push("Invoice PDF is required.");
     if (nameMismatch && !nameOverride) errors.push("Party name mismatch — tick 'Proceed anyway' below to override.");
+    if (isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end) && !dateOverride) {
+      errors.push("Invoice date is outside the billing period — confirm it below.");
+    }
+    if (invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end) && !periodOverride) {
+      errors.push("The period on the invoice does not match this statement — confirm it below.");
+    }
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride, dateOverride, invoicePeriodMonths, periodOverride, row.period_start, row.period_end]);
+
+  const dateOffPeriod = isInvoiceDateOffPeriod(invoiceDate, row.period_start, row.period_end);
+  const periodMismatch = invoicePeriodMismatch(invoicePeriodMonths, row.period_start, row.period_end);
 
   const canSubmit = validation.length === 0 && !submitting;
 
@@ -204,6 +224,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           autofill_source: autofillSource ?? "manual",
           qr_payload: null,
           nic_signature_verified: false,
+          acknowledge_off_period_date: dateOffPeriod && dateOverride,
+          acknowledge_period_mismatch: periodMismatch && periodOverride,
         }),
       );
 
@@ -537,7 +559,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           <input
             type="date"
             value={invoiceDate}
-            onChange={(e) => setInvoiceDate(e.target.value)}
+            onChange={(e) => { setInvoiceDate(e.target.value); setDateOverride(false); }}
             className="w-full rounded border px-2 py-1.5 text-sm"
           />
         </label>
@@ -555,6 +577,43 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           />
         </label>
       </div>
+
+      {periodMismatch && (
+        <div className="rounded border border-red-300 bg-red-50 p-2.5 text-xs text-red-900 space-y-2">
+          <p>
+            <strong>This invoice looks like it is for a different period.</strong> The PDF says it bills{" "}
+            {invoicePeriodMonths.map(formatMonthLabel).join(", ")}, but this statement covers{" "}
+            {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}. Check you picked the
+            right Tally voucher for this customer and month.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={periodOverride}
+              onChange={(e) => setPeriodOverride(e.target.checked)}
+            />
+            <span>The period is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
+
+      {dateOffPeriod && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
+          <p>
+            <strong>Invoice date does not fit the billing period.</strong> This invoice is dated{" "}
+            {formatDate(invoiceDate)} but covers {formatDate(row.period_start ?? "")} → {formatDate(row.period_end ?? "")}.
+            Check the date on the Tally voucher before sending — it decides the GST month.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={dateOverride}
+              onChange={(e) => setDateOverride(e.target.checked)}
+            />
+            <span>The invoice date is correct — proceed anyway</span>
+          </label>
+        </div>
+      )}
 
       {/* Party name check — compare Tally invoice name against CRM record */}
       <label className="block text-xs">

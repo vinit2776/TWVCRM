@@ -14,6 +14,7 @@ import {
   Mail,
   AlertTriangle,
   Banknote,
+  BadgeIndianRupee,
   Upload,
   X,
   Loader2,
@@ -57,6 +58,7 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
+import { ReportPaymentDialog } from "@/components/queries/report-payment-dialog";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { revisionBlockedReason } from "@/lib/proposal-revision";
 import { ProposalForm } from "@/components/proposals/proposal-form";
@@ -119,10 +121,11 @@ export default function ProposalDetailPage({
   const [manualPayMedium, setManualPayMedium] = useState("");
   // True once any part of the deposit has been asked for or paid: the single-deposit controls stand down.
   const [depositPartsActive, setDepositPartsActive] = useState(false);
-  // More than half of the deposit received in parts: activation and the GST invoice are allowed, with a pending-balance warning.
+  // More than half of the deposit received in parts: contract activation is allowed, with a pending-balance warning.
   const [depositCollection, setDepositCollection] = useState<PartialDepositState | null>(null);
   const handleDepositPosition = useCallback((p: DepositPosition) => setDepositCollection(partialDepositState(p.required, p.paid)), []);
-  const depositPartialOk = !!depositCollection?.allowsActivation;
+  // The GST invoice goes out in parallel with the deposit once the deposit has been asked for (not necessarily received).
+  const depositRequested = !!proposal?.deposit_email_sent_at || depositPartsActive;
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -133,6 +136,7 @@ export default function ProposalDetailPage({
   // from the deposit's manualPay* above — both dialogs live on this page and
   // sharing state would let one dialog inherit the other's half-typed values.
   const [monthlyPayDialogOpen, setMonthlyPayDialogOpen] = useState(false);
+  const [reportPiOpen, setReportPiOpen] = useState(false);
   const [monthlyPayAmount, setMonthlyPayAmount] = useState("");
   const [monthlyPayRef, setMonthlyPayRef] = useState("");
   const [monthlyPayMedium, setMonthlyPayMedium] = useState("");
@@ -694,8 +698,8 @@ export default function ProposalDetailPage({
         const verb = json.is_revise ? "resent" : "sent";
         toast.success(
           json.prorationFactor < 1
-            ? `GST invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
-            : `GST invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
+            ? `Proforma invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
+            : `Proforma invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
           { duration: 8000 }
         );
         setGstDialogOpen(false);
@@ -1033,7 +1037,7 @@ export default function ProposalDetailPage({
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-green-600" />
                           <div>
                             <p className="font-medium flex items-center gap-1.5">
-                              GST Invoice
+                              Proforma Invoice
                               <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded">PAID</span>
                             </p>
                             <p className="text-xs text-muted-foreground">Monthly charge paid — no email needed</p>
@@ -1042,16 +1046,16 @@ export default function ProposalDetailPage({
                       ) : (
                         <DropdownMenuItem
                           onClick={() => openGstDialog(invoiceSentAlready)}
-                          disabled={hasDeposit && !depositPaid && !depositPartialOk}
+                          disabled={hasDeposit && !depositPaid && !depositRequested}
                         >
                           <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
                           <div>
                             <p className="font-medium">
-                              {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
+                              {invoiceSentAlready ? "Revise & Resend Proforma Invoice" : "Proforma Invoice — First Month"}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {hasDeposit && !depositPaid && !depositPartialOk
-                                ? "Deposit must be paid first"
+                              {hasDeposit && !depositPaid && !depositRequested
+                                ? "Send the deposit request first"
                                 : `₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month · Prorated · PDF attached`}
                             </p>
                           </div>
@@ -1144,7 +1148,7 @@ export default function ProposalDetailPage({
           <CardTitle className="text-base">Proposal history</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <ProposalLifecycle proposal={proposal} />
+          <ProposalLifecycle proposal={proposal} depositPartsRequested={depositPartsActive} />
         </CardContent>
       </Card>
 
@@ -1491,6 +1495,7 @@ export default function ProposalDetailPage({
                   depositPaymentStatus={proposal.deposit_payment_status}
                   userId={currentUser?.id ?? null}
                   role={currentUser?.role ?? null}
+                  partyLabel={`${proposal.proposal_number} · security deposit`}
                   onChanged={fetchProposal}
                   onPartsActive={setDepositPartsActive}
                   onPosition={handleDepositPosition}
@@ -1687,7 +1692,7 @@ export default function ProposalDetailPage({
           {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
             const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
             const depositPaid = proposal.deposit_payment_status === "paid";
-            const canSendInvoice = !depositRequired || depositPaid || depositPartialOk;
+            const canSendInvoice = !depositRequired || depositPaid || depositRequested;
             const invoiceSent = !!proposal.occupation_start_date;
 
             return (
@@ -1801,7 +1806,7 @@ export default function ProposalDetailPage({
                     <>
                       {!canSendInvoice && (
                         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          More than half of the security deposit must be paid before sending the GST invoice.
+                          Send the security deposit request before sending the proforma invoice.
                         </p>
                       )}
                       {canSendInvoice && !depositPaid && depositCollection && (
@@ -1816,7 +1821,7 @@ export default function ProposalDetailPage({
                         onClick={() => openGstDialog(false)}
                       >
                         <Mail className="mr-2 h-3.5 w-3.5" />
-                        Preview & Send GST Invoice
+                        Preview & Send Proforma Invoice
                       </Button>
                     </>
                   )}
@@ -1837,6 +1842,21 @@ export default function ProposalDetailPage({
                       >
                         <Banknote className="mr-2 h-3.5 w-3.5" />
                         Record Payment Received
+                      </Button>
+                    )}
+                  {/* Everyone else tells accounts the customer says they paid; accounts verify against the bank and record it. */}
+                  {proposal.payment_status !== "paid" &&
+                    !canRecordPayments(currentUser?.role) &&
+                    proposal.pi_statement_id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-teal-300 text-teal-700 hover:bg-teal-50"
+                        title="The customer says they've paid this proforma outside the CRM — accounts will check the bank and record it"
+                        onClick={() => setReportPiOpen(true)}
+                      >
+                        <BadgeIndianRupee className="mr-2 h-3.5 w-3.5" />
+                        Report paid
                       </Button>
                     )}
                 </CardContent>
@@ -2166,7 +2186,7 @@ export default function ProposalDetailPage({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
-              {gstIsRevise ? "Revise & Resend GST Invoice" : "Preview & Send GST Invoice"}
+              {gstIsRevise ? "Revise & Resend Proforma Invoice" : "Preview & Send Proforma Invoice"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground">
               {proposal.proposal_number} — Monthly charge ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
@@ -2308,13 +2328,13 @@ export default function ProposalDetailPage({
 
               {gstIsRevise && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new GST invoice number and send a fresh email (with the new PDF) to the customer.
+                  <strong>Revise & Resend:</strong> This will cancel the previously sent payment link and void that invoice, then issue a new proforma invoice number and send a fresh email (with the new PDF) to the customer.
                 </div>
               )}
 
               <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
                 <iframe
-                  title="GST invoice email preview"
+                  title="Proforma invoice email preview"
                   srcDoc={gstPreview.html}
                   className="w-full h-[400px] border-0"
                   sandbox=""
@@ -2579,6 +2599,15 @@ export default function ProposalDetailPage({
       </Dialog>
 
       {/* Record the monthly / pro-rata first invoice payment (bank transfer) */}
+      <ReportPaymentDialog
+        open={reportPiOpen}
+        onOpenChange={setReportPiOpen}
+        entityType="billing_statement"
+        entityId={proposal?.pi_statement_id ?? null}
+        partyLabel={`${proposal?.lead?.company || [proposal?.lead?.first_name, proposal?.lead?.last_name].filter(Boolean).join(" ")} · ${proposal?.proposal_number} · first-month proforma`}
+        suggestedAmount={proposal?.pi_statement_total ?? null}
+        onReported={fetchProposal}
+      />
       <Dialog open={monthlyPayDialogOpen} onOpenChange={setMonthlyPayDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>

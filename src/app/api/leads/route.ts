@@ -1,5 +1,9 @@
+import { leadStaleState, latestInstant, NON_EVENT_SUBJECTS } from "@/lib/lead-stale";
+import { isLastContactActivity } from "@/lib/lead-last-contact";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizePhoneFields, normalizeStoredPhone } from "@/lib/phone";
+import { phoneMatchClauses } from "@/lib/phone-search";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
@@ -27,6 +31,7 @@ export async function GET(request: NextRequest) {
   const sort_order = searchParams.get("sort_order") || "desc";
   const phone_exact = searchParams.get("phone_exact");
   const include_archived = searchParams.get("include_archived") === "true";
+  const pinnedOnly = searchParams.get("pinned") === "true";
   // Leads page tabs. "overdue" returns only leads with an overdue/due-today follow-up;
   // "all" is a plain sort with no follow-up reordering, so a backlog of stale follow-ups
   // can't push newly created leads off page 1. Absent = legacy overdue-first merge
@@ -38,7 +43,7 @@ export async function GET(request: NextRequest) {
     const { data } = await supabase
       .from("leads")
       .select("id, first_name, last_name, id_proof_path")
-      .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
+      .or(`phone.eq.${normalizeStoredPhone(phone_exact)},mobile.eq.${normalizeStoredPhone(phone_exact)}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
   }
@@ -48,6 +53,8 @@ export async function GET(request: NextRequest) {
   let searchOr = "";
   if (search && !search.startsWith("#")) {
     searchOr = `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`;
+    const phoneClauses = phoneMatchClauses(search, ["phone", "mobile"]);
+    if (phoneClauses.length) searchOr += `,${phoneClauses.join(",")}`;
     const refMatch = search.trim().match(/^(?:twv-)?e-?(\d+)$/i);
     if (refMatch) {
       const reference = `TWV-E-${refMatch[1].padStart(4, "0")}`;
@@ -66,9 +73,10 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
 
   const LEAD_SELECT =
-    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
+    "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(id, follow_up_date, is_follow_up_done, follow_up_notes, subject, type)";
 
   type Followup = {
+    id: string;
     follow_up_date: string | null;
     is_follow_up_done: boolean;
     follow_up_notes: string | null;
@@ -76,14 +84,44 @@ export async function GET(request: NextRequest) {
     type: string;
   };
   type NextFollowup = {
+    activity_id: string;
     due_at: string;
     days_overdue: number;
     notes: string | null;
     subject: string | null;
     type: string;
   };
+  type EnquiryGlance = {
+    source: string;
+    received_at: string;
+    workspace_type: string | null;
+    seat_capacity: number | null;
+    budget_per_seat: number | null;
+    preferred_location: string | null;
+    message: string | null;
+  };
+  type EnquiryRow = {
+    lead_id: string;
+    source: string;
+    received_at: string;
+    payload: {
+      workspace_type?: string;
+      seat_capacity?: number;
+      budget_per_seat?: number;
+      preferred_location?: string;
+      description?: string;
+      messages?: { text?: string }[];
+    } | null;
+  };
   type LeadRow = {
     id: string;
+    status: string;
+    created_at: string;
+    archived_at?: string | null;
+    pinned_at?: string | null;
+    _stale?: unknown;
+    _last_contact?: { subject: string; at: string; note: string | null } | null;
+    _enquiry?: EnquiryGlance | null;
     _pending_followups?: Followup[];
     _followup?: {
       overdue: boolean;
@@ -119,6 +157,7 @@ export async function GET(request: NextRequest) {
         l._followup = {
           ...flags,
           next: {
+            activity_id: soonest.id,
             due_at: soonest.follow_up_date as string,
             days_overdue,
             notes: soonest.follow_up_notes,
@@ -138,7 +177,9 @@ export async function GET(request: NextRequest) {
   if (!include_archived) countQuery = countQuery.is("archived_at", null);
   if (status) countQuery = countQuery.eq("status", status);
   if (sources.length > 0) countQuery = countQuery.in("source", sources);
-  if (assigned_to) countQuery = countQuery.eq("assigned_to", assigned_to);
+  // "none" = leads nobody is handling yet (the Unclaimed filter).
+  if (pinnedOnly) countQuery = countQuery.not("pinned_at", "is", null);
+  if (assigned_to) countQuery = assigned_to === "none" ? countQuery.is("assigned_to", null) : countQuery.eq("assigned_to", assigned_to);
   if (rating) countQuery = countQuery.eq("rating", rating);
   if (location_id) countQuery = countQuery.eq("location_id", location_id);
   if (search) {
@@ -169,7 +210,8 @@ export async function GET(request: NextRequest) {
   if (!include_archived) priorityQuery = priorityQuery.is("leads.archived_at", null);
   if (status) priorityQuery = priorityQuery.eq("leads.status", status);
   if (sources.length > 0) priorityQuery = priorityQuery.in("leads.source", sources);
-  if (assigned_to) priorityQuery = priorityQuery.eq("leads.assigned_to", assigned_to);
+  if (pinnedOnly) priorityQuery = priorityQuery.not("leads.pinned_at", "is", null);
+  if (assigned_to) priorityQuery = assigned_to === "none" ? priorityQuery.is("leads.assigned_to", null) : priorityQuery.eq("leads.assigned_to", assigned_to);
   if (rating) priorityQuery = priorityQuery.eq("leads.rating", rating);
   if (location_id) priorityQuery = priorityQuery.eq("leads.location_id", location_id);
   if (search) {
@@ -230,7 +272,8 @@ export async function GET(request: NextRequest) {
     if (!include_archived) restQuery = restQuery.is("archived_at", null);
     if (status) restQuery = restQuery.eq("status", status);
     if (sources.length > 0) restQuery = restQuery.in("source", sources);
-    if (assigned_to) restQuery = restQuery.eq("assigned_to", assigned_to);
+    if (pinnedOnly) restQuery = restQuery.not("pinned_at", "is", null);
+    if (assigned_to) restQuery = assigned_to === "none" ? restQuery.is("assigned_to", null) : restQuery.eq("assigned_to", assigned_to);
     if (rating) restQuery = restQuery.eq("rating", rating);
     if (location_id) restQuery = restQuery.eq("location_id", location_id);
     if (search) {
@@ -269,6 +312,70 @@ export async function GET(request: NextRequest) {
   }
 
   const leads = [...priorityLeads, ...restLeads];
+
+  // What the latest public enquiry asked for. A form lead's requirement lives on the enquiry,
+  // not on the lead, so without this the list can't say what a lead wants or when they last asked.
+  const leadIds = leads.map((l) => l.id);
+  if (leadIds.length > 0) {
+    const { data: enquiryRows } = await supabase
+      .from("lead_enquiries")
+      .select("lead_id, source, received_at, payload")
+      .in("lead_id", leadIds)
+      .or("resolution_outcome.is.null,resolution_outcome.neq.spam")
+      .order("received_at", { ascending: false });
+    const latest = new Map<string, EnquiryGlance>();
+    for (const row of (enquiryRows || []) as EnquiryRow[]) {
+      if (latest.has(row.lead_id)) continue;
+      const p = row.payload ?? {};
+      const thread = (p.messages ?? []).map((m) => (m.text ?? "").trim()).filter(Boolean);
+      latest.set(row.lead_id, {
+        source: row.source,
+        received_at: row.received_at,
+        workspace_type: p.workspace_type ?? null,
+        seat_capacity: p.seat_capacity ?? null,
+        budget_per_seat: p.budget_per_seat ?? null,
+        preferred_location: p.preferred_location ?? null,
+        message: (thread[thread.length - 1] ?? p.description?.trim()) || null,
+      });
+    }
+    for (const l of leads) l._enquiry = latest.get(l.id) ?? null;
+
+    // How long each lead has been quiet, with the same rule the daily archive job uses.
+    const { data: activityRows } = await supabase
+      .from("activities")
+      .select("lead_id, created_at, subject, type, description")
+      .in("lead_id", leadIds)
+      .order("created_at", { ascending: false })
+      .limit(3000);
+    const lastActivity = new Map<string, string>();
+    // The last time someone actually spoke to or met them, for the "Last:" line on the row.
+    const lastContact = new Map<string, { subject: string; at: string; note: string | null }>();
+    for (const a of (activityRows || []) as {
+      lead_id: string;
+      created_at: string;
+      subject: string | null;
+      type: string;
+      description: string | null;
+    }[]) {
+      if ((NON_EVENT_SUBJECTS as readonly string[]).includes(a.subject ?? "")) continue;
+      if (!lastActivity.has(a.lead_id)) lastActivity.set(a.lead_id, a.created_at);
+      if (!lastContact.has(a.lead_id) && isLastContactActivity(a)) {
+        lastContact.set(a.lead_id, { subject: a.subject || a.type, at: a.created_at, note: a.description?.trim() || null });
+      }
+    }
+    for (const l of leads) {
+      l._last_contact = lastContact.get(l.id) ?? null;
+      const stale = leadStaleState({
+        status: l.status,
+        archivedAt: l.archived_at,
+        pinnedAt: l.pinned_at,
+        lastEventAt:
+          latestInstant([l.created_at, lastActivity.get(l.id), l._enquiry?.received_at]) ?? l.created_at,
+        hasFutureFollowUp: !!(l._followup?.upcoming || l._followup?.due_today),
+      });
+      if (stale.state !== "active") l._stale = stale;
+    }
+  }
 
   return NextResponse.json({
     data: leads,
@@ -311,7 +418,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("leads")
     .insert({
-      ...result.data,
+      ...normalizePhoneFields(result.data),
       created_by: dbUser?.id,
       assigned_to: result.data.assigned_to || dbUser?.id,
     })

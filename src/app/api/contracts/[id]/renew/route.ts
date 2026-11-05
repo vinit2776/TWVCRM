@@ -8,6 +8,7 @@ import { firstBillingAnchor } from "@/lib/billing-months";
 import { normalizeRenewalNote } from "@/lib/renewal-note";
 import { carrySpecialClauseToRenewal } from "@/lib/special-clause/service";
 import { carryElectricityConfigToRenewal } from "@/lib/electricity-renewal";
+import { DEFAULT_ESCALATION_PERCENTAGE, programmedEscalation } from "@/lib/auto-renewal";
 
 /**
  * POST /api/contracts/[id]/renew
@@ -131,10 +132,14 @@ export async function POST(
   const nextBillingDateYmd = firstBillingAnchor(startDate.toISOString().slice(0, 10));
 
   // 4. Apply escalation to items
-  // Allow custom escalation % override — negotiation may result in a different rate
+  // Allow custom escalation % override — negotiation may result in a different rate.
+  // A negotiated rate applies to THIS term only: the next renewal starts again
+  // from the signed agreement's escalation (programmedEscalation), not from
+  // whatever was negotiated here.
+  const programmedPct = programmedEscalation(source);
   const escalationPct = body.escalation_percentage != null
     ? Number(body.escalation_percentage)
-    : Number(source.escalation_percentage || 10);
+    : programmedPct;
   const escalationMultiplier = 1 + escalationPct / 100;
 
   // Round to nearest Rupee.
@@ -198,6 +203,10 @@ export async function POST(
       complimentary_items: source.complimentary_items,
       security_deposit_months: securityDepositMonths,
       escalation_percentage: escalationPct,
+      // The base agreement's escalation, carried unchanged. Only written once
+      // migration 00662 is applied (the column shows up on `source` then), so
+      // renewals keep working until it is.
+      ...("agreement_escalation_percentage" in source ? { agreement_escalation_percentage: programmedPct } : {}),
       // Only written when a note was typed, so a renewal without one never
       // touches the column (keeps renewals working until migration 00609 is applied).
       ...(noteResult.value !== null ? { renewal_agreed_note: noteResult.value } : {}),
@@ -391,7 +400,9 @@ export async function POST(
   // an approval request. The draft is created with the proposed rate, but
   // the contract is flagged as pending approval. If rejected, the rate
   // reverts to the default escalation.
-  const parentEscPct = Number(source.escalation_percentage || 10);
+  // Compared against the agreement's escalation, so negotiating below it needs
+  // approval every cycle, even when the previous term was itself negotiated.
+  const parentEscPct = programmedPct;
   const needsApproval = dbUser.role !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
   let approvalStatus: string | null = null;
 
@@ -442,6 +453,7 @@ export async function POST(
       contract_number: newContract.contract_number,
       parent_contract_number: source.contract_number,
       escalation_percentage: escalationPct,
+      agreement_escalation_percentage: programmedPct,
       old_subtotal: Number(source.subtotal),
       new_subtotal: newSubtotal,
       deposit_shortfall: depositShortfall,
@@ -503,12 +515,17 @@ export async function PATCH(
   // Fetched separately rather than via an embedded PostgREST join — the
   // self-referencing FK relationship isn't resolvable through the embed
   // syntax in this project's schema cache.
-  type ParentSummary = { id: string; items: unknown; subtotal: number; seats: number; escalation_percentage: number | null; contract_number: string };
+  type ParentSummary = {
+    id: string; items: unknown; subtotal: number; seats: number;
+    escalation_percentage: number | null; agreement_escalation_percentage?: number | null; contract_number: string;
+  };
   let parent: ParentSummary | null = null;
   if (contract.parent_contract_id) {
+    // "*" rather than a column list: agreement_escalation_percentage only exists
+    // after migration 00662, and a named column that is missing fails the whole read.
     const { data: parentData } = await admin
       .from("contracts")
-      .select("id, items, subtotal, seats, escalation_percentage, contract_number")
+      .select("*")
       .eq("id", contract.parent_contract_id)
       .single();
     parent = parentData;
@@ -552,7 +569,12 @@ export async function PATCH(
     const tenureMonths = body.tenure_months != null ? Number(body.tenure_months) : Number(contract.tenure_months);
     const seats = body.seats != null ? Number(body.seats) : Number(contract.seats || 1);
     const billingCycle = body.billing_cycle || contract.billing_cycle || "monthly";
-    const escalationPct = body.escalation_percentage != null ? Number(body.escalation_percentage) : Number(contract.escalation_percentage || 0);
+    const programmedPct = parent ? programmedEscalation(parent) : DEFAULT_ESCALATION_PERCENTAGE;
+    const escalationPct = body.escalation_percentage != null
+      ? Number(body.escalation_percentage)
+      : contract.escalation_percentage != null
+        ? Number(contract.escalation_percentage)
+        : programmedPct;
     const startDateStr = body.start_date || contract.start_date;
 
     if (!startDateStr || !tenureMonths || tenureMonths < 1) {
@@ -589,6 +611,7 @@ export async function PATCH(
       seats,
       billing_cycle: billingCycle,
       escalation_percentage: escalationPct,
+      ...("agreement_escalation_percentage" in contract ? { agreement_escalation_percentage: programmedPct } : {}),
       start_date: startDateStr,
       end_date: endDateStr,
       next_billing_date: nextBillingDateYmd,
@@ -638,7 +661,7 @@ export async function PATCH(
     // Same rule as at creation: a reduced or zero escalation set by a
     // non-admin needs admin approval. Editing the draft afterwards must not
     // be a way around it.
-    const parentEscPct = Number(parent?.escalation_percentage || 10);
+    const parentEscPct = programmedPct;
     const escalationChanged = escalationPct !== Number(contract.escalation_percentage || 0);
     const needsApproval = dbUser.role !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
     let approvalStatus: string | null = contract.escalation_approval_status ?? null;

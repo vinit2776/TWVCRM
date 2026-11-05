@@ -40,6 +40,7 @@ export const createLeadSchema = z.object({
     "google_ads",
     "direct_walkin",
     "whatsapp",
+    "inbound_call",
     "referral",
     "cold_call",
     "aggregator",
@@ -109,7 +110,7 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "referral", "cold_call", "aggregator",
+    "meta_ads", "google_ads", "direct_walkin", "whatsapp", "inbound_call", "referral", "cold_call", "aggregator",
   ]).default("meta_ads"),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
@@ -166,8 +167,13 @@ export const createActivitySchema = z.object({
   meeting_location: z.string().optional(),
   meeting_start_at: z.string().optional(),
   meeting_end_at: z.string().optional(),
+  /** Who will host the tour; reminded 2 hours before, along with whoever booked it. */
+  tour_host_id: z.string().uuid().optional(),
   follow_up_date: z.string().optional(),
   follow_up_notes: z.string().optional(),
+  /** Set by the one-tap actions: this contact deals with the follow-ups already open on the lead,
+   *  so they are marked done and the new next step (if any) is the only one left. Never stored. */
+  closes_open_follow_ups: z.boolean().optional(),
 }).refine((v) => !v.follow_up_date || !!v.follow_up_notes?.trim(), {
   // The Follow-ups due list shows this as the "next action"; without it the person
   // picking the lead up has to open every lead to find out what the follow-up is for.
@@ -263,6 +269,9 @@ export const createInvoiceSchema = z.object({
   /** Bill the end client directly on a case that is billed to an aggregator. */
   bill_client_override: z.boolean().optional(),
   proposal_id: z.string().uuid().optional(),
+  // Which live contract this invoice belongs on. Optional: one live contract
+  // attaches by itself, several must be chosen (see decideAttachment()).
+  contract_id: z.string().uuid().optional(),
   title: z.string().min(1, "Title is required"),
   // Security deposits are never billed through an ad-hoc invoice — they go
   // through the proposal deposit link instead (GST-exempt, tracked against

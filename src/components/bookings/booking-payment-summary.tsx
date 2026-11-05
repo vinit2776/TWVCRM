@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Booking, BookingPayment } from "@/types";
+import { reportedPaymentState } from "@/lib/booking-payment-rules";
 
 const MONTH_LABELS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
@@ -148,6 +149,27 @@ export function BookingPaymentSummary({ booking, variant = "full", payments, onV
         kind: "pending" as const,
         title: "Pending — Awaiting decision",
         sub: "Contract holder — choose to post to monthly invoice or collect now",
+        tone: "amber",
+        icon: AlertCircle,
+      };
+    }
+    const reportedState = reportedPaymentState(total, payments ?? []);
+    if (reportedState.coveredByReport) {
+      return {
+        kind: "pending" as const,
+        title: "Pending verification",
+        sub: reportedState.overReported
+          ? `${formatCurrency(reportedState.reported)} reported on a ${formatCurrency(total)} booking — check for a duplicate`
+          : `${formatCurrency(reportedState.reported)} reported, waiting for accounts to verify`,
+        tone: "amber",
+        icon: AlertCircle,
+      };
+    }
+    if (reportedState.reported > 0) {
+      return {
+        kind: "pending" as const,
+        title: "Pending Collection",
+        sub: `${formatCurrency(reportedState.left)} left to collect · ${formatCurrency(reportedState.reported)} reported, waiting for accounts`,
         tone: "amber",
         icon: AlertCircle,
       };
