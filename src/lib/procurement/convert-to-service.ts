@@ -87,7 +87,7 @@ export function checkConvertToService(i: ConvertInput):
   // The cycle engine counts reports and invoices, so a gap would offer a cycle that is already billed.
   for (let c = 1; c <= list.length; c++) {
     if (!seenCycles.has(c)) {
-      return { ok: false, error: `Invoices must fill cycles 1 to ${list.length} with no gap. Nothing is tied to cycle ${c}.`, status: 422 };
+      return { ok: false, error: `Invoices must start at cycle 1 and leave no gap. Nothing is tied to cycle ${c}.`, status: 422 };
     }
   }
   return { ok: true, unitCost };
