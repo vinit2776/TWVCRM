@@ -36,7 +36,9 @@ import type { ProcurementItem, Location, Company, ProcurementDepartment, ItemUni
 import { PageBreadcrumb } from "@/components/page-breadcrumb";
 import { AmcStepHeader, AmcReviewCard } from "@/components/procurement/amc-wizard-parts";
 import { AmcProposalCard } from "@/components/procurement/amc-proposal-card";
-import type { PrefillPlan } from "@/lib/procurement/amc-prefill";
+import type { PrefillAnswers, PrefillPlan } from "@/lib/procurement/amc-prefill";
+import { useAmcOverlap } from "@/lib/procurement/use-amc-overlap";
+import { AssetOverlapNote } from "@/components/procurement/asset-warnings";
 import type { ExtractedAmcProposal } from "@/lib/procurement/proposal-extraction";
 import { AMC_STEPS, validateAmcStep, contractLengthText } from "@/lib/procurement/amc-wizard-steps";
 
@@ -258,6 +260,8 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   }, [department, reimbursementContracts.length]);
 
   // Auto-fill service name + end date when asset/start date change.
+  // Other live AMCs already covering the chosen assets in these dates (advisory; never blocks saving).
+  const amcOverlaps = useAmcOverlap(amcLines.map((l) => l.assetId), amcStartDate, amcEndDate, isEdit ? pr?.id : undefined);
   const updateAmcLine = (id: string, patch: Partial<AmcLine>) =>
     setAmcLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   const handleAssetSelect = (lineId: string, assetId: string) => {
@@ -799,7 +803,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
   };
 
   /** Fills the wizard from a proposal the user confirmed; returns how many details were set. */
-  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, chosenValue: number | undefined): number => {
+  const applyProposalPrefill = (plan: PrefillPlan, file: File, x: ExtractedAmcProposal, answers: PrefillAnswers): number => {
     const u = plan.updates;
     let count = 0;
     if (u.serviceName !== undefined) { setServiceItemName(u.serviceName); count++; }
@@ -814,11 +818,21 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
       setAmcLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, billingCycle: fl.billingCycle, perCycleCost: fl.perCycleCost ?? l.perCycleCost, cycleCountOverride: "" } : l)));
       count += fl.perCycleCost === undefined ? 1 : 2;
     }
+    if (u.lines) {
+      setAmcLines(u.lines.map((l) => newAmcLine({ assetId: l.assetId, billingCycle: l.billingCycle, perCycleCost: l.perCycleCost })));
+      count += u.lines.length;
+    }
     // Keep the proposal itself as the attached quotation, so the approver can read it.
-    const amount = chosenValue ?? x.valueBeforeGst;
+    // When some units were left out, the attached figure is what this request covers, so the approver
+    // never sees a quotation that disagrees with the lines; the full proposal total stays in the note.
+    const scope = plan.unitScope && plan.unitScope.leftOut > 0 ? plan.unitScope : null;
+    const amount = scope ? scope.coveredTotal : answers.amount !== undefined ? Number(answers.amount) : x.valueBeforeGst;
+    const quoteNotes = scope
+      ? `AMC proposal. Covers ${scope.covered} of the ${scope.covered + scope.leftOut} units listed (${formatCurrency(scope.coveredTotal)} before GST${scope.proposalTotal ? ` of ${formatCurrency(scope.proposalTotal)}` : ""}); ${scope.leftOut} left out.`
+      : "AMC proposal";
     setQuotations((prev) => [
       ...prev,
-      { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: "AMC proposal", file },
+      { id: generateLocalId(), vendor_name: x.vendorName ?? "Vendor", amount: amount ? String(amount) : "", notes: quoteNotes, file },
     ]);
     toast.success("Filled in from the proposal. Check each step as you go.");
     return count;
@@ -1029,6 +1043,9 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
 
       {amcWizard && amcStep === 0 && (
         <AmcProposalCard
+          assets={assets}
+          defaultLocationId={locationId || undefined}
+          onAssetCreated={(a) => setAssets((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]))}
           onApply={applyProposalPrefill}
           current={{
             serviceName: serviceItemName, startDate: amcStartDate, endDate: amcEndDate,
@@ -1164,6 +1181,7 @@ export function MaterialRequestForm(props: MaterialRequestFormProps) {
                         placeholder="Select the asset this line covers..."
                         emptyMessage="No active assets found"
                       />
+                      <AssetOverlapNote conflicts={l.assetId ? amcOverlaps[l.assetId] : undefined} />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="space-y-1.5">
