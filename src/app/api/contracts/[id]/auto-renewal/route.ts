@@ -29,7 +29,7 @@ const bodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("clear_revision") }),
 ]);
 
-const MIGRATION_MISSING = "Auto-renewal is not set up on this database yet (migrations 00662 and 00667 not applied).";
+const MIGRATION_MISSING = "Auto-renewal is not set up on this database yet (migrations 00662 and 00669 not applied).";
 
 async function actor() {
   const supabase = await createClient();

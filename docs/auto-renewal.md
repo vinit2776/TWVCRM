@@ -88,7 +88,7 @@ report-only for now. `GET/POST /api/contracts/[id]/auto-renewal`; roles admin, m
 (`AUTO_RENEW_MANAGE_ROLES`).
 
 - **Revise rate** stores a negotiated escalation for the next term only in
-  `contracts.auto_renew_escalation_override` (migration 00667), with who, when and why. The agreement's
+  `contracts.auto_renew_escalation_override` (migration 00669), with who, when and why. The agreement's
   figure is untouched. A rate below the agreement's needs an admin (`checkRevision`). A rate equal to the
   agreement's clears the revision. The preview and the daily report use it.
 - **Pause** stops the roll only: `auto_renew` goes false with the reason "Paused while renegotiating: ...".

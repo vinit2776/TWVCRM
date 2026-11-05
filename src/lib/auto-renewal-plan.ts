@@ -45,7 +45,7 @@ export interface AutoRenewFacts {
   subtotal: number;
   agreementEscalationPercentage: number | null;
   escalationPercentage: number | null;
-  /** A rate agreed for the NEXT term only (migration 00667); null when none. */
+  /** A rate agreed for the NEXT term only (migration 00669); null when none. */
   revisedEscalationPercentage?: number | null;
   renewalDeclined: boolean;
   hasLiveExit: boolean;
