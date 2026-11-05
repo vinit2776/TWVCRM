@@ -15,7 +15,8 @@ export interface NextStepChip {
   when: string;
 }
 
-function datePart(iso: string): string {
+/** "Fri 6 Nov" in IST. */
+export function datePart(iso: string): string {
   const parts = new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
     weekday: "short",
@@ -26,7 +27,8 @@ function datePart(iso: string): string {
   return `${get("weekday")} ${get("day")} ${get("month")}`;
 }
 
-function timePart(iso: string): string {
+/** "4:00 pm" in IST. */
+export function timePart(iso: string): string {
   return new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
     hour: "numeric",
