@@ -18,7 +18,9 @@ import {
  * accounts/admin. Only an unverified report can be withdrawn: the update is
  * conditional on status = 'reported', so a verification that lands first wins
  * and this returns 409. Nothing here touches money — an unverified report was
- * only ever a claim.
+ * only ever a claim. It deliberately never touches the invoice, a payment, the
+ * payment link or the proposal: withdrawing takes back the claim so it can be
+ * reported again, nothing more.
  */
 export const dynamic = "force-dynamic";
 

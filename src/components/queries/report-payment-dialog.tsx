@@ -215,7 +215,7 @@ export function ReportPaymentDialog({
       setReloadKey((k) => k + 1);
       return;
     }
-    toast.success("Report withdrawn — you can report it again with the right details");
+    toast.success("Report withdrawn — the invoice is untouched. You can report the payment again with the right details");
     withdrewRef.current = true;
     setReloadKey((k) => k + 1);
   }
@@ -370,7 +370,8 @@ export function ReportPaymentDialog({
                     confirmWithdrawId === rep.id ? (
                       <div className="flex items-center gap-2 border-t pt-1.5">
                         <span className="text-[11px] text-amber-900">
-                          Withdraw this report? Accounts will be told.
+                          Withdraw this report? The invoice and any payment are not affected, and
+                          you can report it again. Accounts will be told.
                         </span>
                         <Button
                           type="button" size="sm" variant="outline"
@@ -395,7 +396,7 @@ export function ReportPaymentDialog({
                         <Button
                           type="button" size="sm" variant="outline"
                           className="h-6 px-2 text-[11px]"
-                          title="Take this report back so you can correct it — only possible until accounts verifies it"
+                          title="Take back this report so you can correct it and report it again — the invoice and payment are not affected. Only possible until accounts verifies it"
                           onClick={() => setConfirmWithdrawId(rep.id)}
                         >
                           Withdraw report
