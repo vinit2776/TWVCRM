@@ -406,6 +406,9 @@ export async function POST(request: NextRequest) {
           }, { status: 422 });
         }
         servicePrItemId = line.id;
+        // A running contract's line holds only the cycles still to bill; the form must not
+        // order more than was approved, whatever count it derived from the dates.
+        if (openingCycles > 0) svc.cycleCount = Number(line.quantity);
       }
     }
 

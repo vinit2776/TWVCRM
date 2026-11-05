@@ -87,6 +87,8 @@ function NewServicePOForm() {
   // single-payment contract — still the common case — is unchanged.
   const [amcBillingCycle, setAmcBillingCycle] = useState<ServicePoBillingCycle>("yearly");
   const [amcCycleCountOverride, setAmcCycleCountOverride] = useState("");
+  /** Cycles the request says were billed and settled before the contract was entered. */
+  const [openingFromMr, setOpeningFromMr] = useState(0);
   const [sourceMrNumber, setSourceMrNumber] = useState<string | null>(null);
   const [amcContactExpanded, setAmcContactExpanded] = useState(true);
   const [termsExpanded, setTermsExpanded] = useState(false);
@@ -227,7 +229,11 @@ function NewServicePOForm() {
         // total_estimated_amount is the whole commitment, so using it as the unit
         // cost would multiply a monthly contract by its own cycle count.
         setAmcBillingCycle(cycleFromUnit(mrItem?.unit));
-        if (mrItem?.quantity && Number(mrItem.quantity) > 1) {
+        // A contract that was already running stores only the cycles still to bill, even when that is one,
+        // so the quantity must win over the count derived from the contract dates.
+        const opening = Number(pr.opening_cycles ?? 0);
+        setOpeningFromMr(opening);
+        if (mrItem?.quantity && (Number(mrItem.quantity) > 1 || opening > 0)) {
           setAmcCycleCountOverride(String(mrItem.quantity));
         }
         if (isCombined) setUnitCost(String(Math.round(picked.reduce((sum, l) => sum + Number(l.estimated_price ?? 0), 0) * 100) / 100));
@@ -389,6 +395,12 @@ function NewServicePOForm() {
           {inheritedCompany && (
             <div className="mt-1 text-xs text-blue-700">
               Company: <span className="font-medium">{inheritedCompany.brand_name}</span>
+            </div>
+          )}
+          {openingFromMr > 0 && (
+            <div className="mt-1 text-xs text-amber-800">
+              This contract was already running: {openingFromMr} {CYCLE_UNIT_LABEL[amcBillingCycle]}{openingFromMr === 1 ? "" : "s"} were billed and paid before it was entered here,
+              so this PO covers only the {amcCycleCount} still to bill.
             </div>
           )}
         </div>
