@@ -2564,6 +2564,9 @@ export interface PurchaseRequest {
   amc_start_date?: string | null;
   amc_end_date?: string | null;
   amc_visits_covered?: number | null;
+  /** Cycles settled and visits done before the contract was entered here (the line quantity is only what is left). */
+  opening_cycles?: number;
+  opening_visits?: number;
   amc_contact_name?: string | null;
   amc_helpline_number?: string | null;
   amc_contact_email?: string | null;
