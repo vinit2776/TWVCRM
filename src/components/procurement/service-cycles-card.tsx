@@ -29,7 +29,10 @@ interface Props {
   status: string;
   terminated: boolean;
   billingCycle: ServicePoBillingCycle | null;
+  /** Cycles still to bill here; the full contract is `openingCycles + cycleCount`. */
   cycleCount: number | null;
+  /** Cycles billed and settled before the contract was entered here. */
+  openingCycles?: number;
   unitCostPerCycle: number | null;
   reports: PoServiceReport[];
   bills: CycleBill[];
@@ -62,13 +65,14 @@ const LIFECYCLE_STEPS = [
   { label: "Payment", owner: "Accounts" },
 ] as const;
 
-type ChipState = "paid" | "progress" | "current" | "upcoming";
+type ChipState = "paid" | "progress" | "current" | "upcoming" | "earlier";
 
 const CHIP_CLASS: Record<ChipState, string> = {
   paid: "bg-green-100 text-green-800 border-green-300",
   progress: "bg-amber-100 text-amber-800 border-amber-300",
   current: "bg-blue-100 text-blue-800 border-blue-500 border-2",
   upcoming: "text-muted-foreground border-border",
+  earlier: "bg-muted text-muted-foreground border-border",
 };
 
 /** Which of the five lifecycle steps the contract is on; 5 = past the last step. */
@@ -92,7 +96,7 @@ function lifecycleStep(next: ReturnType<typeof serviceNextStep>, bills: CycleBil
  * as several invoices on the same contract.
  */
 export function ServiceCyclesCard({
-  accentBar, status, terminated, billingCycle, cycleCount, unitCostPerCycle,
+  accentBar, status, terminated, billingCycle, cycleCount, openingCycles = 0, unitCostPerCycle,
   reports, bills: allBills, onRecordReport, onUploadInvoice, onEditInvoice, canTie, onChanged,
 }: Props) {
   // A withdrawn invoice is out of play, so its cycle reads as un-invoiced again.
@@ -102,7 +106,8 @@ export function ServiceCyclesCard({
   const [tying, setTying] = useState(false);
   const unit = billingCycle ? CYCLE_UNIT_LABEL[billingCycle] : "cycle";
   const Unit = unit.charAt(0).toUpperCase() + unit.slice(1);
-  const total = cycleCount ?? 0;
+  // `cycleCount` is only what is left to bill here; labels speak of the whole contract.
+  const total = (cycleCount ?? 0) + openingCycles;
   const sorted = [...reports].sort((a, b) => a.cycle_number - b.cycle_number);
   const billFor = (srId: string) => bills.find((b) => b.service_report_id === srId);
   // Only invoices tied to a report count towards the cycles. A legacy contract
@@ -115,6 +120,7 @@ export function ServiceCyclesCard({
     reportsFiled: reports.length,
     invoicesFiled: cycleBills.length,
     cycleCount,
+    openingCycles,
   });
 
   const tieTargets = sorted.filter((r) => !bills.some((b) => b.service_report_id === r.id));
@@ -144,6 +150,7 @@ export function ServiceCyclesCard({
   const chipCount = Math.max(total, sorted.length);
   const chips = Array.from({ length: chipCount }, (_, i) => {
     const n = i + 1;
+    if (n <= openingCycles) return { n, state: "earlier" as ChipState, text: "settled before this system" };
     const sr = sorted.find((r) => r.cycle_number === n);
     const bill = sr ? billFor(sr.id) : undefined;
     let state: ChipState = "upcoming";
@@ -156,7 +163,7 @@ export function ServiceCyclesCard({
 
   // One more placeholder row for the cycle after the last report, so the user
   // can see what is coming and why its invoice is locked.
-  const upcomingCycle = sorted.length + 1;
+  const upcomingCycle = openingCycles + sorted.length + 1;
   const showUpcoming = total === 0 || upcomingCycle <= total;
   const awaiting = cycleBills.filter((b) => b.approval_status === "pending");
 
@@ -213,7 +220,7 @@ export function ServiceCyclesCard({
           <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
             <div className="flex items-baseline justify-between gap-2 flex-wrap">
               <p className="text-sm font-medium">How this contract is billed</p>
-              {total > 1 && <span className="text-xs text-muted-foreground">Steps 2 to 5 repeat for each of the {total} {unit}s</span>}
+              {(cycleCount ?? 0) > 1 && <span className="text-xs text-muted-foreground">Steps 2 to 5 repeat for each of the {cycleCount} {unit}s still to bill</span>}
             </div>
             <ol className="grid grid-cols-5 gap-1.5">
               {LIFECYCLE_STEPS.map((st, i) => {
@@ -245,7 +252,7 @@ export function ServiceCyclesCard({
               </div>
             )}
             {chips.length > 4 && (
-              <p className="text-[11px] text-muted-foreground">Green is paid, amber is invoiced and in progress, blue is the {unit} you are on, grey is upcoming.</p>
+              <p className="text-[11px] text-muted-foreground">Green is paid, amber is invoiced and in progress, blue is the {unit} you are on, grey is upcoming or settled before this system.</p>
             )}
           </div>
         )}
@@ -269,6 +276,15 @@ export function ServiceCyclesCard({
               </tr>
             </thead>
             <tbody>
+              {openingCycles > 0 && (
+                <tr className="border-b bg-muted/30 text-muted-foreground">
+                  <td className="px-3 py-2.5" colSpan={4}>
+                    <p className="text-xs">
+                      {openingCycles === 1 ? `${Unit} 1` : `${Unit}s 1 to ${openingCycles}`} billed and settled before this contract was entered here. Nothing to do.
+                    </p>
+                  </td>
+                </tr>
+              )}
               {sorted.map((sr) => {
                 const bill = billFor(sr.id);
                 const approval = bill ? APPROVAL_BADGE[bill.approval_status] ?? APPROVAL_BADGE.pending : null;

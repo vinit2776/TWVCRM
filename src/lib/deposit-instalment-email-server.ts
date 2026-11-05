@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logCommunication } from "@/lib/communications-log";
-import { requiredDeposit } from "@/lib/deposit-instalments";
+import { livePartNumbers, requiredDeposit } from "@/lib/deposit-instalments";
 import {
   requestFigures,
   buildPartReceivedEmail,
@@ -42,7 +42,7 @@ async function load(admin: SupabaseClient, instalmentId: string, kind: PartEmail
       .eq("id", part.proposal_id)
       .maybeSingle(),
     admin.from("proposal_deposit_instalments")
-      .select("amount, status, paid_amount")
+      .select("id, seq, amount, status, paid_amount")
       .eq("proposal_id", part.proposal_id),
   ]);
   if (!proposal) return { error: "Proposal not found", status: 404 };
@@ -55,7 +55,9 @@ async function load(admin: SupabaseClient, instalmentId: string, kind: PartEmail
     input: {
       proposalNumber: proposal.proposal_number,
       customerName: lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() || "Customer" : "Customer",
-      seq: part.seq,
+      // The customer reads "Part 1" for the first live part, however many
+      // cancelled requests came before it.
+      seq: livePartNumbers(rows || []).get(part.id) ?? part.seq,
       amount: Number(kind === "received" ? part.paid_amount ?? part.amount : part.amount),
       required: requiredDeposit(proposal),
       rows: rows || [],

@@ -1491,6 +1491,7 @@ export default function ProposalDetailPage({
                   depositPaymentStatus={proposal.deposit_payment_status}
                   userId={currentUser?.id ?? null}
                   role={currentUser?.role ?? null}
+                  partyLabel={`${proposal.proposal_number} · security deposit`}
                   onChanged={fetchProposal}
                   onPartsActive={setDepositPartsActive}
                   onPosition={handleDepositPosition}

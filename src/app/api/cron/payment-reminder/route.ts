@@ -100,6 +100,8 @@ export async function GET(request: NextRequest) {
 
   const ccPools = await fetchCcPools(admin);
   let sent = 0, skipped = 0, errors = 0, deferred = 0;
+  // Reminders that went out without a Pay button because no working link could be secured.
+  const linkIssues: string[] = [];
   // Statements held back because there's no evidence the customer ever received
   // them. Reported, never silent — each one needs a human to resend it.
   const undelivered: string[] = [];
@@ -210,11 +212,16 @@ export async function GET(request: NextRequest) {
       statements: g.members.map((m) => m.statement),
       appUrl, triggeredBy: "cron", triggeredByUserId: null, ccPools,
     });
-    if (!r.emailSent && !r.whatsAppSent) {
+    if (r.skipped) {
+      // Not a failure: the link shows a payment that is waiting to be reconciled.
+      skipped += g.members.length;
+      summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel, channel: "—", status: "skip", reason: r.skipped });
+    } else if (!r.emailSent && !r.whatsAppSent) {
       errors++;
       summary.push({ id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel, channel: "email+wa", status: "error", reason: r.errors[0] });
     } else {
       sent++;
+      if (r.linkIssues?.length) linkIssues.push(...r.linkIssues);
       summary.push({
         id: primary.id, stmt: ids, stage: stageIdx, tone: r.toneLabel,
         channel: `${r.emailSent ? "email" : ""}${r.emailSent && r.whatsAppSent ? "+" : ""}${r.whatsAppSent ? "wa" : ""}`,
@@ -229,12 +236,14 @@ export async function GET(request: NextRequest) {
   // drives live monthly invoicing — stays untouched.
   const other = await runOtherReceivablesPass(admin, { dry, force, ccPools, startedAt });
   sent += other.sent; skipped += other.skipped; errors += other.errors; deferred += other.deferred;
+  linkIssues.push(...other.linkIssues);
 
   const todayIst = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await pingCronHealth("cron/payment-reminder", errors > 0 ? "error" : "ok", {
     sent, skipped, errors, deferred,
     elapsed_s: Math.round((Date.now() - startedAt) / 1000),
     undelivered: undelivered.length,
+    ...(linkIssues.length > 0 ? { link_issues: linkIssues.join(", ") } : {}),
     ...(undelivered.length > 0 ? { undelivered_statements: undelivered.join(", ") } : {}),
   });
   return NextResponse.json({
@@ -244,6 +253,9 @@ export async function GET(request: NextRequest) {
     // Open receivables that were never delivered — excluded from dunning and
     // waiting on a resend. Surfaced at the top level so it can't hide inside
     // a long per-statement summary.
+    // Sent without a Pay button (no working link could be secured) — accounts should reissue these.
+    link_issue_count: linkIssues.length,
+    link_issues: linkIssues,
     undelivered_count: undelivered.length,
     undelivered_statements: undelivered,
     summary, other_summary: other.summary,
@@ -263,6 +275,7 @@ async function runOtherReceivablesPass(
 ) {
   const rows = (await fetchDunnableReceivables(admin)).sort(byLeastRecentlyReminded);
   let sent = 0, skipped = 0, errors = 0, deferred = 0;
+  const linkIssues: string[] = [];
   const summary: { kind: string; ref: string; stage: number; status: string; reason?: string }[] = [];
 
   for (const r of rows) {
@@ -305,17 +318,21 @@ async function runOtherReceivablesPass(
     const res = await sendReceivableReminder(admin, {
       kind: r.kind, id: r.id, reference: r.reference, partyName: r.party_name,
       email: r.email, phone: r.phone, amount: r.amount, dueDate: r.due_date,
-      daysOverdue: days, stageIdx, payLinkUrl: r.payment_link_url,
+      daysOverdue: days, stageIdx, payLinkUrl: r.payment_link_url, payLinkId: r.payment_link_id,
       triggeredBy: "cron", triggeredByUserId: null, ccPools,
     });
-    if (!res.emailSent && !res.whatsAppSent) {
+    if (res.skipped) {
+      skipped++;
+      summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "skip", reason: res.skipped });
+    } else if (!res.emailSent && !res.whatsAppSent) {
       errors++;
       summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "error", reason: res.errors[0] });
     } else {
       sent++;
+      if (res.linkIssue) linkIssues.push(r.reference);
       summary.push({ kind: r.kind, ref: r.reference, stage: stageIdx, status: "sent" });
     }
   }
 
-  return { considered: rows.length, sent, skipped, errors, deferred, summary };
+  return { considered: rows.length, sent, skipped, errors, deferred, summary, linkIssues };
 }

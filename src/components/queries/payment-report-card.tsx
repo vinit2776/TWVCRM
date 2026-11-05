@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { RecordPaymentDialog } from "@/components/billing/record-payment-dialog";
+import { livePartNumbers } from "@/lib/deposit-instalments";
 import { RecordOtherPaymentDialog } from "@/components/billing/record-other-payment-dialog";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { statementReference } from "@/lib/receivables";
@@ -89,6 +90,29 @@ export function PaymentReportCard({
   const canReview = canReviewPaymentReport(user?.role) && report.status === "reported";
 
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isDeposit || entityType !== "proposal_deposit" || report.status !== "reported") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/proposals/${entityId}/deposit-instalments`);
+        if (!res.ok) return;
+        const rows = ((await res.json()).data?.instalments ?? []) as Array<{ id: string; seq: number; amount: number | string; status: string; paid_amount?: number | string | null }>;
+        const numbers = livePartNumbers(rows);
+        if (cancelled) return;
+        const live = rows.filter((r) => r.status !== "cancelled");
+        setDepositHasParts(live.length > 0);
+        const open = live.filter((r) => r.status === "requested");
+        // The part whose amount the customer reported; the only open one if just one is out.
+        const match = open.find((r) => Math.abs(Number(r.amount) - Number(report.amount)) <= 1) ?? (open.length === 1 ? open[0] : null);
+        setDepositPart(match ? { id: match.id, seq: numbers.get(match.id) ?? match.seq, amount: Number(match.amount) } : null);
+      } catch {
+        // Falls back to the single-deposit dialog, which explains itself if parts exist.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isDeposit, entityType, entityId, report.status, report.amount]);
   const [mode, setMode] = useState<"idle" | "not_found" | "rejected">("idle");
   const [note, setNote] = useState("");
 
@@ -103,6 +127,10 @@ export function PaymentReportCard({
     report.claimed_statement_id ?? (entityType === "billing_statement" ? entityId : null),
   );
   const [recordOpen, setRecordOpen] = useState(false);
+  // A deposit collected in parts is recorded against the part it pays, not the
+  // proposal. `undefined` = not looked up yet, `null` = no matching open part.
+  const [depositPart, setDepositPart] = useState<{ id: string; seq: number; amount: number } | null | undefined>(undefined);
+  const [depositHasParts, setDepositHasParts] = useState(false);
   // Payments already on the chosen invoice. The usual way a report ends up
   // double-counted is accounts recording the receipt first, then verifying the
   // report with "Verify and record" — which would record it again. Showing
@@ -441,10 +469,12 @@ export function PaymentReportCard({
                     size="sm"
                     variant={bankRecorded.length > 0 ? "outline" : "default"}
                     className={bankRecorded.length > 0 ? "h-7 text-xs bg-background" : "h-7 text-xs bg-green-600 hover:bg-green-700"}
-                    disabled={busy || (!isDeposit && !isBooking && !statementId)}
+                    disabled={busy || (!isDeposit && !isBooking && !statementId) || (isDeposit && depositHasParts && !depositPart)}
                     title={
                       isBooking
                         ? "Mark this booking payment verified — the booking becomes paid"
+                        : isDeposit && depositHasParts && !depositPart
+                          ? "No open part matches this report — ask sales to request the part on the proposal first"
                         : isDeposit
                           ? "Record this deposit against the proposal"
                           : statementId
@@ -531,8 +561,10 @@ export function PaymentReportCard({
             kind: "deposit",
             reference: entityReference ?? "Deposit",
             party_name: entityTitle ?? "",
-            total_amount: entityAmount ?? report.amount,
-            balance_due: entityAmount ?? report.amount,
+            total_amount: depositPart?.amount ?? entityAmount ?? report.amount,
+            balance_due: depositPart?.amount ?? entityAmount ?? report.amount,
+            part_id: depositPart?.id ?? null,
+            part_label: depositPart ? `Part ${depositPart.seq} — recorded for exactly what was asked` : null,
             due_date: null,
             days_overdue: null,
             payment_link_url: null,

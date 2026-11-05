@@ -594,4 +594,6 @@ export interface ExtractResponse {
    *  extracted text. Null when the statement has no PO number to check, or the
    *  PDF's text couldn't be parsed at all (e.g. a scanned image). */
   po_number_found: boolean | null;
+  /** Calendar months (YYYY-MM) the PDF says it bills; empty when it names no period. */
+  invoice_period_months?: string[];
 }

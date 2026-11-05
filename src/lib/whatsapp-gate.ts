@@ -29,11 +29,19 @@ export function applyLabelToKind(label: string | null | undefined, kind: TriageK
   return kind === "complaint" || kind === "customer" ? kind : "customer";
 }
 
-/** Held in the Possible leads tray (no lead, no enquiry yet): an unknown number whose message the
- *  rules could not judge. A known number keeps today's path (an enquiry flagged Needs review),
- *  and an ad reply is never held. */
-export function shouldHoldForReview(a: { kind: TriageKind; knownSender: boolean; hasReferral: boolean }): boolean {
-  return a.kind === "unsure" && !a.knownSender && !a.hasReferral;
+/** Held in the Possible leads tray (no new enquiry yet) when the rules could not judge the message.
+ *  That covers a number that is already a lead too: it may be a staff member or vendor saved as a
+ *  lead once, and an unclear line from them must not open a fresh card every time. Never held:
+ *  an ad reply, a customer (their unclear message is a question for a person, not junk), and a
+ *  message that continues a conversation we already have (the enquiry open for this number, or a
+ *  converted customer's thread). */
+export function shouldHoldForReview(a: {
+  kind: TriageKind;
+  hasReferral: boolean;
+  isCustomer: boolean;
+  continuesConversation: boolean;
+}): boolean {
+  return a.kind === "unsure" && !a.hasReferral && !a.isCustomer && !a.continuesConversation;
 }
 
 /** Last 10 digits, the key labels and held conversations use. */

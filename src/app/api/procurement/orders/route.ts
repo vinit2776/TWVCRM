@@ -322,6 +322,8 @@ export async function POST(request: NextRequest) {
     // refine() above. po_number is trigger-assigned, company-scoped.
     let servicePoCompanyId = parsed.data.company_id ?? null;
     let servicePrItemId: string | null = null;
+    let openingCycles = 0;
+    let openingVisits = 0;
     // What the PO will actually be created with. A combined PO overrides the body's
     // schedule and cost with the sum of its lines.
     const svc = {
@@ -334,7 +336,7 @@ export async function POST(request: NextRequest) {
     if (parsed.data.pr_id) {
       const { data: parentPr, error: parentPrError } = await supabase
         .from("purchase_requests")
-        .select("company_id, status, department, expenditure_type")
+        .select("company_id, status, department, expenditure_type, opening_cycles, opening_visits")
         .eq("id", parsed.data.pr_id)
         .single();
       if (parentPrError || !parentPr) {
@@ -353,6 +355,9 @@ export async function POST(request: NextRequest) {
         }, { status: 422 });
       }
       servicePoCompanyId = parentPr.company_id;
+      // A contract that was already running keeps its starting point on the PO.
+      openingCycles = Number(parentPr.opening_cycles ?? 0);
+      openingVisits = Number(parentPr.opening_visits ?? 0);
 
       // Tie this PO to the request line(s) it fulfils. Without the link the request
       // never registers as ordered, stays "approved", and can be ordered again.
@@ -471,7 +476,10 @@ export async function POST(request: NextRequest) {
         amc_start_date: amcStart,
         amc_end_date: amcEnd,
         amc_visits_covered: amcVisitsCovered,
-        amc_visits_used: 0,
+        // Visits already done before the contract was entered here, if any.
+        amc_visits_used: openingVisits,
+        opening_cycles: openingCycles,
+        opening_visits: openingVisits,
         amc_contact_name: parsed.data.amc_contact_name ?? null,
         amc_helpline_number: parsed.data.amc_helpline_number ?? null,
         amc_contact_email: parsed.data.amc_contact_email ?? null,
